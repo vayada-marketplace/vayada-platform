@@ -3,6 +3,21 @@ name: Deploy App Service
 on:
   repository_dispatch:
     types: [app-image-published]
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service key (e.g. affiliate-dashboard)"
+        required: true
+      ecr_repo:
+        description: "ECR repository name (e.g. vayada-affiliate-dashboard)"
+        required: true
+      image_sha:
+        description: "Full 40-char git SHA of the image to deploy"
+        required: true
+      environment:
+        description: "Target environment"
+        required: true
+        default: production
 
 permissions:
   id-token: write
@@ -15,7 +30,7 @@ env:
 
 jobs:
   deploy:
-    name: Deploy ${{ github.event.client_payload.service }}
+    name: Deploy ${{ github.event.client_payload.service || inputs.service }}
     runs-on: ubuntu-latest
 
     steps:
@@ -31,7 +46,7 @@ jobs:
       - name: Resolve ECS service and task family
         id: resolve
         run: |
-          SERVICE="${{ github.event.client_payload.service }}"
+          SERVICE="${{ github.event.client_payload.service || inputs.service }}"
           case "$SERVICE" in
             booking-backend)
               echo "ecs_service=vayada-booking-backend-service" >> "$GITHUB_OUTPUT"
@@ -84,7 +99,7 @@ jobs:
         with:
           task-definition: task-definition.json
           container-name: ${{ steps.resolve.outputs.task_family }}
-          image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ github.event.client_payload.ecr_repo }}:${{ github.event.client_payload.image_sha }}
+          image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ github.event.client_payload.ecr_repo || inputs.ecr_repo }}:${{ github.event.client_payload.image_sha || inputs.image_sha }}
 
       - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
