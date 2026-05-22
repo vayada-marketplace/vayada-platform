@@ -13,7 +13,7 @@ Platform infrastructure for Vayada — Terraform, cloud environments, and deploy
 
 ## What this repo does not own
 
-Application code, Docker builds, migrations, local development setup, and product feature code live in [`vayada`](https://github.com/FlamurMaliqi/vayada).
+Application code, Docker builds, migrations, local development setup, and product feature code live in [`vayada`](https://github.com/vayada-marketplace/vayada).
 
 ## Boundary rules
 
