@@ -8,9 +8,13 @@ terraform {
     }
   }
 
+  # After cloning this repo for the first time, run:
+  #   terraform init -migrate-state
+  # to copy state from the legacy key (infra/terraform.tfstate) to platform/terraform.tfstate.
+  # Do not run terraform apply until the plan shows no changes after migration.
   backend "s3" {
     bucket         = "vayada-terraform-state"
-    key            = "infra/terraform.tfstate"
+    key            = "platform/terraform.tfstate"
     region         = "eu-west-1"
     dynamodb_table = "vayada-terraform-lock"
     encrypt        = true
