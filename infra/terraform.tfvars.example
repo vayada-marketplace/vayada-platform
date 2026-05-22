@@ -1,0 +1,7 @@
+# Copy this file to terraform.tfvars and fill in the sensitive values
+# DO NOT commit terraform.tfvars to version control
+
+db_master_password  = "your-rds-master-password"
+db_booking_password = "your-booking-db-password"
+db_pms_password     = "your-pms-db-password"
+db_auth_password        = "your-auth-db-password"jwt_secret_key      = "your-jwt-secret-key"

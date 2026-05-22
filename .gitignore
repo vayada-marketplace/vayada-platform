@@ -1,0 +1,9 @@
+# Terraform
+infra/.terraform/
+infra/terraform.tfvars
+infra/*.tfstate
+infra/*.tfstate.backup
+infra/.terraform.tfstate.lock.info
+infra/crash.log
+infra/override.tf
+infra/override.tf.json
