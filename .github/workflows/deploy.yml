@@ -1,0 +1,95 @@
+name: Deploy App Service
+
+on:
+  repository_dispatch:
+    types: [app-image-published]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-west-1
+  AWS_ACCOUNT_ID: 269416271598
+  ECS_CLUSTER: vayada-backend-cluster
+
+jobs:
+  deploy:
+    name: Deploy ${{ github.event.client_payload.service }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve ECS service and task family
+        id: resolve
+        run: |
+          SERVICE="${{ github.event.client_payload.service }}"
+          case "$SERVICE" in
+            booking-backend)
+              echo "ecs_service=vayada-booking-backend-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-booking-backend" >> "$GITHUB_OUTPUT"
+              ;;
+            booking-frontend)
+              echo "ecs_service=vayada-booking-frontend-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-booking-frontend" >> "$GITHUB_OUTPUT"
+              ;;
+            booking-admin)
+              echo "ecs_service=vayada-booking-admin-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-booking-admin" >> "$GITHUB_OUTPUT"
+              ;;
+            pms-backend)
+              echo "ecs_service=vayada-pms-backend-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-pms-backend" >> "$GITHUB_OUTPUT"
+              ;;
+            pms-frontend)
+              echo "ecs_service=vayada-pms-frontend-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-pms-frontend" >> "$GITHUB_OUTPUT"
+              ;;
+            marketplace-backend)
+              echo "ecs_service=vayada-marketplace-backend-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-marketplace-backend" >> "$GITHUB_OUTPUT"
+              ;;
+            marketplace-admin)
+              echo "ecs_service=vayada-marketplace-admin-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-marketplace-admin" >> "$GITHUB_OUTPUT"
+              ;;
+            affiliate-dashboard)
+              echo "ecs_service=vayada-affiliate-dashboard-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-affiliate-dashboard" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unknown service: $SERVICE"
+              exit 1
+              ;;
+          esac
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ steps.resolve.outputs.task_family }} \
+            --region ${{ env.AWS_REGION }} \
+            --query taskDefinition > task-definition.json
+
+      - name: Render task definition with SHA-pinned image
+        id: render-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ steps.resolve.outputs.task_family }}
+          image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ github.event.client_payload.ecr_repo }}:${{ github.event.client_payload.image_sha }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          service: ${{ steps.resolve.outputs.ecs_service }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true

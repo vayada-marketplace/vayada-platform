@@ -1,0 +1,81 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "infra/**"
+      - ".github/workflows/tf-apply.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-west-1
+
+jobs:
+  apply:
+    name: Apply
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.5"
+
+      - name: Terraform init
+        run: terraform init
+        working-directory: infra
+
+      - name: Terraform plan
+        run: terraform plan -no-color -out=tfplan
+        working-directory: infra
+        env:
+          TF_VAR_db_master_password: ${{ secrets.TF_VAR_DB_MASTER_PASSWORD }}
+          TF_VAR_db_booking_password: ${{ secrets.TF_VAR_DB_BOOKING_PASSWORD }}
+          TF_VAR_db_pms_password: ${{ secrets.TF_VAR_DB_PMS_PASSWORD }}
+          TF_VAR_db_auth_password: ${{ secrets.TF_VAR_DB_AUTH_PASSWORD }}
+          TF_VAR_jwt_secret_key: ${{ secrets.TF_VAR_JWT_SECRET_KEY }}
+          TF_VAR_smtp_username: ${{ secrets.TF_VAR_SMTP_USERNAME }}
+          TF_VAR_smtp_password: ${{ secrets.TF_VAR_SMTP_PASSWORD }}
+          TF_VAR_stripe_secret_key: ${{ secrets.TF_VAR_STRIPE_SECRET_KEY }}
+          TF_VAR_stripe_publishable_key: ${{ secrets.TF_VAR_STRIPE_PUBLISHABLE_KEY }}
+          TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
+          TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.TF_VAR_CLOUDFLARE_API_TOKEN }}
+          TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}
+          TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
+          TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
+
+      - name: Terraform apply
+        run: terraform apply -no-color tfplan
+        working-directory: infra
+        env:
+          TF_VAR_db_master_password: ${{ secrets.TF_VAR_DB_MASTER_PASSWORD }}
+          TF_VAR_db_booking_password: ${{ secrets.TF_VAR_DB_BOOKING_PASSWORD }}
+          TF_VAR_db_pms_password: ${{ secrets.TF_VAR_DB_PMS_PASSWORD }}
+          TF_VAR_db_auth_password: ${{ secrets.TF_VAR_DB_AUTH_PASSWORD }}
+          TF_VAR_jwt_secret_key: ${{ secrets.TF_VAR_JWT_SECRET_KEY }}
+          TF_VAR_smtp_username: ${{ secrets.TF_VAR_SMTP_USERNAME }}
+          TF_VAR_smtp_password: ${{ secrets.TF_VAR_SMTP_PASSWORD }}
+          TF_VAR_stripe_secret_key: ${{ secrets.TF_VAR_STRIPE_SECRET_KEY }}
+          TF_VAR_stripe_publishable_key: ${{ secrets.TF_VAR_STRIPE_PUBLISHABLE_KEY }}
+          TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
+          TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.TF_VAR_CLOUDFLARE_API_TOKEN }}
+          TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}
+          TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
+          TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
