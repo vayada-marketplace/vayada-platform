@@ -54,6 +54,11 @@ jobs:
           TF_VAR_stripe_publishable_key: ${{ secrets.TF_VAR_STRIPE_PUBLISHABLE_KEY }}
           TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
+          TF_VAR_manage_staging_rehearsal_secrets: ${{ secrets.TF_VAR_MANAGE_STAGING_REHEARSAL_SECRETS || 'false' }}
+          TF_VAR_staging_target_database_url: ${{ secrets.TF_VAR_STAGING_TARGET_DATABASE_URL }}
+          TF_VAR_staging_stripe_webhook_secret: ${{ secrets.TF_VAR_STAGING_STRIPE_WEBHOOK_SECRET }}
+          TF_VAR_staging_xendit_webhook_secret: ${{ secrets.TF_VAR_STAGING_XENDIT_WEBHOOK_SECRET }}
+          TF_VAR_staging_channex_webhook_secret: ${{ secrets.TF_VAR_STAGING_CHANNEX_WEBHOOK_SECRET }}
           TF_VAR_cloudflare_api_token: ${{ secrets.TF_VAR_CLOUDFLARE_API_TOKEN }}
           TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}
           TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
