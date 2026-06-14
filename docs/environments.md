@@ -111,10 +111,10 @@ variables without printing them.
 Example no-print local load for the app repo rehearsal commands:
 
 ```bash
-export TARGET_DATABASE_URL="$(aws ssm get-parameter --name /vayada/staging/target-database-url --with-decryption --query Parameter.Value --output text)"
-export STRIPE_WEBHOOK_SECRET="$(aws ssm get-parameter --name /vayada/staging/stripe-webhook-secret --with-decryption --query Parameter.Value --output text)"
-export XENDIT_WEBHOOK_SECRET="$(aws ssm get-parameter --name /vayada/staging/xendit-webhook-secret --with-decryption --query Parameter.Value --output text)"
-export CHANNEX_WEBHOOK_SECRET="$(aws ssm get-parameter --name /vayada/staging/channex-webhook-secret --with-decryption --query Parameter.Value --output text)"
+export TARGET_DATABASE_URL="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/target-database-url --with-decryption --query Parameter.Value --output text)"
+export STRIPE_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/stripe-webhook-secret --with-decryption --query Parameter.Value --output text)"
+export XENDIT_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/xendit-webhook-secret --with-decryption --query Parameter.Value --output text)"
+export CHANNEX_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/channex-webhook-secret --with-decryption --query Parameter.Value --output text)"
 ```
 
 ### Applying infrastructure changes

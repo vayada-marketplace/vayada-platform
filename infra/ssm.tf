@@ -28,6 +28,11 @@ locals {
     "xendit-webhook-secret"  = var.staging_xendit_webhook_secret
     "channex-webhook-secret" = var.staging_channex_webhook_secret
   }
+
+  staging_rehearsal_ssm_parameter_arns = [
+    for name in sort(keys(local.staging_rehearsal_ssm_secrets)) :
+    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/${name}"
+  ]
 }
 
 resource "aws_ssm_parameter" "secrets" {
@@ -60,7 +65,7 @@ resource "aws_ssm_parameter" "staging_rehearsal_secrets" {
 
   lifecycle {
     precondition {
-      condition     = local.staging_rehearsal_ssm_secrets[each.key] != ""
+      condition     = trimspace(local.staging_rehearsal_ssm_secrets[each.key]) != ""
       error_message = "All staging rehearsal secret variables must be non-empty when manage_staging_rehearsal_secrets is true."
     }
   }
@@ -88,7 +93,7 @@ resource "aws_iam_role_policy" "ecs_exec_ssm" {
           "ssm:GetParameters",
           "ssm:GetParameter",
         ]
-        Resource = "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/*"
+        Resource = local.staging_rehearsal_ssm_parameter_arns
       },
       {
         Effect   = "Allow"
