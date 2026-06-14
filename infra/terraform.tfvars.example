@@ -4,4 +4,13 @@
 db_master_password  = "your-rds-master-password"
 db_booking_password = "your-booking-db-password"
 db_pms_password     = "your-pms-db-password"
-db_auth_password        = "your-auth-db-password"jwt_secret_key      = "your-jwt-secret-key"
+db_auth_password    = "your-auth-db-password"
+jwt_secret_key      = "your-jwt-secret-key"
+
+# Optional C1 staging rehearsal parameters. Leave unset unless running the
+# Channex/webhook cutover rehearsal.
+manage_staging_rehearsal_secrets = true
+staging_target_database_url    = "postgresql://target-user:target-password@target-host:5432/target-db?sslmode=require"
+staging_stripe_webhook_secret  = "whsec_target_staging"
+staging_xendit_webhook_secret  = "xendit-target-staging-callback-token"
+staging_channex_webhook_secret = "channex-target-staging-token"
