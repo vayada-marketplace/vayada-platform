@@ -44,43 +44,43 @@ locals {
 
   listener_rules = {
     booking-admin = {
-      priority  = 10
-      host      = "admin.booking.vayada.com"
+      priority     = 10
+      host         = "admin.booking.vayada.com"
       target_group = "booking-admin"
     }
     admin = {
-      priority  = 15
-      host      = "admin.vayada.com"
+      priority     = 15
+      host         = "admin.vayada.com"
       target_group = "marketplace-admin"
     }
     booking-api = {
-      priority  = 20
-      host      = "booking-api.vayada.com"
+      priority     = 20
+      host         = "booking-api.vayada.com"
       target_group = "booking-backend"
     }
     marketplace-api = {
-      priority  = 25
-      host      = "api.vayada.com"
+      priority     = 25
+      host         = "api.vayada.com"
       target_group = "marketplace-backend"
     }
     pms-api = {
-      priority  = 30
-      host      = "pms-api.vayada.com"
+      priority     = 30
+      host         = "pms-api.vayada.com"
       target_group = "pms-backend"
     }
     pms-frontend = {
-      priority  = 40
-      host      = "pms.vayada.com"
+      priority     = 40
+      host         = "pms.vayada.com"
       target_group = "pms-frontend"
     }
     affiliate = {
-      priority  = 45
-      host      = "affiliate.vayada.com"
+      priority     = 45
+      host         = "affiliate.vayada.com"
       target_group = "affiliate-dashboard"
     }
     booking-frontend = {
-      priority  = 50
-      host      = "*.booking.vayada.com"
+      priority     = 50
+      host         = "*.booking.vayada.com"
       target_group = "booking-frontend"
     }
   }

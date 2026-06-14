@@ -81,6 +81,42 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 
 SSM parameters are referenced by ARN in ECS task definitions — containers read them at startup via the `ecsTaskExecutionRole`.
 
+### C1 staging rehearsal secrets
+
+The Channex/webhook cutover rehearsal uses a separate SSM namespace so replay
+credentials do not get mixed with production runtime secrets:
+
+| Parameter | Used by |
+|---|---|
+| `/vayada/staging/target-database-url` | `TARGET_DATABASE_URL` for target parity and C1 rehearsal dashboard checks |
+| `/vayada/staging/stripe-webhook-secret` | `STRIPE_WEBHOOK_SECRET` for signing Stripe replay fixtures |
+| `/vayada/staging/xendit-webhook-secret` | `XENDIT_WEBHOOK_SECRET` / `x-callback-token` for Xendit replay fixtures |
+| `/vayada/staging/channex-webhook-secret` | `CHANNEX_WEBHOOK_SECRET` / `x-vayada-webhook-token` for Channex replay fixtures |
+
+Terraform creates these parameters only when `manage_staging_rehearsal_secrets`
+is enabled and all matching variables are set:
+
+```hcl
+manage_staging_rehearsal_secrets = true
+staging_target_database_url    = "..."
+staging_stripe_webhook_secret  = "..."
+staging_xendit_webhook_secret  = "..."
+staging_channex_webhook_secret = "..."
+```
+
+Do not commit the real values. The C1 rehearsal operator should read these
+parameters into the app repo rehearsal commands and pass them as environment
+variables without printing them.
+
+Example no-print local load for the app repo rehearsal commands:
+
+```bash
+export TARGET_DATABASE_URL="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/target-database-url --with-decryption --query Parameter.Value --output text)"
+export STRIPE_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/stripe-webhook-secret --with-decryption --query Parameter.Value --output text)"
+export XENDIT_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/xendit-webhook-secret --with-decryption --query Parameter.Value --output text)"
+export CHANNEX_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/channex-webhook-secret --with-decryption --query Parameter.Value --output text)"
+```
+
 ### Applying infrastructure changes
 
 ```bash

@@ -104,6 +104,40 @@ variable "stripe_webhook_secret" {
   default     = ""
 }
 
+variable "staging_target_database_url" {
+  description = "Target database URL used by C1 staging rehearsal tooling"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "manage_staging_rehearsal_secrets" {
+  description = "Whether Terraform should create the /vayada/staging C1 rehearsal SSM parameters"
+  type        = bool
+  default     = false
+}
+
+variable "staging_stripe_webhook_secret" {
+  description = "Stripe webhook signing secret used for C1 staging replay"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "staging_xendit_webhook_secret" {
+  description = "Xendit callback token used for C1 staging replay"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "staging_channex_webhook_secret" {
+  description = "Channex webhook header token used for C1 staging replay"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "stripe_platform_account_id" {
   description = "Stripe platform account ID"
   type        = string

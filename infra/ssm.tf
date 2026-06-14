@@ -1,7 +1,7 @@
 # SSM Parameter Store — encrypted secrets for ECS services
 
-resource "aws_ssm_parameter" "secrets" {
-  for_each = {
+locals {
+  prod_ssm_secrets = {
     # Database connection URLs
     "db-booking-url"     = "postgresql://vayada_booking_user:${var.db_booking_password}@${var.rds_endpoint}:5432/vayada_booking_db"
     "db-auth-url"        = "postgresql://vayada_auth_user:${var.db_auth_password}@${var.rds_endpoint}:5432/vayada_auth_db"
@@ -22,6 +22,22 @@ resource "aws_ssm_parameter" "secrets" {
     "firecrawl-api-key"     = var.firecrawl_api_key
   }
 
+  staging_rehearsal_ssm_secrets = {
+    "target-database-url"    = var.staging_target_database_url
+    "stripe-webhook-secret"  = var.staging_stripe_webhook_secret
+    "xendit-webhook-secret"  = var.staging_xendit_webhook_secret
+    "channex-webhook-secret" = var.staging_channex_webhook_secret
+  }
+
+  staging_rehearsal_ssm_parameter_arns = [
+    for name in sort(keys(local.staging_rehearsal_ssm_secrets)) :
+    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/${name}"
+  ]
+}
+
+resource "aws_ssm_parameter" "secrets" {
+  for_each = local.prod_ssm_secrets
+
   name  = "/vayada/prod/${each.key}"
   type  = "SecureString"
   value = each.value
@@ -30,6 +46,28 @@ resource "aws_ssm_parameter" "secrets" {
     Project     = "vayada"
     Environment = "production"
     ManagedBy   = "terraform"
+  }
+}
+
+resource "aws_ssm_parameter" "staging_rehearsal_secrets" {
+  for_each = var.manage_staging_rehearsal_secrets ? toset(keys(local.staging_rehearsal_ssm_secrets)) : toset([])
+
+  name  = "/vayada/staging/${each.key}"
+  type  = "SecureString"
+  value = local.staging_rehearsal_ssm_secrets[each.key]
+
+  tags = {
+    Project     = "vayada"
+    Environment = "staging"
+    ManagedBy   = "terraform"
+    Purpose     = "c1-rehearsal"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = trimspace(local.staging_rehearsal_ssm_secrets[each.key]) != ""
+      error_message = "All staging rehearsal secret variables must be non-empty when manage_staging_rehearsal_secrets is true."
+    }
   }
 }
 
@@ -48,6 +86,14 @@ resource "aws_iam_role_policy" "ecs_exec_ssm" {
           "ssm:GetParameter",
         ]
         Resource = "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/prod/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameters",
+          "ssm:GetParameter",
+        ]
+        Resource = local.staging_rehearsal_ssm_parameter_arns
       },
       {
         Effect   = "Allow"
