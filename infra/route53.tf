@@ -2,7 +2,7 @@ locals {
   dns_records = {
     "wildcard-booking" = "*.booking.vayada.com"
     "admin-booking"    = "admin.booking.vayada.com"
-"booking-api"      = "booking-api.vayada.com"
+    "booking-api"      = "booking-api.vayada.com"
     "pms-api"          = "pms-api.vayada.com"
     "pms"              = "pms.vayada.com"
     "custom-booking"   = "custom.booking.vayada.com"
