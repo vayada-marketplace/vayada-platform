@@ -275,7 +275,7 @@ resource "aws_ecs_task_definition" "services" {
     }
   ])
 
-  tags = {
+  tags = each.key == "staging-pms-backend" ? {} : {
     Service = each.value.name
   }
 }
@@ -309,7 +309,7 @@ resource "aws_ecs_service" "services" {
     ignore_changes = [task_definition]
   }
 
-  tags = {
+  tags = each.key == "staging-pms-backend" ? {} : {
     Service = each.value.name
   }
 }
