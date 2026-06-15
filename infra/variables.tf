@@ -138,6 +138,19 @@ variable "staging_channex_webhook_secret" {
   default     = ""
 }
 
+variable "enable_staging_pms_runtime" {
+  description = "Whether Terraform should create the frozen staging PMS backend runtime for C1 rehearsal"
+  type        = bool
+  default     = false
+}
+
+variable "staging_pms_database_url" {
+  description = "PMS database URL used by the frozen staging PMS backend runtime"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "stripe_platform_account_id" {
   description = "Stripe platform account ID"
   type        = string

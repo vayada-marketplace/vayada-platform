@@ -1,5 +1,5 @@
 locals {
-  services = {
+  base_services = {
     booking-backend = {
       name           = "vayada-booking-backend"
       container_port = 8001
@@ -169,6 +169,54 @@ locals {
     }
   }
 
+  staging_pms_service = var.enable_staging_pms_runtime ? {
+    staging-pms-backend = {
+      name           = "vayada-staging-pms-backend"
+      container_port = 8002
+      cpu            = 256
+      memory         = 512
+      health_check   = "/health"
+      log_group      = "/ecs/vayada-staging-pms-backend"
+      environment = [
+        { name = "CORS_ORIGINS", value = "https://staging-pms-api.vayada.com" },
+        { name = "CORS_ORIGIN_REGEX", value = "" },
+        { name = "API_PORT", value = "8002" },
+        { name = "AWS_REGION", value = var.aws_region },
+        { name = "S3_BUCKET_NAME", value = "vayada-uploads-prod" },
+        { name = "SMTP_HOST", value = "email-smtp.eu-west-1.amazonaws.com" },
+        { name = "SMTP_PORT", value = "587" },
+        { name = "SMTP_FROM", value = "noreply@vayada.com" },
+        { name = "STRIPE_PLATFORM_ACCOUNT_ID", value = var.stripe_platform_account_id },
+        { name = "BOOKING_ENGINE_API_URL", value = "https://booking-api.vayada.com" },
+        { name = "CHANNEX_API_BASE_URL", value = "https://app.channex.io" },
+        { name = "ENVIRONMENT", value = "staging" },
+        { name = "DEBUG", value = "false" },
+        { name = "PMS_SCHEDULER_ENABLED", value = "false" },
+        { name = "PMS_LEGACY_WEBHOOK_MODE", value = "ack_only_with_receipt" },
+        { name = "PMS_LEGACY_STRIPE_WEBHOOK_MODE", value = "ack_only_with_receipt" },
+        { name = "PMS_LEGACY_XENDIT_WEBHOOK_MODE", value = "ack_only_with_receipt" },
+        { name = "PMS_LEGACY_CHANNEX_WEBHOOK_MODE", value = "ack_only_with_receipt" },
+        { name = "CHANNEX_ADMIN_DEFAULT_MODE", value = "disabled" },
+        { name = "FINANCE_XENDIT_PAYOUT_RECONCILIATION_LEGACY_MODE", value = "disabled" },
+      ]
+      secrets = [
+        { name = "DATABASE_URL", valueFrom = "/vayada/staging/pms-database-url" },
+        { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/db-auth-url" },
+        { name = "BOOKING_ENGINE_DATABASE_URL", valueFrom = "/vayada/prod/db-booking-url" },
+        { name = "JWT_SECRET_KEY", valueFrom = "/vayada/prod/jwt-secret-key" },
+        { name = "SMTP_USERNAME", valueFrom = "/vayada/prod/smtp-username" },
+        { name = "SMTP_PASSWORD", valueFrom = "/vayada/prod/smtp-password" },
+        { name = "STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/stripe-secret-key" },
+        { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/staging/stripe-webhook-secret" },
+        { name = "CHANNEX_API_KEY", valueFrom = "/vayada/prod/channex-api-key" },
+        { name = "ANTHROPIC_API_KEY", valueFrom = "/vayada/prod/anthropic-api-key" },
+        { name = "FIRECRAWL_API_KEY", valueFrom = "/vayada/prod/firecrawl-api-key" },
+      ]
+    }
+  } : {}
+
+  services = merge(local.base_services, local.staging_pms_service)
+
   # Map from service key to ECR repo name
   ecr_repo_map = {
     "booking-backend"     = "vayada-booking-backend"
@@ -179,6 +227,7 @@ locals {
     "marketplace-backend" = "vayada-creator-marketplace-backend"
     "marketplace-admin"   = "vayada-admin-frontend"
     "affiliate-dashboard" = "vayada-affiliate-dashboard"
+    "staging-pms-backend" = "vayada-pms-backend"
   }
 }
 
