@@ -89,11 +89,12 @@ credentials do not get mixed with production runtime secrets:
 | Parameter | Used by |
 |---|---|
 | `/vayada/staging/target-database-url` | `TARGET_DATABASE_URL` for target parity and C1 rehearsal dashboard checks |
+| `/vayada/staging/pms-database-url` | `DATABASE_URL` for the frozen staging PMS backend runtime |
 | `/vayada/staging/stripe-webhook-secret` | `STRIPE_WEBHOOK_SECRET` for signing Stripe replay fixtures |
 | `/vayada/staging/xendit-webhook-secret` | `XENDIT_WEBHOOK_SECRET` / `x-callback-token` for Xendit replay fixtures |
 | `/vayada/staging/channex-webhook-secret` | `CHANNEX_WEBHOOK_SECRET` / `x-vayada-webhook-token` for Channex replay fixtures |
 
-Terraform creates these parameters only when `manage_staging_rehearsal_secrets`
+Terraform creates the replay parameters when `manage_staging_rehearsal_secrets`
 is enabled and all matching variables are set:
 
 ```hcl
@@ -116,6 +117,31 @@ export STRIPE_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name 
 export XENDIT_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/xendit-webhook-secret --with-decryption --query Parameter.Value --output text)"
 export CHANNEX_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/channex-webhook-secret --with-decryption --query Parameter.Value --output text)"
 ```
+
+### Frozen staging PMS runtime
+
+The C1 rehearsal can create a dedicated staging PMS backend runtime for the
+legacy scheduler-freeze proof. It is disabled by default and is controlled by:
+
+```hcl
+enable_staging_pms_runtime = true
+staging_pms_database_url   = "..."
+```
+
+When enabled, Terraform creates:
+
+- `/vayada/staging/pms-database-url`;
+- ECS task definition/service `vayada-staging-pms-backend`;
+- target group `staging-pms-backend-tg`;
+- ALB listener rule and Route 53 alias for
+  `https://staging-pms-api.vayada.com`;
+- CloudWatch log group `/ecs/vayada-staging-pms-backend`.
+
+The service uses the PMS backend image repository and starts with the legacy
+scheduler frozen and legacy provider webhook modes set to
+`ack_only_with_receipt`. Capture `https://staging-pms-api.vayada.com/health`
+for the VAY-794 freeze evidence before inserting scheduler-freeze rows into the
+target database.
 
 ### Applying infrastructure changes
 

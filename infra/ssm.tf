@@ -29,8 +29,17 @@ locals {
     "channex-webhook-secret" = var.staging_channex_webhook_secret
   }
 
-  staging_rehearsal_ssm_parameter_arns = [
-    for name in sort(keys(local.staging_rehearsal_ssm_secrets)) :
+  staging_pms_runtime_ssm_secrets = var.enable_staging_pms_runtime ? {
+    "pms-database-url" = var.staging_pms_database_url
+  } : {}
+
+  staging_ssm_secrets = merge(
+    var.manage_staging_rehearsal_secrets ? local.staging_rehearsal_ssm_secrets : {},
+    local.staging_pms_runtime_ssm_secrets,
+  )
+
+  staging_ssm_parameter_arns = [
+    for name in sort(keys(local.staging_ssm_secrets)) :
     "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/${name}"
   ]
 }
@@ -50,11 +59,11 @@ resource "aws_ssm_parameter" "secrets" {
 }
 
 resource "aws_ssm_parameter" "staging_rehearsal_secrets" {
-  for_each = var.manage_staging_rehearsal_secrets ? toset(keys(local.staging_rehearsal_ssm_secrets)) : toset([])
+  for_each = toset(keys(local.staging_ssm_secrets))
 
   name  = "/vayada/staging/${each.key}"
   type  = "SecureString"
-  value = local.staging_rehearsal_ssm_secrets[each.key]
+  value = local.staging_ssm_secrets[each.key]
 
   tags = {
     Project     = "vayada"
@@ -65,8 +74,8 @@ resource "aws_ssm_parameter" "staging_rehearsal_secrets" {
 
   lifecycle {
     precondition {
-      condition     = trimspace(local.staging_rehearsal_ssm_secrets[each.key]) != ""
-      error_message = "All staging rehearsal secret variables must be non-empty when manage_staging_rehearsal_secrets is true."
+      condition     = trimspace(local.staging_ssm_secrets[each.key]) != ""
+      error_message = "All enabled staging secret variables must be non-empty."
     }
   }
 }
@@ -93,7 +102,7 @@ resource "aws_iam_role_policy" "ecs_exec_ssm" {
           "ssm:GetParameters",
           "ssm:GetParameter",
         ]
-        Resource = local.staging_rehearsal_ssm_parameter_arns
+        Resource = local.staging_ssm_parameter_arns
       },
       {
         Effect   = "Allow"

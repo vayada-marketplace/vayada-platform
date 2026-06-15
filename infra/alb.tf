@@ -1,5 +1,5 @@
 locals {
-  target_groups = {
+  base_target_groups = {
     booking-backend = {
       name         = "booking-backend-tg"
       port         = 8001
@@ -42,7 +42,17 @@ locals {
     }
   }
 
-  listener_rules = {
+  staging_pms_target_groups = var.enable_staging_pms_runtime ? {
+    staging-pms-backend = {
+      name         = "staging-pms-backend-tg"
+      port         = 8002
+      health_check = "/health"
+    }
+  } : {}
+
+  target_groups = merge(local.base_target_groups, local.staging_pms_target_groups)
+
+  base_listener_rules = {
     booking-admin = {
       priority     = 10
       host         = "admin.booking.vayada.com"
@@ -84,6 +94,16 @@ locals {
       target_group = "booking-frontend"
     }
   }
+
+  staging_pms_listener_rules = var.enable_staging_pms_runtime ? {
+    staging-pms-api = {
+      priority     = 35
+      host         = "staging-pms-api.vayada.com"
+      target_group = "staging-pms-backend"
+    }
+  } : {}
+
+  listener_rules = merge(local.base_listener_rules, local.staging_pms_listener_rules)
 }
 
 resource "aws_lb_target_group" "services" {

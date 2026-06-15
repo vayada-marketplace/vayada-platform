@@ -1,5 +1,5 @@
 locals {
-  log_groups = [
+  base_log_groups = [
     "/ecs/vayada-booking-backend",
     "/ecs/vayada-booking-frontend",
     "/ecs/vayada-booking-admin",
@@ -9,6 +9,12 @@ locals {
     "/ecs/vayada-marketplace-admin",
     "/ecs/vayada-affiliate-dashboard",
   ]
+
+  staging_pms_log_groups = var.enable_staging_pms_runtime ? [
+    "/ecs/vayada-staging-pms-backend",
+  ] : []
+
+  log_groups = concat(local.base_log_groups, local.staging_pms_log_groups)
 }
 
 resource "aws_cloudwatch_log_group" "ecs" {

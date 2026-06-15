@@ -56,7 +56,9 @@ jobs:
           TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
           TF_VAR_manage_staging_rehearsal_secrets: ${{ secrets.TF_VAR_MANAGE_STAGING_REHEARSAL_SECRETS || 'false' }}
+          TF_VAR_enable_staging_pms_runtime: ${{ secrets.TF_VAR_ENABLE_STAGING_PMS_RUNTIME || 'false' }}
           TF_VAR_staging_target_database_url: ${{ secrets.TF_VAR_STAGING_TARGET_DATABASE_URL }}
+          TF_VAR_staging_pms_database_url: ${{ secrets.TF_VAR_STAGING_PMS_DATABASE_URL }}
           TF_VAR_staging_stripe_webhook_secret: ${{ secrets.TF_VAR_STAGING_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_staging_xendit_webhook_secret: ${{ secrets.TF_VAR_STAGING_XENDIT_WEBHOOK_SECRET }}
           TF_VAR_staging_channex_webhook_secret: ${{ secrets.TF_VAR_STAGING_CHANNEX_WEBHOOK_SECRET }}
@@ -81,7 +83,9 @@ jobs:
           TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
           TF_VAR_manage_staging_rehearsal_secrets: ${{ secrets.TF_VAR_MANAGE_STAGING_REHEARSAL_SECRETS || 'false' }}
+          TF_VAR_enable_staging_pms_runtime: ${{ secrets.TF_VAR_ENABLE_STAGING_PMS_RUNTIME || 'false' }}
           TF_VAR_staging_target_database_url: ${{ secrets.TF_VAR_STAGING_TARGET_DATABASE_URL }}
+          TF_VAR_staging_pms_database_url: ${{ secrets.TF_VAR_STAGING_PMS_DATABASE_URL }}
           TF_VAR_staging_stripe_webhook_secret: ${{ secrets.TF_VAR_STAGING_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_staging_xendit_webhook_secret: ${{ secrets.TF_VAR_STAGING_XENDIT_WEBHOOK_SECRET }}
           TF_VAR_staging_channex_webhook_secret: ${{ secrets.TF_VAR_STAGING_CHANNEX_WEBHOOK_SECRET }}

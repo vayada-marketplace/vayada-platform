@@ -1,5 +1,5 @@
 locals {
-  dns_records = {
+  base_dns_records = {
     "wildcard-booking" = "*.booking.vayada.com"
     "admin-booking"    = "admin.booking.vayada.com"
     "booking-api"      = "booking-api.vayada.com"
@@ -8,6 +8,12 @@ locals {
     "custom-booking"   = "custom.booking.vayada.com"
     "affiliate"        = "affiliate.vayada.com"
   }
+
+  staging_pms_dns_records = var.enable_staging_pms_runtime ? {
+    "staging-pms-api" = "staging-pms-api.vayada.com"
+  } : {}
+
+  dns_records = merge(local.base_dns_records, local.staging_pms_dns_records)
 }
 
 resource "aws_route53_record" "services" {
