@@ -42,6 +42,11 @@ locals {
     for name in sort(keys(local.staging_ssm_secrets)) :
     "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/${name}"
   ]
+
+  target_backend_ssm_parameter_arns = [
+    for secret in local.base_services["target-backend"].secrets :
+    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${secret.valueFrom}"
+  ]
 }
 
 resource "aws_ssm_parameter" "secrets" {
@@ -102,7 +107,7 @@ resource "aws_iam_role_policy" "ecs_exec_ssm" {
           "ssm:GetParameters",
           "ssm:GetParameter",
         ]
-        Resource = local.staging_ssm_parameter_arns
+        Resource = distinct(concat(local.staging_ssm_parameter_arns, local.target_backend_ssm_parameter_arns))
       },
       {
         Effect   = "Allow"

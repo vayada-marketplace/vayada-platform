@@ -7,6 +7,7 @@ locals {
     "pms"              = "pms.vayada.com"
     "custom-booking"   = "custom.booking.vayada.com"
     "affiliate"        = "affiliate.vayada.com"
+    "target-api"       = "target-api.vayada.com"
   }
 
   staging_pms_dns_records = var.enable_staging_pms_runtime ? {

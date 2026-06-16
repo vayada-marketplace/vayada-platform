@@ -144,6 +144,18 @@ variable "enable_staging_pms_runtime" {
   default     = false
 }
 
+variable "target_backend_desired_count" {
+  description = "Desired ECS task count for the TypeScript target backend runtime. Keep 0 until a vayada-api image has been published and the runtime is intentionally enabled."
+  type        = number
+  default     = 0
+}
+
+variable "target_backend_staging_secrets_preprovisioned" {
+  description = "Set true only when the /vayada/staging parameters required by the TypeScript target backend already exist outside this Terraform apply."
+  type        = bool
+  default     = false
+}
+
 variable "staging_pms_database_url" {
   description = "PMS database URL used by the frozen staging PMS backend runtime"
   type        = string

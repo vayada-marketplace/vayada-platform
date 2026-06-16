@@ -80,6 +80,10 @@ jobs:
               echo "ecs_service=vayada-affiliate-dashboard-service" >> "$GITHUB_OUTPUT"
               echo "task_family=vayada-affiliate-dashboard" >> "$GITHUB_OUTPUT"
               ;;
+            target-backend)
+              echo "ecs_service=vayada-api-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-api" >> "$GITHUB_OUTPUT"
+              ;;
             *)
               echo "Unknown service: $SERVICE"
               exit 1

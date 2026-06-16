@@ -40,6 +40,11 @@ locals {
       port         = 3005
       health_check = "/"
     }
+    target-backend = {
+      name         = "target-backend-tg"
+      port         = 8003
+      health_check = "/health"
+    }
   }
 
   staging_pms_target_groups = var.enable_staging_pms_runtime ? {
@@ -87,6 +92,11 @@ locals {
       priority     = 45
       host         = "affiliate.vayada.com"
       target_group = "affiliate-dashboard"
+    }
+    target-api = {
+      priority     = 47
+      host         = "target-api.vayada.com"
+      target_group = "target-backend"
     }
     booking-frontend = {
       priority     = 50
