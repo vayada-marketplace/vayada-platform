@@ -10,7 +10,7 @@ resource "aws_security_group" "ecs_tasks" {
 
 # Allow inbound from ALB on all service ports
 resource "aws_security_group_rule" "ecs_from_alb" {
-  for_each = toset(["3001", "3002", "3003", "3004", "3005", "8000", "8001", "8002"])
+  for_each = toset(["3001", "3002", "3003", "3004", "3005", "8000", "8001", "8002", "8003"])
 
   type                     = "ingress"
   from_port                = tonumber(each.value)
