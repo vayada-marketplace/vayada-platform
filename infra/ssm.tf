@@ -42,6 +42,13 @@ locals {
     for name in sort(keys(local.staging_ssm_secrets)) :
     "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/${name}"
   ]
+
+  target_backend_ssm_parameter_arns = [
+    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/target-database-url",
+    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/stripe-webhook-secret",
+    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/xendit-webhook-secret",
+    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/channex-webhook-secret",
+  ]
 }
 
 resource "aws_ssm_parameter" "secrets" {
@@ -102,7 +109,7 @@ resource "aws_iam_role_policy" "ecs_exec_ssm" {
           "ssm:GetParameters",
           "ssm:GetParameter",
         ]
-        Resource = local.staging_ssm_parameter_arns
+        Resource = distinct(concat(local.staging_ssm_parameter_arns, local.target_backend_ssm_parameter_arns))
       },
       {
         Effect   = "Allow"

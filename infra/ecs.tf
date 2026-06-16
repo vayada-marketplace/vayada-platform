@@ -167,6 +167,32 @@ locals {
       ]
       secrets = []
     }
+    target-backend = {
+      name           = "vayada-api"
+      container_port = 8003
+      cpu            = 512
+      memory         = 1024
+      desired_count  = var.target_backend_desired_count
+      health_check   = "/health"
+      log_group      = "/ecs/vayada-api"
+      environment = [
+        { name = "HOST", value = "0.0.0.0" },
+        { name = "PORT", value = "8003" },
+        { name = "NODE_ENV", value = "production" },
+        { name = "ENVIRONMENT", value = "staging" },
+        { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "observe_only" },
+        { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
+        { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
+        { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = "https://app.vayada.com,https://vayada.com" },
+        { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = "https://pms.vayada.com" },
+      ]
+      secrets = [
+        { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/staging/target-database-url" },
+        { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/staging/stripe-webhook-secret" },
+        { name = "XENDIT_WEBHOOK_SECRET", valueFrom = "/vayada/staging/xendit-webhook-secret" },
+        { name = "CHANNEX_WEBHOOK_SECRET", valueFrom = "/vayada/staging/channex-webhook-secret" },
+      ]
+    }
   }
 
   staging_pms_service = var.enable_staging_pms_runtime ? {
@@ -228,6 +254,7 @@ locals {
     "marketplace-admin"   = "vayada-admin-frontend"
     "affiliate-dashboard" = "vayada-affiliate-dashboard"
     "staging-pms-backend" = "vayada-pms-backend"
+    "target-backend"      = "vayada-api"
   }
 }
 
@@ -286,7 +313,7 @@ resource "aws_ecs_service" "services" {
   name            = "${each.value.name}-service"
   cluster         = data.aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.services[each.key].arn
-  desired_count   = 1
+  desired_count   = try(each.value.desired_count, 1)
   launch_type     = "FARGATE"
 
   network_configuration {

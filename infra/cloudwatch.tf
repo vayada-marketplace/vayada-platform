@@ -8,6 +8,7 @@ locals {
     "/ecs/vayada-marketplace-backend",
     "/ecs/vayada-marketplace-admin",
     "/ecs/vayada-affiliate-dashboard",
+    "/ecs/vayada-api",
   ]
 
   staging_pms_log_groups = var.enable_staging_pms_runtime ? [

@@ -6,14 +6,14 @@ How production is provisioned, deployed, and operated from this repository.
 
 This repository owns everything after an image is published to ECR:
 
-| Concern | Owner |
-|---|---|
-| Application code, Docker builds, migrations | `vayada` (app repo) |
-| ECR repository creation | `vayada-platform` (this repo) |
-| ECS task definition updates and service deploys | `vayada-platform` CI |
-| Production secrets and SSM parameters | `vayada-platform` (`infra/ssm.tf`) |
-| DNS, TLS certificates, load balancer config | `vayada-platform` (`infra/route53.tf`, `infra/acm.tf`, `infra/alb.tf`) |
-| CloudWatch log groups | `vayada-platform` (`infra/cloudwatch.tf`) |
+| Concern                                         | Owner                                                                  |
+| ----------------------------------------------- | ---------------------------------------------------------------------- |
+| Application code, Docker builds, migrations     | `vayada` (app repo)                                                    |
+| ECR repository creation                         | `vayada-platform` (this repo)                                          |
+| ECS task definition updates and service deploys | `vayada-platform` CI                                                   |
+| Production secrets and SSM parameters           | `vayada-platform` (`infra/ssm.tf`)                                     |
+| DNS, TLS certificates, load balancer config     | `vayada-platform` (`infra/route53.tf`, `infra/acm.tf`, `infra/alb.tf`) |
+| CloudWatch log groups                           | `vayada-platform` (`infra/cloudwatch.tf`)                              |
 
 ## Production environment
 
@@ -31,17 +31,18 @@ Lock table: `vayada-terraform-lock` (DynamoDB).
 
 ### Services
 
-| Service | ECR repository | ECS service | Domain |
-|---|---|---|---|
-| Booking API | `vayada-booking-backend` | `vayada-booking-backend-service` | `booking-api.vayada.com` |
-| Booking Web | `vayada-booking-frontend` | `vayada-booking-frontend-service` | `*.booking.vayada.com` |
-| Booking Admin | `vayada-booking-admin-frontend` | `vayada-booking-admin-service` | `admin.booking.vayada.com` |
-| PMS API | `vayada-pms-backend` | `vayada-pms-backend-service` | `pms-api.vayada.com` |
-| PMS Web | `vayada-pms-frontend` | `vayada-pms-frontend-service` | `pms.vayada.com` |
-| Marketplace API | `vayada-creator-marketplace-backend` | `vayada-marketplace-backend-service` | `api.vayada.com` |
-| Marketplace Admin | `vayada-admin-frontend` | `vayada-marketplace-admin-service` | (internal) |
-| Affiliate Dashboard | `vayada-affiliate-dashboard` | `vayada-affiliate-dashboard-service` | `affiliate.vayada.com` |
-| Landing | `vayada-landing` | App Runner | (App Runner auto-deploy) |
+| Service               | ECR repository                       | ECS service                          | Domain                     |
+| --------------------- | ------------------------------------ | ------------------------------------ | -------------------------- |
+| Booking API           | `vayada-booking-backend`             | `vayada-booking-backend-service`     | `booking-api.vayada.com`   |
+| Booking Web           | `vayada-booking-frontend`            | `vayada-booking-frontend-service`    | `*.booking.vayada.com`     |
+| Booking Admin         | `vayada-booking-admin-frontend`      | `vayada-booking-admin-service`       | `admin.booking.vayada.com` |
+| PMS API               | `vayada-pms-backend`                 | `vayada-pms-backend-service`         | `pms-api.vayada.com`       |
+| PMS Web               | `vayada-pms-frontend`                | `vayada-pms-frontend-service`        | `pms.vayada.com`           |
+| Marketplace API       | `vayada-creator-marketplace-backend` | `vayada-marketplace-backend-service` | `api.vayada.com`           |
+| Marketplace Admin     | `vayada-admin-frontend`              | `vayada-marketplace-admin-service`   | (internal)                 |
+| Affiliate Dashboard   | `vayada-affiliate-dashboard`         | `vayada-affiliate-dashboard-service` | `affiliate.vayada.com`     |
+| TypeScript Target API | `vayada-api`                         | `vayada-api-service`                 | `target-api.vayada.com`    |
+| Landing               | `vayada-landing`                     | App Runner                           | (App Runner auto-deploy)   |
 
 All ECS services run on `vayada-backend-cluster` (Fargate) in `eu-west-1`, fronted by `vayada-backend-alb`.
 
@@ -57,27 +58,51 @@ The Landing service is excluded — App Runner polls ECR for `:latest` and deplo
 
 ECS services use `lifecycle { ignore_changes = [task_definition] }` in Terraform, so `terraform apply` never rolls back in-flight CI deploys.
 
+The TypeScript Target API is intentionally separate from the legacy Booking,
+PMS, and Marketplace APIs. It is exposed at `target-api.vayada.com` and defaults
+to `target_backend_desired_count = 0` until an image has been published and the
+runtime is intentionally enabled for rehearsal or cutover. Enabling it does not
+repoint any legacy production traffic. The initial runtime is suitable for
+health checks and observe-only provider webhook rehearsal. WorkOS-authenticated
+product traffic must not be enabled until the full WorkOS runtime configuration
+is managed in SSM and added to the task definition together.
+
+Safe activation order:
+
+1. Apply platform Terraform with `target_backend_desired_count = 0` to create
+   the `vayada-api` ECR repository, target group, DNS, task definition, and ECS
+   service without starting tasks before an image exists.
+2. Merge or manually dispatch the app repo TypeScript API deploy workflow so it
+   publishes `vayada-api:<git-sha>` and updates the `vayada-api-service` task
+   definition.
+3. Set `target_backend_desired_count = 1` and apply platform Terraform to start
+   the target runtime on `target-api.vayada.com`.
+
 ### Secrets
 
 Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 
-| Parameter | Used by |
-|---|---|
-| `/vayada/prod/db-booking-url` | `booking-api` |
-| `/vayada/prod/db-pms-url` | `pms-api` |
-| `/vayada/prod/db-pms-url-ssl` | `pms-api` |
-| `/vayada/prod/db-auth-url` | all APIs |
-| `/vayada/prod/db-auth-url-ssl` | all APIs |
-| `/vayada/prod/db-marketplace-url` | `marketplace-api` |
-| `/vayada/prod/jwt-secret-key` | all APIs |
-| `/vayada/prod/stripe-secret-key` | `booking-api` |
-| `/vayada/prod/stripe-webhook-secret` | `booking-api` |
-| `/vayada/prod/smtp-username` | `booking-api`, `marketplace-api` |
-| `/vayada/prod/smtp-password` | `booking-api`, `marketplace-api` |
-| `/vayada/prod/anthropic-api-key` | `pms-api` |
-| `/vayada/prod/channex-api-key` | `pms-api` |
-| `/vayada/prod/firecrawl-api-key` | `pms-api` |
-| `/vayada/prod/cloudflare-api-token` | platform Terraform |
+| Parameter                            | Used by                          |
+| ------------------------------------ | -------------------------------- |
+| `/vayada/prod/db-booking-url`        | `booking-api`                    |
+| `/vayada/prod/db-pms-url`            | `pms-api`                        |
+| `/vayada/prod/db-pms-url-ssl`        | `pms-api`                        |
+| `/vayada/prod/db-auth-url`           | all APIs                         |
+| `/vayada/prod/db-auth-url-ssl`       | all APIs                         |
+| `/vayada/prod/db-marketplace-url`    | `marketplace-api`                |
+| `/vayada/prod/jwt-secret-key`        | all APIs                         |
+| `/vayada/prod/stripe-secret-key`     | `booking-api`                    |
+| `/vayada/prod/stripe-webhook-secret` | `booking-api`                    |
+| `/vayada/prod/smtp-username`         | `booking-api`, `marketplace-api` |
+| `/vayada/prod/smtp-password`         | `booking-api`, `marketplace-api` |
+| `/vayada/prod/anthropic-api-key`     | `pms-api`                        |
+| `/vayada/prod/channex-api-key`       | `pms-api`                        |
+| `/vayada/prod/firecrawl-api-key`     | `pms-api`                        |
+| `/vayada/prod/cloudflare-api-token`  | platform Terraform               |
+
+The TypeScript Target API additionally reads rehearsal-scoped provider and
+target database secrets from `/vayada/staging/*` while it is used for C1
+observe-only rehearsal.
 
 SSM parameters are referenced by ARN in ECS task definitions — containers read them at startup via the `ecsTaskExecutionRole`.
 
@@ -86,12 +111,12 @@ SSM parameters are referenced by ARN in ECS task definitions — containers read
 The Channex/webhook cutover rehearsal uses a separate SSM namespace so replay
 credentials do not get mixed with production runtime secrets:
 
-| Parameter | Used by |
-|---|---|
-| `/vayada/staging/target-database-url` | `TARGET_DATABASE_URL` for target parity and C1 rehearsal dashboard checks |
-| `/vayada/staging/pms-database-url` | `DATABASE_URL` for the frozen staging PMS backend runtime |
-| `/vayada/staging/stripe-webhook-secret` | `STRIPE_WEBHOOK_SECRET` for signing Stripe replay fixtures |
-| `/vayada/staging/xendit-webhook-secret` | `XENDIT_WEBHOOK_SECRET` / `x-callback-token` for Xendit replay fixtures |
+| Parameter                                | Used by                                                                         |
+| ---------------------------------------- | ------------------------------------------------------------------------------- |
+| `/vayada/staging/target-database-url`    | `TARGET_DATABASE_URL` for target parity and C1 rehearsal dashboard checks       |
+| `/vayada/staging/pms-database-url`       | `DATABASE_URL` for the frozen staging PMS backend runtime                       |
+| `/vayada/staging/stripe-webhook-secret`  | `STRIPE_WEBHOOK_SECRET` for signing Stripe replay fixtures                      |
+| `/vayada/staging/xendit-webhook-secret`  | `XENDIT_WEBHOOK_SECRET` / `x-callback-token` for Xendit replay fixtures         |
 | `/vayada/staging/channex-webhook-secret` | `CHANNEX_WEBHOOK_SECRET` / `x-vayada-webhook-token` for Channex replay fixtures |
 
 Terraform creates the replay parameters when `manage_staging_rehearsal_secrets`
@@ -174,7 +199,7 @@ Service keys: `booking-backend`, `booking-frontend`, `booking-admin`, `pms-backe
 GitHub Actions authenticates via OIDC using the `vayada-github-actions-platform-deploy` role:
 
 - **Trust**: `repo:vayada-marketplace/vayada-platform:*`
-- **Permissions**: ECS deploy (RegisterTaskDefinition, UpdateService, Describe*), Terraform state (S3 + DynamoDB), ALB, ACM, Route53, CloudWatch, SSM, ECR management (create/describe repositories — not push)
+- **Permissions**: ECS deploy (RegisterTaskDefinition, UpdateService, Describe\*), Terraform state (S3 + DynamoDB), ALB, ACM, Route53, CloudWatch, SSM, ECR management (create/describe repositories — not push)
 
 The app repo uses a separate role (`vayada-github-actions-deploy`) for ECR push only. Neither role holds the other's permissions.
 

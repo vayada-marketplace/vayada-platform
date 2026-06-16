@@ -8,6 +8,7 @@ locals {
     "vayada-creator-marketplace-backend",
     "vayada-admin-frontend",
     "vayada-affiliate-dashboard",
+    "vayada-api",
   ]
 }
 
