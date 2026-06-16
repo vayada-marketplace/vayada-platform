@@ -44,10 +44,8 @@ locals {
   ]
 
   target_backend_ssm_parameter_arns = [
-    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/target-database-url",
-    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/stripe-webhook-secret",
-    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/xendit-webhook-secret",
-    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/channex-webhook-secret",
+    for secret in local.base_services["target-backend"].secrets :
+    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${secret.valueFrom}"
   ]
 }
 

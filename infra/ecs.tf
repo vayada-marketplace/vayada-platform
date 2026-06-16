@@ -334,6 +334,16 @@ resource "aws_ecs_service" "services" {
 
   lifecycle {
     ignore_changes = [task_definition]
+
+    precondition {
+      condition = (
+        each.key != "target-backend" ||
+        var.target_backend_desired_count == 0 ||
+        var.manage_staging_rehearsal_secrets ||
+        var.target_backend_staging_secrets_preprovisioned
+      )
+      error_message = "target_backend_desired_count can only be greater than 0 when Terraform manages the staging rehearsal SSM parameters or target_backend_staging_secrets_preprovisioned is true. Required parameters: /vayada/staging/target-database-url, /vayada/staging/stripe-webhook-secret, /vayada/staging/xendit-webhook-secret, /vayada/staging/channex-webhook-secret."
+    }
   }
 
   tags = each.key == "staging-pms-backend" ? {} : {

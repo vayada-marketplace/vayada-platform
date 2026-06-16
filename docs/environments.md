@@ -76,7 +76,10 @@ Safe activation order:
    publishes `vayada-api:<git-sha>` and updates the `vayada-api-service` task
    definition.
 3. Set `target_backend_desired_count = 1` and apply platform Terraform to start
-   the target runtime on `target-api.vayada.com`.
+   the target runtime on `target-api.vayada.com`. If the four
+   `/vayada/staging/*` target secrets already exist outside this apply, also set
+   `target_backend_staging_secrets_preprovisioned = true`; otherwise enable
+   `manage_staging_rehearsal_secrets` and provide the matching values.
 
 ### Secrets
 
