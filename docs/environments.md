@@ -80,6 +80,9 @@ Safe activation order:
    `/vayada/staging/*` target secrets already exist outside this apply, also set
    `target_backend_staging_secrets_preprovisioned = true`; otherwise enable
    `manage_staging_rehearsal_secrets` and provide the matching values.
+   In GitHub Actions, these map to repository secrets
+   `TF_VAR_TARGET_BACKEND_DESIRED_COUNT` and
+   `TF_VAR_TARGET_BACKEND_STAGING_SECRETS_PREPROVISIONED`.
 
 ### Secrets
 
