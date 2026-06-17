@@ -13,6 +13,7 @@ output "service_urls" {
     booking_admin    = "https://admin.booking.vayada.com"
     pms_api          = "https://pms-api.vayada.com"
     pms_frontend     = "https://pms.vayada.com"
+    target_api       = "https://target-api.vayada.com"
     staging_pms_api  = var.enable_staging_pms_runtime ? "https://staging-pms-api.vayada.com" : null
   }
 }
