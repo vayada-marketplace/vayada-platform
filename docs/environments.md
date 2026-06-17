@@ -6,14 +6,14 @@ How production is provisioned, deployed, and operated from this repository.
 
 This repository owns everything after an image is published to ECR:
 
-| Concern                                         | Owner                                                                  |
-| ----------------------------------------------- | ---------------------------------------------------------------------- |
-| Application code, Docker builds, migrations     | `vayada` (app repo)                                                    |
-| ECR repository creation                         | `vayada-platform` (this repo)                                          |
-| ECS task definition updates and service deploys | `vayada-platform` CI                                                   |
-| Production secrets and SSM parameters           | `vayada-platform` (`infra/ssm.tf`)                                     |
-| DNS, TLS certificates, load balancer config     | `vayada-platform` (`infra/route53.tf`, `infra/acm.tf`, `infra/alb.tf`) |
-| CloudWatch log groups                           | `vayada-platform` (`infra/cloudwatch.tf`)                              |
+| Concern                                         | Owner                                                                                         |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Application code, Docker builds, migrations     | `vayada` (app repo)                                                                           |
+| ECR repository creation                         | `vayada-platform` (this repo)                                                                 |
+| ECS task definition updates and service deploys | `vayada-platform` CI                                                                          |
+| Production secrets and SSM parameters           | `vayada-platform` (`infra/ssm.tf`)                                                            |
+| DNS, TLS certificates, load balancer config     | `vayada-platform` (`infra/route53.tf`, `infra/cloudflare.tf`, `infra/acm.tf`, `infra/alb.tf`) |
+| CloudWatch log groups                           | `vayada-platform` (`infra/cloudwatch.tf`)                                                     |
 
 ## Production environment
 
@@ -44,7 +44,7 @@ Lock table: `vayada-terraform-lock` (DynamoDB).
 | TypeScript Target API | `vayada-api`                         | `vayada-api-service`                 | `target-api.vayada.com`    |
 | Landing               | `vayada-landing`                     | App Runner                           | (App Runner auto-deploy)   |
 
-All ECS services run on `vayada-backend-cluster` (Fargate) in `eu-west-1`, fronted by `vayada-backend-alb`.
+All ECS services run on `vayada-backend-cluster` (Fargate) in `eu-west-1`, fronted by `vayada-backend-alb`. Public `vayada.com` DNS is authoritative in Cloudflare; Route 53 records remain for AWS-side aliases and certificate validation where used.
 
 ### Deployment flow
 
