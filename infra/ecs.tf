@@ -344,6 +344,12 @@ resource "aws_ecs_task_definition" "services" {
   tags = contains(["staging-pms-backend", "target-backend"], each.key) ? {} : {
     Service = each.value.name
   }
+
+  depends_on = [aws_iam_role_policy.github_actions_platform_ecs_task_definition]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_ecs_service" "services" {
