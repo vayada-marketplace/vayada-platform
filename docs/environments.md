@@ -205,7 +205,7 @@ Service keys: `booking-backend`, `booking-frontend`, `booking-admin`, `pms-backe
 GitHub Actions authenticates via OIDC using the `vayada-github-actions-platform-deploy` role:
 
 - **Trust**: `repo:vayada-marketplace/vayada-platform:*`
-- **Permissions**: ECS deploy (RegisterTaskDefinition, UpdateService, Describe\*), Terraform state (S3 + DynamoDB), ALB, ACM, Route53, CloudWatch, SSM, ECR management (create/describe repositories — not push)
+- **Permissions**: ECS deploy (RegisterTaskDefinition, CreateService, UpdateService, Describe\*), Terraform state (S3 + DynamoDB), ALB, ACM, Route53, CloudWatch, SSM, ECR management (create/describe repositories — not push)
 
 The app repo uses a separate role (`vayada-github-actions-deploy`) for ECR push only. Neither role holds the other's permissions.
 
