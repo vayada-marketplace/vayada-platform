@@ -64,6 +64,7 @@ jobs:
           TF_VAR_staging_xendit_webhook_secret: ${{ secrets.TF_VAR_STAGING_XENDIT_WEBHOOK_SECRET }}
           TF_VAR_staging_channex_webhook_secret: ${{ secrets.TF_VAR_STAGING_CHANNEX_WEBHOOK_SECRET }}
           TF_VAR_cloudflare_api_token: ${{ secrets.TF_VAR_CLOUDFLARE_API_TOKEN }}
+          TF_VAR_enable_cloudflare_dns: ${{ secrets.TF_VAR_ENABLE_CLOUDFLARE_DNS || 'false' }}
           TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}
           TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
           TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
