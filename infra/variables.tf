@@ -156,6 +156,50 @@ variable "target_backend_staging_secrets_preprovisioned" {
   default     = false
 }
 
+variable "target_backend_production_cutover_enabled" {
+  description = "Enable production source flags and AuthKit runtime config for the TypeScript target backend. Provider webhooks remain observe-only."
+  type        = bool
+  default     = false
+}
+
+variable "workos_api_key" {
+  description = "WorkOS API key used by the TypeScript target backend AuthKit runtime"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "workos_client_id" {
+  description = "WorkOS client ID used by the TypeScript target backend AuthKit runtime"
+  type        = string
+  default     = ""
+}
+
+variable "workos_audience" {
+  description = "WorkOS JWT audience used by the TypeScript target backend"
+  type        = string
+  default     = ""
+}
+
+variable "workos_issuer" {
+  description = "WorkOS JWT issuer used by the TypeScript target backend"
+  type        = string
+  default     = ""
+}
+
+variable "workos_jwks_url" {
+  description = "WorkOS JWKS URL used by the TypeScript target backend"
+  type        = string
+  default     = ""
+}
+
+variable "auth_cookie_secret" {
+  description = "Cookie encryption secret used by the TypeScript target backend AuthKit runtime"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "staging_pms_database_url" {
   description = "PMS database URL used by the frozen staging PMS backend runtime"
   type        = string
