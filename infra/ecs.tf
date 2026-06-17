@@ -41,8 +41,10 @@ locals {
       health_check   = "/en"
       log_group      = "/ecs/vayada-booking-frontend"
       environment = [
-        { name = "NEXT_PUBLIC_API_URL", value = "https://booking-api.vayada.com" },
-        { name = "NEXT_PUBLIC_PMS_URL", value = "https://pms-api.vayada.com" },
+        { name = "NEXT_PUBLIC_API_URL", value = "https://target-api.vayada.com" },
+        { name = "NEXT_PUBLIC_BOOKING_WEB_API_URL", value = "https://target-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PMS_API_URL", value = "https://target-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PMS_URL", value = "https://target-api.vayada.com" },
         { name = "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY", value = var.stripe_publishable_key },
       ]
       secrets = []
@@ -55,7 +57,8 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-booking-admin"
       environment = [
-        { name = "NEXT_PUBLIC_API_URL", value = "https://booking-api.vayada.com" },
+        { name = "NEXT_PUBLIC_API_URL", value = "https://target-api.vayada.com" },
+        { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://target-api.vayada.com" },
       ]
       secrets = []
     }
