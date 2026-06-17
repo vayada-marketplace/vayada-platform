@@ -203,6 +203,12 @@ variable "cloudflare_zone_id" {
   default     = "77009db898599f8a81d571050e7c5f15"
 }
 
+variable "enable_cloudflare_dns" {
+  description = "Whether Terraform should manage public Cloudflare DNS records. Keep false until TF_VAR_CLOUDFLARE_API_TOKEN is a valid DNS edit token for vayada.com."
+  type        = bool
+  default     = false
+}
+
 variable "alb_sg_id" {
   description = "Existing ALB security group ID"
   type        = string
