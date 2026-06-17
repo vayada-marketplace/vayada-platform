@@ -207,6 +207,10 @@ GitHub Actions authenticates via OIDC using the `vayada-github-actions-platform-
 - **Trust**: `repo:vayada-marketplace/vayada-platform:*`
 - **Permissions**: ECS deploy (RegisterTaskDefinition, CreateService, UpdateService, Describe\*), Terraform state (S3 + DynamoDB), ALB, ACM, Route53, CloudWatch, SSM, ECR management (create/describe repositories — not push)
 
+The `vayada-github-actions-platform-deploy` role is bootstrapped outside this
+Terraform module, so changes to that role must be applied before platform
+Terraform can use the new permission.
+
 The app repo uses a separate role (`vayada-github-actions-deploy`) for ECR push only. Neither role holds the other's permissions.
 
 ## Preview environments

@@ -330,7 +330,6 @@ resource "aws_ecs_service" "services" {
 
   depends_on = [
     aws_lb_listener_rule.services,
-    aws_iam_role_policy.github_actions_ecs_service_management,
   ]
 
   lifecycle {

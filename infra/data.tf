@@ -22,7 +22,3 @@ data "aws_iam_role" "ecs_task_execution" {
 data "aws_iam_role" "ecs_task" {
   name = "ecsTaskRole"
 }
-
-data "aws_iam_role" "github_actions_platform_deploy" {
-  name = "vayada-github-actions-platform-deploy"
-}
