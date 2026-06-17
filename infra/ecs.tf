@@ -175,23 +175,62 @@ locals {
       desired_count  = var.target_backend_desired_count
       health_check   = "/health"
       log_group      = "/ecs/vayada-api"
-      environment = [
+      environment = concat([
         { name = "HOST", value = "0.0.0.0" },
         { name = "PORT", value = "8003" },
         { name = "NODE_ENV", value = "production" },
-        { name = "ENVIRONMENT", value = "staging" },
+        { name = "ENVIRONMENT", value = var.target_backend_production_cutover_enabled ? "production" : "staging" },
         { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = "https://app.vayada.com,https://vayada.com" },
         { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = "https://pms.vayada.com" },
-      ]
-      secrets = [
+        ], var.target_backend_production_cutover_enabled ? [
+        { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "target" },
+        { name = "BOOKING_DOMAIN_RESOLUTION_SOURCE", value = "target" },
+        { name = "PUBLIC_BOOKABILITY_SOURCE", value = "target" },
+        { name = "BOOKING_SETTINGS_SOURCE", value = "target" },
+        { name = "BOOKING_RESERVATIONS_SOURCE", value = "target" },
+        { name = "MARKETPLACE_DISCOVERY_SOURCE", value = "target" },
+        { name = "MARKETPLACE_ADMIN_SOURCE", value = "target" },
+        { name = "PMS_OPERATIONS_SOURCE", value = "target" },
+        { name = "FINANCE_SOURCE", value = "target" },
+        { name = "AFFILIATE_PUBLIC_SOURCE", value = "target" },
+        { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
+        { name = "BOOKING_WEB_EVENT_SINK", value = "target" },
+        { name = "BOOKING_WEB_LEGACY_CHECKOUT_COMMAND_PROXY_ENABLED", value = "false" },
+        { name = "BOOKING_HOST_BASE", value = "https://booking.vayada.com" },
+        { name = "WORKOS_CLIENT_ID", value = var.workos_client_id },
+        { name = "WORKOS_AUDIENCE", value = var.workos_audience },
+        { name = "WORKOS_ISSUER", value = var.workos_issuer },
+        { name = "WORKOS_JWKS_URL", value = var.workos_jwks_url },
+        { name = "AUTH_CALLBACK_URL", value = "https://target-api.vayada.com/auth/workos/callback" },
+        { name = "AUTH_SUCCESS_URL", value = "https://app.vayada.com/dashboard" },
+        { name = "AUTH_LOGOUT_URL", value = "https://app.vayada.com/login" },
+        { name = "AUTH_ALLOWED_ORIGINS", value = "https://target-api.vayada.com,https://app.vayada.com,https://admin.vayada.com,https://admin.booking.vayada.com,https://pms.vayada.com,https://affiliate.vayada.com,https://booking.vayada.com,https://vayada.com" },
+        { name = "AUTH_COOKIE_DOMAIN", value = ".vayada.com" },
+        { name = "AUTH_COOKIE_SECURE", value = "true" },
+        { name = "AUTH_BOOKING_ADMIN_SUCCESS_URL", value = "https://admin.booking.vayada.com/dashboard" },
+        { name = "AUTH_BOOKING_ADMIN_LOGOUT_URL", value = "https://admin.booking.vayada.com/login" },
+        { name = "AUTH_PMS_WEB_SUCCESS_URL", value = "https://pms.vayada.com/dashboard" },
+        { name = "AUTH_PMS_WEB_LOGOUT_URL", value = "https://pms.vayada.com/login" },
+        { name = "AUTH_AFFILIATE_DASHBOARD_SUCCESS_URL", value = "https://affiliate.vayada.com/dashboard" },
+        { name = "AUTH_AFFILIATE_DASHBOARD_LOGOUT_URL", value = "https://affiliate.vayada.com/login" },
+      ] : [])
+      secrets = concat([
         { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/staging/target-database-url" },
         { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/staging/stripe-webhook-secret" },
         { name = "XENDIT_WEBHOOK_SECRET", valueFrom = "/vayada/staging/xendit-webhook-secret" },
         { name = "CHANNEX_WEBHOOK_SECRET", valueFrom = "/vayada/staging/channex-webhook-secret" },
-      ]
+        ], var.target_backend_production_cutover_enabled ? [
+        { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/db-auth-url-ssl" },
+        { name = "WORKOS_API_KEY", valueFrom = "/vayada/prod/workos-api-key" },
+        { name = "AUTH_COOKIE_SECRET", valueFrom = "/vayada/prod/auth-cookie-secret" },
+        { name = "AUTH_LEGACY_MARKETPLACE_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
+        { name = "AUTH_LEGACY_BOOKING_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
+        { name = "AUTH_LEGACY_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
+        { name = "AUTH_LEGACY_AFFILIATE_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
+      ] : [])
     }
   }
 
