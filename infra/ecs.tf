@@ -323,6 +323,7 @@ locals {
         { name = "AUTH_SUCCESS_URL", value = "https://next-pms.vayada.com/dashboard" },
         { name = "AUTH_LOGOUT_URL", value = "https://next-pms.vayada.com/login" },
         { name = "AUTH_ALLOWED_ORIGINS", value = "https://next-api.vayada.com,https://next-pms.vayada.com" },
+        { name = "AUTH_COOKIE_DOMAIN", value = ".vayada.com" },
         { name = "AUTH_COOKIE_SECURE", value = "true" },
         { name = "AUTH_PMS_WEB_SUCCESS_URL", value = "https://next-pms.vayada.com/dashboard" },
         { name = "AUTH_PMS_WEB_LOGOUT_URL", value = "https://next-pms.vayada.com/login" },
