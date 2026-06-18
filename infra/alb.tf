@@ -73,7 +73,7 @@ locals {
     next-marketplace-frontend = {
       name         = "next-mkt-front-tg"
       port         = 3000
-      health_check = "/"
+      health_check = "/api/health"
     }
     next-affiliate-dashboard = {
       name         = "next-affiliate-tg"
