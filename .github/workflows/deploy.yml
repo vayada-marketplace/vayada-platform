@@ -92,6 +92,26 @@ jobs:
               echo "ecs_service=vayada-next-pms-frontend-service" >> "$GITHUB_OUTPUT"
               echo "task_family=vayada-next-pms-frontend" >> "$GITHUB_OUTPUT"
               ;;
+            next-booking-frontend)
+              echo "ecs_service=vayada-next-booking-frontend-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-next-booking-frontend" >> "$GITHUB_OUTPUT"
+              ;;
+            next-booking-admin)
+              echo "ecs_service=vayada-next-booking-admin-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-next-booking-admin" >> "$GITHUB_OUTPUT"
+              ;;
+            next-marketplace-admin)
+              echo "ecs_service=vayada-next-marketplace-admin-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-next-marketplace-admin" >> "$GITHUB_OUTPUT"
+              ;;
+            next-marketplace-frontend)
+              echo "ecs_service=vayada-next-marketplace-frontend-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-next-marketplace-frontend" >> "$GITHUB_OUTPUT"
+              ;;
+            next-affiliate-dashboard)
+              echo "ecs_service=vayada-next-affiliate-dashboard-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-next-affiliate-dashboard" >> "$GITHUB_OUTPUT"
+              ;;
             *)
               echo "Unknown service: $SERVICE"
               exit 1

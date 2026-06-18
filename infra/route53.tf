@@ -1,15 +1,21 @@
 locals {
   base_dns_records = {
-    "wildcard-booking" = "*.booking.vayada.com"
-    "admin-booking"    = "admin.booking.vayada.com"
-    "booking-api"      = "booking-api.vayada.com"
-    "pms-api"          = "pms-api.vayada.com"
-    "pms"              = "pms.vayada.com"
-    "custom-booking"   = "custom.booking.vayada.com"
-    "affiliate"        = "affiliate.vayada.com"
-    "target-api"       = "target-api.vayada.com"
-    "next-api"         = "next-api.vayada.com"
-    "next-pms"         = "next-pms.vayada.com"
+    "wildcard-booking"      = "*.booking.vayada.com"
+    "admin-booking"         = "admin.booking.vayada.com"
+    "booking-api"           = "booking-api.vayada.com"
+    "pms-api"               = "pms-api.vayada.com"
+    "pms"                   = "pms.vayada.com"
+    "custom-booking"        = "custom.booking.vayada.com"
+    "affiliate"             = "affiliate.vayada.com"
+    "target-api"            = "target-api.vayada.com"
+    "next-api"              = "next-api.vayada.com"
+    "next-pms"              = "next-pms.vayada.com"
+    "next-admin"            = "next-admin.vayada.com"
+    "next-booking-admin"    = "next-booking-admin.vayada.com"
+    "next-booking"          = "next-booking.vayada.com"
+    "wildcard-next-booking" = "*.next-booking.vayada.com"
+    "next-marketplace"      = "next-marketplace.vayada.com"
+    "next-affiliate"        = "next-affiliate.vayada.com"
   }
 
   staging_pms_dns_records = var.enable_staging_pms_runtime ? {
