@@ -283,7 +283,85 @@ locals {
     }
   } : {}
 
-  services = merge(local.base_services, local.staging_pms_service)
+  next_services = {
+    next-target-backend = {
+      name           = "vayada-next-api"
+      container_port = 8003
+      cpu            = 512
+      memory         = 1024
+      health_check   = "/health"
+      log_group      = "/ecs/vayada-next-api"
+      environment = [
+        { name = "HOST", value = "0.0.0.0" },
+        { name = "PORT", value = "8003" },
+        { name = "NODE_ENV", value = "production" },
+        { name = "ENVIRONMENT", value = "staging" },
+        { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "observe_only" },
+        { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
+        { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
+        { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = "https://next-pms.vayada.com" },
+        { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = "https://next-pms.vayada.com" },
+        { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "target" },
+        { name = "BOOKING_DOMAIN_RESOLUTION_SOURCE", value = "target" },
+        { name = "PUBLIC_BOOKABILITY_SOURCE", value = "target" },
+        { name = "BOOKING_SETTINGS_SOURCE", value = "target" },
+        { name = "BOOKING_RESERVATIONS_SOURCE", value = "target" },
+        { name = "MARKETPLACE_DISCOVERY_SOURCE", value = "target" },
+        { name = "MARKETPLACE_ADMIN_SOURCE", value = "target" },
+        { name = "PMS_OPERATIONS_SOURCE", value = "target" },
+        { name = "FINANCE_SOURCE", value = "target" },
+        { name = "AFFILIATE_PUBLIC_SOURCE", value = "target" },
+        { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
+        { name = "BOOKING_WEB_EVENT_SINK", value = "target" },
+        { name = "BOOKING_WEB_LEGACY_CHECKOUT_COMMAND_PROXY_ENABLED", value = "false" },
+        { name = "BOOKING_HOST_BASE", value = "https://booking.vayada.com" },
+        { name = "WORKOS_CLIENT_ID", value = var.workos_client_id },
+        { name = "WORKOS_AUDIENCE", value = var.workos_audience },
+        { name = "WORKOS_ISSUER", value = var.workos_issuer },
+        { name = "WORKOS_JWKS_URL", value = var.workos_jwks_url },
+        { name = "AUTH_CALLBACK_URL", value = "https://next-api.vayada.com/auth/workos/callback" },
+        { name = "AUTH_SUCCESS_URL", value = "https://next-pms.vayada.com/dashboard" },
+        { name = "AUTH_LOGOUT_URL", value = "https://next-pms.vayada.com/login" },
+        { name = "AUTH_ALLOWED_ORIGINS", value = "https://next-api.vayada.com,https://next-pms.vayada.com" },
+        { name = "AUTH_COOKIE_SECURE", value = "true" },
+        { name = "AUTH_PMS_WEB_SUCCESS_URL", value = "https://next-pms.vayada.com/dashboard" },
+        { name = "AUTH_PMS_WEB_LOGOUT_URL", value = "https://next-pms.vayada.com/login" },
+      ]
+      secrets = [
+        { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/staging/target-database-url" },
+        { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/staging/stripe-webhook-secret" },
+        { name = "XENDIT_WEBHOOK_SECRET", valueFrom = "/vayada/staging/xendit-webhook-secret" },
+        { name = "CHANNEX_WEBHOOK_SECRET", valueFrom = "/vayada/staging/channex-webhook-secret" },
+        { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/staging/target-database-url" },
+        { name = "WORKOS_API_KEY", valueFrom = "/vayada/prod/workos-api-key" },
+        { name = "AUTH_COOKIE_SECRET", valueFrom = "/vayada/prod/auth-cookie-secret" },
+        { name = "AUTH_LEGACY_MARKETPLACE_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
+        { name = "AUTH_LEGACY_BOOKING_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
+        { name = "AUTH_LEGACY_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
+        { name = "AUTH_LEGACY_AFFILIATE_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
+      ]
+    }
+    next-pms-frontend = {
+      name           = "vayada-next-pms-frontend"
+      container_port = 3004
+      cpu            = 256
+      memory         = 512
+      health_check   = "/"
+      log_group      = "/ecs/vayada-next-pms-frontend"
+      environment = [
+        { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PMS_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PMS_OPERATIONS_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PMS_OPERATIONS_READS_ENABLED", value = "true" },
+        { name = "NEXT_PUBLIC_AUTHKIT_LOGIN_ENABLED", value = "true" },
+        { name = "NEXT_PUBLIC_AUTHKIT_LEGACY_FALLBACK_ENABLED", value = "false" },
+      ]
+      secrets = []
+    }
+  }
+
+  services = merge(local.base_services, local.staging_pms_service, local.next_services)
 
   # Map from service key to ECR repo name
   ecr_repo_map = {
@@ -297,6 +375,8 @@ locals {
     "affiliate-dashboard" = "vayada-affiliate-dashboard"
     "staging-pms-backend" = "vayada-pms-backend"
     "target-backend"      = "vayada-api"
+    "next-target-backend" = "vayada-api"
+    "next-pms-frontend"   = "vayada-pms-frontend"
   }
 }
 
@@ -344,7 +424,7 @@ resource "aws_ecs_task_definition" "services" {
     }
   ])
 
-  tags = contains(["staging-pms-backend", "target-backend"], each.key) ? {} : {
+  tags = contains(["staging-pms-backend", "target-backend", "next-target-backend"], each.key) ? {} : {
     Service = each.value.name
   }
 
@@ -383,8 +463,8 @@ resource "aws_ecs_service" "services" {
 
     precondition {
       condition = (
-        each.key != "target-backend" ||
-        var.target_backend_desired_count == 0 ||
+        !contains(["target-backend", "next-target-backend"], each.key) ||
+        try(each.value.desired_count, 1) == 0 ||
         var.manage_staging_rehearsal_secrets ||
         var.target_backend_staging_secrets_preprovisioned
       )
@@ -392,7 +472,7 @@ resource "aws_ecs_service" "services" {
     }
   }
 
-  tags = contains(["staging-pms-backend", "target-backend"], each.key) ? {} : {
+  tags = contains(["staging-pms-backend", "target-backend", "next-target-backend"], each.key) ? {} : {
     Service = each.value.name
   }
 }

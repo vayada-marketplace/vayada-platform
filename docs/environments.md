@@ -42,6 +42,8 @@ Lock table: `vayada-terraform-lock` (DynamoDB).
 | Marketplace Admin     | `vayada-admin-frontend`              | `vayada-marketplace-admin-service`   | (internal)                 |
 | Affiliate Dashboard   | `vayada-affiliate-dashboard`         | `vayada-affiliate-dashboard-service` | `affiliate.vayada.com`     |
 | TypeScript Target API | `vayada-api`                         | `vayada-api-service`                 | `target-api.vayada.com`    |
+| Next TypeScript API   | `vayada-api`                         | `vayada-next-api-service`            | `next-api.vayada.com`      |
+| Next PMS Web          | `vayada-pms-frontend`                | `vayada-next-pms-frontend-service`   | `next-pms.vayada.com`      |
 | Landing               | `vayada-landing`                     | App Runner                           | (App Runner auto-deploy)   |
 
 All ECS services run on `vayada-backend-cluster` (Fargate) in `eu-west-1`, fronted by `vayada-backend-alb`. Public `vayada.com` DNS is authoritative in Cloudflare; Route 53 records remain for AWS-side aliases and certificate validation where used. Cloudflare DNS management is gated by `enable_cloudflare_dns`; only enable it after `TF_VAR_CLOUDFLARE_API_TOKEN` is a valid DNS edit token for the `vayada.com` zone.
@@ -199,6 +201,11 @@ gh workflow run deploy.yml \
 ```
 
 Service keys: `booking-backend`, `booking-frontend`, `booking-admin`, `pms-backend`, `pms-frontend`, `marketplace-backend`, `marketplace-admin`, `affiliate-dashboard`.
+
+Parallel next-stack service keys: `next-target-backend`, `next-pms-frontend`.
+These exist so `pms.vayada.com` and the legacy API hostnames can stay on the
+known-good production rollback while the TypeScript backend and PMS frontend are
+tested at `next-api.vayada.com` and `next-pms.vayada.com`.
 
 ## IAM
 
