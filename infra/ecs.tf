@@ -226,7 +226,7 @@ locals {
         { name = "XENDIT_WEBHOOK_SECRET", valueFrom = "/vayada/staging/xendit-webhook-secret" },
         { name = "CHANNEX_WEBHOOK_SECRET", valueFrom = "/vayada/staging/channex-webhook-secret" },
         ], var.target_backend_production_cutover_enabled ? [
-        { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/db-auth-url-ssl" },
+        { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/staging/target-database-url" },
         { name = "WORKOS_API_KEY", valueFrom = "/vayada/prod/workos-api-key" },
         { name = "AUTH_COOKIE_SECRET", valueFrom = "/vayada/prod/auth-cookie-secret" },
         { name = "AUTH_LEGACY_MARKETPLACE_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },

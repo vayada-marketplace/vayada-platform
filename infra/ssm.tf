@@ -7,7 +7,7 @@ locals {
     "db-auth-url"        = "postgresql://vayada_auth_user:${var.db_auth_password}@${var.rds_endpoint}:5432/vayada_auth_db"
     "db-pms-url"         = "postgresql://vayada_pms_user:${var.db_pms_password}@${var.rds_endpoint}:5432/vayada_pms_db"
     "db-marketplace-url" = "postgresql://vayada_admin:${var.db_master_password}@${var.rds_endpoint}:5432/postgres?sslmode=require"
-    "db-auth-url-ssl"    = "postgresql://vayada_auth_user:${var.db_auth_password}@${var.rds_endpoint}:5432/vayada_auth_db?sslmode=require"
+    "db-auth-url-ssl"    = "postgresql://vayada_auth_user:${var.db_auth_password}@${var.rds_endpoint}:5432/vayada_auth_db?sslmode=require&uselibpqcompat=true"
     "db-pms-url-ssl"     = "postgresql://vayada_pms_user:${var.db_pms_password}@${var.rds_endpoint}:5432/vayada_pms_db?sslmode=require"
 
     # Application secrets
