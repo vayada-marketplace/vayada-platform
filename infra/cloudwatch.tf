@@ -11,6 +11,11 @@ locals {
     "/ecs/vayada-api",
     "/ecs/vayada-next-api",
     "/ecs/vayada-next-pms-frontend",
+    "/ecs/vayada-next-booking-frontend",
+    "/ecs/vayada-next-booking-admin",
+    "/ecs/vayada-next-marketplace-admin",
+    "/ecs/vayada-next-marketplace-frontend",
+    "/ecs/vayada-next-affiliate-dashboard",
   ]
 
   staging_pms_log_groups = var.enable_staging_pms_runtime ? [
