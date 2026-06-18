@@ -14,6 +14,8 @@ output "service_urls" {
     pms_api          = "https://pms-api.vayada.com"
     pms_frontend     = "https://pms.vayada.com"
     target_api       = var.enable_cloudflare_dns ? "https://${cloudflare_record.target_api[0].hostname}" : "https://target-api.vayada.com"
+    next_api         = var.enable_cloudflare_dns ? "https://${cloudflare_record.next_api[0].hostname}" : "https://next-api.vayada.com"
+    next_pms         = var.enable_cloudflare_dns ? "https://${cloudflare_record.next_pms[0].hostname}" : "https://next-pms.vayada.com"
     staging_pms_api  = var.enable_staging_pms_runtime ? "https://staging-pms-api.vayada.com" : null
   }
 }

@@ -84,6 +84,14 @@ jobs:
               echo "ecs_service=vayada-api-service" >> "$GITHUB_OUTPUT"
               echo "task_family=vayada-api" >> "$GITHUB_OUTPUT"
               ;;
+            next-target-backend)
+              echo "ecs_service=vayada-next-api-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-next-api" >> "$GITHUB_OUTPUT"
+              ;;
+            next-pms-frontend)
+              echo "ecs_service=vayada-next-pms-frontend-service" >> "$GITHUB_OUTPUT"
+              echo "task_family=vayada-next-pms-frontend" >> "$GITHUB_OUTPUT"
+              ;;
             *)
               echo "Unknown service: $SERVICE"
               exit 1

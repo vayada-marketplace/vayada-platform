@@ -45,6 +45,16 @@ locals {
       port         = 8003
       health_check = "/health"
     }
+    next-target-backend = {
+      name         = "next-target-backend-tg"
+      port         = 8003
+      health_check = "/health"
+    }
+    next-pms-frontend = {
+      name         = "next-pms-frontend-tg"
+      port         = 3004
+      health_check = "/"
+    }
   }
 
   staging_pms_target_groups = var.enable_staging_pms_runtime ? {
@@ -97,6 +107,16 @@ locals {
       priority     = 47
       host         = "target-api.vayada.com"
       target_group = "target-backend"
+    }
+    next-api = {
+      priority     = 48
+      host         = "next-api.vayada.com"
+      target_group = "next-target-backend"
+    }
+    next-pms-frontend = {
+      priority     = 49
+      host         = "next-pms.vayada.com"
+      target_group = "next-pms-frontend"
     }
     booking-frontend = {
       priority     = 50
