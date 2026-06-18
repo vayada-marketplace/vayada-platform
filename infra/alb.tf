@@ -55,6 +55,31 @@ locals {
       port         = 3004
       health_check = "/"
     }
+    next-booking-frontend = {
+      name         = "next-booking-front-tg"
+      port         = 3002
+      health_check = "/en"
+    }
+    next-booking-admin = {
+      name         = "next-booking-admin-tg"
+      port         = 3003
+      health_check = "/"
+    }
+    next-marketplace-admin = {
+      name         = "next-mkt-admin-tg"
+      port         = 3001
+      health_check = "/"
+    }
+    next-marketplace-frontend = {
+      name         = "next-mkt-front-tg"
+      port         = 3000
+      health_check = "/api/health"
+    }
+    next-affiliate-dashboard = {
+      name         = "next-affiliate-tg"
+      port         = 3005
+      health_check = "/"
+    }
   }
 
   staging_pms_target_groups = var.enable_staging_pms_runtime ? {
@@ -117,6 +142,36 @@ locals {
       priority     = 49
       host         = "next-pms.vayada.com"
       target_group = "next-pms-frontend"
+    }
+    next-admin = {
+      priority     = 51
+      host         = "next-admin.vayada.com"
+      target_group = "next-marketplace-admin"
+    }
+    next-booking-admin = {
+      priority     = 52
+      host         = "next-booking-admin.vayada.com"
+      target_group = "next-booking-admin"
+    }
+    next-booking = {
+      priority     = 53
+      host         = "next-booking.vayada.com"
+      target_group = "next-booking-frontend"
+    }
+    next-booking-wildcard = {
+      priority     = 54
+      host         = "*.next-booking.vayada.com"
+      target_group = "next-booking-frontend"
+    }
+    next-marketplace = {
+      priority     = 55
+      host         = "next-marketplace.vayada.com"
+      target_group = "next-marketplace-frontend"
+    }
+    next-affiliate = {
+      priority     = 56
+      host         = "next-affiliate.vayada.com"
+      target_group = "next-affiliate-dashboard"
     }
     booking-frontend = {
       priority     = 50

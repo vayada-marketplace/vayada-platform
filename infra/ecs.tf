@@ -1,4 +1,14 @@
 locals {
+  next_frontend_allowed_origins = join(",", [
+    "https://next-api.vayada.com",
+    "https://next-pms.vayada.com",
+    "https://next-admin.vayada.com",
+    "https://next-booking-admin.vayada.com",
+    "https://next-booking.vayada.com",
+    "https://next-marketplace.vayada.com",
+    "https://next-affiliate.vayada.com",
+  ])
+
   base_services = {
     booking-backend = {
       name           = "vayada-booking-backend"
@@ -299,8 +309,8 @@ locals {
         { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
-        { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = "https://next-pms.vayada.com" },
-        { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = "https://next-pms.vayada.com" },
+        { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
+        { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "target" },
         { name = "BOOKING_DOMAIN_RESOLUTION_SOURCE", value = "target" },
         { name = "PUBLIC_BOOKABILITY_SOURCE", value = "target" },
@@ -314,19 +324,23 @@ locals {
         { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
         { name = "BOOKING_WEB_EVENT_SINK", value = "target" },
         { name = "BOOKING_WEB_LEGACY_CHECKOUT_COMMAND_PROXY_ENABLED", value = "false" },
-        { name = "BOOKING_HOST_BASE", value = "https://booking.vayada.com" },
+        { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
         { name = "WORKOS_CLIENT_ID", value = var.workos_client_id },
         { name = "WORKOS_AUDIENCE", value = var.workos_audience },
         { name = "WORKOS_ISSUER", value = var.workos_issuer },
         { name = "WORKOS_JWKS_URL", value = var.workos_jwks_url },
         { name = "AUTH_CALLBACK_URL", value = "https://next-api.vayada.com/auth/workos/callback" },
-        { name = "AUTH_SUCCESS_URL", value = "https://next-pms.vayada.com/dashboard" },
-        { name = "AUTH_LOGOUT_URL", value = "https://next-pms.vayada.com/login" },
-        { name = "AUTH_ALLOWED_ORIGINS", value = "https://next-api.vayada.com,https://next-pms.vayada.com" },
+        { name = "AUTH_SUCCESS_URL", value = "https://next-admin.vayada.com/dashboard" },
+        { name = "AUTH_LOGOUT_URL", value = "https://next-admin.vayada.com/login" },
+        { name = "AUTH_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "AUTH_COOKIE_DOMAIN", value = ".vayada.com" },
         { name = "AUTH_COOKIE_SECURE", value = "true" },
         { name = "AUTH_PMS_WEB_SUCCESS_URL", value = "https://next-pms.vayada.com/dashboard" },
         { name = "AUTH_PMS_WEB_LOGOUT_URL", value = "https://next-pms.vayada.com/login" },
+        { name = "AUTH_BOOKING_ADMIN_SUCCESS_URL", value = "https://next-booking-admin.vayada.com/dashboard" },
+        { name = "AUTH_BOOKING_ADMIN_LOGOUT_URL", value = "https://next-booking-admin.vayada.com/login" },
+        { name = "AUTH_AFFILIATE_DASHBOARD_SUCCESS_URL", value = "https://next-affiliate.vayada.com/dashboard" },
+        { name = "AUTH_AFFILIATE_DASHBOARD_LOGOUT_URL", value = "https://next-affiliate.vayada.com/login" },
       ]
       secrets = [
         { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/staging/target-database-url" },
@@ -360,24 +374,113 @@ locals {
       ]
       secrets = []
     }
+    next-booking-frontend = {
+      name           = "vayada-next-booking-frontend"
+      container_port = 3002
+      cpu            = 256
+      memory         = 512
+      health_check   = "/en"
+      log_group      = "/ecs/vayada-next-booking-frontend"
+      environment = [
+        { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_BOOKING_WEB_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PMS_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY", value = var.stripe_publishable_key },
+      ]
+      secrets = []
+    }
+    next-booking-admin = {
+      name           = "vayada-next-booking-admin"
+      container_port = 3003
+      cpu            = 256
+      memory         = 512
+      health_check   = "/"
+      log_group      = "/ecs/vayada-next-booking-admin"
+      environment = [
+        { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_AUTHKIT_LOGIN_ENABLED", value = "true" },
+        { name = "NEXT_PUBLIC_AUTHKIT_LEGACY_FALLBACK_ENABLED", value = "false" },
+        { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PMS_FRONTEND_URL", value = "https://next-pms.vayada.com" },
+        { name = "NEXT_PUBLIC_MARKETPLACE_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_MARKETPLACE_URL", value = "https://next-marketplace.vayada.com" },
+        { name = "NEXT_PUBLIC_BOOKING_URL_TEMPLATE", value = "https://{slug}.next-booking.vayada.com" },
+        { name = "NEXT_PUBLIC_BOOKING_RESERVATIONS_ENABLED", value = "true" },
+      ]
+      secrets = []
+    }
+    next-marketplace-admin = {
+      name           = "vayada-next-marketplace-admin"
+      container_port = 3001
+      cpu            = 256
+      memory         = 512
+      health_check   = "/"
+      log_group      = "/ecs/vayada-next-marketplace-admin"
+      environment = [
+        { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_AUTHKIT_LOGIN_ENABLED", value = "true" },
+        { name = "NEXT_PUBLIC_AUTHKIT_LEGACY_FALLBACK_ENABLED", value = "false" },
+        { name = "NEXT_PUBLIC_BOOKING_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PMS_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_BOOKING_URL_TEMPLATE", value = "https://{slug}.next-booking.vayada.com" },
+      ]
+      secrets = []
+    }
+    next-marketplace-frontend = {
+      name           = "vayada-next-marketplace-frontend"
+      container_port = 3000
+      cpu            = 256
+      memory         = 512
+      health_check   = "/"
+      log_group      = "/ecs/vayada-next-marketplace-frontend"
+      environment = [
+        { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-pms.vayada.com" },
+        { name = "NEXT_PUBLIC_BOOKING_ADMIN_URL", value = "https://next-booking-admin.vayada.com" },
+      ]
+      secrets = []
+    }
+    next-affiliate-dashboard = {
+      name           = "vayada-next-affiliate-dashboard"
+      container_port = 3005
+      cpu            = 256
+      memory         = 512
+      health_check   = "/"
+      log_group      = "/ecs/vayada-next-affiliate-dashboard"
+      environment = [
+        { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
+      ]
+      secrets = []
+    }
   }
 
   services = merge(local.base_services, local.staging_pms_service, local.next_services)
 
   # Map from service key to ECR repo name
   ecr_repo_map = {
-    "booking-backend"     = "vayada-booking-backend"
-    "booking-frontend"    = "vayada-booking-frontend"
-    "booking-admin"       = "vayada-booking-admin-frontend"
-    "pms-backend"         = "vayada-pms-backend"
-    "pms-frontend"        = "vayada-pms-frontend"
-    "marketplace-backend" = "vayada-creator-marketplace-backend"
-    "marketplace-admin"   = "vayada-admin-frontend"
-    "affiliate-dashboard" = "vayada-affiliate-dashboard"
-    "staging-pms-backend" = "vayada-pms-backend"
-    "target-backend"      = "vayada-api"
-    "next-target-backend" = "vayada-api"
-    "next-pms-frontend"   = "vayada-pms-frontend"
+    "booking-backend"           = "vayada-booking-backend"
+    "booking-frontend"          = "vayada-booking-frontend"
+    "booking-admin"             = "vayada-booking-admin-frontend"
+    "pms-backend"               = "vayada-pms-backend"
+    "pms-frontend"              = "vayada-pms-frontend"
+    "marketplace-backend"       = "vayada-creator-marketplace-backend"
+    "marketplace-admin"         = "vayada-admin-frontend"
+    "affiliate-dashboard"       = "vayada-affiliate-dashboard"
+    "staging-pms-backend"       = "vayada-pms-backend"
+    "target-backend"            = "vayada-api"
+    "next-target-backend"       = "vayada-api"
+    "next-pms-frontend"         = "vayada-pms-frontend"
+    "next-booking-frontend"     = "vayada-booking-frontend"
+    "next-booking-admin"        = "vayada-booking-admin-frontend"
+    "next-marketplace-admin"    = "vayada-admin-frontend"
+    "next-marketplace-frontend" = "vayada-frontend"
+    "next-affiliate-dashboard"  = "vayada-affiliate-dashboard"
   }
 }
 
