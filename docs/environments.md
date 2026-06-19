@@ -48,6 +48,44 @@ Lock table: `vayada-terraform-lock` (DynamoDB).
 
 All ECS services run on `vayada-backend-cluster` (Fargate) in `eu-west-1`, fronted by `vayada-backend-alb`. Public `vayada.com` DNS is authoritative in Cloudflare; Route 53 records remain for AWS-side aliases and certificate validation where used. Cloudflare DNS management is gated by `enable_cloudflare_dns`; only enable it after `TF_VAR_CLOUDFLARE_API_TOKEN` is a valid DNS edit token for the `vayada.com` zone.
 
+### Parallel next-stack hostname freeze
+
+Next-stack rollout is parallel validation, not a production hostname cutover.
+The existing production hostnames intentionally keep their current routing until
+a separate cutover ticket says otherwise:
+
+| Hostname | Current routing owner |
+| --- | --- |
+| `vayada.com` | Existing public site routing |
+| `app.vayada.com` | Existing marketplace frontend routing |
+| `api.vayada.com` | Legacy Marketplace API |
+| `booking-api.vayada.com` | Legacy Booking API |
+| `booking.vayada.com` and `*.booking.vayada.com` | Existing Booking Web |
+| `admin.booking.vayada.com` | Existing Booking Admin |
+| `pms-api.vayada.com` | Legacy PMS API |
+| `pms.vayada.com` | Existing PMS Web |
+| `admin.vayada.com` | Existing Vayada Admin |
+| `affiliate.vayada.com` | Existing Affiliate Dashboard |
+
+Next-stack changes must use only the `next-*` hostnames:
+`next-api.vayada.com`, `next-pms.vayada.com`, `next-admin.vayada.com`,
+`next-booking-admin.vayada.com`, `next-booking.vayada.com`,
+`*.next-booking.vayada.com`, `next-marketplace.vayada.com`, and
+`next-affiliate.vayada.com`.
+
+Before merging VAY-858 through VAY-862 platform changes, review
+`infra/alb.tf`, `infra/route53.tf`, `infra/cloudflare.tf`, and `infra/ecs.tf`
+with `terraform plan`. The plan must not repoint any existing production
+hostname above to a `next-*` target group, Cloudflare record, Route 53 record,
+or next-stack ECS environment.
+
+Stripe, Xendit, and Channex dashboard/webhook endpoints also stay on the
+current legacy Python production paths until an explicit provider cutover
+window. Do not move provider callbacks to `next-api.vayada.com` during
+next-stack validation; preserve the currently exported dashboard URLs, such as
+`https://pms-api.vayada.com/webhooks/stripe`, or the existing legacy
+`/webhooks/*` route for providers that are not currently active.
+
 ### Deployment flow
 
 1. App CI pushes a Docker image to ECR with two tags: `:latest` and `:<git-sha>`
