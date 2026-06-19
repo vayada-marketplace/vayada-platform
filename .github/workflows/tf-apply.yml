@@ -180,7 +180,7 @@ jobs:
       - name: Render next-api task definition with current image
         if: steps.next_api_task.outputs.deploy_required == 'true'
         id: render-next-api-task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        uses: aws-actions/amazon-ecs-render-task-definition@6853cfae8c3a7d978fbf68b5a55453395541dfbb
         with:
           task-definition: next-api-task-definition.json
           container-name: vayada-next-api
@@ -188,7 +188,7 @@ jobs:
 
       - name: Deploy latest next-api task definition
         if: steps.next_api_task.outputs.deploy_required == 'true'
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a310a830f5c14e583e35d84e4e1ec7dd177c3c9c
         with:
           task-definition: ${{ steps.render-next-api-task-def.outputs.task-definition }}
           service: vayada-next-api-service
