@@ -40,7 +40,9 @@ jobs:
 
       - name: Terraform plan
         id: plan
-        run: terraform plan -no-color -out=tfplan 2>&1 | tee plan.txt
+        run: |
+          set -o pipefail
+          terraform plan -no-color -out=tfplan 2>&1 | tee plan.txt
         working-directory: infra
         env:
           TF_VAR_db_master_password: ${{ secrets.TF_VAR_DB_MASTER_PASSWORD }}
