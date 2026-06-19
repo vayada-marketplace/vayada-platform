@@ -97,6 +97,10 @@ next-stack validation; preserve the currently exported dashboard URLs, such as
 The Landing service is excluded — App Runner polls ECR for `:latest` and deploys automatically. No dispatch is needed.
 
 ECS services use `lifecycle { ignore_changes = [task_definition] }` in Terraform, so `terraform apply` never rolls back in-flight CI deploys.
+When Terraform registers a newer `vayada-next-api` task definition, `tf-apply.yml`
+deploys that latest next-api task definition with the service's current
+container image. This rolls forward secret/config changes without replacing the
+currently deployed app image.
 
 The TypeScript Target API is intentionally separate from the legacy Booking,
 PMS, and Marketplace APIs. It is exposed at `target-api.vayada.com` and defaults
@@ -124,31 +128,74 @@ Safe activation order:
    `TF_VAR_TARGET_BACKEND_DESIRED_COUNT` and
    `TF_VAR_TARGET_BACKEND_STAGING_SECRETS_PREPROVISIONED`.
 
+The parallel Next TypeScript API at `next-api.vayada.com` is separate from the
+C1 rehearsal runtime above. It reads production-owned target runtime secrets
+from `/vayada/prod/*`, not `/vayada/staging/*`, while old production hostnames
+continue to use their existing routing.
+
 ### Secrets
 
 Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 
-| Parameter                            | Used by                          |
-| ------------------------------------ | -------------------------------- |
-| `/vayada/prod/db-booking-url`        | `booking-api`                    |
-| `/vayada/prod/db-pms-url`            | `pms-api`                        |
-| `/vayada/prod/db-pms-url-ssl`        | `pms-api`                        |
-| `/vayada/prod/db-auth-url`           | all APIs                         |
-| `/vayada/prod/db-auth-url-ssl`       | all APIs                         |
-| `/vayada/prod/db-marketplace-url`    | `marketplace-api`                |
-| `/vayada/prod/jwt-secret-key`        | all APIs                         |
-| `/vayada/prod/stripe-secret-key`     | `booking-api`                    |
-| `/vayada/prod/stripe-webhook-secret` | `booking-api`                    |
-| `/vayada/prod/smtp-username`         | `booking-api`, `marketplace-api` |
-| `/vayada/prod/smtp-password`         | `booking-api`, `marketplace-api` |
-| `/vayada/prod/anthropic-api-key`     | `pms-api`                        |
-| `/vayada/prod/channex-api-key`       | `pms-api`                        |
-| `/vayada/prod/firecrawl-api-key`     | `pms-api`                        |
-| `/vayada/prod/cloudflare-api-token`  | platform Terraform               |
+| Parameter                             | Used by                            |
+| ------------------------------------- | ---------------------------------- |
+| `/vayada/prod/db-booking-url`         | `booking-api`                      |
+| `/vayada/prod/db-pms-url`             | `pms-api`                          |
+| `/vayada/prod/db-pms-url-ssl`         | `pms-api`                          |
+| `/vayada/prod/db-auth-url`            | all APIs                           |
+| `/vayada/prod/db-auth-url-ssl`        | all APIs                           |
+| `/vayada/prod/db-marketplace-url`     | `marketplace-api`                  |
+| `/vayada/prod/jwt-secret-key`         | all APIs                           |
+| `/vayada/prod/stripe-secret-key`      | `booking-api`                      |
+| `/vayada/prod/stripe-webhook-secret`  | `booking-api`, `next-api`          |
+| `/vayada/prod/smtp-username`          | `booking-api`, `marketplace-api`   |
+| `/vayada/prod/smtp-password`          | `booking-api`, `marketplace-api`   |
+| `/vayada/prod/anthropic-api-key`      | `pms-api`                          |
+| `/vayada/prod/channex-api-key`        | `pms-api`                          |
+| `/vayada/prod/firecrawl-api-key`      | `pms-api`                          |
+| `/vayada/prod/cloudflare-api-token`   | platform Terraform                 |
+| `/vayada/prod/target-database-url`    | `next-api`                         |
+| `/vayada/prod/workos-api-key`         | `next-api`                         |
+| `/vayada/prod/workos-webhook-secret`  | `next-api`                         |
+| `/vayada/prod/auth-cookie-secret`     | `next-api`                         |
+| `/vayada/prod/openai-api-key`         | `next-api` when `ASK_INTELLIGENCE_PROVIDER=openai` |
 
-The TypeScript Target API additionally reads rehearsal-scoped provider and
-target database secrets from `/vayada/staging/*` while it is used for C1
-observe-only rehearsal.
+The `next-api` task maps those SSM parameters to the backend's runtime
+environment as:
+
+| Backend env var | SSM parameter or Terraform variable |
+| --- | --- |
+| `TARGET_DATABASE_URL` | `/vayada/prod/target-database-url` |
+| `AUTH_DATABASE_URL` | `/vayada/prod/target-database-url` |
+| `WORKOS_API_KEY` | `/vayada/prod/workos-api-key` |
+| `WORKOS_WEBHOOK_SECRET` | `/vayada/prod/workos-webhook-secret` |
+| `AUTH_COOKIE_SECRET` | `/vayada/prod/auth-cookie-secret` |
+| `STRIPE_WEBHOOK_SECRET` | `/vayada/prod/stripe-webhook-secret` |
+| `WORKOS_CLIENT_ID`, `WORKOS_AUDIENCE`, `WORKOS_ISSUER`, `WORKOS_JWKS_URL` | Terraform variables from matching GitHub Actions secrets |
+| `ASK_INTELLIGENCE_PROVIDER`, `ASK_INTELLIGENCE_MODEL`, `OPENAI_BASE_URL`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT` | Terraform variables from matching GitHub Actions secrets |
+| `OPENAI_API_KEY` | `/vayada/prod/openai-api-key` when `ASK_INTELLIGENCE_PROVIDER=openai` |
+
+Set the required GitHub Actions repository secrets before merging or applying a
+live `next-api` task definition: `TF_VAR_TARGET_DATABASE_URL`,
+`TF_VAR_WORKOS_API_KEY`, `TF_VAR_WORKOS_WEBHOOK_SECRET`,
+`TF_VAR_WORKOS_CLIENT_ID`, `TF_VAR_WORKOS_AUDIENCE`,
+`TF_VAR_WORKOS_ISSUER`, `TF_VAR_WORKOS_JWKS_URL`,
+`TF_VAR_AUTH_COOKIE_SECRET`, and `TF_VAR_ASK_INTELLIGENCE_PROVIDER` if
+overriding the default fixture Ask provider. When enabling
+`ASK_INTELLIGENCE_PROVIDER=openai`, also set `TF_VAR_OPENAI_API_KEY` and
+`TF_VAR_ASK_INTELLIGENCE_MODEL`. Optional OpenAI routing fields are
+`TF_VAR_OPENAI_BASE_URL`, `TF_VAR_OPENAI_ORGANIZATION`, and
+`TF_VAR_OPENAI_PROJECT`.
+
+Xendit and Channex callback/API secrets remain outside the parallel next-stack
+task definition while provider dashboard callbacks stay on legacy Python
+production hostnames. Add production-owned `/vayada/prod/*` names for those
+providers in the explicit provider cutover ticket that first routes their
+traffic to `next-api.vayada.com`.
+
+The TypeScript Target API at `target-api.vayada.com` additionally reads
+rehearsal-scoped provider and target database secrets from `/vayada/staging/*`
+while it is used for C1 observe-only rehearsal.
 
 SSM parameters are referenced by ARN in ECS task definitions — containers read them at startup via the `ecsTaskExecutionRole`.
 
