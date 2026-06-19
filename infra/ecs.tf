@@ -341,20 +341,26 @@ locals {
         { name = "AUTH_BOOKING_ADMIN_LOGOUT_URL", value = "https://next-booking-admin.vayada.com/login" },
         { name = "AUTH_AFFILIATE_DASHBOARD_SUCCESS_URL", value = "https://next-affiliate.vayada.com/dashboard" },
         { name = "AUTH_AFFILIATE_DASHBOARD_LOGOUT_URL", value = "https://next-affiliate.vayada.com/login" },
+        { name = "ASK_INTELLIGENCE_PROVIDER", value = var.ask_intelligence_provider },
+        { name = "ASK_INTELLIGENCE_MODEL", value = var.ask_intelligence_model },
+        { name = "OPENAI_BASE_URL", value = var.openai_base_url },
+        { name = "OPENAI_ORGANIZATION", value = var.openai_organization },
+        { name = "OPENAI_PROJECT", value = var.openai_project },
       ]
-      secrets = [
-        { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/staging/target-database-url" },
-        { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/staging/stripe-webhook-secret" },
-        { name = "XENDIT_WEBHOOK_SECRET", valueFrom = "/vayada/staging/xendit-webhook-secret" },
-        { name = "CHANNEX_WEBHOOK_SECRET", valueFrom = "/vayada/staging/channex-webhook-secret" },
-        { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/staging/target-database-url" },
+      secrets = concat([
+        { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
+        { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
+        { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/stripe-webhook-secret" },
         { name = "WORKOS_API_KEY", valueFrom = "/vayada/prod/workos-api-key" },
+        { name = "WORKOS_WEBHOOK_SECRET", valueFrom = "/vayada/prod/workos-webhook-secret" },
         { name = "AUTH_COOKIE_SECRET", valueFrom = "/vayada/prod/auth-cookie-secret" },
         { name = "AUTH_LEGACY_MARKETPLACE_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_BOOKING_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_AFFILIATE_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
-      ]
+        ], var.ask_intelligence_provider == "openai" ? [
+        { name = "OPENAI_API_KEY", valueFrom = "/vayada/prod/openai-api-key" },
+      ] : [])
     }
     next-pms-frontend = {
       name           = "vayada-next-pms-frontend"
@@ -534,6 +540,35 @@ resource "aws_ecs_task_definition" "services" {
 
   lifecycle {
     create_before_destroy = true
+
+    precondition {
+      condition = (
+        each.key != "next-target-backend" ||
+        (
+          nonsensitive(length(trimspace(var.target_database_url)) > 0) &&
+          nonsensitive(length(trimspace(var.workos_api_key)) > 0) &&
+          nonsensitive(length(trimspace(var.workos_webhook_secret)) > 0) &&
+          nonsensitive(length(trimspace(var.auth_cookie_secret)) > 0) &&
+          length(trimspace(var.workos_client_id)) > 0 &&
+          length(trimspace(var.workos_audience)) > 0 &&
+          length(trimspace(var.workos_issuer)) > 0 &&
+          length(trimspace(var.workos_jwks_url)) > 0
+        )
+      )
+      error_message = "next-api.vayada.com requires production target DB/Auth values: TF_VAR_TARGET_DATABASE_URL, TF_VAR_WORKOS_API_KEY, TF_VAR_WORKOS_WEBHOOK_SECRET, TF_VAR_AUTH_COOKIE_SECRET, TF_VAR_WORKOS_CLIENT_ID, TF_VAR_WORKOS_AUDIENCE, TF_VAR_WORKOS_ISSUER, and TF_VAR_WORKOS_JWKS_URL."
+    }
+
+    precondition {
+      condition = (
+        each.key != "next-target-backend" ||
+        var.ask_intelligence_provider != "openai" ||
+        (
+          nonsensitive(length(trimspace(var.openai_api_key)) > 0) &&
+          length(trimspace(var.ask_intelligence_model)) > 0
+        )
+      )
+      error_message = "ASK_INTELLIGENCE_PROVIDER=openai requires TF_VAR_OPENAI_API_KEY and TF_VAR_ASK_INTELLIGENCE_MODEL for next-api.vayada.com."
+    }
   }
 }
 
@@ -567,7 +602,7 @@ resource "aws_ecs_service" "services" {
 
     precondition {
       condition = (
-        !contains(["target-backend", "next-target-backend"], each.key) ||
+        each.key != "target-backend" ||
         try(each.value.desired_count, 1) == 0 ||
         var.manage_staging_rehearsal_secrets ||
         var.target_backend_staging_secrets_preprovisioned

@@ -64,12 +64,20 @@ jobs:
           TF_VAR_staging_stripe_webhook_secret: ${{ secrets.TF_VAR_STAGING_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_staging_xendit_webhook_secret: ${{ secrets.TF_VAR_STAGING_XENDIT_WEBHOOK_SECRET }}
           TF_VAR_staging_channex_webhook_secret: ${{ secrets.TF_VAR_STAGING_CHANNEX_WEBHOOK_SECRET }}
+          TF_VAR_target_database_url: ${{ secrets.TF_VAR_TARGET_DATABASE_URL }}
           TF_VAR_workos_api_key: ${{ secrets.TF_VAR_WORKOS_API_KEY }}
+          TF_VAR_workos_webhook_secret: ${{ secrets.TF_VAR_WORKOS_WEBHOOK_SECRET }}
           TF_VAR_workos_client_id: ${{ secrets.TF_VAR_WORKOS_CLIENT_ID }}
           TF_VAR_workos_audience: ${{ secrets.TF_VAR_WORKOS_AUDIENCE }}
           TF_VAR_workos_issuer: ${{ secrets.TF_VAR_WORKOS_ISSUER }}
           TF_VAR_workos_jwks_url: ${{ secrets.TF_VAR_WORKOS_JWKS_URL }}
           TF_VAR_auth_cookie_secret: ${{ secrets.TF_VAR_AUTH_COOKIE_SECRET }}
+          TF_VAR_openai_api_key: ${{ secrets.TF_VAR_OPENAI_API_KEY }}
+          TF_VAR_ask_intelligence_provider: ${{ secrets.TF_VAR_ASK_INTELLIGENCE_PROVIDER || 'fixture' }}
+          TF_VAR_ask_intelligence_model: ${{ secrets.TF_VAR_ASK_INTELLIGENCE_MODEL }}
+          TF_VAR_openai_base_url: ${{ secrets.TF_VAR_OPENAI_BASE_URL }}
+          TF_VAR_openai_organization: ${{ secrets.TF_VAR_OPENAI_ORGANIZATION }}
+          TF_VAR_openai_project: ${{ secrets.TF_VAR_OPENAI_PROJECT }}
           TF_VAR_cloudflare_api_token: ${{ secrets.TF_VAR_CLOUDFLARE_API_TOKEN }}
           TF_VAR_enable_cloudflare_dns: ${{ secrets.TF_VAR_ENABLE_CLOUDFLARE_DNS || 'false' }}
           TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}

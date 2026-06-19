@@ -111,6 +111,13 @@ variable "staging_target_database_url" {
   default     = ""
 }
 
+variable "target_database_url" {
+  description = "Production-owned target database URL used by next-api.vayada.com"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "manage_staging_rehearsal_secrets" {
   description = "Whether Terraform should create the /vayada/staging C1 rehearsal SSM parameters"
   type        = bool
@@ -169,6 +176,13 @@ variable "workos_api_key" {
   default     = ""
 }
 
+variable "workos_webhook_secret" {
+  description = "WorkOS webhook signing secret used by the TypeScript target backend AuthKit runtime"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "workos_client_id" {
   description = "WorkOS client ID used by the TypeScript target backend AuthKit runtime"
   type        = string
@@ -197,6 +211,48 @@ variable "auth_cookie_secret" {
   description = "Cookie encryption secret used by the TypeScript target backend AuthKit runtime"
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+variable "openai_api_key" {
+  description = "OpenAI API key used by Ask Intelligence when ASK_INTELLIGENCE_PROVIDER=openai"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "ask_intelligence_provider" {
+  description = "Ask Intelligence provider for next-api.vayada.com"
+  type        = string
+  default     = "fixture"
+
+  validation {
+    condition     = contains(["fixture", "openai"], var.ask_intelligence_provider)
+    error_message = "ask_intelligence_provider must be fixture or openai."
+  }
+}
+
+variable "ask_intelligence_model" {
+  description = "Ask Intelligence model when ask_intelligence_provider is openai"
+  type        = string
+  default     = ""
+}
+
+variable "openai_base_url" {
+  description = "Optional OpenAI-compatible base URL for Ask Intelligence"
+  type        = string
+  default     = ""
+}
+
+variable "openai_organization" {
+  description = "Optional OpenAI organization for Ask Intelligence"
+  type        = string
+  default     = ""
+}
+
+variable "openai_project" {
+  description = "Optional OpenAI project for Ask Intelligence"
+  type        = string
   default     = ""
 }
 

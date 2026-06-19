@@ -22,12 +22,23 @@ locals {
     "firecrawl-api-key"     = var.firecrawl_api_key
   }
 
-  prod_target_cutover_ssm_secrets = var.target_backend_production_cutover_enabled ? {
-    "workos-api-key"     = var.workos_api_key
-    "auth-cookie-secret" = var.auth_cookie_secret
+  prod_next_api_required_ssm_secrets = {
+    "target-database-url"   = var.target_database_url
+    "workos-api-key"        = var.workos_api_key
+    "workos-webhook-secret" = var.workos_webhook_secret
+    "auth-cookie-secret"    = var.auth_cookie_secret
+  }
+
+  prod_next_api_ask_ssm_secrets = var.ask_intelligence_provider == "openai" ? {
+    "openai-api-key" = var.openai_api_key
   } : {}
 
-  prod_ssm_secrets = merge(local.prod_core_ssm_secrets, local.prod_target_cutover_ssm_secrets)
+  prod_next_api_ssm_secrets = merge(
+    local.prod_next_api_required_ssm_secrets,
+    local.prod_next_api_ask_ssm_secrets,
+  )
+
+  prod_ssm_secrets = merge(local.prod_core_ssm_secrets, local.prod_next_api_ssm_secrets)
 
   staging_rehearsal_ssm_secrets = {
     "target-database-url"    = var.staging_target_database_url

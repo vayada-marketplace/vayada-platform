@@ -65,12 +65,20 @@ jobs:
           TF_VAR_staging_stripe_webhook_secret: ${{ secrets.TF_VAR_STAGING_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_staging_xendit_webhook_secret: ${{ secrets.TF_VAR_STAGING_XENDIT_WEBHOOK_SECRET }}
           TF_VAR_staging_channex_webhook_secret: ${{ secrets.TF_VAR_STAGING_CHANNEX_WEBHOOK_SECRET }}
+          TF_VAR_target_database_url: ${{ secrets.TF_VAR_TARGET_DATABASE_URL }}
           TF_VAR_workos_api_key: ${{ secrets.TF_VAR_WORKOS_API_KEY }}
+          TF_VAR_workos_webhook_secret: ${{ secrets.TF_VAR_WORKOS_WEBHOOK_SECRET }}
           TF_VAR_workos_client_id: ${{ secrets.TF_VAR_WORKOS_CLIENT_ID }}
           TF_VAR_workos_audience: ${{ secrets.TF_VAR_WORKOS_AUDIENCE }}
           TF_VAR_workos_issuer: ${{ secrets.TF_VAR_WORKOS_ISSUER }}
           TF_VAR_workos_jwks_url: ${{ secrets.TF_VAR_WORKOS_JWKS_URL }}
           TF_VAR_auth_cookie_secret: ${{ secrets.TF_VAR_AUTH_COOKIE_SECRET }}
+          TF_VAR_openai_api_key: ${{ secrets.TF_VAR_OPENAI_API_KEY }}
+          TF_VAR_ask_intelligence_provider: ${{ secrets.TF_VAR_ASK_INTELLIGENCE_PROVIDER || 'fixture' }}
+          TF_VAR_ask_intelligence_model: ${{ secrets.TF_VAR_ASK_INTELLIGENCE_MODEL }}
+          TF_VAR_openai_base_url: ${{ secrets.TF_VAR_OPENAI_BASE_URL }}
+          TF_VAR_openai_organization: ${{ secrets.TF_VAR_OPENAI_ORGANIZATION }}
+          TF_VAR_openai_project: ${{ secrets.TF_VAR_OPENAI_PROJECT }}
           TF_VAR_cloudflare_api_token: ${{ secrets.TF_VAR_CLOUDFLARE_API_TOKEN }}
           TF_VAR_enable_cloudflare_dns: ${{ secrets.TF_VAR_ENABLE_CLOUDFLARE_DNS || 'false' }}
           TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}
@@ -102,14 +110,87 @@ jobs:
           TF_VAR_staging_stripe_webhook_secret: ${{ secrets.TF_VAR_STAGING_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_staging_xendit_webhook_secret: ${{ secrets.TF_VAR_STAGING_XENDIT_WEBHOOK_SECRET }}
           TF_VAR_staging_channex_webhook_secret: ${{ secrets.TF_VAR_STAGING_CHANNEX_WEBHOOK_SECRET }}
+          TF_VAR_target_database_url: ${{ secrets.TF_VAR_TARGET_DATABASE_URL }}
           TF_VAR_workos_api_key: ${{ secrets.TF_VAR_WORKOS_API_KEY }}
+          TF_VAR_workos_webhook_secret: ${{ secrets.TF_VAR_WORKOS_WEBHOOK_SECRET }}
           TF_VAR_workos_client_id: ${{ secrets.TF_VAR_WORKOS_CLIENT_ID }}
           TF_VAR_workos_audience: ${{ secrets.TF_VAR_WORKOS_AUDIENCE }}
           TF_VAR_workos_issuer: ${{ secrets.TF_VAR_WORKOS_ISSUER }}
           TF_VAR_workos_jwks_url: ${{ secrets.TF_VAR_WORKOS_JWKS_URL }}
           TF_VAR_auth_cookie_secret: ${{ secrets.TF_VAR_AUTH_COOKIE_SECRET }}
+          TF_VAR_openai_api_key: ${{ secrets.TF_VAR_OPENAI_API_KEY }}
+          TF_VAR_ask_intelligence_provider: ${{ secrets.TF_VAR_ASK_INTELLIGENCE_PROVIDER || 'fixture' }}
+          TF_VAR_ask_intelligence_model: ${{ secrets.TF_VAR_ASK_INTELLIGENCE_MODEL }}
+          TF_VAR_openai_base_url: ${{ secrets.TF_VAR_OPENAI_BASE_URL }}
+          TF_VAR_openai_organization: ${{ secrets.TF_VAR_OPENAI_ORGANIZATION }}
+          TF_VAR_openai_project: ${{ secrets.TF_VAR_OPENAI_PROJECT }}
           TF_VAR_cloudflare_api_token: ${{ secrets.TF_VAR_CLOUDFLARE_API_TOKEN }}
           TF_VAR_enable_cloudflare_dns: ${{ secrets.TF_VAR_ENABLE_CLOUDFLARE_DNS || 'false' }}
           TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}
           TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
           TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
+
+      - name: Check next-api task definition drift
+        id: next_api_task
+        run: |
+          set -euo pipefail
+
+          current_task_definition="$(
+            aws ecs describe-services \
+              --cluster vayada-backend-cluster \
+              --services vayada-next-api-service \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'services[0].taskDefinition' \
+              --output text
+          )"
+          latest_task_definition="$(
+            aws ecs describe-task-definition \
+              --task-definition vayada-next-api \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'taskDefinition.taskDefinitionArn' \
+              --output text
+          )"
+
+          echo "current_task_definition=${current_task_definition}" >> "$GITHUB_OUTPUT"
+          echo "latest_task_definition=${latest_task_definition}" >> "$GITHUB_OUTPUT"
+
+          if [ "$current_task_definition" = "$latest_task_definition" ]; then
+            echo "deploy_required=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current_image="$(
+            aws ecs describe-task-definition \
+              --task-definition "$current_task_definition" \
+              --region "${{ env.AWS_REGION }}" \
+              --query "taskDefinition.containerDefinitions[?name=='vayada-next-api'].image | [0]" \
+              --output text
+          )"
+          echo "current_image=${current_image}" >> "$GITHUB_OUTPUT"
+          echo "deploy_required=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download latest next-api task definition
+        if: steps.next_api_task.outputs.deploy_required == 'true'
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${{ steps.next_api_task.outputs.latest_task_definition }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --query taskDefinition > next-api-task-definition.json
+
+      - name: Render next-api task definition with current image
+        if: steps.next_api_task.outputs.deploy_required == 'true'
+        id: render-next-api-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: next-api-task-definition.json
+          container-name: vayada-next-api
+          image: ${{ steps.next_api_task.outputs.current_image }}
+
+      - name: Deploy latest next-api task definition
+        if: steps.next_api_task.outputs.deploy_required == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-next-api-task-def.outputs.task-definition }}
+          service: vayada-next-api-service
+          cluster: vayada-backend-cluster
+          wait-for-service-stability: true
