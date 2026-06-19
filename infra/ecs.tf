@@ -305,7 +305,7 @@ locals {
         { name = "HOST", value = "0.0.0.0" },
         { name = "PORT", value = "8003" },
         { name = "NODE_ENV", value = "production" },
-        { name = "ENVIRONMENT", value = "staging" },
+        { name = "ENVIRONMENT", value = "production" },
         { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
@@ -377,6 +377,7 @@ locals {
         { name = "NEXT_PUBLIC_PMS_OPERATIONS_READS_ENABLED", value = "true" },
         { name = "NEXT_PUBLIC_AUTHKIT_LOGIN_ENABLED", value = "true" },
         { name = "NEXT_PUBLIC_AUTHKIT_LEGACY_FALLBACK_ENABLED", value = "false" },
+        { name = "NEXT_PUBLIC_AUTHKIT_COMPATIBILITY_TOKEN_ENABLED", value = "false" },
       ]
       secrets = []
     }
@@ -407,6 +408,7 @@ locals {
         { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTHKIT_LOGIN_ENABLED", value = "true" },
         { name = "NEXT_PUBLIC_AUTHKIT_LEGACY_FALLBACK_ENABLED", value = "false" },
+        { name = "NEXT_PUBLIC_AUTHKIT_COMPATIBILITY_TOKEN_ENABLED", value = "false" },
         { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_FRONTEND_URL", value = "https://next-pms.vayada.com" },
@@ -429,6 +431,7 @@ locals {
         { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTHKIT_LOGIN_ENABLED", value = "true" },
         { name = "NEXT_PUBLIC_AUTHKIT_LEGACY_FALLBACK_ENABLED", value = "false" },
+        { name = "NEXT_PUBLIC_AUTHKIT_COMPATIBILITY_TOKEN_ENABLED", value = "false" },
         { name = "NEXT_PUBLIC_BOOKING_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_API_URL", value = "https://next-api.vayada.com" },
@@ -461,6 +464,7 @@ locals {
       environment = [
         { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
+        { name = "NEXT_PUBLIC_AUTHKIT_COMPATIBILITY_TOKEN_ENABLED", value = "false" },
       ]
       secrets = []
     }
