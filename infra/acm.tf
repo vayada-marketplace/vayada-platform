@@ -104,9 +104,29 @@ resource "aws_route53_record" "wildcard_next_booking_validation" {
   zone_id         = data.aws_route53_zone.main.zone_id
 }
 
+resource "cloudflare_record" "wildcard_next_booking_validation" {
+  for_each = var.enable_cloudflare_dns ? {
+    for dvo in aws_acm_certificate.wildcard_next_booking.domain_validation_options : dvo.domain_name => {
+      name   = trimsuffix(trimsuffix(dvo.resource_record_name, "."), ".vayada.com")
+      record = trimsuffix(dvo.resource_record_value, ".")
+      type   = dvo.resource_record_type
+    }
+  } : {}
+
+  zone_id         = var.cloudflare_zone_id
+  name            = each.value.name
+  type            = each.value.type
+  content         = each.value.record
+  ttl             = 60
+  proxied         = false
+  allow_overwrite = true
+}
+
 resource "aws_acm_certificate_validation" "wildcard_next_booking" {
   certificate_arn         = aws_acm_certificate.wildcard_next_booking.arn
   validation_record_fqdns = [for record in aws_route53_record.wildcard_next_booking_validation : record.fqdn]
+
+  depends_on = [cloudflare_record.wildcard_next_booking_validation]
 }
 
 # Attach wildcard certs to the existing ALB HTTPS listener
