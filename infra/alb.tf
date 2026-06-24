@@ -128,6 +128,11 @@ locals {
       host         = "affiliate.vayada.com"
       target_group = "affiliate-dashboard"
     }
+    booking-root = {
+      priority     = 46
+      host         = "booking.vayada.com"
+      target_group = "booking-frontend"
+    }
     target-api = {
       priority     = 47
       host         = "target-api.vayada.com"

@@ -1,5 +1,6 @@
 locals {
   base_dns_records = {
+    "booking"               = "booking.vayada.com"
     "wildcard-booking"      = "*.booking.vayada.com"
     "admin-booking"         = "admin.booking.vayada.com"
     "booking-api"           = "booking-api.vayada.com"
