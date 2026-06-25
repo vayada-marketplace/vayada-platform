@@ -88,7 +88,9 @@ next-stack validation; preserve the currently exported dashboard URLs, such as
 
 ### Deployment flow
 
-1. App CI pushes a Docker image to ECR with two tags: `:latest` and `:<git-sha>`
+1. App CI pushes a Docker image to ECR with a moving environment tag and
+   `:<git-sha>`; legacy production deploys own `:latest`, next deploys own
+   `:next-latest`
 2. App CI fires a `repository_dispatch` event (`app-image-published`) to this repo
 3. `.github/workflows/deploy.yml` picks up the event
 4. Platform CI downloads the current ECS task definition, renders a new revision with the SHA-pinned image, and deploys it to the ECS service
