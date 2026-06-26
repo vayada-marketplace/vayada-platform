@@ -16,37 +16,13 @@ locals {
   ]
 }
 
-resource "aws_iam_role" "c1_rehearsal_runner_execution" {
+data "aws_iam_role" "c1_rehearsal_runner_execution" {
   name = "vayada-c1-rehearsal-runner-exec"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "ecs-tasks.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      },
-    ]
-  })
-
-  tags = {
-    Project     = "vayada"
-    Environment = "staging"
-    Purpose     = "c1-rehearsal"
-  }
-}
-
-resource "aws_iam_role_policy_attachment" "c1_rehearsal_runner_execution" {
-  role       = aws_iam_role.c1_rehearsal_runner_execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 resource "aws_iam_role_policy" "c1_rehearsal_runner_secrets" {
   name = "c1-rehearsal-ssm-secrets-access"
-  role = aws_iam_role.c1_rehearsal_runner_execution.name
+  role = data.aws_iam_role.c1_rehearsal_runner_execution.name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -80,7 +56,7 @@ resource "aws_ecs_task_definition" "c1_rehearsal_runner" {
   requires_compatibilities = ["FARGATE"]
   cpu                      = 512
   memory                   = 1024
-  execution_role_arn       = aws_iam_role.c1_rehearsal_runner_execution.arn
+  execution_role_arn       = data.aws_iam_role.c1_rehearsal_runner_execution.arn
 
   container_definitions = jsonencode([
     {
