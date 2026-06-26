@@ -34,3 +34,8 @@ output "ecs_security_group_id" {
   description = "ECS tasks security group ID"
   value       = aws_security_group.ecs_tasks.id
 }
+
+output "c1_rehearsal_runner_task_definition" {
+  description = "One-off C1 rehearsal runner task definition ARN"
+  value       = aws_ecs_task_definition.c1_rehearsal_runner.arn
+}

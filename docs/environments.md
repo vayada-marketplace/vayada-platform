@@ -227,17 +227,94 @@ staging_xendit_webhook_secret       = "..."
 staging_channex_webhook_secret      = "..."
 ```
 
-Do not commit the real values. The C1 rehearsal operator should read these
-parameters into the app repo rehearsal commands and pass them as environment
-variables without printing them.
+Do not commit the real values. The default rehearsal path is the one-off ECS
+runner below so app repo CI does not need access to these secrets.
 
-Example no-print local load for the app repo rehearsal commands:
+### C1 one-off rehearsal runner
+
+Terraform registers task definition `vayada-c1-rehearsal-runner`. It is not an
+ECS service and only runs when an operator starts it with `aws ecs run-task`.
+The task uses the `vayada-api:latest` image, injects the four
+`/vayada/staging/*` parameters through ECS `secrets`, and writes logs to
+CloudWatch log group `/ecs/vayada-c1-rehearsal-runner`.
+Operator IAM should allow `ecs:RunTask` only for this task definition and
+`iam:PassRole` only for its execution role. Do not grant app repo CI access to
+the `/vayada/staging/*` parameters or the runner execution role.
+
+The default command runs the compiled dashboard checker without printing
+secrets:
 
 ```bash
-export TARGET_DATABASE_URL="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/target-database-url --with-decryption --query Parameter.Value --output text)"
-export STRIPE_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/stripe-webhook-secret --with-decryption --query Parameter.Value --output text)"
-export XENDIT_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/xendit-webhook-secret --with-decryption --query Parameter.Value --output text)"
-export CHANNEX_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/channex-webhook-secret --with-decryption --query Parameter.Value --output text)"
+node packages/backend-migration/dist/cli/c1RehearsalChecks.js \
+  --lookback-minutes 1440 \
+  --pretty
+```
+
+Run the default dashboard check:
+
+```bash
+cd infra
+
+TASK_DEFINITION="$(terraform output -raw c1_rehearsal_runner_task_definition)"
+SECURITY_GROUP="$(terraform output -raw ecs_security_group_id)"
+
+aws ecs run-task \
+  --region eu-west-1 \
+  --cluster vayada-backend-cluster \
+  --launch-type FARGATE \
+  --task-definition "$TASK_DEFINITION" \
+  --network-configuration "awsvpcConfiguration={subnets=[subnet-0cebe0311f380e8e6,subnet-0f5978ad929071531],securityGroups=[$SECURITY_GROUP],assignPublicIp=ENABLED}"
+```
+
+Provider replay uses the same task and must keep the exact-host allowlist at
+`target-api.vayada.com`. The task definition sets:
+
+```text
+C1_REHEARSAL_WEBHOOK_BASE_URL=https://target-api.vayada.com
+C1_REHEARSAL_ALLOW_SEND_TO_HOST=target-api.vayada.com
+```
+
+Run `--list` or a no-send dry run before any send:
+
+```bash
+cat >/tmp/c1-replay-overrides.json <<'JSON'
+{
+  "containerOverrides": [
+    {
+      "name": "vayada-c1-rehearsal-runner",
+      "command": [
+        "node",
+        "scripts/c1-rehearsal-replay-fixtures.mjs",
+        "--all",
+        "--base-url",
+        "https://target-api.vayada.com"
+      ]
+    }
+  ]
+}
+JSON
+
+aws ecs run-task \
+  --region eu-west-1 \
+  --cluster vayada-backend-cluster \
+  --launch-type FARGATE \
+  --task-definition "$TASK_DEFINITION" \
+  --network-configuration "awsvpcConfiguration={subnets=[subnet-0cebe0311f380e8e6,subnet-0f5978ad929071531],securityGroups=[$SECURITY_GROUP],assignPublicIp=ENABLED}" \
+  --overrides file:///tmp/c1-replay-overrides.json
+```
+
+Only after the dry run is clean, add `--twice` and `--send` to the override
+command. The replay script refuses non-local sends unless
+`C1_REHEARSAL_ALLOW_SEND_TO_HOST` matches the base URL hostname exactly, and the
+runbook keeps that value set to `target-api.vayada.com`.
+
+Read the log stream without exposing secret values:
+
+```bash
+aws logs tail /ecs/vayada-c1-rehearsal-runner \
+  --region eu-west-1 \
+  --since 30m \
+  --format short
 ```
 
 ### C1 staging rehearsal secret cleanup
