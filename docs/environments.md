@@ -210,6 +210,9 @@ credentials do not get mixed with production runtime secrets:
 | ---------------------------------------- | ------------------------------------------------------------------------------- |
 | `/vayada/staging/target-database-url`    | `TARGET_DATABASE_URL` for target parity and C1 rehearsal dashboard checks       |
 | `/vayada/staging/pms-database-url`       | `DATABASE_URL` for the frozen staging PMS backend runtime                       |
+| `/vayada/staging/pms-auth-database-url`  | `AUTH_DATABASE_URL` for the frozen staging PMS runtime; staging or approved read-only only |
+| `/vayada/staging/pms-booking-engine-database-url` | `BOOKING_ENGINE_DATABASE_URL` for the frozen staging PMS runtime; staging or approved read-only only |
+| `/vayada/staging/pms-stripe-webhook-secret` | No-op `STRIPE_WEBHOOK_SECRET` for the frozen staging PMS runtime                |
 | `/vayada/staging/stripe-webhook-secret`  | `STRIPE_WEBHOOK_SECRET` for signing Stripe replay fixtures                      |
 | `/vayada/staging/xendit-webhook-secret`  | `XENDIT_WEBHOOK_SECRET` / `x-callback-token` for Xendit replay fixtures         |
 | `/vayada/staging/channex-webhook-secret` | `CHANNEX_WEBHOOK_SECRET` / `x-vayada-webhook-token` for Channex replay fixtures |
@@ -372,13 +375,19 @@ The C1 rehearsal can create a dedicated staging PMS backend runtime for the
 legacy scheduler-freeze proof. It is disabled by default and is controlled by:
 
 ```hcl
-enable_staging_pms_runtime = true
-staging_pms_database_url   = "..."
+enable_staging_pms_runtime              = true
+staging_pms_database_url                = "..."
+staging_pms_auth_database_url           = "..."
+staging_pms_booking_engine_database_url = "..."
 ```
 
 When enabled, Terraform creates:
 
 - `/vayada/staging/pms-database-url`;
+- `/vayada/staging/pms-auth-database-url` and
+  `/vayada/staging/pms-booking-engine-database-url`;
+- no-op `/vayada/staging/pms-*` SMTP, Stripe API/webhook, Channex API,
+  Anthropic, Firecrawl, and JWT secrets;
 - ECS task definition/service `vayada-staging-pms-backend`;
 - target group `staging-pms-backend-tg`;
 - ALB listener rule and Route 53 alias for
@@ -390,6 +399,16 @@ scheduler frozen and legacy provider webhook modes set to
 `ack_only_with_receipt`. Capture `https://staging-pms-api.vayada.com/health`
 for the VAY-794 freeze evidence before inserting scheduler-freeze rows into the
 target database.
+
+Only enable this runtime for scheduler-freeze evidence when the auth and
+booking URLs above point to staging databases or explicitly approved read-only
+production credentials. SMTP, Stripe API, Channex API, Anthropic, Firecrawl,
+S3, and booking API runtime values are no-op values in Terraform so the frozen
+runtime cannot write to production providers. With staging auth and booking
+URLs, the only production dependency is the PMS backend image repository, which
+ECS pulls read-only. If either URL points at production, it must use explicitly
+approved read-only credentials and is the only approved production data
+dependency.
 
 ### Applying infrastructure changes
 

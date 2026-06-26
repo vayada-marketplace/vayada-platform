@@ -19,4 +19,6 @@ staging_xendit_webhook_secret       = "xendit-target-staging-callback-token"
 staging_channex_webhook_secret      = "channex-target-staging-token"
 
 # Optional frozen legacy PMS runtime for the C1 scheduler-freeze proof.
-enable_staging_pms_runtime = false
+enable_staging_pms_runtime              = false
+staging_pms_auth_database_url           = "postgresql://staging-auth-readonly-user:staging-auth-password@target-host:5432/staging-auth-db?sslmode=require"
+staging_pms_booking_engine_database_url = "postgresql://staging-booking-readonly-user:staging-booking-password@target-host:5432/staging-booking-db?sslmode=require"
