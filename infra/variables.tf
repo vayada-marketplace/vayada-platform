@@ -131,9 +131,9 @@ variable "staging_rehearsal_secret_owner" {
 }
 
 variable "staging_rehearsal_secret_expires_at" {
-  description = "ISO-8601 expiry tag for /vayada/staging C1 rehearsal SSM parameters"
+  description = "ISO-8601 expiry tag for /vayada/staging C1 rehearsal SSM parameters; override per rehearsal"
   type        = string
-  default     = ""
+  default     = "2026-06-30T18:00:00Z"
 }
 
 variable "staging_stripe_webhook_secret" {
