@@ -10,44 +10,10 @@ locals {
     { name = "CHANNEX_WEBHOOK_SECRET", valueFrom = "/vayada/staging/channex-webhook-secret" },
   ]
 
-  c1_rehearsal_runner_secret_arns = [
-    for secret in local.c1_rehearsal_runner_secrets :
-    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${secret.valueFrom}"
-  ]
 }
 
 data "aws_iam_role" "c1_rehearsal_runner_execution" {
   name = "vayada-c1-rehearsal-runner-exec"
-}
-
-resource "aws_iam_role_policy" "c1_rehearsal_runner_secrets" {
-  name = "c1-rehearsal-ssm-secrets-access"
-  role = data.aws_iam_role.c1_rehearsal_runner_execution.name
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "ssm:GetParameters",
-          "ssm:GetParameter",
-        ]
-        Resource = local.c1_rehearsal_runner_secret_arns
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = "*"
-        Condition = {
-          StringEquals = {
-            "kms:CallerAccount" = var.aws_account_id
-            "kms:ViaService"    = "ssm.${var.aws_region}.amazonaws.com"
-          }
-        }
-      },
-    ]
-  })
 }
 
 resource "aws_ecs_task_definition" "c1_rehearsal_runner" {
