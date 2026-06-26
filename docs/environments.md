@@ -237,6 +237,9 @@ ECS service and only runs when an operator starts it with `aws ecs run-task`.
 The task uses the `vayada-api:next-latest` image, injects the four
 `/vayada/staging/*` parameters through ECS `secrets`, and writes logs to
 CloudWatch log group `/ecs/vayada-c1-rehearsal-runner`.
+The execution role `vayada-c1-rehearsal-runner-exec` is bootstrapped outside
+this Terraform module because the platform deploy role cannot create IAM roles;
+Terraform manages the rehearsal-specific SSM/KMS inline policy on that role.
 Operator IAM should allow `ecs:RunTask` only for this task definition and
 `iam:PassRole` only for its execution role. Do not grant app repo CI access to
 the `/vayada/staging/*` parameters or the runner execution role.
