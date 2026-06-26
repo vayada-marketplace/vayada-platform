@@ -218,11 +218,13 @@ Terraform creates the replay parameters when `manage_staging_rehearsal_secrets`
 is enabled and all matching variables are set:
 
 ```hcl
-manage_staging_rehearsal_secrets = true
-staging_target_database_url    = "..."
-staging_stripe_webhook_secret  = "..."
-staging_xendit_webhook_secret  = "..."
-staging_channex_webhook_secret = "..."
+manage_staging_rehearsal_secrets    = true
+staging_rehearsal_secret_owner      = "platform-runtime"
+staging_rehearsal_secret_expires_at = "2026-06-30T18:00:00Z"
+staging_target_database_url         = "..."
+staging_stripe_webhook_secret       = "..."
+staging_xendit_webhook_secret       = "..."
+staging_channex_webhook_secret      = "..."
 ```
 
 Do not commit the real values. The C1 rehearsal operator should read these
@@ -236,6 +238,51 @@ export TARGET_DATABASE_URL="$(aws ssm get-parameter --region eu-west-1 --name /v
 export STRIPE_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/stripe-webhook-secret --with-decryption --query Parameter.Value --output text)"
 export XENDIT_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/xendit-webhook-secret --with-decryption --query Parameter.Value --output text)"
 export CHANNEX_WEBHOOK_SECRET="$(aws ssm get-parameter --region eu-west-1 --name /vayada/staging/channex-webhook-secret --with-decryption --query Parameter.Value --output text)"
+```
+
+### C1 staging rehearsal secret cleanup
+
+VAY-794 is not complete until the rehearsal operator has either rotated or
+deleted the provider replay secrets and recorded the parameter names, versions,
+operator, and cleanup timestamp without secret values.
+
+Normal deletion path after the rehearsal window:
+
+```bash
+cd infra
+terraform plan -out=tfplan \
+  -var='manage_staging_rehearsal_secrets=false' \
+  -var='enable_staging_pms_runtime=false'
+terraform apply tfplan
+```
+
+Normal rotation path for a follow-up rehearsal:
+
+```bash
+export TF_VAR_staging_stripe_webhook_secret="$STRIPE_WEBHOOK_SECRET_ROTATED"
+export TF_VAR_staging_xendit_webhook_secret="$XENDIT_WEBHOOK_SECRET_ROTATED"
+export TF_VAR_staging_channex_webhook_secret="$CHANNEX_WEBHOOK_SECRET_ROTATED"
+export TF_VAR_staging_rehearsal_secret_expires_at="$REHEARSAL_SECRET_EXPIRES_AT"
+
+cd infra
+terraform plan -out=tfplan -var='manage_staging_rehearsal_secrets=true'
+terraform apply tfplan
+
+unset TF_VAR_staging_stripe_webhook_secret
+unset TF_VAR_staging_xendit_webhook_secret
+unset TF_VAR_staging_channex_webhook_secret
+unset TF_VAR_staging_rehearsal_secret_expires_at
+```
+
+Keep the existing `staging_target_database_url` supplied through secure
+`tfvars` or `TF_VAR_staging_target_database_url`; do not print it.
+
+Emergency provider-secret deletion if Terraform cannot run:
+
+```bash
+for name in stripe-webhook-secret xendit-webhook-secret channex-webhook-secret; do
+  aws ssm delete-parameter --region eu-west-1 --name "/vayada/staging/${name}"
+done
 ```
 
 ### Frozen staging PMS runtime
