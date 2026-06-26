@@ -1,7 +1,7 @@
 locals {
   c1_rehearsal_runner_name      = "vayada-c1-rehearsal-runner"
   c1_rehearsal_runner_log_group = "/ecs/${local.c1_rehearsal_runner_name}"
-  c1_rehearsal_runner_image     = "${var.aws_account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/vayada-api:latest"
+  c1_rehearsal_runner_image     = "${var.aws_account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/vayada-api:next-latest"
 
   c1_rehearsal_runner_secrets = [
     { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/staging/target-database-url" },

@@ -234,7 +234,7 @@ runner below so app repo CI does not need access to these secrets.
 
 Terraform registers task definition `vayada-c1-rehearsal-runner`. It is not an
 ECS service and only runs when an operator starts it with `aws ecs run-task`.
-The task uses the `vayada-api:latest` image, injects the four
+The task uses the `vayada-api:next-latest` image, injects the four
 `/vayada/staging/*` parameters through ECS `secrets`, and writes logs to
 CloudWatch log group `/ecs/vayada-c1-rehearsal-runner`.
 Operator IAM should allow `ecs:RunTask` only for this task definition and
