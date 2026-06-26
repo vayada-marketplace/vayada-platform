@@ -253,6 +253,7 @@ locals {
       container_port = 8002
       cpu            = 256
       memory         = 512
+      task_role_arn  = null
       health_check   = "/health"
       log_group      = "/ecs/vayada-staging-pms-backend"
       environment = [
@@ -503,7 +504,7 @@ resource "aws_ecs_task_definition" "services" {
   cpu                      = each.value.cpu
   memory                   = each.value.memory
   execution_role_arn       = data.aws_iam_role.ecs_task_execution.arn
-  task_role_arn            = data.aws_iam_role.ecs_task.arn
+  task_role_arn            = try(each.value.task_role_arn, data.aws_iam_role.ecs_task.arn)
 
   container_definitions = jsonencode([
     {

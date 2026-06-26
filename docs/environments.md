@@ -389,6 +389,8 @@ When enabled, Terraform creates:
 - no-op `/vayada/staging/pms-*` SMTP, Stripe API/webhook, Channex API,
   Anthropic, Firecrawl, and JWT secrets;
 - ECS task definition/service `vayada-staging-pms-backend`;
+- no ECS task role for the staging PMS container; only the execution role reads
+  its SSM secrets and pulls the image;
 - target group `staging-pms-backend-tg`;
 - ALB listener rule and Route 53 alias for
   `https://staging-pms-api.vayada.com`;
@@ -405,12 +407,13 @@ booking URLs above point to staging databases or explicitly approved read-only
 production credentials. If the auth or booking URL is omitted, Terraform uses
 `staging_pms_database_url` so the runtime does not fall back to production.
 SMTP, Stripe API, Channex API, Anthropic, Firecrawl,
-S3, and booking API runtime values are no-op values in Terraform so the frozen
-runtime cannot write to production providers. With staging auth and booking
-URLs, the only production dependency is the PMS backend image repository, which
-ECS pulls read-only. If either URL points at production, it must use explicitly
-approved read-only credentials and is the only approved production data
-dependency.
+S3, and booking API runtime values are no-op values in Terraform, and the
+container has no ECS task role, so the frozen runtime cannot write to
+production AWS resources or providers. With staging auth and booking URLs, the
+only production dependency is the PMS backend image repository, which ECS pulls
+read-only through the execution role. If either URL points at production, it
+must use explicitly approved read-only credentials and is the only approved
+production data dependency.
 
 ### Applying infrastructure changes
 
