@@ -124,6 +124,18 @@ variable "manage_staging_rehearsal_secrets" {
   default     = false
 }
 
+variable "staging_rehearsal_secret_owner" {
+  description = "Owner tag for /vayada/staging C1 rehearsal SSM parameters"
+  type        = string
+  default     = "platform-runtime"
+}
+
+variable "staging_rehearsal_secret_expires_at" {
+  description = "ISO-8601 expiry tag for /vayada/staging C1 rehearsal SSM parameters"
+  type        = string
+  default     = ""
+}
+
 variable "staging_stripe_webhook_secret" {
   description = "Stripe webhook signing secret used for C1 staging replay"
   type        = string

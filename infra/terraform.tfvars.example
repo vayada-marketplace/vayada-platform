@@ -9,12 +9,14 @@ jwt_secret_key      = "your-jwt-secret-key"
 
 # Optional C1 staging rehearsal parameters. Leave unset unless running the
 # Channex/webhook cutover rehearsal.
-manage_staging_rehearsal_secrets = false
-staging_target_database_url    = "postgresql://target-user:target-password@target-host:5432/target-db?sslmode=require"
-staging_pms_database_url       = "postgresql://staging-pms-user:staging-pms-password@target-host:5432/staging-pms-db?sslmode=require"
-staging_stripe_webhook_secret  = "whsec_target_staging"
-staging_xendit_webhook_secret  = "xendit-target-staging-callback-token"
-staging_channex_webhook_secret = "channex-target-staging-token"
+manage_staging_rehearsal_secrets    = false
+staging_rehearsal_secret_owner      = "platform-runtime"
+staging_rehearsal_secret_expires_at = "2026-06-30T18:00:00Z"
+staging_target_database_url         = "postgresql://target-user:target-password@target-host:5432/target-db?sslmode=require"
+staging_pms_database_url            = "postgresql://staging-pms-user:staging-pms-password@target-host:5432/staging-pms-db?sslmode=require"
+staging_stripe_webhook_secret       = "whsec_target_staging"
+staging_xendit_webhook_secret       = "xendit-target-staging-callback-token"
+staging_channex_webhook_secret      = "channex-target-staging-token"
 
 # Optional frozen legacy PMS runtime for the C1 scheduler-freeze proof.
 enable_staging_pms_runtime = false

@@ -93,12 +93,18 @@ resource "aws_ssm_parameter" "staging_rehearsal_secrets" {
     Environment = "staging"
     ManagedBy   = "terraform"
     Purpose     = "c1-rehearsal"
+    Owner       = var.staging_rehearsal_secret_owner
+    ExpiresAt   = var.staging_rehearsal_secret_expires_at
   }
 
   lifecycle {
     precondition {
       condition     = trimspace(local.staging_ssm_secrets[each.key]) != ""
       error_message = "All enabled staging secret variables must be non-empty."
+    }
+    precondition {
+      condition     = trimspace(var.staging_rehearsal_secret_owner) != "" && trimspace(var.staging_rehearsal_secret_expires_at) != ""
+      error_message = "Enabled staging secret parameters require non-empty staging_rehearsal_secret_owner and staging_rehearsal_secret_expires_at tags."
     }
   }
 }
