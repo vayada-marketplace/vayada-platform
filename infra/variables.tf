@@ -275,6 +275,20 @@ variable "staging_pms_database_url" {
   default     = ""
 }
 
+variable "staging_pms_auth_database_url" {
+  description = "Staging or approved read-only auth database URL used by the frozen staging PMS backend runtime"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "staging_pms_booking_engine_database_url" {
+  description = "Staging or approved read-only booking database URL used by the frozen staging PMS backend runtime"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "stripe_platform_account_id" {
   description = "Stripe platform account ID"
   type        = string

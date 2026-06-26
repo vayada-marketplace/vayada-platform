@@ -47,8 +47,22 @@ locals {
     "channex-webhook-secret" = var.staging_channex_webhook_secret
   }
 
+  staging_pms_auth_database_url           = trimspace(var.staging_pms_auth_database_url) != "" ? var.staging_pms_auth_database_url : var.staging_pms_database_url
+  staging_pms_booking_engine_database_url = trimspace(var.staging_pms_booking_engine_database_url) != "" ? var.staging_pms_booking_engine_database_url : var.staging_pms_database_url
+
   staging_pms_runtime_ssm_secrets = var.enable_staging_pms_runtime ? {
-    "pms-database-url" = var.staging_pms_database_url
+    "pms-database-url"                = var.staging_pms_database_url
+    "pms-auth-database-url"           = local.staging_pms_auth_database_url
+    "pms-booking-engine-database-url" = local.staging_pms_booking_engine_database_url
+    # ponytail: no-op credentials are enough for scheduler-freeze health evidence; add real staging provider keys only if this runtime starts replaying provider APIs.
+    "pms-jwt-secret-key"        = "staging-pms-noop-jwt-secret"
+    "pms-smtp-username"         = "staging-pms-noop"
+    "pms-smtp-password"         = "staging-pms-noop"
+    "pms-stripe-secret-key"     = "sk_test_vayada_staging_noop"
+    "pms-stripe-webhook-secret" = "whsec_staging_pms_noop"
+    "pms-channex-api-key"       = "staging-pms-noop"
+    "pms-anthropic-api-key"     = "staging-pms-noop"
+    "pms-firecrawl-api-key"     = "staging-pms-noop"
   } : {}
 
   staging_ssm_secrets = merge(

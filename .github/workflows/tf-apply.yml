@@ -62,6 +62,8 @@ jobs:
           TF_VAR_enable_staging_pms_runtime: ${{ secrets.TF_VAR_ENABLE_STAGING_PMS_RUNTIME || 'false' }}
           TF_VAR_staging_target_database_url: ${{ secrets.TF_VAR_STAGING_TARGET_DATABASE_URL }}
           TF_VAR_staging_pms_database_url: ${{ secrets.TF_VAR_STAGING_PMS_DATABASE_URL }}
+          TF_VAR_staging_pms_auth_database_url: ${{ secrets.TF_VAR_STAGING_PMS_AUTH_DATABASE_URL }}
+          TF_VAR_staging_pms_booking_engine_database_url: ${{ secrets.TF_VAR_STAGING_PMS_BOOKING_ENGINE_DATABASE_URL }}
           TF_VAR_staging_stripe_webhook_secret: ${{ secrets.TF_VAR_STAGING_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_staging_xendit_webhook_secret: ${{ secrets.TF_VAR_STAGING_XENDIT_WEBHOOK_SECRET }}
           TF_VAR_staging_channex_webhook_secret: ${{ secrets.TF_VAR_STAGING_CHANNEX_WEBHOOK_SECRET }}
@@ -107,6 +109,8 @@ jobs:
           TF_VAR_enable_staging_pms_runtime: ${{ secrets.TF_VAR_ENABLE_STAGING_PMS_RUNTIME || 'false' }}
           TF_VAR_staging_target_database_url: ${{ secrets.TF_VAR_STAGING_TARGET_DATABASE_URL }}
           TF_VAR_staging_pms_database_url: ${{ secrets.TF_VAR_STAGING_PMS_DATABASE_URL }}
+          TF_VAR_staging_pms_auth_database_url: ${{ secrets.TF_VAR_STAGING_PMS_AUTH_DATABASE_URL }}
+          TF_VAR_staging_pms_booking_engine_database_url: ${{ secrets.TF_VAR_STAGING_PMS_BOOKING_ENGINE_DATABASE_URL }}
           TF_VAR_staging_stripe_webhook_secret: ${{ secrets.TF_VAR_STAGING_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_staging_xendit_webhook_secret: ${{ secrets.TF_VAR_STAGING_XENDIT_WEBHOOK_SECRET }}
           TF_VAR_staging_channex_webhook_secret: ${{ secrets.TF_VAR_STAGING_CHANNEX_WEBHOOK_SECRET }}
