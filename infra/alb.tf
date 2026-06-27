@@ -106,17 +106,23 @@ locals {
     booking-api = {
       priority     = 20
       host         = "booking-api.vayada.com"
-      target_group = "booking-backend"
+      target_group = "next-target-backend"
     }
     marketplace-api = {
       priority     = 25
       host         = "api.vayada.com"
-      target_group = "marketplace-backend"
+      target_group = "next-target-backend"
+    }
+    pms-api-provider-webhooks = {
+      priority     = 28
+      host         = "pms-api.vayada.com"
+      paths        = ["/webhooks/*"]
+      target_group = "pms-backend"
     }
     pms-api = {
       priority     = 30
       host         = "pms-api.vayada.com"
-      target_group = "pms-backend"
+      target_group = "next-target-backend"
     }
     pms-frontend = {
       priority     = 40
@@ -235,6 +241,16 @@ resource "aws_lb_listener_rule" "services" {
   condition {
     host_header {
       values = [each.value.host]
+    }
+  }
+
+  dynamic "condition" {
+    for_each = try(each.value.paths, null) == null ? [] : [each.value.paths]
+
+    content {
+      path_pattern {
+        values = condition.value
+      }
     }
   }
 
