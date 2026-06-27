@@ -106,23 +106,17 @@ locals {
     booking-api = {
       priority     = 20
       host         = "booking-api.vayada.com"
-      target_group = "next-target-backend"
+      target_group = "booking-backend"
     }
     marketplace-api = {
       priority     = 25
       host         = "api.vayada.com"
-      target_group = "next-target-backend"
-    }
-    pms-api-provider-webhooks = {
-      priority     = 28
-      host         = "pms-api.vayada.com"
-      paths        = ["/webhooks/*"]
-      target_group = "pms-backend"
+      target_group = "marketplace-backend"
     }
     pms-api = {
       priority     = 30
       host         = "pms-api.vayada.com"
-      target_group = "next-target-backend"
+      target_group = "pms-backend"
     }
     pms-frontend = {
       priority     = 40

@@ -164,7 +164,7 @@ variable "enable_staging_pms_runtime" {
 }
 
 variable "legacy_booking_api_desired_count" {
-  description = "Desired ECS task count for the legacy Python Booking API service. Keep 1 through canonical API cutover smoke; set 0 only after acceptance."
+  description = "Desired ECS task count for the legacy Python Booking API service. Keep 1 while booking-api.vayada.com routes to legacy."
   type        = number
   default     = 1
 
@@ -175,7 +175,7 @@ variable "legacy_booking_api_desired_count" {
 }
 
 variable "legacy_marketplace_api_desired_count" {
-  description = "Desired ECS task count for the legacy Python Marketplace API service. Keep 1 through canonical API cutover smoke; set 0 only after acceptance."
+  description = "Desired ECS task count for the legacy Python Marketplace API service. Keep 1 while api.vayada.com routes to legacy."
   type        = number
   default     = 1
 
@@ -186,7 +186,7 @@ variable "legacy_marketplace_api_desired_count" {
 }
 
 variable "legacy_pms_api_desired_count" {
-  description = "Desired ECS task count for the legacy Python PMS API service. Keep 1 while provider webhook paths remain routed there; set 0 only after provider callback cutover removes that dependency."
+  description = "Desired ECS task count for the legacy Python PMS API service. Keep 1 while pms-api.vayada.com routes to legacy."
   type        = number
   default     = 1
 
