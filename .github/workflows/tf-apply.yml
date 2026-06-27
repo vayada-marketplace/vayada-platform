@@ -55,6 +55,9 @@ jobs:
           TF_VAR_stripe_publishable_key: ${{ secrets.TF_VAR_STRIPE_PUBLISHABLE_KEY }}
           TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
+          TF_VAR_legacy_booking_api_desired_count: ${{ secrets.TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT || '1' }}
+          TF_VAR_legacy_marketplace_api_desired_count: ${{ secrets.TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT || '1' }}
+          TF_VAR_legacy_pms_api_desired_count: ${{ secrets.TF_VAR_LEGACY_PMS_API_DESIRED_COUNT || '1' }}
           TF_VAR_target_backend_desired_count: ${{ secrets.TF_VAR_TARGET_BACKEND_DESIRED_COUNT || '0' }}
           TF_VAR_target_backend_staging_secrets_preprovisioned: ${{ secrets.TF_VAR_TARGET_BACKEND_STAGING_SECRETS_PREPROVISIONED || 'false' }}
           TF_VAR_target_backend_production_cutover_enabled: ${{ secrets.TF_VAR_TARGET_BACKEND_PRODUCTION_CUTOVER_ENABLED || 'false' }}
@@ -102,6 +105,9 @@ jobs:
           TF_VAR_stripe_publishable_key: ${{ secrets.TF_VAR_STRIPE_PUBLISHABLE_KEY }}
           TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
+          TF_VAR_legacy_booking_api_desired_count: ${{ secrets.TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT || '1' }}
+          TF_VAR_legacy_marketplace_api_desired_count: ${{ secrets.TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT || '1' }}
+          TF_VAR_legacy_pms_api_desired_count: ${{ secrets.TF_VAR_LEGACY_PMS_API_DESIRED_COUNT || '1' }}
           TF_VAR_target_backend_desired_count: ${{ secrets.TF_VAR_TARGET_BACKEND_DESIRED_COUNT || '0' }}
           TF_VAR_target_backend_staging_secrets_preprovisioned: ${{ secrets.TF_VAR_TARGET_BACKEND_STAGING_SECRETS_PREPROVISIONED || 'false' }}
           TF_VAR_target_backend_production_cutover_enabled: ${{ secrets.TF_VAR_TARGET_BACKEND_PRODUCTION_CUTOVER_ENABLED || 'false' }}
@@ -196,5 +202,135 @@ jobs:
         with:
           task-definition: ${{ steps.render-next-api-task-def.outputs.task-definition }}
           service: vayada-next-api-service
+          cluster: vayada-backend-cluster
+          wait-for-service-stability: true
+
+      - name: Check booking frontend task definition drift
+        id: booking_frontend_task
+        run: |
+          set -euo pipefail
+
+          current_task_definition="$(
+            aws ecs describe-services \
+              --cluster vayada-backend-cluster \
+              --services vayada-booking-frontend-service \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'services[0].taskDefinition' \
+              --output text
+          )"
+          latest_task_definition="$(
+            aws ecs describe-task-definition \
+              --task-definition vayada-booking-frontend \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'taskDefinition.taskDefinitionArn' \
+              --output text
+          )"
+
+          echo "current_task_definition=${current_task_definition}" >> "$GITHUB_OUTPUT"
+          echo "latest_task_definition=${latest_task_definition}" >> "$GITHUB_OUTPUT"
+
+          if [ "$current_task_definition" = "$latest_task_definition" ]; then
+            echo "deploy_required=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current_image="$(
+            aws ecs describe-task-definition \
+              --task-definition "$current_task_definition" \
+              --region "${{ env.AWS_REGION }}" \
+              --query "taskDefinition.containerDefinitions[?name=='vayada-booking-frontend'].image | [0]" \
+              --output text
+          )"
+          echo "current_image=${current_image}" >> "$GITHUB_OUTPUT"
+          echo "deploy_required=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download latest booking frontend task definition
+        if: steps.booking_frontend_task.outputs.deploy_required == 'true'
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${{ steps.booking_frontend_task.outputs.latest_task_definition }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --query taskDefinition > booking-frontend-task-definition.json
+
+      - name: Render booking frontend task definition with current image
+        if: steps.booking_frontend_task.outputs.deploy_required == 'true'
+        id: render-booking-frontend-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@6853cfae8c3a7d978fbf68b5a55453395541dfbb
+        with:
+          task-definition: booking-frontend-task-definition.json
+          container-name: vayada-booking-frontend
+          image: ${{ steps.booking_frontend_task.outputs.current_image }}
+
+      - name: Deploy latest booking frontend task definition
+        if: steps.booking_frontend_task.outputs.deploy_required == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a310a830f5c14e583e35d84e4e1ec7dd177c3c9c
+        with:
+          task-definition: ${{ steps.render-booking-frontend-task-def.outputs.task-definition }}
+          service: vayada-booking-frontend-service
+          cluster: vayada-backend-cluster
+          wait-for-service-stability: true
+
+      - name: Check booking admin task definition drift
+        id: booking_admin_task
+        run: |
+          set -euo pipefail
+
+          current_task_definition="$(
+            aws ecs describe-services \
+              --cluster vayada-backend-cluster \
+              --services vayada-booking-admin-service \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'services[0].taskDefinition' \
+              --output text
+          )"
+          latest_task_definition="$(
+            aws ecs describe-task-definition \
+              --task-definition vayada-booking-admin \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'taskDefinition.taskDefinitionArn' \
+              --output text
+          )"
+
+          echo "current_task_definition=${current_task_definition}" >> "$GITHUB_OUTPUT"
+          echo "latest_task_definition=${latest_task_definition}" >> "$GITHUB_OUTPUT"
+
+          if [ "$current_task_definition" = "$latest_task_definition" ]; then
+            echo "deploy_required=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current_image="$(
+            aws ecs describe-task-definition \
+              --task-definition "$current_task_definition" \
+              --region "${{ env.AWS_REGION }}" \
+              --query "taskDefinition.containerDefinitions[?name=='vayada-booking-admin'].image | [0]" \
+              --output text
+          )"
+          echo "current_image=${current_image}" >> "$GITHUB_OUTPUT"
+          echo "deploy_required=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download latest booking admin task definition
+        if: steps.booking_admin_task.outputs.deploy_required == 'true'
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${{ steps.booking_admin_task.outputs.latest_task_definition }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --query taskDefinition > booking-admin-task-definition.json
+
+      - name: Render booking admin task definition with current image
+        if: steps.booking_admin_task.outputs.deploy_required == 'true'
+        id: render-booking-admin-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@6853cfae8c3a7d978fbf68b5a55453395541dfbb
+        with:
+          task-definition: booking-admin-task-definition.json
+          container-name: vayada-booking-admin
+          image: ${{ steps.booking_admin_task.outputs.current_image }}
+
+      - name: Deploy latest booking admin task definition
+        if: steps.booking_admin_task.outputs.deploy_required == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a310a830f5c14e583e35d84e4e1ec7dd177c3c9c
+        with:
+          task-definition: ${{ steps.render-booking-admin-task-def.outputs.task-definition }}
+          service: vayada-booking-admin-service
           cluster: vayada-backend-cluster
           wait-for-service-stability: true

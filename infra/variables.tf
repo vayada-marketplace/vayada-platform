@@ -163,6 +163,39 @@ variable "enable_staging_pms_runtime" {
   default     = false
 }
 
+variable "legacy_booking_api_desired_count" {
+  description = "Desired ECS task count for the legacy Python Booking API service. Keep 1 through canonical API cutover smoke; set 0 only after acceptance."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = contains([0, 1], var.legacy_booking_api_desired_count)
+    error_message = "legacy_booking_api_desired_count must be 0 or 1."
+  }
+}
+
+variable "legacy_marketplace_api_desired_count" {
+  description = "Desired ECS task count for the legacy Python Marketplace API service. Keep 1 through canonical API cutover smoke; set 0 only after acceptance."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = contains([0, 1], var.legacy_marketplace_api_desired_count)
+    error_message = "legacy_marketplace_api_desired_count must be 0 or 1."
+  }
+}
+
+variable "legacy_pms_api_desired_count" {
+  description = "Desired ECS task count for the legacy Python PMS API service. Keep 1 while provider webhook paths remain routed there; set 0 only after provider callback cutover removes that dependency."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = contains([0, 1], var.legacy_pms_api_desired_count)
+    error_message = "legacy_pms_api_desired_count must be 0 or 1."
+  }
+}
+
 variable "target_backend_desired_count" {
   description = "Desired ECS task count for the TypeScript target backend runtime. Keep 0 until a vayada-api image has been published and the runtime is intentionally enabled."
   type        = number

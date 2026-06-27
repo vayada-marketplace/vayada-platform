@@ -33,58 +33,88 @@ Lock table: `vayada-terraform-lock` (DynamoDB).
 
 | Service               | ECR repository                       | ECS service                          | Domain                     |
 | --------------------- | ------------------------------------ | ------------------------------------ | -------------------------- |
-| Booking API           | `vayada-booking-backend`             | `vayada-booking-backend-service`     | `booking-api.vayada.com`   |
+| Canonical TypeScript API | `vayada-api`                      | `vayada-next-api-service`            | `api.vayada.com`, `booking-api.vayada.com`, `pms-api.vayada.com` |
+| Legacy Booking API    | `vayada-booking-backend`             | `vayada-booking-backend-service`     | Rollback only              |
 | Booking Web           | `vayada-booking-frontend`            | `vayada-booking-frontend-service`    | `*.booking.vayada.com`     |
 | Booking Admin         | `vayada-booking-admin-frontend`      | `vayada-booking-admin-service`       | `admin.booking.vayada.com` |
-| PMS API               | `vayada-pms-backend`                 | `vayada-pms-backend-service`         | `pms-api.vayada.com`       |
+| Legacy PMS API        | `vayada-pms-backend`                 | `vayada-pms-backend-service`         | Rollback and provider webhooks |
 | PMS Web               | `vayada-pms-frontend`                | `vayada-pms-frontend-service`        | `pms.vayada.com`           |
-| Marketplace API       | `vayada-creator-marketplace-backend` | `vayada-marketplace-backend-service` | `api.vayada.com`           |
+| Legacy Marketplace API | `vayada-creator-marketplace-backend` | `vayada-marketplace-backend-service` | Rollback only              |
 | Marketplace Admin     | `vayada-admin-frontend`              | `vayada-marketplace-admin-service`   | (internal)                 |
 | Affiliate Dashboard   | `vayada-affiliate-dashboard`         | `vayada-affiliate-dashboard-service` | `affiliate.vayada.com`     |
 | TypeScript Target API | `vayada-api`                         | `vayada-api-service`                 | `target-api.vayada.com`    |
-| Next TypeScript API   | `vayada-api`                         | `vayada-next-api-service`            | `next-api.vayada.com`      |
+| TypeScript API validation hostname | `vayada-api`              | `vayada-next-api-service`            | `next-api.vayada.com`      |
 | Next PMS Web          | `vayada-pms-frontend`                | `vayada-next-pms-frontend-service`   | `next-pms.vayada.com`      |
 | Landing               | `vayada-landing`                     | App Runner                           | (App Runner auto-deploy)   |
 
 All ECS services run on `vayada-backend-cluster` (Fargate) in `eu-west-1`, fronted by `vayada-backend-alb`. Public `vayada.com` DNS is authoritative in Cloudflare; Route 53 records remain for AWS-side aliases and certificate validation where used. Cloudflare DNS management is gated by `enable_cloudflare_dns`; only enable it after `TF_VAR_CLOUDFLARE_API_TOKEN` is a valid DNS edit token for the `vayada.com` zone.
 
-### Parallel next-stack hostname freeze
+### Canonical API hostname cutover
 
-Next-stack rollout is parallel validation, not a production hostname cutover.
-The existing production hostnames intentionally keep their current routing until
-a separate cutover ticket says otherwise:
+VAY-946 cuts the canonical API hostnames over to the production TypeScript API
+runtime. The ALB listener rules for `api.vayada.com`,
+`booking-api.vayada.com`, and `pms-api.vayada.com` forward to
+`next-target-backend-tg`, which is served by `vayada-next-api-service`.
+`next-api.vayada.com` remains a validation hostname for that same service,
+target group, and production `/vayada/prod/*` secret set.
+`target-api.vayada.com` remains the C1 rehearsal lane until VAY-868 removes it.
+Provider callback ownership is not part of this cutover, so
+`pms-api.vayada.com/webhooks/*` remains routed to the legacy PMS target group
+with a higher-priority ALB path rule.
 
-| Hostname | Current routing owner |
-| --- | --- |
-| `vayada.com` | Existing public site routing |
-| `app.vayada.com` | Existing marketplace frontend routing |
-| `api.vayada.com` | Legacy Marketplace API |
-| `booking-api.vayada.com` | Legacy Booking API |
-| `booking.vayada.com` and `*.booking.vayada.com` | Existing Booking Web |
-| `admin.booking.vayada.com` | Existing Booking Admin |
-| `pms-api.vayada.com` | Legacy PMS API |
-| `pms.vayada.com` | Existing PMS Web |
-| `admin.vayada.com` | Existing Vayada Admin |
-| `affiliate.vayada.com` | Existing Affiliate Dashboard |
+The previous rollback owners are:
 
-Next-stack changes must use only the `next-*` hostnames:
-`next-api.vayada.com`, `next-pms.vayada.com`, `next-admin.vayada.com`,
-`next-booking-admin.vayada.com`, `next-booking.vayada.com`,
-`*.next-booking.vayada.com`, `next-marketplace.vayada.com`, and
-`next-affiliate.vayada.com`.
+| Hostname | Previous target group | Previous ECS service |
+| --- | --- | --- |
+| `api.vayada.com` | `marketplace-backend-tg` | `vayada-marketplace-backend-service` |
+| `booking-api.vayada.com` | `booking-backend-tg` | `vayada-booking-backend-service` |
+| `pms-api.vayada.com` | `pms-backend-tg` | `vayada-pms-backend-service` |
 
-Before merging VAY-858 through VAY-862 platform changes, review
-`infra/alb.tf`, `infra/route53.tf`, `infra/cloudflare.tf`, and `infra/ecs.tf`
-with `terraform plan`. The plan must not repoint any existing production
-hostname above to a `next-*` target group, Cloudflare record, Route 53 record,
-or next-stack ECS environment.
+Before merging a canonical API cutover change, confirm the TypeScript runtime is
+healthy:
 
-Stripe, Xendit, and Channex dashboard/webhook endpoints also stay on the
-current legacy Python production paths until an explicit provider cutover
-window. Do not move provider callbacks to `next-api.vayada.com` during
-next-stack validation; preserve the currently exported dashboard URLs, such as
-`https://pms-api.vayada.com/webhooks/stripe`, or the existing legacy
-`/webhooks/*` route for providers that are not currently active.
+```bash
+for host in next-api.vayada.com target-api.vayada.com; do
+  curl -fsS "https://${host}/health"
+  curl -fsS "https://${host}/ready"
+done
+```
+
+After the Terraform apply completes, smoke the canonical API hostnames:
+
+```bash
+for host in api.vayada.com booking-api.vayada.com pms-api.vayada.com; do
+  curl -fsS "https://${host}/health"
+  curl -fsS "https://${host}/ready"
+done
+```
+
+Then run the production acceptance flows that cover auth/session, marketplace
+admin, booking admin/web, PMS operations, and affiliate dashboard routes. Record
+the exact commands, timestamp, and ECS/ALB evidence in Linear before accepting
+VAY-946.
+
+Keep the legacy Python API services at desired count `1` through cutover smoke.
+After human acceptance, set GitHub Actions secret
+`TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT=0` and
+`TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT=0`, then run the Terraform Apply
+workflow. Verify `vayada-marketplace-backend-service` and
+`vayada-booking-backend-service` are desired/running `0/0`.
+
+Keep `TF_VAR_LEGACY_PMS_API_DESIRED_COUNT=1` while
+`pms-api.vayada.com/webhooks/*` remains routed to the legacy PMS target group.
+Set it to `0` only after a separate accepted provider callback cutover removes
+that path exception.
+
+Rollback before legacy scale-down: revert the ALB listener rule change and rerun
+the Terraform Apply workflow. Rollback after legacy scale-down requires two
+applies: first set the affected legacy desired-count secret back to `1`, run
+Terraform Apply, and verify the previous target group is healthy; then revert
+the listener rule change and run Terraform Apply again.
+
+Provider dashboard/webhook endpoints stay on their accepted production paths
+until an explicit provider cutover window. Do not move provider callbacks as
+part of VAY-946.
 
 ### Deployment flow
 
@@ -99,10 +129,11 @@ next-stack validation; preserve the currently exported dashboard URLs, such as
 The Landing service is excluded — App Runner polls ECR for `:latest` and deploys automatically. No dispatch is needed.
 
 ECS services use `lifecycle { ignore_changes = [task_definition] }` in Terraform, so `terraform apply` never rolls back in-flight CI deploys.
-When Terraform registers a newer `vayada-next-api` task definition, `tf-apply.yml`
-deploys that latest next-api task definition with the service's current
-container image. This rolls forward secret/config changes without replacing the
-currently deployed app image.
+When Terraform registers newer task definitions for `vayada-next-api`,
+`vayada-booking-frontend`, or `vayada-booking-admin`, `tf-apply.yml` deploys
+the latest task definition with the service's current container image. This
+rolls forward secret/config changes without replacing the currently deployed
+app image.
 
 The TypeScript Target API is intentionally separate from the legacy Booking,
 PMS, and Marketplace APIs. It is exposed at `target-api.vayada.com` and defaults
@@ -130,10 +161,10 @@ Safe activation order:
    `TF_VAR_TARGET_BACKEND_DESIRED_COUNT` and
    `TF_VAR_TARGET_BACKEND_STAGING_SECRETS_PREPROVISIONED`.
 
-The parallel Next TypeScript API at `next-api.vayada.com` is separate from the
-C1 rehearsal runtime above. It reads production-owned target runtime secrets
-from `/vayada/prod/*`, not `/vayada/staging/*`, while old production hostnames
-continue to use their existing routing.
+The `next-api.vayada.com` validation hostname is separate from the C1 rehearsal
+runtime above. It is served by `vayada-next-api-service` and reads
+production-owned target runtime secrets from `/vayada/prod/*`, not
+`/vayada/staging/*`.
 
 ### Secrets
 
@@ -189,11 +220,10 @@ overriding the default fixture Ask provider. When enabling
 `TF_VAR_OPENAI_BASE_URL`, `TF_VAR_OPENAI_ORGANIZATION`, and
 `TF_VAR_OPENAI_PROJECT`.
 
-Xendit and Channex callback/API secrets remain outside the parallel next-stack
-task definition while provider dashboard callbacks stay on legacy Python
-production hostnames. Add production-owned `/vayada/prod/*` names for those
-providers in the explicit provider cutover ticket that first routes their
-traffic to `next-api.vayada.com`.
+Provider callback/API secrets remain outside the canonical API task definition
+while provider dashboard callbacks stay on accepted legacy production paths.
+Add production-owned `/vayada/prod/*` names for those providers in the explicit
+provider cutover ticket that first routes their traffic to the TypeScript API.
 
 The TypeScript Target API at `target-api.vayada.com` additionally reads
 rehearsal-scoped provider and target database secrets from `/vayada/staging/*`
@@ -442,9 +472,9 @@ gh workflow run deploy.yml \
 Service keys: `booking-backend`, `booking-frontend`, `booking-admin`, `pms-backend`, `pms-frontend`, `marketplace-backend`, `marketplace-admin`, `affiliate-dashboard`.
 
 Parallel next-stack service keys: `next-target-backend`, `next-pms-frontend`.
-These exist so `pms.vayada.com` and the legacy API hostnames can stay on the
-known-good production rollback while the TypeScript backend and PMS frontend are
-tested at `next-api.vayada.com` and `next-pms.vayada.com`.
+After the Canonical API hostname cutover, `next-target-backend` serves both the
+canonical API hostnames and `next-api.vayada.com`; `next-pms-frontend` remains
+the parallel PMS frontend validation lane.
 
 ## IAM
 
