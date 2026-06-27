@@ -54,6 +54,7 @@ jobs:
           TF_VAR_stripe_secret_key: ${{ secrets.TF_VAR_STRIPE_SECRET_KEY }}
           TF_VAR_stripe_publishable_key: ${{ secrets.TF_VAR_STRIPE_PUBLISHABLE_KEY }}
           TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
+          TF_VAR_channex_webhook_secret: ${{ secrets.TF_VAR_CHANNEX_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
           TF_VAR_legacy_booking_api_desired_count: ${{ secrets.TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT || '1' }}
           TF_VAR_legacy_marketplace_api_desired_count: ${{ secrets.TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT || '1' }}
@@ -61,6 +62,8 @@ jobs:
           TF_VAR_target_backend_desired_count: ${{ secrets.TF_VAR_TARGET_BACKEND_DESIRED_COUNT || '0' }}
           TF_VAR_target_backend_staging_secrets_preprovisioned: ${{ secrets.TF_VAR_TARGET_BACKEND_STAGING_SECRETS_PREPROVISIONED || 'false' }}
           TF_VAR_target_backend_production_cutover_enabled: ${{ secrets.TF_VAR_TARGET_BACKEND_PRODUCTION_CUTOVER_ENABLED || 'false' }}
+          TF_VAR_next_api_stripe_webhook_intake_mode: ${{ secrets.TF_VAR_NEXT_API_STRIPE_WEBHOOK_INTAKE_MODE || 'mutating' }}
+          TF_VAR_next_api_channex_webhook_intake_mode: ${{ secrets.TF_VAR_NEXT_API_CHANNEX_WEBHOOK_INTAKE_MODE || 'mutating' }}
           TF_VAR_manage_staging_rehearsal_secrets: ${{ secrets.TF_VAR_MANAGE_STAGING_REHEARSAL_SECRETS || 'false' }}
           TF_VAR_enable_staging_pms_runtime: ${{ secrets.TF_VAR_ENABLE_STAGING_PMS_RUNTIME || 'false' }}
           TF_VAR_staging_target_database_url: ${{ secrets.TF_VAR_STAGING_TARGET_DATABASE_URL }}
@@ -104,6 +107,7 @@ jobs:
           TF_VAR_stripe_secret_key: ${{ secrets.TF_VAR_STRIPE_SECRET_KEY }}
           TF_VAR_stripe_publishable_key: ${{ secrets.TF_VAR_STRIPE_PUBLISHABLE_KEY }}
           TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
+          TF_VAR_channex_webhook_secret: ${{ secrets.TF_VAR_CHANNEX_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
           TF_VAR_legacy_booking_api_desired_count: ${{ secrets.TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT || '1' }}
           TF_VAR_legacy_marketplace_api_desired_count: ${{ secrets.TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT || '1' }}
@@ -111,6 +115,8 @@ jobs:
           TF_VAR_target_backend_desired_count: ${{ secrets.TF_VAR_TARGET_BACKEND_DESIRED_COUNT || '0' }}
           TF_VAR_target_backend_staging_secrets_preprovisioned: ${{ secrets.TF_VAR_TARGET_BACKEND_STAGING_SECRETS_PREPROVISIONED || 'false' }}
           TF_VAR_target_backend_production_cutover_enabled: ${{ secrets.TF_VAR_TARGET_BACKEND_PRODUCTION_CUTOVER_ENABLED || 'false' }}
+          TF_VAR_next_api_stripe_webhook_intake_mode: ${{ secrets.TF_VAR_NEXT_API_STRIPE_WEBHOOK_INTAKE_MODE || 'mutating' }}
+          TF_VAR_next_api_channex_webhook_intake_mode: ${{ secrets.TF_VAR_NEXT_API_CHANNEX_WEBHOOK_INTAKE_MODE || 'mutating' }}
           TF_VAR_manage_staging_rehearsal_secrets: ${{ secrets.TF_VAR_MANAGE_STAGING_REHEARSAL_SECRETS || 'false' }}
           TF_VAR_enable_staging_pms_runtime: ${{ secrets.TF_VAR_ENABLE_STAGING_PMS_RUNTIME || 'false' }}
           TF_VAR_staging_target_database_url: ${{ secrets.TF_VAR_STAGING_TARGET_DATABASE_URL }}

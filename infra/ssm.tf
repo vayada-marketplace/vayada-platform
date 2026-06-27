@@ -11,15 +11,16 @@ locals {
     "db-pms-url-ssl"     = "postgresql://vayada_pms_user:${var.db_pms_password}@${var.rds_endpoint}:5432/vayada_pms_db?sslmode=require"
 
     # Application secrets
-    "jwt-secret-key"        = var.jwt_secret_key
-    "smtp-username"         = var.smtp_username
-    "smtp-password"         = var.smtp_password
-    "stripe-secret-key"     = var.stripe_secret_key
-    "stripe-webhook-secret" = var.stripe_webhook_secret
-    "cloudflare-api-token"  = var.cloudflare_api_token
-    "channex-api-key"       = var.channex_api_key
-    "anthropic-api-key"     = var.anthropic_api_key
-    "firecrawl-api-key"     = var.firecrawl_api_key
+    "jwt-secret-key"         = var.jwt_secret_key
+    "smtp-username"          = var.smtp_username
+    "smtp-password"          = var.smtp_password
+    "stripe-secret-key"      = var.stripe_secret_key
+    "stripe-webhook-secret"  = var.stripe_webhook_secret
+    "channex-webhook-secret" = var.channex_webhook_secret
+    "cloudflare-api-token"   = var.cloudflare_api_token
+    "channex-api-key"        = var.channex_api_key
+    "anthropic-api-key"      = var.anthropic_api_key
+    "firecrawl-api-key"      = var.firecrawl_api_key
   }
 
   prod_next_api_required_ssm_secrets = {
@@ -92,6 +93,13 @@ resource "aws_ssm_parameter" "secrets" {
     Project     = "vayada"
     Environment = "production"
     ManagedBy   = "terraform"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = each.key != "channex-webhook-secret" || trimspace(var.channex_webhook_secret) != ""
+      error_message = "TF_VAR_CHANNEX_WEBHOOK_SECRET must be set before routing Channex callbacks to next-api."
+    }
   }
 }
 

@@ -113,6 +113,18 @@ locals {
       host         = "api.vayada.com"
       target_group = "next-target-backend"
     }
+    pms-api-stripe-webhook = {
+      priority     = 26
+      host         = "pms-api.vayada.com"
+      paths        = ["/webhooks/stripe"]
+      target_group = "next-target-backend"
+    }
+    pms-api-channex-webhook = {
+      priority     = 27
+      host         = "pms-api.vayada.com"
+      paths        = ["/webhooks/channex"]
+      target_group = "next-target-backend"
+    }
     pms-api-provider-webhooks = {
       priority     = 28
       host         = "pms-api.vayada.com"

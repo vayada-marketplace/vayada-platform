@@ -104,6 +104,13 @@ variable "stripe_webhook_secret" {
   default     = ""
 }
 
+variable "channex_webhook_secret" {
+  description = "Channex webhook header token"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "staging_target_database_url" {
   description = "Target database URL used by C1 staging rehearsal tooling"
   type        = string
@@ -212,6 +219,28 @@ variable "target_backend_production_cutover_enabled" {
   description = "Enable production source flags and AuthKit runtime config for the TypeScript target backend. Provider webhooks remain observe-only."
   type        = bool
   default     = false
+}
+
+variable "next_api_stripe_webhook_intake_mode" {
+  description = "Stripe callback intake mode for the canonical TypeScript API."
+  type        = string
+  default     = "mutating"
+
+  validation {
+    condition     = contains(["observe_only", "mutating", "ack_only_with_receipt"], var.next_api_stripe_webhook_intake_mode)
+    error_message = "next_api_stripe_webhook_intake_mode must be observe_only, mutating, or ack_only_with_receipt."
+  }
+}
+
+variable "next_api_channex_webhook_intake_mode" {
+  description = "Channex callback intake mode for the canonical TypeScript API."
+  type        = string
+  default     = "mutating"
+
+  validation {
+    condition     = contains(["observe_only", "mutating", "ack_only_with_receipt"], var.next_api_channex_webhook_intake_mode)
+    error_message = "next_api_channex_webhook_intake_mode must be observe_only, mutating, or ack_only_with_receipt."
+  }
 }
 
 variable "workos_api_key" {

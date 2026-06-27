@@ -58,9 +58,11 @@ runtime. The ALB listener rules for `api.vayada.com`,
 `next-api.vayada.com` remains a validation hostname for that same service,
 target group, and production `/vayada/prod/*` secret set.
 `target-api.vayada.com` remains the C1 rehearsal lane until VAY-868 removes it.
-Provider callback ownership is not part of this cutover, so
-`pms-api.vayada.com/webhooks/*` remains routed to the legacy PMS target group
-with a higher-priority ALB path rule.
+Provider callback ownership was not part of VAY-946. After VAY-947,
+`pms-api.vayada.com/webhooks/stripe` and
+`pms-api.vayada.com/webhooks/channex` route to the TypeScript API, while the
+lower-priority `pms-api.vayada.com/webhooks/*` fallback remains routed to the
+legacy PMS target group for callbacks outside that accepted scope.
 
 The previous rollback owners are:
 
@@ -101,10 +103,10 @@ After human acceptance, set GitHub Actions secret
 workflow. Verify `vayada-marketplace-backend-service` and
 `vayada-booking-backend-service` are desired/running `0/0`.
 
-Keep `TF_VAR_LEGACY_PMS_API_DESIRED_COUNT=1` while
-`pms-api.vayada.com/webhooks/*` remains routed to the legacy PMS target group.
-Set it to `0` only after a separate accepted provider callback cutover removes
-that path exception.
+Keep `TF_VAR_LEGACY_PMS_API_DESIRED_COUNT=1` while the lower-priority
+`pms-api.vayada.com/webhooks/*` fallback remains routed to the legacy PMS
+target group. Set it to `0` only after a separate accepted cleanup removes the
+remaining legacy callback dependency.
 
 Rollback before legacy scale-down: revert the ALB listener rule change and rerun
 the Terraform Apply workflow. Rollback after legacy scale-down requires two
@@ -112,9 +114,9 @@ applies: first set the affected legacy desired-count secret back to `1`, run
 Terraform Apply, and verify the previous target group is healthy; then revert
 the listener rule change and run Terraform Apply again.
 
-Provider dashboard/webhook endpoints stay on their accepted production paths
-until an explicit provider cutover window. Do not move provider callbacks as
-part of VAY-946.
+Provider dashboard/webhook endpoints outside the accepted VAY-947 Stripe and
+Channex paths stay on their accepted production paths. Do not move provider
+callbacks as part of VAY-946.
 
 ### Deployment flow
 
@@ -181,6 +183,7 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/jwt-secret-key`         | all APIs                           |
 | `/vayada/prod/stripe-secret-key`      | `booking-api`                      |
 | `/vayada/prod/stripe-webhook-secret`  | `booking-api`, `next-api`          |
+| `/vayada/prod/channex-webhook-secret` | `next-api`                         |
 | `/vayada/prod/smtp-username`          | `booking-api`, `marketplace-api`   |
 | `/vayada/prod/smtp-password`          | `booking-api`, `marketplace-api`   |
 | `/vayada/prod/anthropic-api-key`      | `pms-api`                          |
@@ -204,6 +207,8 @@ environment as:
 | `WORKOS_WEBHOOK_SECRET` | `/vayada/prod/workos-webhook-secret` |
 | `AUTH_COOKIE_SECRET` | `/vayada/prod/auth-cookie-secret` |
 | `STRIPE_WEBHOOK_SECRET` | `/vayada/prod/stripe-webhook-secret` |
+| `CHANNEX_WEBHOOK_SECRET` | `/vayada/prod/channex-webhook-secret` |
+| `STRIPE_WEBHOOK_INTAKE_MODE`, `CHANNEX_WEBHOOK_INTAKE_MODE` | `next_api_*_webhook_intake_mode` Terraform variables |
 | `WORKOS_CLIENT_ID`, `WORKOS_AUDIENCE`, `WORKOS_ISSUER`, `WORKOS_JWKS_URL` | Terraform variables from matching GitHub Actions secrets |
 | `ASK_INTELLIGENCE_PROVIDER`, `ASK_INTELLIGENCE_MODEL`, `OPENAI_BASE_URL`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT` | Terraform variables from matching GitHub Actions secrets |
 | `OPENAI_API_KEY` | `/vayada/prod/openai-api-key` when `ASK_INTELLIGENCE_PROVIDER=openai` |
@@ -213,17 +218,57 @@ live `next-api` task definition: `TF_VAR_TARGET_DATABASE_URL`,
 `TF_VAR_WORKOS_API_KEY`, `TF_VAR_WORKOS_WEBHOOK_SECRET`,
 `TF_VAR_WORKOS_CLIENT_ID`, `TF_VAR_WORKOS_AUDIENCE`,
 `TF_VAR_WORKOS_ISSUER`, `TF_VAR_WORKOS_JWKS_URL`,
-`TF_VAR_AUTH_COOKIE_SECRET`, and `TF_VAR_ASK_INTELLIGENCE_PROVIDER` if
+`TF_VAR_AUTH_COOKIE_SECRET`, `TF_VAR_CHANNEX_WEBHOOK_SECRET`, and
+`TF_VAR_ASK_INTELLIGENCE_PROVIDER` if
 overriding the default fixture Ask provider. When enabling
 `ASK_INTELLIGENCE_PROVIDER=openai`, also set `TF_VAR_OPENAI_API_KEY` and
 `TF_VAR_ASK_INTELLIGENCE_MODEL`. Optional OpenAI routing fields are
 `TF_VAR_OPENAI_BASE_URL`, `TF_VAR_OPENAI_ORGANIZATION`, and
 `TF_VAR_OPENAI_PROJECT`.
 
-Provider callback/API secrets remain outside the canonical API task definition
-while provider dashboard callbacks stay on accepted legacy production paths.
-Add production-owned `/vayada/prod/*` names for those providers in the explicit
-provider cutover ticket that first routes their traffic to the TypeScript API.
+Stripe and Channex callbacks are owned by the canonical TypeScript API on
+`https://pms-api.vayada.com/webhooks/stripe` and
+`https://pms-api.vayada.com/webhooks/channex`. The ALB keeps a lower-priority
+legacy `/webhooks/*` fallback for callbacks outside that accepted scope.
+Before applying, confirm the Channex dashboard sends the same callback path and
+header token stored in `TF_VAR_CHANNEX_WEBHOOK_SECRET`.
+
+VAY-947 production evidence must avoid printing signatures, webhook tokens, or
+secret payload fields:
+
+1. Confirm `TF_VAR_CHANNEX_WEBHOOK_SECRET` exists in GitHub Actions secrets with
+   `gh secret list --repo vayada-marketplace/vayada-platform | rg '^TF_VAR_CHANNEX_WEBHOOK_SECRET'`.
+2. After Terraform Apply, confirm the `pms-api-stripe-webhook` and
+   `pms-api-channex-webhook` ALB rules target `next-target-backend-tg`, and the
+   lower-priority `pms-api-provider-webhooks` rule still targets
+   `pms-backend-tg`.
+3. Confirm no-secret route ownership without sending valid provider callbacks:
+
+```bash
+curl -sS -X POST -H 'content-type: application/json' --data '{}' \
+  https://pms-api.vayada.com/webhooks/stripe
+
+curl -sS -X POST -H 'content-type: application/json' --data '{}' \
+  https://pms-api.vayada.com/webhooks/channex
+```
+
+Expected TypeScript API ownership signals are
+`{"error":"missing_stripe_signature"}` for Stripe and
+`{"error":"missing_channex_webhook_token"}` for Channex. Legacy PMS responses
+use `detail` fields instead.
+
+4. Run provider-owned replay/test-send from the provider dashboards or CLI, then
+   record only event ids, HTTP status, target host, timestamp, ALB rule state,
+   and `/ecs/vayada-next-api` log timestamps in Linear.
+
+Rollback has two levels. For temporary containment, set
+`TF_VAR_NEXT_API_STRIPE_WEBHOOK_INTAKE_MODE=ack_only_with_receipt` and
+`TF_VAR_NEXT_API_CHANNEX_WEBHOOK_INTAKE_MODE=ack_only_with_receipt`, then run the
+Terraform Apply workflow. For full ownership rollback, change ALB listener rules
+`pms-api-stripe-webhook` and `pms-api-channex-webhook` from
+`next-target-backend` back to `pms-backend`, run Terraform Apply, verify
+`vayada-pms-backend-service` is healthy at desired/running `1/1`, and confirm the
+two callback paths reach the legacy target again.
 
 The TypeScript Target API at `target-api.vayada.com` additionally reads
 rehearsal-scoped provider and target database secrets from `/vayada/staging/*`
