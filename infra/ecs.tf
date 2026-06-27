@@ -9,20 +9,7 @@ locals {
     "https://next-affiliate.vayada.com",
   ]
 
-  canonical_frontend_origins = [
-    "https://api.vayada.com",
-    "https://booking-api.vayada.com",
-    "https://pms-api.vayada.com",
-    "https://app.vayada.com",
-    "https://admin.vayada.com",
-    "https://admin.booking.vayada.com",
-    "https://pms.vayada.com",
-    "https://affiliate.vayada.com",
-    "https://booking.vayada.com",
-    "https://vayada.com",
-  ]
-
-  canonical_api_allowed_origins = join(",", concat(local.next_frontend_origins, local.canonical_frontend_origins))
+  next_frontend_allowed_origins = join(",", local.next_frontend_origins)
 
   base_services = {
     booking-backend = {
@@ -329,8 +316,8 @@ locals {
         { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
-        { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = local.canonical_api_allowed_origins },
-        { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = local.canonical_api_allowed_origins },
+        { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
+        { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "target" },
         { name = "BOOKING_DOMAIN_RESOLUTION_SOURCE", value = "target" },
         { name = "PUBLIC_BOOKABILITY_SOURCE", value = "target" },
@@ -344,23 +331,23 @@ locals {
         { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
         { name = "BOOKING_WEB_EVENT_SINK", value = "target" },
         { name = "BOOKING_WEB_LEGACY_CHECKOUT_COMMAND_PROXY_ENABLED", value = "false" },
-        { name = "BOOKING_HOST_BASE", value = "https://booking.vayada.com" },
+        { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
         { name = "WORKOS_CLIENT_ID", value = var.workos_client_id },
         { name = "WORKOS_AUDIENCE", value = var.workos_audience },
         { name = "WORKOS_ISSUER", value = var.workos_issuer },
         { name = "WORKOS_JWKS_URL", value = var.workos_jwks_url },
-        { name = "AUTH_CALLBACK_URL", value = "https://api.vayada.com/auth/workos/callback" },
-        { name = "AUTH_SUCCESS_URL", value = "https://app.vayada.com/dashboard" },
-        { name = "AUTH_LOGOUT_URL", value = "https://app.vayada.com/login" },
-        { name = "AUTH_ALLOWED_ORIGINS", value = local.canonical_api_allowed_origins },
+        { name = "AUTH_CALLBACK_URL", value = "https://next-api.vayada.com/auth/workos/callback" },
+        { name = "AUTH_SUCCESS_URL", value = "https://next-admin.vayada.com/dashboard" },
+        { name = "AUTH_LOGOUT_URL", value = "https://next-admin.vayada.com/login" },
+        { name = "AUTH_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "AUTH_COOKIE_DOMAIN", value = ".vayada.com" },
         { name = "AUTH_COOKIE_SECURE", value = "true" },
-        { name = "AUTH_PMS_WEB_SUCCESS_URL", value = "https://pms.vayada.com/dashboard" },
-        { name = "AUTH_PMS_WEB_LOGOUT_URL", value = "https://pms.vayada.com/login" },
-        { name = "AUTH_BOOKING_ADMIN_SUCCESS_URL", value = "https://admin.booking.vayada.com/dashboard" },
-        { name = "AUTH_BOOKING_ADMIN_LOGOUT_URL", value = "https://admin.booking.vayada.com/login" },
-        { name = "AUTH_AFFILIATE_DASHBOARD_SUCCESS_URL", value = "https://affiliate.vayada.com/dashboard" },
-        { name = "AUTH_AFFILIATE_DASHBOARD_LOGOUT_URL", value = "https://affiliate.vayada.com/login" },
+        { name = "AUTH_PMS_WEB_SUCCESS_URL", value = "https://next-pms.vayada.com/dashboard" },
+        { name = "AUTH_PMS_WEB_LOGOUT_URL", value = "https://next-pms.vayada.com/login" },
+        { name = "AUTH_BOOKING_ADMIN_SUCCESS_URL", value = "https://next-booking-admin.vayada.com/dashboard" },
+        { name = "AUTH_BOOKING_ADMIN_LOGOUT_URL", value = "https://next-booking-admin.vayada.com/login" },
+        { name = "AUTH_AFFILIATE_DASHBOARD_SUCCESS_URL", value = "https://next-affiliate.vayada.com/dashboard" },
+        { name = "AUTH_AFFILIATE_DASHBOARD_LOGOUT_URL", value = "https://next-affiliate.vayada.com/login" },
         { name = "ASK_INTELLIGENCE_PROVIDER", value = var.ask_intelligence_provider },
         { name = "ASK_INTELLIGENCE_MODEL", value = var.ask_intelligence_model },
         { name = "OPENAI_BASE_URL", value = var.openai_base_url },
