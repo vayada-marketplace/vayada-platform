@@ -16,6 +16,7 @@ output "service_urls" {
     target_api       = var.enable_cloudflare_dns ? "https://${cloudflare_record.target_api[0].hostname}" : "https://target-api.vayada.com"
     next_api         = var.enable_cloudflare_dns ? "https://${cloudflare_record.next_api[0].hostname}" : "https://next-api.vayada.com"
     next_pms         = var.enable_cloudflare_dns ? "https://${cloudflare_record.next_pms[0].hostname}" : "https://next-pms.vayada.com"
+    platform_media   = var.enable_cloudflare_dns ? "https://${cloudflare_record.platform_media[0].hostname}" : local.platform_media_cdn_base_url
     staging_pms_api  = var.enable_staging_pms_runtime ? "https://staging-pms-api.vayada.com" : null
   }
 }
@@ -28,6 +29,16 @@ output "rds_endpoint" {
 output "s3_bucket_name" {
   description = "S3 uploads bucket name"
   value       = aws_s3_bucket.uploads.id
+}
+
+output "platform_media_bucket_name" {
+  description = "Private platform media bucket name"
+  value       = aws_s3_bucket.platform_media.id
+}
+
+output "platform_media_cloudfront_distribution_id" {
+  description = "CloudFront distribution serving public platform media"
+  value       = aws_cloudfront_distribution.platform_media.id
 }
 
 output "ecs_security_group_id" {

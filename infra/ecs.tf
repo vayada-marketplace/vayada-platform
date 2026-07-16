@@ -306,6 +306,7 @@ locals {
       container_port = 8003
       cpu            = 512
       memory         = 1024
+      task_role_arn  = aws_iam_role.next_api_media.arn
       health_check   = "/health"
       log_group      = "/ecs/vayada-next-api"
       environment = [
@@ -313,6 +314,14 @@ locals {
         { name = "PORT", value = "8003" },
         { name = "NODE_ENV", value = "production" },
         { name = "ENVIRONMENT", value = "production" },
+        { name = "AWS_REGION", value = var.aws_region },
+        { name = "PLATFORM_MEDIA_BUCKET", value = aws_s3_bucket.platform_media.id },
+        { name = "PLATFORM_MEDIA_CDN_BASE_URL", value = local.platform_media_cdn_base_url },
+        { name = "PLATFORM_MEDIA_CDN_ORIGIN_HOST", value = aws_s3_bucket.platform_media.bucket_regional_domain_name },
+        { name = "PLATFORM_MEDIA_PUBLIC_PATH_PREFIX", value = "media" },
+        { name = "PLATFORM_MEDIA_PUBLIC_CACHE_CONTROL", value = "public, max-age=31536000, immutable" },
+        { name = "PLATFORM_MEDIA_PRIVATE_DOWNLOAD_TTL_SECONDS", value = "300" },
+        { name = "PLATFORM_MEDIA_PRIVATE_DOWNLOAD_MAX_TTL_SECONDS", value = "900" },
         { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
