@@ -40,13 +40,6 @@ locals {
 
   prod_ssm_secrets = merge(local.prod_core_ssm_secrets, local.prod_next_api_ssm_secrets)
 
-  staging_rehearsal_ssm_secrets = {
-    "target-database-url"    = var.staging_target_database_url
-    "stripe-webhook-secret"  = var.staging_stripe_webhook_secret
-    "xendit-webhook-secret"  = var.staging_xendit_webhook_secret
-    "channex-webhook-secret" = var.staging_channex_webhook_secret
-  }
-
   staging_pms_auth_database_url           = trimspace(var.staging_pms_auth_database_url) != "" ? var.staging_pms_auth_database_url : var.staging_pms_database_url
   staging_pms_booking_engine_database_url = trimspace(var.staging_pms_booking_engine_database_url) != "" ? var.staging_pms_booking_engine_database_url : var.staging_pms_database_url
 
@@ -65,20 +58,13 @@ locals {
     "pms-firecrawl-api-key"     = "staging-pms-noop"
   } : {}
 
-  staging_ssm_secrets = merge(
-    var.manage_staging_rehearsal_secrets ? local.staging_rehearsal_ssm_secrets : {},
-    local.staging_pms_runtime_ssm_secrets,
-  )
+  staging_ssm_secrets = local.staging_pms_runtime_ssm_secrets
 
   staging_ssm_parameter_arns = [
     for name in sort(keys(local.staging_ssm_secrets)) :
     "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/${name}"
   ]
 
-  target_backend_ssm_parameter_arns = [
-    for secret in local.base_services["target-backend"].secrets :
-    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${secret.valueFrom}"
-  ]
 }
 
 resource "aws_ssm_parameter" "secrets" {
@@ -130,7 +116,7 @@ resource "aws_iam_role_policy" "ecs_exec_ssm" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect = "Allow"
         Action = [
@@ -139,19 +125,21 @@ resource "aws_iam_role_policy" "ecs_exec_ssm" {
         ]
         Resource = "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/prod/*"
       },
+      ], length(local.staging_ssm_parameter_arns) > 0 ? [
       {
         Effect = "Allow"
         Action = [
           "ssm:GetParameters",
           "ssm:GetParameter",
         ]
-        Resource = distinct(concat(local.staging_ssm_parameter_arns, local.target_backend_ssm_parameter_arns))
+        Resource = local.staging_ssm_parameter_arns
       },
+      ] : [], [
       {
         Effect   = "Allow"
         Action   = ["kms:Decrypt"]
         Resource = "*"
       },
-    ]
+    ])
   })
 }

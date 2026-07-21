@@ -8,7 +8,6 @@ locals {
     "pms"                   = "pms.vayada.com"
     "custom-booking"        = "custom.booking.vayada.com"
     "affiliate"             = "affiliate.vayada.com"
-    "target-api"            = "target-api.vayada.com"
     "next-api"              = "next-api.vayada.com"
     "next-pms"              = "next-pms.vayada.com"
     "next-admin"            = "next-admin.vayada.com"

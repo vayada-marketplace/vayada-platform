@@ -13,7 +13,6 @@ output "service_urls" {
     booking_admin    = "https://admin.booking.vayada.com"
     pms_api          = "https://pms-api.vayada.com"
     pms_frontend     = "https://pms.vayada.com"
-    target_api       = var.enable_cloudflare_dns ? "https://${cloudflare_record.target_api[0].hostname}" : "https://target-api.vayada.com"
     next_api         = var.enable_cloudflare_dns ? "https://${cloudflare_record.next_api[0].hostname}" : "https://next-api.vayada.com"
     next_pms         = var.enable_cloudflare_dns ? "https://${cloudflare_record.next_pms[0].hostname}" : "https://next-pms.vayada.com"
     staging_pms_api  = var.enable_staging_pms_runtime ? "https://staging-pms-api.vayada.com" : null
@@ -33,9 +32,4 @@ output "s3_bucket_name" {
 output "ecs_security_group_id" {
   description = "ECS tasks security group ID"
   value       = aws_security_group.ecs_tasks.id
-}
-
-output "c1_rehearsal_runner_task_definition" {
-  description = "One-off C1 rehearsal runner task definition ARN"
-  value       = aws_ecs_task_definition.c1_rehearsal_runner.arn
 }
