@@ -42,7 +42,6 @@ Lock table: `vayada-terraform-lock` (DynamoDB).
 | Legacy Marketplace API | `vayada-creator-marketplace-backend` | `vayada-marketplace-backend-service` | `api.vayada.com`           |
 | Marketplace Admin     | `vayada-admin-frontend`              | `vayada-marketplace-admin-service`   | (internal)                 |
 | Affiliate Dashboard   | `vayada-affiliate-dashboard`         | `vayada-affiliate-dashboard-service` | `affiliate.vayada.com`     |
-| TypeScript Target API | `vayada-api`                         | `vayada-api-service`                 | `target-api.vayada.com`    |
 | Next PMS Web          | `vayada-pms-frontend`                | `vayada-next-pms-frontend-service`   | `next-pms.vayada.com`      |
 | Landing               | `vayada-landing`                     | App Runner                           | (App Runner auto-deploy)   |
 
@@ -104,36 +103,9 @@ the latest task definition with the service's current container image. This
 rolls forward secret/config changes without replacing the currently deployed
 app image.
 
-The TypeScript Target API is intentionally separate from the legacy Booking,
-PMS, and Marketplace APIs. It is exposed at `target-api.vayada.com` and defaults
-to `target_backend_desired_count = 0` until an image has been published and the
-runtime is intentionally enabled for rehearsal or cutover. Enabling it does not
-repoint any legacy production traffic. The initial runtime is suitable for
-health checks and observe-only provider webhook rehearsal. WorkOS-authenticated
-product traffic must not be enabled until the full WorkOS runtime configuration
-is managed in SSM and added to the task definition together.
-
-Safe activation order:
-
-1. Apply platform Terraform with `target_backend_desired_count = 0` to create
-   the `vayada-api` ECR repository, target group, DNS, task definition, and ECS
-   service without starting tasks before an image exists.
-2. Merge or manually dispatch the app repo TypeScript API deploy workflow so it
-   publishes `vayada-api:<git-sha>` and updates the `vayada-api-service` task
-   definition.
-3. Set `target_backend_desired_count = 1` and apply platform Terraform to start
-   the target runtime on `target-api.vayada.com`. If the four
-   `/vayada/staging/*` target secrets already exist outside this apply, also set
-   `target_backend_staging_secrets_preprovisioned = true`; otherwise enable
-   `manage_staging_rehearsal_secrets` and provide the matching values.
-   In GitHub Actions, these map to repository secrets
-   `TF_VAR_TARGET_BACKEND_DESIRED_COUNT` and
-   `TF_VAR_TARGET_BACKEND_STAGING_SECRETS_PREPROVISIONED`.
-
-The `next-api.vayada.com` validation hostname is separate from the C1 rehearsal
-runtime above. It is served by `vayada-next-api-service` and reads
-production-owned target runtime secrets from `/vayada/prod/*`, not
-`/vayada/staging/*`.
+`next-api.vayada.com` is the TypeScript validation hostname. It is served by
+`vayada-next-api-service` and reads production-owned target runtime secrets
+from `/vayada/prod/*`, not `/vayada/staging/*`.
 
 ### Secrets
 
@@ -170,7 +142,6 @@ environment as:
 | --- | --- |
 | `TARGET_DATABASE_URL` | `/vayada/prod/target-database-url` |
 | `AUTH_DATABASE_URL` | `/vayada/prod/target-database-url` |
-| `WORKOS_API_KEY` | `/vayada/prod/workos-api-key` |
 | `WORKOS_CLIENT_ID` | `/vayada/prod/workos-client-id` |
 | `WORKOS_WEBHOOK_SECRET` | `/vayada/prod/workos-webhook-secret` |
 | `AUTH_COOKIE_SECRET` | `/vayada/prod/auth-cookie-secret` |
@@ -195,183 +166,11 @@ while provider dashboard callbacks stay on accepted legacy production paths.
 Add production-owned `/vayada/prod/*` names for those providers in the explicit
 provider cutover ticket that first routes their traffic to the TypeScript API.
 
-The TypeScript Target API at `target-api.vayada.com` additionally reads
-rehearsal-scoped provider and target database secrets from `/vayada/staging/*`
-while it is used for C1 observe-only rehearsal.
-
 SSM parameters are referenced by ARN in ECS task definitions — containers read them at startup via the `ecsTaskExecutionRole`.
-
-### C1 staging rehearsal secrets
-
-The Channex/webhook cutover rehearsal uses a separate SSM namespace so replay
-credentials do not get mixed with production runtime secrets:
-
-| Parameter                                | Used by                                                                         |
-| ---------------------------------------- | ------------------------------------------------------------------------------- |
-| `/vayada/staging/target-database-url`    | `TARGET_DATABASE_URL` for target parity and C1 rehearsal dashboard checks       |
-| `/vayada/staging/pms-database-url`       | `DATABASE_URL` for the frozen staging PMS backend runtime                       |
-| `/vayada/staging/pms-auth-database-url`  | `AUTH_DATABASE_URL` for the frozen staging PMS runtime; staging or approved read-only only |
-| `/vayada/staging/pms-booking-engine-database-url` | `BOOKING_ENGINE_DATABASE_URL` for the frozen staging PMS runtime; staging or approved read-only only |
-| `/vayada/staging/pms-stripe-webhook-secret` | No-op `STRIPE_WEBHOOK_SECRET` for the frozen staging PMS runtime                |
-| `/vayada/staging/stripe-webhook-secret`  | `STRIPE_WEBHOOK_SECRET` for signing Stripe replay fixtures                      |
-| `/vayada/staging/xendit-webhook-secret`  | `XENDIT_WEBHOOK_SECRET` / `x-callback-token` for Xendit replay fixtures         |
-| `/vayada/staging/channex-webhook-secret` | `CHANNEX_WEBHOOK_SECRET` / `x-vayada-webhook-token` for Channex replay fixtures |
-
-Terraform creates the replay parameters when `manage_staging_rehearsal_secrets`
-is enabled and all matching variables are set:
-
-```hcl
-manage_staging_rehearsal_secrets    = true
-staging_rehearsal_secret_owner      = "platform-runtime"
-staging_rehearsal_secret_expires_at = "2026-06-30T18:00:00Z"
-staging_target_database_url         = "..."
-staging_stripe_webhook_secret       = "..."
-staging_xendit_webhook_secret       = "..."
-staging_channex_webhook_secret      = "..."
-```
-
-Do not commit the real values. The default rehearsal path is the one-off ECS
-runner below so app repo CI does not need access to these secrets.
-
-### C1 one-off rehearsal runner
-
-Terraform registers task definition `vayada-c1-rehearsal-runner`. It is not an
-ECS service and only runs when an operator starts it with `aws ecs run-task`.
-The task uses the `vayada-api:next-latest` image, injects the four
-`/vayada/staging/*` parameters through ECS `secrets`, and writes logs to
-CloudWatch log group `/ecs/vayada-c1-rehearsal-runner`.
-The execution role `vayada-c1-rehearsal-runner-exec` and its
-`c1-rehearsal-ssm-secrets-access` inline policy are bootstrapped outside this
-Terraform module because the platform deploy role cannot create IAM roles or
-manage IAM policies on that role.
-Operator IAM should allow `ecs:RunTask` only for this task definition and
-`iam:PassRole` only for its execution role. Do not grant app repo CI access to
-the `/vayada/staging/*` parameters or the runner execution role.
-
-The default command runs the compiled dashboard checker without printing
-secrets:
-
-```bash
-node packages/backend-migration/dist/cli/c1RehearsalChecks.js \
-  --lookback-minutes 1440 \
-  --pretty
-```
-
-Run the default dashboard check:
-
-```bash
-cd infra
-
-TASK_DEFINITION="$(terraform output -raw c1_rehearsal_runner_task_definition)"
-SECURITY_GROUP="$(terraform output -raw ecs_security_group_id)"
-
-aws ecs run-task \
-  --region eu-west-1 \
-  --cluster vayada-backend-cluster \
-  --launch-type FARGATE \
-  --task-definition "$TASK_DEFINITION" \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-0cebe0311f380e8e6,subnet-0f5978ad929071531],securityGroups=[$SECURITY_GROUP],assignPublicIp=ENABLED}"
-```
-
-Provider replay uses the same task and must keep the exact-host allowlist at
-`target-api.vayada.com`. The task definition sets:
-
-```text
-C1_REHEARSAL_WEBHOOK_BASE_URL=https://target-api.vayada.com
-C1_REHEARSAL_ALLOW_SEND_TO_HOST=target-api.vayada.com
-```
-
-Run `--list` or a no-send dry run before any send:
-
-```bash
-cat >/tmp/c1-replay-overrides.json <<'JSON'
-{
-  "containerOverrides": [
-    {
-      "name": "vayada-c1-rehearsal-runner",
-      "command": [
-        "node",
-        "scripts/c1-rehearsal-replay-fixtures.mjs",
-        "--all",
-        "--base-url",
-        "https://target-api.vayada.com"
-      ]
-    }
-  ]
-}
-JSON
-
-aws ecs run-task \
-  --region eu-west-1 \
-  --cluster vayada-backend-cluster \
-  --launch-type FARGATE \
-  --task-definition "$TASK_DEFINITION" \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-0cebe0311f380e8e6,subnet-0f5978ad929071531],securityGroups=[$SECURITY_GROUP],assignPublicIp=ENABLED}" \
-  --overrides file:///tmp/c1-replay-overrides.json
-```
-
-Only after the dry run is clean, add `--twice` and `--send` to the override
-command. The replay script refuses non-local sends unless
-`C1_REHEARSAL_ALLOW_SEND_TO_HOST` matches the base URL hostname exactly, and the
-runbook keeps that value set to `target-api.vayada.com`.
-
-Read the log stream without exposing secret values:
-
-```bash
-aws logs tail /ecs/vayada-c1-rehearsal-runner \
-  --region eu-west-1 \
-  --since 30m \
-  --format short
-```
-
-### C1 staging rehearsal secret cleanup
-
-VAY-794 is not complete until the rehearsal operator has either rotated or
-deleted the provider replay secrets and recorded the parameter names, versions,
-operator, and cleanup timestamp without secret values.
-
-Normal deletion path after the rehearsal window:
-
-```bash
-cd infra
-terraform plan -out=tfplan \
-  -var='manage_staging_rehearsal_secrets=false' \
-  -var='enable_staging_pms_runtime=false'
-terraform apply tfplan
-```
-
-Normal rotation path for a follow-up rehearsal:
-
-```bash
-export TF_VAR_staging_stripe_webhook_secret="$STRIPE_WEBHOOK_SECRET_ROTATED"
-export TF_VAR_staging_xendit_webhook_secret="$XENDIT_WEBHOOK_SECRET_ROTATED"
-export TF_VAR_staging_channex_webhook_secret="$CHANNEX_WEBHOOK_SECRET_ROTATED"
-export TF_VAR_staging_rehearsal_secret_expires_at="$REHEARSAL_SECRET_EXPIRES_AT"
-
-cd infra
-terraform plan -out=tfplan -var='manage_staging_rehearsal_secrets=true'
-terraform apply tfplan
-
-unset TF_VAR_staging_stripe_webhook_secret
-unset TF_VAR_staging_xendit_webhook_secret
-unset TF_VAR_staging_channex_webhook_secret
-unset TF_VAR_staging_rehearsal_secret_expires_at
-```
-
-Keep the existing `staging_target_database_url` supplied through secure
-`tfvars` or `TF_VAR_staging_target_database_url`; do not print it.
-
-Emergency provider-secret deletion if Terraform cannot run:
-
-```bash
-for name in stripe-webhook-secret xendit-webhook-secret channex-webhook-secret; do
-  aws ssm delete-parameter --region eu-west-1 --name "/vayada/staging/${name}"
-done
-```
 
 ### Frozen staging PMS runtime
 
-The C1 rehearsal can create a dedicated staging PMS backend runtime for the
+Terraform can create a dedicated staging PMS backend runtime for the
 legacy scheduler-freeze proof. It is disabled by default and is controlled by:
 
 ```hcl
