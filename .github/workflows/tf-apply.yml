@@ -337,12 +337,12 @@ jobs:
           fi
 
           latest_task_definition="$(
-            aws ecs describe-task-definition \
-              --task-definition vayada-staging-pms-backend \
-              --region "${{ env.AWS_REGION }}" \
-              --query 'taskDefinition.taskDefinitionArn' \
-              --output text
+            terraform -chdir=infra output -raw staging_pms_task_definition 2>/dev/null || true
           )"
+
+          if [ -z "$latest_task_definition" ]; then
+            exit 0
+          fi
 
           if [ "$current_task_definition" = "$latest_task_definition" ]; then
             exit 0

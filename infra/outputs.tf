@@ -33,3 +33,8 @@ output "ecs_security_group_id" {
   description = "ECS tasks security group ID"
   value       = aws_security_group.ecs_tasks.id
 }
+
+output "staging_pms_task_definition" {
+  description = "Terraform-owned staging PMS task definition ARN, when enabled"
+  value       = try(aws_ecs_task_definition.services["staging-pms-backend"].arn, null)
+}
