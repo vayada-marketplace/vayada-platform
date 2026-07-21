@@ -318,3 +318,42 @@ jobs:
           service: vayada-booking-admin-service
           cluster: vayada-backend-cluster
           wait-for-service-stability: true
+
+      - name: Roll forward staging PMS task definition
+        run: |
+          set -euo pipefail
+
+          current_task_definition="$(
+            aws ecs describe-services \
+              --cluster vayada-backend-cluster \
+              --services vayada-staging-pms-backend-service \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'services[?status==`ACTIVE`].taskDefinition | [0]' \
+              --output text
+          )"
+
+          if [ -z "$current_task_definition" ] || [ "$current_task_definition" = "None" ]; then
+            exit 0
+          fi
+
+          latest_task_definition="$(
+            terraform -chdir=infra output -raw staging_pms_task_definition 2>/dev/null || true
+          )"
+
+          if [ -z "$latest_task_definition" ]; then
+            exit 0
+          fi
+
+          if [ "$current_task_definition" = "$latest_task_definition" ]; then
+            exit 0
+          fi
+
+          aws ecs update-service \
+            --cluster vayada-backend-cluster \
+            --service vayada-staging-pms-backend-service \
+            --task-definition "$latest_task_definition" \
+            --region "${{ env.AWS_REGION }}"
+          aws ecs wait services-stable \
+            --cluster vayada-backend-cluster \
+            --services vayada-staging-pms-backend-service \
+            --region "${{ env.AWS_REGION }}"
