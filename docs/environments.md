@@ -84,6 +84,55 @@ currently exported dashboard URLs, such as
 `https://pms-api.vayada.com/webhooks/stripe`, or the existing legacy
 `/webhooks/*` route for providers that are not currently active.
 
+### Platform media delivery
+
+The TypeScript platform media service uses the private, encrypted, versioned
+`vayada-media-production` bucket. Browser uploads use signed `PUT` requests to
+`staging/*`; the `vayada-next-api-media-task-role` can read, publish, and delete
+objects only under `staging/*`, `public/*`, and `private/*`.
+
+Public media is served at `https://images.vayada.com`. CloudFront signs origin
+requests with Origin Access Control and can read only `public/*`. Its `/public`
+origin path maps a viewer request such as `/media/<id>/original_safe/<version>.webp`
+to `public/media/<id>/original_safe/<version>.webp` in S3. The bucket blocks all
+anonymous access, and CloudFront cannot read `private/*` or `staging/*`.
+
+`next-api` receives the complete media serving contract:
+
+```text
+PLATFORM_MEDIA_BUCKET=vayada-media-production
+PLATFORM_MEDIA_CDN_BASE_URL=https://images.vayada.com
+PLATFORM_MEDIA_CDN_ORIGIN_HOST=vayada-media-production.s3.eu-west-1.amazonaws.com
+PLATFORM_MEDIA_PUBLIC_PATH_PREFIX=media
+PLATFORM_MEDIA_PUBLIC_CACHE_CONTROL=public, max-age=31536000, immutable
+PLATFORM_MEDIA_PRIVATE_DOWNLOAD_TTL_SECONDS=300
+PLATFORM_MEDIA_PRIVATE_DOWNLOAD_MAX_TTL_SECONDS=900
+```
+
+#### Rollout
+
+1. Bootstrap the platform deploy role permissions described in [IAM](#iam).
+2. Set `TF_VAR_ENABLE_CLOUDFLARE_DNS=true` and provide a Cloudflare token with
+   DNS edit access. Cloudflare is authoritative for `vayada.com`, so this is
+   required for the `us-east-1` ACM validation record and the DNS-only `images`
+   CNAME.
+3. Review `terraform plan`, then apply and wait for the certificate and
+   CloudFront distribution to reach their issued/deployed states.
+4. Deploy the durable upload code with required-photo flags still disabled, then
+   upload a canary profile image through the signed browser flow.
+5. Verify its browser preflight and `PUT`, confirm the anonymous S3 object URL is
+   denied, and confirm the matching `https://images.vayada.com/media/...` URL
+   succeeds (including HTTP-to-HTTPS redirect behavior).
+6. Activate required-photo flags only in the separate data-cutover ticket.
+
+#### Rollback and legacy safety
+
+The legacy `vayada-uploads-prod` bucket, its guarded CDN policy, BIMI object, and
+all stored direct URLs remain in place. If the new media path must be rolled back,
+first deploy the previous `next-api` task definition or remove its
+`PLATFORM_MEDIA_*` values. Keep the new bucket and CDN in place while references
+may exist; do not delete media objects or use `terraform destroy` as rollback.
+
 ### Deployment flow
 
 1. App CI pushes a Docker image to ECR with a moving environment tag and
@@ -260,6 +309,16 @@ GitHub Actions authenticates via OIDC using the `vayada-github-actions-platform-
 The `vayada-github-actions-platform-deploy` role is bootstrapped outside this
 Terraform module, so changes to that role must be applied before platform
 Terraform can use the new permission.
+
+Before the first platform-media plan/apply, extend that bootstrapped role with
+CloudFront distribution and Origin Access Control lifecycle permissions, ACM
+certificate lifecycle permissions in `us-east-1`, and S3 bucket/configuration
+lifecycle permissions (including bucket policy) for `vayada-media-production`.
+It also needs IAM role/inline-policy lifecycle permissions for
+`vayada-next-api-media-task-role` plus `iam:PassRole` restricted to that role.
+Keep the Cloudflare API token limited to DNS edits for the `vayada.com` zone.
+These deployment permissions do not belong on the ECS task role; the task role
+itself receives only the three object actions declared in `infra/media.tf`.
 
 The app repo uses a separate role (`vayada-github-actions-deploy`) for ECR push only. Neither role holds the other's permissions.
 
