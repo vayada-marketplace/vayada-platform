@@ -40,11 +40,6 @@ locals {
       port         = 3005
       health_check = "/"
     }
-    target-backend = {
-      name         = "target-backend-tg"
-      port         = 8003
-      health_check = "/health"
-    }
     next-target-backend = {
       name         = "next-target-backend-tg"
       port         = 8003
@@ -132,11 +127,6 @@ locals {
       priority     = 46
       host         = "booking.vayada.com"
       target_group = "booking-frontend"
-    }
-    target-api = {
-      priority     = 47
-      host         = "target-api.vayada.com"
-      target_group = "target-backend"
     }
     next-api = {
       priority     = 48

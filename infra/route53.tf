@@ -8,7 +8,6 @@ locals {
     "pms"                   = "pms.vayada.com"
     "custom-booking"        = "custom.booking.vayada.com"
     "affiliate"             = "affiliate.vayada.com"
-    "target-api"            = "target-api.vayada.com"
     "next-api"              = "next-api.vayada.com"
     "next-pms"              = "next-pms.vayada.com"
     "next-admin"            = "next-admin.vayada.com"
@@ -49,6 +48,6 @@ resource "aws_route53_record" "bimi" {
   type    = "TXT"
   ttl     = 3600
   records = [
-    "v=BIMI1; l=https://vayada-uploads-prod.s3.eu-west-1.amazonaws.com/branding/vayada-bimi.svg;",
+    "v=BIMI1; l=https://${aws_cloudfront_distribution.platform_media.domain_name}/branding/vayada-bimi.svg;",
   ]
 }

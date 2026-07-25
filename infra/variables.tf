@@ -104,24 +104,11 @@ variable "stripe_webhook_secret" {
   default     = ""
 }
 
-variable "staging_target_database_url" {
-  description = "Target database URL used by C1 staging rehearsal tooling"
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
 variable "target_database_url" {
   description = "Production-owned target database URL used by next-api.vayada.com"
   type        = string
   sensitive   = true
   default     = ""
-}
-
-variable "manage_staging_rehearsal_secrets" {
-  description = "Whether Terraform should create the /vayada/staging C1 rehearsal SSM parameters"
-  type        = bool
-  default     = false
 }
 
 variable "staging_rehearsal_secret_owner" {
@@ -134,27 +121,6 @@ variable "staging_rehearsal_secret_expires_at" {
   description = "ISO-8601 expiry tag for /vayada/staging C1 rehearsal SSM parameters; override per rehearsal"
   type        = string
   default     = "2026-06-30T18:00:00Z"
-}
-
-variable "staging_stripe_webhook_secret" {
-  description = "Stripe webhook signing secret used for C1 staging replay"
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
-variable "staging_xendit_webhook_secret" {
-  description = "Xendit callback token used for C1 staging replay"
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
-variable "staging_channex_webhook_secret" {
-  description = "Channex webhook header token used for C1 staging replay"
-  type        = string
-  sensitive   = true
-  default     = ""
 }
 
 variable "enable_staging_pms_runtime" {
@@ -194,24 +160,6 @@ variable "legacy_pms_api_desired_count" {
     condition     = contains([0, 1], var.legacy_pms_api_desired_count)
     error_message = "legacy_pms_api_desired_count must be 0 or 1."
   }
-}
-
-variable "target_backend_desired_count" {
-  description = "Desired ECS task count for the TypeScript target backend runtime. Keep 0 until a vayada-api image has been published and the runtime is intentionally enabled."
-  type        = number
-  default     = 0
-}
-
-variable "target_backend_staging_secrets_preprovisioned" {
-  description = "Set true only when the /vayada/staging parameters required by the TypeScript target backend already exist outside this Terraform apply."
-  type        = bool
-  default     = false
-}
-
-variable "target_backend_production_cutover_enabled" {
-  description = "Enable production source flags and AuthKit runtime config for the TypeScript target backend. Provider webhooks remain observe-only."
-  type        = bool
-  default     = false
 }
 
 variable "workos_api_key" {

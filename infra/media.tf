@@ -1,10 +1,10 @@
 locals {
-  platform_media_bucket_name  = "vayada-media-production"
-  platform_media_domain_name  = "images.vayada.com"
-  platform_media_cdn_base_url = "https://${local.platform_media_domain_name}"
-  platform_media_origin_id    = "vayada-platform-media-s3"
+  private_profile_media_bucket_name  = "vayada-media-production"
+  private_profile_media_domain_name  = "images.vayada.com"
+  private_profile_media_cdn_base_url = "https://${local.private_profile_media_domain_name}"
+  private_profile_media_origin_id    = "vayada-platform-media-s3"
 
-  platform_media_upload_origins = [
+  private_profile_media_upload_origins = [
     "https://app.vayada.com",
     "https://admin.vayada.com",
     "https://admin.booking.vayada.com",
@@ -16,26 +16,26 @@ locals {
   ]
 }
 
-resource "aws_s3_bucket" "platform_media" {
-  bucket = local.platform_media_bucket_name
+resource "aws_s3_bucket" "private_profile_media" {
+  bucket = local.private_profile_media_bucket_name
 
   tags = {
-    Name        = local.platform_media_bucket_name
+    Name        = local.private_profile_media_bucket_name
     Project     = "vayada"
     Environment = "production"
   }
 }
 
-resource "aws_s3_bucket_ownership_controls" "platform_media" {
-  bucket = aws_s3_bucket.platform_media.id
+resource "aws_s3_bucket_ownership_controls" "private_profile_media" {
+  bucket = aws_s3_bucket.private_profile_media.id
 
   rule {
     object_ownership = "BucketOwnerEnforced"
   }
 }
 
-resource "aws_s3_bucket_public_access_block" "platform_media" {
-  bucket = aws_s3_bucket.platform_media.id
+resource "aws_s3_bucket_public_access_block" "private_profile_media" {
+  bucket = aws_s3_bucket.private_profile_media.id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -43,8 +43,8 @@ resource "aws_s3_bucket_public_access_block" "platform_media" {
   restrict_public_buckets = true
 }
 
-resource "aws_s3_bucket_server_side_encryption_configuration" "platform_media" {
-  bucket = aws_s3_bucket.platform_media.id
+resource "aws_s3_bucket_server_side_encryption_configuration" "private_profile_media" {
+  bucket = aws_s3_bucket.private_profile_media.id
 
   rule {
     apply_server_side_encryption_by_default {
@@ -53,28 +53,28 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "platform_media" {
   }
 }
 
-resource "aws_s3_bucket_versioning" "platform_media" {
-  bucket = aws_s3_bucket.platform_media.id
+resource "aws_s3_bucket_versioning" "private_profile_media" {
+  bucket = aws_s3_bucket.private_profile_media.id
 
   versioning_configuration {
     status = "Enabled"
   }
 }
 
-resource "aws_s3_bucket_cors_configuration" "platform_media" {
-  bucket = aws_s3_bucket.platform_media.id
+resource "aws_s3_bucket_cors_configuration" "private_profile_media" {
+  bucket = aws_s3_bucket.private_profile_media.id
 
   cors_rule {
     allowed_headers = ["*"]
     allowed_methods = ["PUT"]
-    allowed_origins = local.platform_media_upload_origins
+    allowed_origins = local.private_profile_media_upload_origins
     expose_headers  = ["ETag"]
     max_age_seconds = 3600
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "platform_media" {
-  bucket = aws_s3_bucket.platform_media.id
+resource "aws_s3_bucket_lifecycle_configuration" "private_profile_media" {
+  bucket = aws_s3_bucket.private_profile_media.id
 
   rule {
     id     = "expire-abandoned-staging-uploads"
@@ -97,13 +97,13 @@ resource "aws_s3_bucket_lifecycle_configuration" "platform_media" {
     }
   }
 
-  depends_on = [aws_s3_bucket_versioning.platform_media]
+  depends_on = [aws_s3_bucket_versioning.private_profile_media]
 }
 
-resource "aws_acm_certificate" "platform_media" {
+resource "aws_acm_certificate" "private_profile_media" {
   provider = aws.us_east_1
 
-  domain_name       = local.platform_media_domain_name
+  domain_name       = local.private_profile_media_domain_name
   validation_method = "DNS"
 
   lifecycle {
@@ -117,9 +117,9 @@ resource "aws_acm_certificate" "platform_media" {
   }
 }
 
-resource "cloudflare_record" "platform_media_certificate_validation" {
+resource "cloudflare_record" "private_profile_media_certificate_validation" {
   for_each = var.enable_cloudflare_dns ? {
-    for option in aws_acm_certificate.platform_media.domain_validation_options : option.domain_name => {
+    for option in aws_acm_certificate.private_profile_media.domain_validation_options : option.domain_name => {
       name    = trimsuffix(trimsuffix(option.resource_record_name, "."), ".vayada.com")
       content = trimsuffix(option.resource_record_value, ".")
       type    = option.resource_record_type
@@ -135,35 +135,35 @@ resource "cloudflare_record" "platform_media_certificate_validation" {
   allow_overwrite = true
 }
 
-resource "aws_acm_certificate_validation" "platform_media" {
+resource "aws_acm_certificate_validation" "private_profile_media" {
   provider = aws.us_east_1
 
-  certificate_arn = aws_acm_certificate.platform_media.arn
+  certificate_arn = aws_acm_certificate.private_profile_media.arn
   validation_record_fqdns = [
-    for option in aws_acm_certificate.platform_media.domain_validation_options : option.resource_record_name
+    for option in aws_acm_certificate.private_profile_media.domain_validation_options : option.resource_record_name
   ]
 
-  depends_on = [cloudflare_record.platform_media_certificate_validation]
+  depends_on = [cloudflare_record.private_profile_media_certificate_validation]
 }
 
-resource "aws_cloudfront_origin_access_control" "platform_media" {
-  name                              = "vayada-platform-media"
+resource "aws_cloudfront_origin_access_control" "private_profile_media" {
+  name                              = "vayada-private-profile-media"
   description                       = "Private S3 access for public Vayada media"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
 }
 
-resource "aws_cloudfront_distribution" "platform_media" {
+resource "aws_cloudfront_distribution" "private_profile_media" {
   enabled         = true
   is_ipv6_enabled = true
-  aliases         = [local.platform_media_domain_name]
+  aliases         = [local.private_profile_media_domain_name]
   comment         = "Vayada public platform media"
 
   origin {
-    domain_name              = aws_s3_bucket.platform_media.bucket_regional_domain_name
-    origin_access_control_id = aws_cloudfront_origin_access_control.platform_media.id
-    origin_id                = local.platform_media_origin_id
+    domain_name              = aws_s3_bucket.private_profile_media.bucket_regional_domain_name
+    origin_access_control_id = aws_cloudfront_origin_access_control.private_profile_media.id
+    origin_id                = local.private_profile_media_origin_id
     origin_path              = "/public"
   }
 
@@ -173,7 +173,7 @@ resource "aws_cloudfront_distribution" "platform_media" {
     # AWS-managed CachingOptimized policy.
     cache_policy_id        = "658327ea-f89d-4fab-a63d-7e88639e58f6"
     compress               = true
-    target_origin_id       = local.platform_media_origin_id
+    target_origin_id       = local.private_profile_media_origin_id
     viewer_protocol_policy = "redirect-to-https"
   }
 
@@ -184,19 +184,19 @@ resource "aws_cloudfront_distribution" "platform_media" {
   }
 
   viewer_certificate {
-    acm_certificate_arn      = aws_acm_certificate_validation.platform_media.certificate_arn
+    acm_certificate_arn      = aws_acm_certificate_validation.private_profile_media.certificate_arn
     minimum_protocol_version = "TLSv1.2_2021"
     ssl_support_method       = "sni-only"
   }
 
   tags = {
-    Name        = "vayada-platform-media"
+    Name        = "vayada-private-profile-media"
     Project     = "vayada"
     Environment = "production"
   }
 }
 
-data "aws_iam_policy_document" "platform_media_bucket" {
+data "aws_iam_policy_document" "private_profile_media_bucket" {
   statement {
     sid    = "AllowCloudFrontPublicMediaRead"
     effect = "Allow"
@@ -207,12 +207,12 @@ data "aws_iam_policy_document" "platform_media_bucket" {
     }
 
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.platform_media.arn}/public/*"]
+    resources = ["${aws_s3_bucket.private_profile_media.arn}/public/*"]
 
     condition {
       test     = "StringEquals"
       variable = "AWS:SourceArn"
-      values   = [aws_cloudfront_distribution.platform_media.arn]
+      values   = [aws_cloudfront_distribution.private_profile_media.arn]
     }
   }
 
@@ -227,8 +227,8 @@ data "aws_iam_policy_document" "platform_media_bucket" {
 
     actions = ["s3:*"]
     resources = [
-      aws_s3_bucket.platform_media.arn,
-      "${aws_s3_bucket.platform_media.arn}/*",
+      aws_s3_bucket.private_profile_media.arn,
+      "${aws_s3_bucket.private_profile_media.arn}/*",
     ]
 
     condition {
@@ -239,20 +239,20 @@ data "aws_iam_policy_document" "platform_media_bucket" {
   }
 }
 
-resource "aws_s3_bucket_policy" "platform_media" {
-  bucket = aws_s3_bucket.platform_media.id
-  policy = data.aws_iam_policy_document.platform_media_bucket.json
+resource "aws_s3_bucket_policy" "private_profile_media" {
+  bucket = aws_s3_bucket.private_profile_media.id
+  policy = data.aws_iam_policy_document.private_profile_media_bucket.json
 
-  depends_on = [aws_s3_bucket_public_access_block.platform_media]
+  depends_on = [aws_s3_bucket_public_access_block.private_profile_media]
 }
 
-resource "cloudflare_record" "platform_media" {
+resource "cloudflare_record" "private_profile_media" {
   count = var.enable_cloudflare_dns ? 1 : 0
 
   zone_id = var.cloudflare_zone_id
   name    = "images"
   type    = "CNAME"
-  content = aws_cloudfront_distribution.platform_media.domain_name
+  content = aws_cloudfront_distribution.private_profile_media.domain_name
   proxied = false
 }
 
@@ -303,9 +303,9 @@ resource "aws_iam_role_policy" "next_api_media" {
           "s3:DeleteObject",
         ]
         Resource = [
-          "${aws_s3_bucket.platform_media.arn}/staging/*",
-          "${aws_s3_bucket.platform_media.arn}/public/*",
-          "${aws_s3_bucket.platform_media.arn}/private/*",
+          "${aws_s3_bucket.private_profile_media.arn}/staging/*",
+          "${aws_s3_bucket.private_profile_media.arn}/public/*",
+          "${aws_s3_bucket.private_profile_media.arn}/private/*",
         ]
       }
     ]
