@@ -48,6 +48,6 @@ resource "aws_route53_record" "bimi" {
   type    = "TXT"
   ttl     = 3600
   records = [
-    "v=BIMI1; l=https://vayada-uploads-prod.s3.eu-west-1.amazonaws.com/branding/vayada-bimi.svg;",
+    "v=BIMI1; l=https://${aws_cloudfront_distribution.platform_media.domain_name}/branding/vayada-bimi.svg;",
   ]
 }

@@ -6,6 +6,32 @@ resource "aws_cloudfront_origin_access_control" "platform_media" {
   signing_protocol                  = "sigv4"
 }
 
+resource "aws_cloudfront_function" "platform_media_path_guard" {
+  name    = "vayada-platform-media-path-guard"
+  runtime = "cloudfront-js-2.0"
+  comment = "Expose public media and BIMI only; deny private and staging paths"
+  publish = true
+  code    = <<-EOT
+    function handler(event) {
+      var request = event.request;
+
+      if (request.uri.indexOf('/media/') === 0) {
+        request.uri = '/public' + request.uri;
+        return request;
+      }
+
+      if (request.uri === '/branding/vayada-bimi.svg') {
+        return request;
+      }
+
+      return {
+        statusCode: 403,
+        statusDescription: 'Forbidden'
+      };
+    }
+  EOT
+}
+
 resource "aws_cloudfront_distribution" "platform_media" {
   enabled         = true
   is_ipv6_enabled = true
@@ -24,6 +50,11 @@ resource "aws_cloudfront_distribution" "platform_media" {
     target_origin_id       = "vayada-platform-media-s3"
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.platform_media_path_guard.arn
+    }
 
     forwarded_values {
       query_string = false
