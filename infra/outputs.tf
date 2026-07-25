@@ -29,6 +29,11 @@ output "s3_bucket_name" {
   value       = aws_s3_bucket.uploads.id
 }
 
+output "platform_media_cdn_url" {
+  description = "CloudFront base URL for immutable public platform media"
+  value       = "https://${aws_cloudfront_distribution.platform_media.domain_name}"
+}
+
 output "ecs_security_group_id" {
   description = "ECS tasks security group ID"
   value       = aws_security_group.ecs_tasks.id

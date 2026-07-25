@@ -287,6 +287,9 @@ locals {
         { name = "OPENAI_BASE_URL", value = var.openai_base_url },
         { name = "OPENAI_ORGANIZATION", value = var.openai_organization },
         { name = "OPENAI_PROJECT", value = var.openai_project },
+        { name = "PLATFORM_MEDIA_BUCKET", value = aws_s3_bucket.uploads.id },
+        { name = "PLATFORM_MEDIA_CDN_BASE_URL", value = "https://${aws_cloudfront_distribution.platform_media.domain_name}" },
+        { name = "PLATFORM_MEDIA_CDN_ORIGIN_HOST", value = aws_s3_bucket.uploads.bucket_regional_domain_name },
       ]
       secrets = concat([
         { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },

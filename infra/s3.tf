@@ -29,6 +29,20 @@ resource "aws_s3_bucket_policy" "uploads_public_read" {
         Principal = "*"
         Action    = "s3:GetObject"
         Resource  = "${aws_s3_bucket.uploads.arn}/*"
+      },
+      {
+        Sid    = "AllowPlatformMediaCloudFrontRead"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        }
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.uploads.arn}/*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = aws_cloudfront_distribution.platform_media.arn
+          }
+        }
       }
     ]
   })
@@ -44,6 +58,10 @@ resource "aws_s3_bucket_cors_configuration" "uploads" {
       "https://pms.vayada.com",
       "https://admin.booking.vayada.com",
       "https://*.booking.vayada.com",
+      "https://next-admin.vayada.com",
+      "https://next-booking-admin.vayada.com",
+      "https://next-marketplace.vayada.com",
+      "https://next-pms.vayada.com",
     ]
     expose_headers  = ["ETag"]
     max_age_seconds = 3600
