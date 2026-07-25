@@ -5,7 +5,7 @@ BIMI (Brand Indicators for Message Identification) lets supporting mail clients 
 ## What this directory ships
 
 - `vayada-bimi.svg` — the brand mark in the BIMI-mandated SVG profile (SVG Tiny 1.2 PS, `baseProfile="tiny-ps"`, square 1:1 viewBox, `<title>` element, no scripts, no external refs).
-- Hosting: uploaded to `s3://vayada-uploads-prod/branding/vayada-bimi.svg` via `infra/s3.tf` (`aws_s3_object.bimi_logo`). Public URL: `https://vayada-uploads-prod.s3.eu-west-1.amazonaws.com/branding/vayada-bimi.svg`.
+- Hosting: uploaded to `s3://vayada-uploads-prod/branding/vayada-bimi.svg` via `infra/s3.tf` (`aws_s3_object.bimi_logo`) and served through the platform media CloudFront distribution at `/branding/vayada-bimi.svg`. The bucket itself is private.
 - DNS: `default._bimi.vayada.com` TXT record in `infra/route53.tf` (`aws_route53_record.bimi`).
 
 > The SVG is currently a hand-traced approximation of the V mark from `vayada-logo.png`. Drop in the design team's master vector when available — re-export to SVG Tiny PS profile and run through the validator below.
@@ -56,7 +56,7 @@ After `terraform apply`:
 
 ```bash
 dig +short TXT default._bimi.vayada.com
-curl -I https://vayada-uploads-prod.s3.eu-west-1.amazonaws.com/branding/vayada-bimi.svg
+curl -I "https://$(terraform -chdir=infra output -raw platform_media_cdn_domain)/branding/vayada-bimi.svg"
 ```
 
 Then run the published record + SVG through:
