@@ -107,6 +107,12 @@ Terraform-owned `latest` image reference.
 `vayada-next-api-service` and reads production-owned target runtime secrets
 from `/vayada/prod/*`, not `/vayada/staging/*`.
 
+Public platform media is written to `vayada-uploads-prod` and served through the
+Terraform-managed `vayada-platform-media` CloudFront distribution. The
+`PLATFORM_MEDIA_BUCKET`, `PLATFORM_MEDIA_CDN_BASE_URL`, and
+`PLATFORM_MEDIA_CDN_ORIGIN_HOST` values are injected directly into the
+`next-api` task definition.
+
 ### Secrets
 
 Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
