@@ -88,6 +88,18 @@ jobs:
       - name: Terraform apply
         run: |
           terraform apply -no-color tfplan
+          legacy_image_key="$(aws s3api list-objects-v2 \
+            --bucket vayada-uploads-prod \
+            --prefix rooms/ \
+            --max-keys 1 \
+            --query 'Contents[0].Key' \
+            --output text)"
+          test -n "$legacy_image_key"
+          test "$legacy_image_key" != "None"
+          public_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://vayada-uploads-prod.s3.eu-west-1.amazonaws.com/${legacy_image_key}")"
+          test "$public_status" = "200"
+          echo "Verified an existing legacy rooms/* image is publicly readable (HTTP ${public_status})."
           echo "Targeted VAY-1039 apply completed; stopping before unrelated task-definition reconciliation."
           exit 1
         working-directory: infra
