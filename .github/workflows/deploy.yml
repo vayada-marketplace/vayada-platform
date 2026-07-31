@@ -121,6 +121,19 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             --query taskDefinition > task-definition.json
 
+      - name: Verify image exists in ECR
+        env:
+          ECR_REPOSITORY: ${{ github.event.client_payload.ecr_repo || inputs.ecr_repo }}
+          IMAGE_TAG: ${{ github.event.client_payload.image_sha || inputs.image_sha }}
+        run: |
+          set -euo pipefail
+          aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$IMAGE_TAG" \
+            --region "${{ env.AWS_REGION }}" \
+            --query 'imageDetails[0].{digest:imageDigest,pushed:imagePushedAt,tags:imageTags}' \
+            --output json
+
       - name: Render task definition with SHA-pinned image
         id: render-task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
