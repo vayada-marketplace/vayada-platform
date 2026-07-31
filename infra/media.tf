@@ -19,6 +19,10 @@ locals {
 resource "aws_s3_bucket" "private_profile_media" {
   bucket = local.private_profile_media_bucket_name
 
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = {
     Name        = local.private_profile_media_bucket_name
     Project     = "vayada"
