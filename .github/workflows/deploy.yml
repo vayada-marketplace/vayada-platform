@@ -135,6 +135,11 @@ jobs:
           IMAGE_DIGEST: ${{ github.event.client_payload.image_digest || inputs.image_digest }}
         run: |
           set -euo pipefail
+          if [ "${#IMAGE_TAG}" -gt 128 ] || [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::Image tag is invalid."
+            exit 1
+          fi
+
           if [ -n "$IMAGE_DIGEST" ]; then
             if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
               echo "::error::Invalid image digest '$IMAGE_DIGEST'."
