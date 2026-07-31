@@ -14,6 +14,12 @@ on:
       image_sha:
         description: "Full 40-char git SHA of the image to deploy"
         required: true
+      image_digest:
+        description: "Optional sha256 digest captured by the publishing workflow"
+        required: false
+      rollback_image:
+        description: "Optional image URI to deploy automatically if cutover fails"
+        required: false
       environment:
         description: "Target environment"
         required: true
@@ -121,18 +127,109 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             --query taskDefinition > task-definition.json
 
-      - name: Verify image exists in ECR
+      - name: Resolve and verify image digest in ECR
+        id: resolve-image
         env:
           ECR_REPOSITORY: ${{ github.event.client_payload.ecr_repo || inputs.ecr_repo }}
           IMAGE_TAG: ${{ github.event.client_payload.image_sha || inputs.image_sha }}
+          IMAGE_DIGEST: ${{ github.event.client_payload.image_digest || inputs.image_digest }}
         run: |
           set -euo pipefail
-          aws ecr describe-images \
-            --repository-name "$ECR_REPOSITORY" \
-            --image-ids "imageTag=$IMAGE_TAG" \
-            --region "${{ env.AWS_REGION }}" \
-            --query 'imageDetails[0].{digest:imageDigest,pushed:imagePushedAt,tags:imageTags}' \
-            --output json
+          if [ "${#IMAGE_TAG}" -gt 128 ] || [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::Image tag is invalid."
+            exit 1
+          fi
+
+          if [ -n "$IMAGE_DIGEST" ]; then
+            if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Invalid image digest '$IMAGE_DIGEST'."
+              exit 1
+            fi
+
+            aws ecr describe-images \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids "imageTag=$IMAGE_TAG,imageDigest=$IMAGE_DIGEST" \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'imageDetails[0].{digest:imageDigest,pushed:imagePushedAt,tags:imageTags}' \
+              --output json
+          else
+            IMAGE_DIGEST="$(
+              aws ecr describe-images \
+                --repository-name "$ECR_REPOSITORY" \
+                --image-ids "imageTag=$IMAGE_TAG" \
+                --region "${{ env.AWS_REGION }}" \
+                --query 'imageDetails[0].imageDigest' \
+                --output text
+            )"
+          fi
+
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::ECR did not return a valid image digest."
+            exit 1
+          fi
+
+          registry="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          image_uri="${registry}/${ECR_REPOSITORY}@${IMAGE_DIGEST}"
+          echo "image_uri=${image_uri}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "- Deploy image: ${image_uri}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve and verify rollback image
+        id: resolve-rollback
+        env:
+          ECR_REPOSITORY: ${{ github.event.client_payload.ecr_repo || inputs.ecr_repo }}
+          ROLLBACK_IMAGE: ${{ github.event.client_payload.rollback_image || inputs.rollback_image }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ROLLBACK_IMAGE" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          registry="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          repository_uri="${registry}/${ECR_REPOSITORY}"
+          case "$ROLLBACK_IMAGE" in
+            "${repository_uri}:"*)
+              rollback_tag="${ROLLBACK_IMAGE#"${repository_uri}:"}"
+              if [ "${#rollback_tag}" -gt 128 ] || [[ ! "$rollback_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]]; then
+                echo "::error::Rollback image tag is invalid."
+                exit 1
+              fi
+              rollback_digest="$(
+                aws ecr describe-images \
+                  --repository-name "$ECR_REPOSITORY" \
+                  --image-ids "imageTag=$rollback_tag" \
+                  --region "${{ env.AWS_REGION }}" \
+                  --query 'imageDetails[0].imageDigest' \
+                  --output text
+              )"
+              ;;
+            "${repository_uri}@"*)
+              rollback_digest="${ROLLBACK_IMAGE#"${repository_uri}@"}"
+              if [[ ! "$rollback_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+                echo "::error::Rollback image digest is invalid."
+                exit 1
+              fi
+              aws ecr describe-images \
+                --repository-name "$ECR_REPOSITORY" \
+                --image-ids "imageDigest=$rollback_digest" \
+                --region "${{ env.AWS_REGION }}" \
+                --query 'imageDetails[0].{digest:imageDigest,pushed:imagePushedAt,tags:imageTags}' \
+                --output json
+              ;;
+            *)
+              echo "::error::Rollback image must reference the deployment ECR repository."
+              exit 1
+              ;;
+          esac
+
+          if [[ ! "$rollback_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::ECR did not return a valid rollback image digest."
+            exit 1
+          fi
+
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          echo "image_uri=${repository_uri}@${rollback_digest}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "- Rollback image: ${repository_uri}@${rollback_digest}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Render task definition with SHA-pinned image
         id: render-task-def
@@ -140,12 +237,31 @@ jobs:
         with:
           task-definition: task-definition.json
           container-name: ${{ steps.resolve.outputs.task_family }}
-          image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ github.event.client_payload.ecr_repo || inputs.ecr_repo }}:${{ github.event.client_payload.image_sha || inputs.image_sha }}
+          image: ${{ steps.resolve-image.outputs.image_uri }}
+
+      - name: Render rollback task definition
+        if: steps.resolve-rollback.outputs.available == 'true'
+        id: render-rollback-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ steps.resolve.outputs.task_family }}
+          image: ${{ steps.resolve-rollback.outputs.image_uri }}
 
       - name: Deploy to ECS
+        id: deploy
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          service: ${{ steps.resolve.outputs.ecs_service }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Roll back failed ECS cutover
+        if: failure() && steps.deploy.outcome == 'failure' && steps.resolve-rollback.outputs.available == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-rollback-task-def.outputs.task-definition }}
           service: ${{ steps.resolve.outputs.ecs_service }}
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
