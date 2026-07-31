@@ -9,6 +9,13 @@ locals {
     "vayada-admin-frontend",
     "vayada-affiliate-dashboard",
     "vayada-api",
+    "vayada-next-api",
+    "vayada-next-booking-frontend",
+    "vayada-next-booking-admin-frontend",
+    "vayada-next-pms-frontend",
+    "vayada-next-admin-frontend",
+    "vayada-next-marketplace-frontend",
+    "vayada-next-affiliate-dashboard",
   ]
 }
 
@@ -33,11 +40,12 @@ resource "aws_ecr_lifecycle_policy" "repos" {
     rules = [
       {
         rulePriority = 1
-        description  = "Keep last 10 images"
+        description  = "Expire untagged build artifacts after 7 days; tagged release images are retained"
         selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 10
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 7
         }
         action = {
           type = "expire"
