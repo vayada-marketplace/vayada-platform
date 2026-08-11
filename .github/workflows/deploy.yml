@@ -32,7 +32,6 @@ permissions:
 concurrency:
   group: production-ecs-mutations
   queue: max
-  cancel-in-progress: false
 
 env:
   AWS_REGION: eu-west-1
