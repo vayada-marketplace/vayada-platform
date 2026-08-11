@@ -29,6 +29,10 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: production-ecs-mutations
+  cancel-in-progress: false
+
 env:
   AWS_REGION: eu-west-1
   AWS_ACCOUNT_ID: 269416271598

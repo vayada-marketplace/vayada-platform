@@ -18,13 +18,14 @@ locals {
     [for contract in local.auth_gateway_contracts_raw : tostring(contract.public_origin)],
   )
   next_frontend_allowed_origins = join(",", local.next_frontend_origins)
-  auth_gateway_enabled_services = toset([
-    "next-affiliate-dashboard",
-    "next-booking-admin",
-    "next-marketplace-admin",
-    "next-marketplace-frontend",
-    "next-pms-frontend",
-  ])
+  auth_gateway_expected_public_origins = {
+    next-affiliate-dashboard  = "https://next-affiliate.vayada.com"
+    next-booking-admin        = "https://next-booking-admin.vayada.com"
+    next-marketplace-admin    = "https://next-admin.vayada.com"
+    next-marketplace-frontend = "https://next-marketplace.vayada.com"
+    next-pms-frontend         = "https://next-pms.vayada.com"
+  }
+  auth_gateway_enabled_services                 = toset(keys(local.auth_gateway_expected_public_origins))
   auth_gateway_public_origin_environment_name   = "AUTH_PUBLIC_ORIGIN"
   auth_gateway_upstream_origin_environment_name = "AUTH_GATEWAY_UPSTREAM_ORIGIN"
   auth_gateway_reserved_environment_names = toset([
@@ -544,13 +545,13 @@ resource "aws_ecs_task_definition" "services" {
       condition = (
         each.key != "next-target-backend" ||
         alltrue([
-          for contract in values(local.auth_gateway_contracts) :
-          can(regex("^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\\.vayada\\.com$", contract.public_origin)) &&
+          for service, contract in local.auth_gateway_contracts :
+          lookup(local.auth_gateway_expected_public_origins, service, "") == contract.public_origin &&
           contains(local.auth_gateway_allowed_upstream_origins, contract.upstream_origin) &&
           can(regex("^[a-z][a-z0-9-]*$", contract.surface))
         ])
       )
-      error_message = "Auth gateway public origins must be pathless Vayada HTTPS origins, upstream origins must be allowlisted, and surfaces must use lowercase kebab-case."
+      error_message = "Auth gateway public origins must match the expected service mapping, upstream origins must be allowlisted, and surfaces must use lowercase kebab-case."
     }
 
     precondition {
