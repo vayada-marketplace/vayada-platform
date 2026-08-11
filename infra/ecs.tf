@@ -357,6 +357,8 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-booking-admin"
       environment = [
+        { name = "AUTH_PUBLIC_ORIGIN", value = "https://next-booking-admin.vayada.com" },
+        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTHKIT_LOGIN_ENABLED", value = "true" },
