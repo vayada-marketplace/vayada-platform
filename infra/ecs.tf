@@ -321,6 +321,8 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-pms-frontend"
       environment = [
+        { name = "AUTH_PUBLIC_ORIGIN", value = "https://next-pms.vayada.com" },
+        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_OPERATIONS_API_URL", value = "https://next-api.vayada.com" },
