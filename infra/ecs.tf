@@ -1,16 +1,4 @@
 locals {
-  next_frontend_origins = [
-    "https://next-api.vayada.com",
-    "https://next-pms.vayada.com",
-    "https://next-admin.vayada.com",
-    "https://next-booking-admin.vayada.com",
-    "https://next-booking.vayada.com",
-    "https://next-marketplace.vayada.com",
-    "https://next-affiliate.vayada.com",
-  ]
-
-  next_frontend_allowed_origins = join(",", local.next_frontend_origins)
-
   auth_gateway_contracts_raw = jsondecode(file("${path.module}/auth-gateways.json"))
   auth_gateway_contracts = tomap({
     for contract in local.auth_gateway_contracts_raw : tostring(contract.service) => {
@@ -19,6 +7,17 @@ locals {
       upstream_origin = try(tostring(contract.upstream_origin), "")
     }
   })
+  auth_gateway_public_origins_by_surface = tomap({
+    for contract in values(local.auth_gateway_contracts) : contract.surface => contract.public_origin
+  })
+  auth_gateway_upstream_origin = one(toset([
+    for contract in values(local.auth_gateway_contracts) : contract.upstream_origin
+  ]))
+  next_frontend_origins = concat(
+    [local.auth_gateway_upstream_origin, "https://next-booking.vayada.com"],
+    [for contract in local.auth_gateway_contracts_raw : tostring(contract.public_origin)],
+  )
+  next_frontend_allowed_origins = join(",", local.next_frontend_origins)
   auth_gateway_enabled_services = toset([
     "next-affiliate-dashboard",
     "next-booking-admin",
@@ -301,6 +300,12 @@ locals {
         { name = "AUTH_SUCCESS_URL", value = "https://next-admin.vayada.com/dashboard" },
         { name = "AUTH_LOGOUT_URL", value = "https://next-admin.vayada.com/login" },
         { name = "AUTH_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
+        { name = "AUTH_COMPATIBILITY_CALLBACK_ORIGIN", value = local.auth_gateway_upstream_origin },
+        { name = "AUTH_PLATFORM_ADMIN_ORIGIN", value = local.auth_gateway_public_origins_by_surface["platform-admin"] },
+        { name = "AUTH_BOOKING_ADMIN_ORIGIN", value = local.auth_gateway_public_origins_by_surface["booking-admin"] },
+        { name = "AUTH_PMS_WEB_ORIGIN", value = local.auth_gateway_public_origins_by_surface["pms-web"] },
+        { name = "AUTH_AFFILIATE_DASHBOARD_ORIGIN", value = local.auth_gateway_public_origins_by_surface["affiliate-dashboard"] },
+        { name = "AUTH_MARKETPLACE_WEB_ORIGIN", value = local.auth_gateway_public_origins_by_surface["marketplace-web"] },
         { name = "AUTH_COOKIE_DOMAIN", value = ".vayada.com" },
         { name = "AUTH_COOKIE_SECURE", value = "true" },
         { name = "AUTH_PMS_WEB_SUCCESS_URL", value = "https://next-pms.vayada.com/dashboard" },
@@ -546,10 +551,11 @@ resource "aws_ecs_task_definition" "services" {
         each.key != "next-target-backend" ||
         (
           length(distinct([for contract in values(local.auth_gateway_contracts) : contract.public_origin])) == length(local.auth_gateway_contracts) &&
-          length(distinct([for contract in values(local.auth_gateway_contracts) : contract.surface])) == length(local.auth_gateway_contracts)
+          length(distinct([for contract in values(local.auth_gateway_contracts) : contract.surface])) == length(local.auth_gateway_contracts) &&
+          length(distinct([for contract in values(local.auth_gateway_contracts) : contract.upstream_origin])) == 1
         )
       )
-      error_message = "Auth gateway public origins and surfaces must be unique."
+      error_message = "Auth gateway public origins and surfaces must be unique, and every gateway must share one upstream origin."
     }
 
     precondition {

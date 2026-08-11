@@ -7,6 +7,15 @@ Terraform turns each entry into `AUTH_PUBLIC_ORIGIN` and
 `AUTH_GATEWAY_UPSTREAM_ORIGIN`; do not duplicate those variables in an
 individual ECS service environment.
 
+The same map supplies the TypeScript API's per-surface callback origins
+(`AUTH_PLATFORM_ADMIN_ORIGIN`, `AUTH_BOOKING_ADMIN_ORIGIN`,
+`AUTH_PMS_WEB_ORIGIN`, `AUTH_AFFILIATE_DASHBOARD_ORIGIN`, and
+`AUTH_MARKETPLACE_WEB_ORIGIN`), the common compatibility callback origin, and
+the gateway portion of `AUTH_ALLOWED_ORIGINS`. The guest Booking origin is the
+only additional frontend allowlist entry. This keeps the API startup contract
+aligned with the frontend gateways and prevents a new API image from
+crash-looping on missing or stale callback origins.
+
 ## Current gateways
 
 | Platform service | App auth surface | Public origin | Upstream origin |
