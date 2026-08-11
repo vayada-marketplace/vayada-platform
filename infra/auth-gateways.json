@@ -1,0 +1,20 @@
+[
+  {
+    "service": "next-booking-admin",
+    "public_origin": "https://next-booking-admin.vayada.com",
+    "surface": "booking-admin",
+    "upstream_origin": "https://next-api.vayada.com"
+  },
+  {
+    "service": "next-marketplace-frontend",
+    "public_origin": "https://next-marketplace.vayada.com",
+    "surface": "marketplace-web",
+    "upstream_origin": "https://next-api.vayada.com"
+  },
+  {
+    "service": "next-pms-frontend",
+    "public_origin": "https://next-pms.vayada.com",
+    "surface": "pms-web",
+    "upstream_origin": "https://next-api.vayada.com"
+  }
+]

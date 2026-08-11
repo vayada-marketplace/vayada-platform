@@ -11,6 +11,20 @@ locals {
 
   next_frontend_allowed_origins = join(",", local.next_frontend_origins)
 
+  auth_gateway_contracts_raw = jsondecode(file("${path.module}/auth-gateways.json"))
+  auth_gateway_contracts = tomap({
+    for contract in local.auth_gateway_contracts_raw : tostring(contract.service) => {
+      public_origin   = try(tostring(contract.public_origin), "")
+      surface         = try(tostring(contract.surface), "")
+      upstream_origin = try(tostring(contract.upstream_origin), "")
+    }
+  })
+  auth_gateway_enabled_services = toset([
+    "next-booking-admin",
+    "next-marketplace-frontend",
+    "next-pms-frontend",
+  ])
+
   base_services = {
     booking-backend = {
       name           = "vayada-booking-backend"
@@ -321,8 +335,6 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-pms-frontend"
       environment = [
-        { name = "AUTH_PUBLIC_ORIGIN", value = "https://next-pms.vayada.com" },
-        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_OPERATIONS_API_URL", value = "https://next-api.vayada.com" },
@@ -357,8 +369,6 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-booking-admin"
       environment = [
-        { name = "AUTH_PUBLIC_ORIGIN", value = "https://next-booking-admin.vayada.com" },
-        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTHKIT_LOGIN_ENABLED", value = "true" },
@@ -404,8 +414,6 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-marketplace-frontend"
       environment = [
-        { name = "AUTH_PUBLIC_ORIGIN", value = "https://next-marketplace.vayada.com" },
-        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-pms.vayada.com" },
@@ -431,7 +439,23 @@ locals {
     }
   }
 
-  services = merge(local.base_services, local.staging_pms_service, local.next_services)
+  auth_gateway_environment = {
+    for service_key, contract in local.auth_gateway_contracts : service_key => [
+      { name = "AUTH_PUBLIC_ORIGIN", value = contract.public_origin },
+      { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = contract.upstream_origin },
+    ]
+  }
+
+  next_services_with_auth_gateways = {
+    for service_key, service in local.next_services : service_key => merge(service, {
+      environment = concat(
+        lookup(local.auth_gateway_environment, service_key, []),
+        service.environment,
+      )
+    })
+  }
+
+  services = merge(local.base_services, local.staging_pms_service, local.next_services_with_auth_gateways)
 
   # Map from service key to ECR repo name
   ecr_repo_map = {
@@ -504,6 +528,55 @@ resource "aws_ecs_task_definition" "services" {
 
   lifecycle {
     create_before_destroy = true
+
+    precondition {
+      condition = (
+        each.key != "next-target-backend" ||
+        (
+          length(setsubtract(local.auth_gateway_enabled_services, toset(keys(local.auth_gateway_contracts)))) == 0 &&
+          length(setsubtract(toset(keys(local.auth_gateway_contracts)), local.auth_gateway_enabled_services)) == 0 &&
+          length(setsubtract(local.auth_gateway_enabled_services, toset(keys(local.next_services)))) == 0
+        )
+      )
+      error_message = "Auth gateway contracts must exactly match enabled services that exist in local.next_services."
+    }
+
+    precondition {
+      condition = (
+        each.key != "next-target-backend" ||
+        alltrue([
+          for contract in values(local.auth_gateway_contracts) :
+          can(regex("^https://[a-z0-9.-]+$", contract.public_origin)) &&
+          can(regex("^https://[a-z0-9.-]+$", contract.upstream_origin)) &&
+          can(regex("^[a-z][a-z0-9-]*$", contract.surface))
+        ])
+      )
+      error_message = "Auth gateway origins must be pathless HTTPS origins and surfaces must use lowercase kebab-case."
+    }
+
+    precondition {
+      condition = (
+        each.key != "next-target-backend" ||
+        (
+          length(distinct([for contract in values(local.auth_gateway_contracts) : contract.public_origin])) == length(local.auth_gateway_contracts) &&
+          length(distinct([for contract in values(local.auth_gateway_contracts) : contract.surface])) == length(local.auth_gateway_contracts)
+        )
+      )
+      error_message = "Auth gateway public origins and surfaces must be unique."
+    }
+
+    precondition {
+      condition = (
+        each.key != "next-target-backend" ||
+        alltrue(flatten([
+          for service in values(local.next_services) : [
+            for variable in service.environment :
+            !contains(["AUTH_PUBLIC_ORIGIN", "AUTH_GATEWAY_UPSTREAM_ORIGIN"], variable.name)
+          ]
+        ]))
+      )
+      error_message = "AUTH_PUBLIC_ORIGIN and AUTH_GATEWAY_UPSTREAM_ORIGIN are reserved for infra/auth-gateways.json and must not be declared in a service environment."
+    }
 
     precondition {
       condition = (
