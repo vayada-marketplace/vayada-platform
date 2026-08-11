@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - "infra/**"
+      - "scripts/roll-forward-auth-gateways.sh"
+      - "scripts/smoke-auth-gateway.sh"
       - ".github/workflows/tf-apply.yml"
   workflow_dispatch:
 
@@ -123,6 +125,11 @@ jobs:
           TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}
           TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
           TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
+
+      - name: Roll forward auth gateway task definitions
+        env:
+          ECS_CLUSTER: vayada-backend-cluster
+        run: bash scripts/roll-forward-auth-gateways.sh
 
       - name: Check next-api task definition drift
         id: next_api_task

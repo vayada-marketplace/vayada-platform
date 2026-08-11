@@ -27,6 +27,13 @@ locals {
   ])
   auth_gateway_public_origin_environment_name   = "AUTH_PUBLIC_ORIGIN"
   auth_gateway_upstream_origin_environment_name = "AUTH_GATEWAY_UPSTREAM_ORIGIN"
+  auth_gateway_reserved_environment_names = toset([
+    local.auth_gateway_public_origin_environment_name,
+    local.auth_gateway_upstream_origin_environment_name,
+  ])
+  auth_gateway_allowed_upstream_origins = toset([
+    "https://next-api.vayada.com",
+  ])
 
   base_services = {
     booking-backend = {
@@ -538,12 +545,26 @@ resource "aws_ecs_task_definition" "services" {
         each.key != "next-target-backend" ||
         alltrue([
           for contract in values(local.auth_gateway_contracts) :
-          can(regex("^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$", contract.public_origin)) &&
-          can(regex("^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$", contract.upstream_origin)) &&
+          can(regex("^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\\.vayada\\.com$", contract.public_origin)) &&
+          contains(local.auth_gateway_allowed_upstream_origins, contract.upstream_origin) &&
           can(regex("^[a-z][a-z0-9-]*$", contract.surface))
         ])
       )
-      error_message = "Auth gateway origins must be pathless HTTPS origins and surfaces must use lowercase kebab-case."
+      error_message = "Auth gateway public origins must be pathless Vayada HTTPS origins, upstream origins must be allowlisted, and surfaces must use lowercase kebab-case."
+    }
+
+    precondition {
+      condition = (
+        each.key != "next-target-backend" ||
+        alltrue([
+          for service in values(local.next_services) :
+          length(setintersection(
+            toset([for entry in service.environment : entry.name]),
+            local.auth_gateway_reserved_environment_names,
+          )) == 0
+        ])
+      )
+      error_message = "AUTH_PUBLIC_ORIGIN and AUTH_GATEWAY_UPSTREAM_ORIGIN are reserved for generated auth gateway contracts."
     }
 
     precondition {
