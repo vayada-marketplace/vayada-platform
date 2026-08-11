@@ -30,8 +30,9 @@ Each service is also listed in `auth_gateway_enabled_services` in `infra/ecs.tf`
 CI rejects malformed or duplicate contracts and service-local declarations of the
 two reserved gateway environment variables. Terraform checks that the
 enabled-service inventory and JSON contracts match exactly, that origins are
-pathless HTTPS URLs, and that public origins and surfaces are unique. Pull-request
-Terraform validation and plan are required before merge.
+approved pathless Vayada HTTPS URLs, that upstream origins are allowlisted, and
+that public origins and surfaces are unique. Pull-request Terraform validation
+and plan are required before merge.
 
 ## Cross-repository release rule
 
@@ -44,6 +45,16 @@ change must:
 2. add or update its entry in `infra/auth-gateways.json`;
 3. pass Terraform validation and the production plan; and
 4. merge and apply before the corresponding app image is deployed.
+
+After Terraform applies, `scripts/roll-forward-auth-gateways.sh` compares every
+gateway service with the latest generated task definition. Terraform applies and
+application deployments share one FIFO, non-canceling concurrency queue so they
+cannot overwrite each other or replace an already pending deployment. The script
+also aborts if a service changes outside that queue. It preserves the currently
+deployed image, rolls forward only drifted services, waits for ECS stability, and
+probes every gateway even when there is no task-definition drift. A failed rollout
+or probe restores the service's previous task definition only when the failed
+revision is still active.
 
 Do not rely on app tests that mock server environment variables as deployment
 evidence. Terraform owns the production values, while the app repository owns
