@@ -70,9 +70,10 @@ deployed service's contract and requests:
 ```
 
 HTTP 401 with JSON error `missing_session` is the healthy unauthenticated
-result: the public proxy reached the upstream auth service. A gateway 5xx,
-unexpected status, malformed response, or other error fails the deployment
-workflow visibly.
+session result: the public proxy reached the upstream auth service. The Google
+start route must also return HTTP 302 to the WorkOS authorization endpoint. A
+gateway 5xx, unexpected status, malformed response, or other error fails the
+deployment workflow visibly.
 
 This probe intentionally needs no production user credentials. Authenticated
 product QA remains a separate release check when a ticket changes signed-in
