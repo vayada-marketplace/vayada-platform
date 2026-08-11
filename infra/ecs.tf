@@ -400,6 +400,8 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-marketplace-frontend"
       environment = [
+        { name = "AUTH_PUBLIC_ORIGIN", value = "https://next-marketplace.vayada.com" },
+        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-pms.vayada.com" },
