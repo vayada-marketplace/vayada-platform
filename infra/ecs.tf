@@ -13,6 +13,7 @@ locals {
   auth_gateway_upstream_origin = one(toset([
     for contract in values(local.auth_gateway_contracts) : contract.upstream_origin
   ]))
+  auth_first_party_surfaces = join(",", keys(local.auth_gateway_public_origins_by_surface))
   next_frontend_origins = concat(
     [local.auth_gateway_upstream_origin, "https://next-booking.vayada.com"],
     [for contract in local.auth_gateway_contracts_raw : tostring(contract.public_origin)],
@@ -308,6 +309,7 @@ locals {
         { name = "AUTH_SUCCESS_URL", value = "https://next-admin.vayada.com/dashboard" },
         { name = "AUTH_LOGOUT_URL", value = "https://next-admin.vayada.com/login" },
         { name = "AUTH_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
+        { name = "AUTH_FIRST_PARTY_SURFACES", value = local.auth_first_party_surfaces },
         { name = "AUTH_COMPATIBILITY_CALLBACK_ORIGIN", value = local.auth_gateway_upstream_origin },
         { name = "AUTH_PLATFORM_ADMIN_ORIGIN", value = local.auth_gateway_public_origins_by_surface["platform-admin"] },
         { name = "AUTH_BOOKING_ADMIN_ORIGIN", value = local.auth_gateway_public_origins_by_surface["booking-admin"] },
