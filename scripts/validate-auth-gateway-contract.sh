@@ -10,8 +10,8 @@ jq --exit-status '
   all(.[];
     (keys | sort) == ["public_origin", "service", "surface", "upstream_origin"] and
     (.service | test("^next-[a-z0-9-]+$")) and
-    (.public_origin | test("^https://[a-z0-9.-]+$")) and
-    (.upstream_origin | test("^https://[a-z0-9.-]+$")) and
+    (.public_origin | test("^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")) and
+    (.upstream_origin | test("^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")) and
     (.surface | test("^[a-z][a-z0-9-]*$"))
   ) and
   ([.[].service] | length == (unique | length)) and

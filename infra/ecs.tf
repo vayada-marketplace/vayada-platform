@@ -533,8 +533,8 @@ resource "aws_ecs_task_definition" "services" {
         each.key != "next-target-backend" ||
         alltrue([
           for contract in values(local.auth_gateway_contracts) :
-          can(regex("^https://[a-z0-9.-]+$", contract.public_origin)) &&
-          can(regex("^https://[a-z0-9.-]+$", contract.upstream_origin)) &&
+          can(regex("^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$", contract.public_origin)) &&
+          can(regex("^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$", contract.upstream_origin)) &&
           can(regex("^[a-z][a-z0-9-]*$", contract.surface))
         ])
       )

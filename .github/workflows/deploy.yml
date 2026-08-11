@@ -264,7 +264,7 @@ jobs:
         run: bash scripts/smoke-auth-gateway.sh "$SERVICE"
 
       - name: Roll back failed ECS cutover
-        if: failure() && steps.deploy.outcome == 'failure' && steps.resolve-rollback.outputs.available == 'true'
+        if: failure() && steps.resolve-rollback.outputs.available == 'true' && (steps.deploy.outcome == 'failure' || steps.auth-gateway-smoke.outcome == 'failure')
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-rollback-task-def.outputs.task-definition }}
