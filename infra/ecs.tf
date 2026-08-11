@@ -439,16 +439,7 @@ locals {
     }
   }
 
-  next_services_with_auth_gateways = merge(local.next_services, {
-    for service_key, contract in local.auth_gateway_contracts : service_key => merge(local.next_services[service_key], {
-      environment = concat([
-        { name = "AUTH_PUBLIC_ORIGIN", value = contract.public_origin },
-        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = contract.upstream_origin },
-      ], local.next_services[service_key].environment)
-    })
-  })
-
-  services = merge(local.base_services, local.staging_pms_service, local.next_services_with_auth_gateways)
+  services = merge(local.base_services, local.staging_pms_service, local.next_services)
 
   # Map from service key to ECR repo name
   ecr_repo_map = {
@@ -496,7 +487,10 @@ resource "aws_ecs_task_definition" "services" {
         }
       ]
 
-      environment = each.value.environment
+      environment = contains(local.auth_gateway_enabled_services, each.key) ? concat([
+        { name = "AUTH_PUBLIC_ORIGIN", value = local.auth_gateway_contracts[each.key].public_origin },
+        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = local.auth_gateway_contracts[each.key].upstream_origin },
+      ], each.value.environment) : each.value.environment
       secrets = length(each.value.secrets) > 0 ? [
         for s in each.value.secrets : {
           name      = s.name
@@ -559,15 +553,11 @@ resource "aws_ecs_task_definition" "services" {
     }
 
     precondition {
-      condition = (
-        each.key != "next-target-backend" ||
-        alltrue([
-          for service_key, service in local.next_services_with_auth_gateways :
-          length([for variable in service.environment : variable if variable.name == "AUTH_PUBLIC_ORIGIN"]) == (contains(local.auth_gateway_enabled_services, service_key) ? 1 : 0) &&
-          length([for variable in service.environment : variable if variable.name == "AUTH_GATEWAY_UPSTREAM_ORIGIN"]) == (contains(local.auth_gateway_enabled_services, service_key) ? 1 : 0)
-        ])
-      )
-      error_message = "Each enabled gateway must have exactly one generated AUTH_PUBLIC_ORIGIN and AUTH_GATEWAY_UPSTREAM_ORIGIN; other services must have none."
+      condition = alltrue([
+        for variable in each.value.environment :
+        !contains(["AUTH_PUBLIC_ORIGIN", "AUTH_GATEWAY_UPSTREAM_ORIGIN"], variable.name)
+      ])
+      error_message = "AUTH_PUBLIC_ORIGIN and AUTH_GATEWAY_UPSTREAM_ORIGIN are reserved for infra/auth-gateways.json and must not be declared in a service environment."
     }
 
     precondition {
