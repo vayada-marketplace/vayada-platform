@@ -48,12 +48,13 @@ change must:
 
 After Terraform applies, `scripts/roll-forward-auth-gateways.sh` compares every
 gateway service with the latest generated task definition. Terraform applies and
-application deployments share one non-canceling concurrency group so they cannot
-overwrite each other. The script also aborts if a service changes outside that
-queue. It preserves the currently deployed image, rolls forward only drifted
-services, waits for ECS stability, and probes every gateway even when there is no
-task-definition drift. A failed rollout or probe restores the service's previous
-task definition only when the failed revision is still active.
+application deployments share one FIFO, non-canceling concurrency queue so they
+cannot overwrite each other or replace an already pending deployment. The script
+also aborts if a service changes outside that queue. It preserves the currently
+deployed image, rolls forward only drifted services, waits for ECS stability, and
+probes every gateway even when there is no task-definition drift. A failed rollout
+or probe restores the service's previous task definition only when the failed
+revision is still active.
 
 Do not rely on app tests that mock server environment variables as deployment
 evidence. Terraform owns the production values, while the app repository owns

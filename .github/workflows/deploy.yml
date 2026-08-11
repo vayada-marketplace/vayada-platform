@@ -31,6 +31,7 @@ permissions:
 
 concurrency:
   group: production-ecs-mutations
+  queue: max
   cancel-in-progress: false
 
 env:
