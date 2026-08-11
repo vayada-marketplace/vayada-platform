@@ -257,8 +257,14 @@ jobs:
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
 
+      - name: Smoke test auth gateway
+        id: auth-gateway-smoke
+        env:
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+        run: bash scripts/smoke-auth-gateway.sh "$SERVICE"
+
       - name: Roll back failed ECS cutover
-        if: failure() && steps.deploy.outcome == 'failure' && steps.resolve-rollback.outputs.available == 'true'
+        if: failure() && steps.resolve-rollback.outputs.available == 'true' && (steps.deploy.outcome == 'failure' || steps.auth-gateway-smoke.outcome == 'failure')
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-rollback-task-def.outputs.task-definition }}

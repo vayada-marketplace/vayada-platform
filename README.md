@@ -21,6 +21,7 @@ Application code, Docker builds, migrations, local development setup, and produc
 - Database schema migrations stay in the app repo.
 - Runtime environment variable names are documented in the app repo; values and SSM references live here.
 - ECR repository creation belongs here; image build and push belongs in app CI.
+- Own-origin authentication gateways follow the [Auth Gateway Deployment Contract](docs/auth-gateway-contract.md).
 
 See the [App Artifact Contract](https://linear.app/vayadacom/document/app-artifact-contract-add468dbc00f) for the full interface definition between the two repos.
 

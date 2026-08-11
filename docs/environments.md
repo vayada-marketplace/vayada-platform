@@ -142,6 +142,12 @@ may exist; do not delete media objects or use `terraform destroy` as rollback.
 3. `.github/workflows/deploy.yml` picks up the event
 4. Platform CI downloads the current ECS task definition, renders a new revision with the SHA-pinned image, and deploys it to the ECS service
 5. The workflow waits for service stability before marking success
+6. Auth-gateway-enabled frontends are probed through their public own-origin session route and must return HTTP 401 `missing_session`
+
+Gateway service names, origins, and surfaces come from
+[`infra/auth-gateways.json`](../infra/auth-gateways.json). See the
+[Auth Gateway Deployment Contract](auth-gateway-contract.md) for the required
+app/platform release coordination and validation rules.
 
 The Landing service is excluded — App Runner polls ECR for `:latest` and deploys automatically. No dispatch is needed.
 
