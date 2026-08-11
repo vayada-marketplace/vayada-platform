@@ -130,11 +130,6 @@ jobs:
           TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
           TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
 
-      - name: Roll forward auth gateway task definitions
-        env:
-          ECS_CLUSTER: vayada-backend-cluster
-        run: bash scripts/roll-forward-auth-gateways.sh
-
       - name: Check next-api task definition drift
         id: next_api_task
         run: |
@@ -199,6 +194,11 @@ jobs:
           service: vayada-next-api-service
           cluster: vayada-backend-cluster
           wait-for-service-stability: true
+
+      - name: Roll forward auth gateway task definitions
+        env:
+          ECS_CLUSTER: vayada-backend-cluster
+        run: bash scripts/roll-forward-auth-gateways.sh
 
       - name: Check booking frontend task definition drift
         id: booking_frontend_task
