@@ -568,14 +568,13 @@ resource "aws_ecs_task_definition" "services" {
     precondition {
       condition = (
         each.key != "next-target-backend" ||
-        alltrue(flatten([
-          for service in values(local.next_services) : [
-            for variable in service.environment :
-            !contains(["AUTH_PUBLIC_ORIGIN", "AUTH_GATEWAY_UPSTREAM_ORIGIN"], variable.name)
-          ]
-        ]))
+        alltrue([
+          for service_key, service in local.next_services_with_auth_gateways :
+          length([for variable in service.environment : variable if variable.name == "AUTH_PUBLIC_ORIGIN"]) == (contains(local.auth_gateway_enabled_services, service_key) ? 1 : 0) &&
+          length([for variable in service.environment : variable if variable.name == "AUTH_GATEWAY_UPSTREAM_ORIGIN"]) == (contains(local.auth_gateway_enabled_services, service_key) ? 1 : 0)
+        ])
       )
-      error_message = "AUTH_PUBLIC_ORIGIN and AUTH_GATEWAY_UPSTREAM_ORIGIN are reserved for infra/auth-gateways.json and must not be declared in a service environment."
+      error_message = "Each enabled gateway must have exactly one generated AUTH_PUBLIC_ORIGIN and AUTH_GATEWAY_UPSTREAM_ORIGIN; other services must have none."
     }
 
     precondition {
