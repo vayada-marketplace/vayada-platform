@@ -439,21 +439,14 @@ locals {
     }
   }
 
-  auth_gateway_environment = {
-    for service_key, contract in local.auth_gateway_contracts : service_key => [
-      { name = "AUTH_PUBLIC_ORIGIN", value = contract.public_origin },
-      { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = contract.upstream_origin },
-    ]
-  }
-
-  next_services_with_auth_gateways = {
-    for service_key, service in local.next_services : service_key => merge(service, {
-      environment = concat(
-        lookup(local.auth_gateway_environment, service_key, []),
-        service.environment,
-      )
+  next_services_with_auth_gateways = merge(local.next_services, {
+    for service_key, contract in local.auth_gateway_contracts : service_key => merge(local.next_services[service_key], {
+      environment = concat([
+        { name = "AUTH_PUBLIC_ORIGIN", value = contract.public_origin },
+        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = contract.upstream_origin },
+      ], local.next_services[service_key].environment)
     })
-  }
+  })
 
   services = merge(local.base_services, local.staging_pms_service, local.next_services_with_auth_gateways)
 
@@ -574,14 +567,7 @@ resource "aws_ecs_task_definition" "services" {
           length([for variable in service.environment : variable if variable.name == "AUTH_GATEWAY_UPSTREAM_ORIGIN"]) == (contains(local.auth_gateway_enabled_services, service_key) ? 1 : 0)
         ])
       )
-      error_message = "Auth gateway environment counts: ${jsonencode({
-        for service_key, service in local.next_services_with_auth_gateways : service_key => {
-          enabled  = contains(local.auth_gateway_enabled_services, service_key)
-          names    = [for variable in service.environment : variable.name]
-          public   = length([for variable in service.environment : variable if variable.name == "AUTH_PUBLIC_ORIGIN"])
-          upstream = length([for variable in service.environment : variable if variable.name == "AUTH_GATEWAY_UPSTREAM_ORIGIN"])
-        }
-      })}"
+      error_message = "Each enabled gateway must have exactly one generated AUTH_PUBLIC_ORIGIN and AUTH_GATEWAY_UPSTREAM_ORIGIN; other services must have none."
     }
 
     precondition {
