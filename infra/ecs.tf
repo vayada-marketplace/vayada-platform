@@ -574,7 +574,13 @@ resource "aws_ecs_task_definition" "services" {
           length([for variable in service.environment : variable if variable.name == "AUTH_GATEWAY_UPSTREAM_ORIGIN"]) == (contains(local.auth_gateway_enabled_services, service_key) ? 1 : 0)
         ])
       )
-      error_message = "Each enabled gateway must have exactly one generated AUTH_PUBLIC_ORIGIN and AUTH_GATEWAY_UPSTREAM_ORIGIN; other services must have none."
+      error_message = "Auth gateway environment counts: ${jsonencode({
+        for service_key, service in local.next_services_with_auth_gateways : service_key => {
+          enabled  = contains(local.auth_gateway_enabled_services, service_key)
+          public   = length([for variable in service.environment : variable if variable.name == "AUTH_PUBLIC_ORIGIN"])
+          upstream = length([for variable in service.environment : variable if variable.name == "AUTH_GATEWAY_UPSTREAM_ORIGIN"])
+        }
+      })}"
     }
 
     precondition {
