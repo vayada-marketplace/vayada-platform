@@ -24,6 +24,8 @@ locals {
     "next-marketplace-frontend",
     "next-pms-frontend",
   ])
+  auth_gateway_public_origin_environment_name   = "AUTH_PUBLIC_ORIGIN"
+  auth_gateway_upstream_origin_environment_name = "AUTH_GATEWAY_UPSTREAM_ORIGIN"
 
   base_services = {
     booking-backend = {
@@ -488,8 +490,8 @@ resource "aws_ecs_task_definition" "services" {
       ]
 
       environment = contains(local.auth_gateway_enabled_services, each.key) ? concat([
-        { name = "AUTH_PUBLIC_ORIGIN", value = local.auth_gateway_contracts[each.key].public_origin },
-        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = local.auth_gateway_contracts[each.key].upstream_origin },
+        { name = local.auth_gateway_public_origin_environment_name, value = local.auth_gateway_contracts[each.key].public_origin },
+        { name = local.auth_gateway_upstream_origin_environment_name, value = local.auth_gateway_contracts[each.key].upstream_origin },
       ], each.value.environment) : each.value.environment
       secrets = length(each.value.secrets) > 0 ? [
         for s in each.value.secrets : {
@@ -550,14 +552,6 @@ resource "aws_ecs_task_definition" "services" {
         )
       )
       error_message = "Auth gateway public origins and surfaces must be unique."
-    }
-
-    precondition {
-      condition = alltrue([
-        for variable in each.value.environment :
-        !contains(["AUTH_PUBLIC_ORIGIN", "AUTH_GATEWAY_UPSTREAM_ORIGIN"], variable.name)
-      ])
-      error_message = "AUTH_PUBLIC_ORIGIN and AUTH_GATEWAY_UPSTREAM_ORIGIN are reserved for infra/auth-gateways.json and must not be declared in a service environment."
     }
 
     precondition {

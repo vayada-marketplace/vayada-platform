@@ -21,7 +21,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate auth gateway smoke script
-        run: bash -n scripts/smoke-auth-gateway.sh
+        run: |
+          bash -n scripts/validate-auth-gateway-contract.sh
+          bash -n scripts/smoke-auth-gateway.sh
+
+      - name: Validate auth gateway contract
+        run: bash scripts/validate-auth-gateway-contract.sh
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3

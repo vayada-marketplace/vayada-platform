@@ -16,11 +16,11 @@ individual ECS service environment.
 | `next-pms-frontend` | `pms-web` | `https://next-pms.vayada.com` | `https://next-api.vayada.com` |
 
 Each service is also listed in `auth_gateway_enabled_services` in `infra/ecs.tf`.
-Terraform checks that service keys are unique, that the enabled-service inventory
-and JSON contracts match exactly, that origins are pathless HTTPS URLs, and that
-public origins and surfaces are unique. It also blocks service-local declarations
-of the two reserved gateway environment variables. Pull-request Terraform
-validation and plan are required before merge.
+CI rejects malformed or duplicate contracts and service-local declarations of the
+two reserved gateway environment variables. Terraform checks that the
+enabled-service inventory and JSON contracts match exactly, that origins are
+pathless HTTPS URLs, and that public origins and surfaces are unique. Pull-request
+Terraform validation and plan are required before merge.
 
 ## Cross-repository release rule
 
