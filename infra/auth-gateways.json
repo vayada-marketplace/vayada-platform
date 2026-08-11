@@ -1,8 +1,20 @@
 [
   {
+    "service": "next-affiliate-dashboard",
+    "public_origin": "https://next-affiliate.vayada.com",
+    "surface": "affiliate-dashboard",
+    "upstream_origin": "https://next-api.vayada.com"
+  },
+  {
     "service": "next-booking-admin",
     "public_origin": "https://next-booking-admin.vayada.com",
     "surface": "booking-admin",
+    "upstream_origin": "https://next-api.vayada.com"
+  },
+  {
+    "service": "next-marketplace-admin",
+    "public_origin": "https://next-admin.vayada.com",
+    "surface": "platform-admin",
     "upstream_origin": "https://next-api.vayada.com"
   },
   {

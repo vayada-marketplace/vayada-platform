@@ -20,7 +20,9 @@ locals {
     }
   })
   auth_gateway_enabled_services = toset([
+    "next-affiliate-dashboard",
     "next-booking-admin",
+    "next-marketplace-admin",
     "next-marketplace-frontend",
     "next-pms-frontend",
   ])
@@ -394,8 +396,6 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-marketplace-admin"
       environment = [
-        { name = "AUTH_PUBLIC_ORIGIN", value = "https://next-admin.vayada.com" },
-        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTHKIT_LOGIN_ENABLED", value = "true" },
@@ -431,8 +431,6 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-affiliate-dashboard"
       environment = [
-        { name = "AUTH_PUBLIC_ORIGIN", value = "https://next-affiliate.vayada.com" },
-        { name = "AUTH_GATEWAY_UPSTREAM_ORIGIN", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTHKIT_COMPATIBILITY_TOKEN_ENABLED", value = "false" },

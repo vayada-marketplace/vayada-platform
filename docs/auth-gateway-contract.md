@@ -11,7 +11,9 @@ individual ECS service environment.
 
 | Platform service | App auth surface | Public origin | Upstream origin |
 | --- | --- | --- | --- |
+| `next-affiliate-dashboard` | `affiliate-dashboard` | `https://next-affiliate.vayada.com` | `https://next-api.vayada.com` |
 | `next-booking-admin` | `booking-admin` | `https://next-booking-admin.vayada.com` | `https://next-api.vayada.com` |
+| `next-marketplace-admin` | `platform-admin` | `https://next-admin.vayada.com` | `https://next-api.vayada.com` |
 | `next-marketplace-frontend` | `marketplace-web` | `https://next-marketplace.vayada.com` | `https://next-api.vayada.com` |
 | `next-pms-frontend` | `pms-web` | `https://next-pms.vayada.com` | `https://next-api.vayada.com` |
 
