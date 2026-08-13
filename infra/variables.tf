@@ -98,6 +98,13 @@ variable "stripe_secret_key" {
   default     = ""
 }
 
+variable "next_stripe_test_secret_key" {
+  description = "Restricted Stripe test key used only by the isolated next-checkout smoke task"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "stripe_publishable_key" {
   description = "Stripe publishable key"
   type        = string

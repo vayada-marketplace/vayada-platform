@@ -54,10 +54,15 @@ locals {
 
   staging_ssm_secrets = local.staging_pms_runtime_ssm_secrets
 
-  staging_ssm_parameter_arns = [
-    for name in sort(keys(local.staging_ssm_secrets)) :
-    "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/${name}"
-  ]
+  staging_ssm_parameter_arns = concat(
+    [
+      for name in sort(keys(local.staging_ssm_secrets)) :
+      "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/${name}"
+    ],
+    [
+      "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/next-stripe-test-secret-key",
+    ],
+  )
 
 }
 
@@ -99,6 +104,26 @@ resource "aws_ssm_parameter" "staging_rehearsal_secrets" {
     precondition {
       condition     = trimspace(var.staging_rehearsal_secret_owner) != "" && trimspace(var.staging_rehearsal_secret_expires_at) != ""
       error_message = "Enabled staging secret parameters require non-empty staging_rehearsal_secret_owner and staging_rehearsal_secret_expires_at tags."
+    }
+  }
+}
+
+resource "aws_ssm_parameter" "next_stripe_test_secret" {
+  name  = "/vayada/staging/next-stripe-test-secret-key"
+  type  = "SecureString"
+  value = var.next_stripe_test_secret_key
+
+  tags = {
+    Project     = "vayada"
+    Environment = "staging"
+    ManagedBy   = "terraform"
+    Purpose     = "next-checkout-stripe-smoke"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = nonsensitive(startswith(trimspace(var.next_stripe_test_secret_key), "rk_test_"))
+      error_message = "The isolated next-checkout smoke task requires TF_VAR_NEXT_STRIPE_TEST_SECRET_KEY with an rk_test_ restricted key."
     }
   }
 }
