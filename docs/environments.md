@@ -297,6 +297,20 @@ Parallel next-stack service keys: `next-target-backend`, `next-pms-frontend`.
 `next-target-backend` serves `next-api.vayada.com`; `next-pms-frontend` remains
 the parallel PMS frontend validation lane.
 
+### Stripe test-mode checkout smoke
+
+Terraform also publishes the `vayada-next-api-stripe-test-smoke` task
+definition. It is deliberately not attached to an ECS service, listener, or
+public DNS name. Its default command exits immediately, so it cannot start the
+API or duplicate target background workers by accident.
+
+The task receives the production-owned target database URL for isolated QA
+property checks and a dedicated restricted `rk_test_` Stripe credential from
+`/vayada/staging/next-stripe-test-secret-key`. Never point this task at a real
+property or use the production Stripe key. Start it only with an explicit
+one-off command override, wait for the task to stop, review its CloudWatch
+output, and remove every QA database mutation that the smoke created.
+
 ## IAM
 
 GitHub Actions authenticates via OIDC using the `vayada-github-actions-platform-deploy` role:
