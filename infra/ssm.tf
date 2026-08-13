@@ -29,14 +29,7 @@ locals {
     "auth-cookie-secret"    = var.auth_cookie_secret
   }
 
-  prod_next_api_ask_ssm_secrets = var.ask_intelligence_provider == "openai" ? {
-    "openai-api-key" = var.openai_api_key
-  } : {}
-
-  prod_next_api_ssm_secrets = merge(
-    local.prod_next_api_required_ssm_secrets,
-    local.prod_next_api_ask_ssm_secrets,
-  )
+  prod_next_api_ssm_secrets = local.prod_next_api_required_ssm_secrets
 
   prod_ssm_secrets = merge(local.prod_core_ssm_secrets, local.prod_next_api_ssm_secrets)
 
