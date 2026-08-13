@@ -283,7 +283,7 @@ locals {
         { name = "PLATFORM_MEDIA_PUBLIC_CACHE_CONTROL", value = "public, max-age=31536000, immutable" },
         { name = "PLATFORM_MEDIA_PRIVATE_DOWNLOAD_TTL_SECONDS", value = "300" },
         { name = "PLATFORM_MEDIA_PRIVATE_DOWNLOAD_MAX_TTL_SECONDS", value = "900" },
-        { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "observe_only" },
+        { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "mutating" },
         { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
@@ -302,6 +302,7 @@ locals {
         { name = "BOOKING_WEB_EVENT_SINK", value = "target" },
         { name = "BOOKING_WEB_LEGACY_CHECKOUT_COMMAND_PROXY_ENABLED", value = "false" },
         { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
+        { name = "BOOKING_EMAIL_FROM", value = "Vayada Bookings <bookings@vayada.com>" },
         { name = "WORKOS_AUDIENCE", value = var.workos_audience },
         { name = "WORKOS_ISSUER", value = var.workos_issuer },
         { name = "WORKOS_JWKS_URL", value = var.workos_jwks_url },
@@ -328,7 +329,9 @@ locals {
       secrets = [
         { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
         { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
+        { name = "STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/stripe-secret-key" },
         { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/stripe-webhook-secret" },
+        { name = "RESEND_API_KEY", valueFrom = "/vayada/prod/resend-api-key" },
         { name = "WORKOS_API_KEY", valueFrom = "/vayada/prod/workos-api-key" },
         { name = "WORKOS_CLIENT_ID", valueFrom = "/vayada/prod/workos-client-id" },
         { name = "WORKOS_WEBHOOK_SECRET", valueFrom = "/vayada/prod/workos-webhook-secret" },
@@ -583,12 +586,15 @@ resource "aws_ecs_task_definition" "services" {
           nonsensitive(length(trimspace(var.workos_api_key)) > 0) &&
           nonsensitive(length(trimspace(var.workos_webhook_secret)) > 0) &&
           nonsensitive(length(trimspace(var.auth_cookie_secret)) > 0) &&
+          nonsensitive(length(trimspace(var.resend_api_key)) > 0) &&
+          nonsensitive(length(trimspace(var.stripe_secret_key)) > 0) &&
+          nonsensitive(length(trimspace(var.stripe_webhook_secret)) > 0) &&
           length(trimspace(var.workos_audience)) > 0 &&
           length(trimspace(var.workos_issuer)) > 0 &&
           length(trimspace(var.workos_jwks_url)) > 0
         )
       )
-      error_message = "next-api.vayada.com requires production target DB/Auth values: TF_VAR_TARGET_DATABASE_URL, TF_VAR_WORKOS_API_KEY, TF_VAR_WORKOS_WEBHOOK_SECRET, TF_VAR_AUTH_COOKIE_SECRET, TF_VAR_WORKOS_AUDIENCE, TF_VAR_WORKOS_ISSUER, and TF_VAR_WORKOS_JWKS_URL. It also requires /vayada/prod/workos-client-id in SSM."
+      error_message = "next-api.vayada.com requires production target DB/Auth, booking email, and Stripe values: TF_VAR_TARGET_DATABASE_URL, TF_VAR_WORKOS_API_KEY, TF_VAR_WORKOS_WEBHOOK_SECRET, TF_VAR_AUTH_COOKIE_SECRET, TF_VAR_RESEND_API_KEY, TF_VAR_STRIPE_SECRET_KEY, TF_VAR_STRIPE_WEBHOOK_SECRET, TF_VAR_WORKOS_AUDIENCE, TF_VAR_WORKOS_ISSUER, and TF_VAR_WORKOS_JWKS_URL. It also requires /vayada/prod/workos-client-id in SSM."
     }
 
   }
