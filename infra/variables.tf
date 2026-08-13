@@ -215,44 +215,9 @@ variable "auth_cookie_secret" {
 }
 
 variable "openai_api_key" {
-  description = "OpenAI API key used by Ask Intelligence when ASK_INTELLIGENCE_PROVIDER=openai"
+  description = "OpenAI API key retained until deployed task definitions no longer reference it"
   type        = string
   sensitive   = true
-  default     = ""
-}
-
-variable "ask_intelligence_provider" {
-  description = "Ask Intelligence provider for next-api.vayada.com"
-  type        = string
-  default     = "fixture"
-
-  validation {
-    condition     = contains(["fixture", "openai"], var.ask_intelligence_provider)
-    error_message = "ask_intelligence_provider must be fixture or openai."
-  }
-}
-
-variable "ask_intelligence_model" {
-  description = "Ask Intelligence model when ask_intelligence_provider is openai"
-  type        = string
-  default     = ""
-}
-
-variable "openai_base_url" {
-  description = "Optional OpenAI-compatible base URL for Ask Intelligence"
-  type        = string
-  default     = ""
-}
-
-variable "openai_organization" {
-  description = "Optional OpenAI organization for Ask Intelligence"
-  type        = string
-  default     = ""
-}
-
-variable "openai_project" {
-  description = "Optional OpenAI project for Ask Intelligence"
-  type        = string
   default     = ""
 }
 

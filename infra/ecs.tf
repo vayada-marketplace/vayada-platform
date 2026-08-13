@@ -325,13 +325,8 @@ locals {
         { name = "AUTH_BOOKING_ADMIN_LOGOUT_URL", value = "https://next-booking-admin.vayada.com/login" },
         { name = "AUTH_AFFILIATE_DASHBOARD_SUCCESS_URL", value = "https://next-affiliate.vayada.com/dashboard" },
         { name = "AUTH_AFFILIATE_DASHBOARD_LOGOUT_URL", value = "https://next-affiliate.vayada.com/login" },
-        { name = "ASK_INTELLIGENCE_PROVIDER", value = var.ask_intelligence_provider },
-        { name = "ASK_INTELLIGENCE_MODEL", value = var.ask_intelligence_model },
-        { name = "OPENAI_BASE_URL", value = var.openai_base_url },
-        { name = "OPENAI_ORGANIZATION", value = var.openai_organization },
-        { name = "OPENAI_PROJECT", value = var.openai_project },
       ]
-      secrets = concat([
+      secrets = [
         { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
         { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
         { name = "STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/stripe-secret-key" },
@@ -345,9 +340,7 @@ locals {
         { name = "AUTH_LEGACY_BOOKING_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_AFFILIATE_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
-        ], var.ask_intelligence_provider == "openai" ? [
-        { name = "OPENAI_API_KEY", valueFrom = "/vayada/prod/openai-api-key" },
-      ] : [])
+      ]
     }
     next-pms-frontend = {
       name           = "vayada-next-pms-frontend"
@@ -604,17 +597,6 @@ resource "aws_ecs_task_definition" "services" {
       error_message = "next-api.vayada.com requires production target DB/Auth, booking email, and Stripe values: TF_VAR_TARGET_DATABASE_URL, TF_VAR_WORKOS_API_KEY, TF_VAR_WORKOS_WEBHOOK_SECRET, TF_VAR_AUTH_COOKIE_SECRET, TF_VAR_RESEND_API_KEY, TF_VAR_STRIPE_SECRET_KEY, TF_VAR_STRIPE_WEBHOOK_SECRET, TF_VAR_WORKOS_AUDIENCE, TF_VAR_WORKOS_ISSUER, and TF_VAR_WORKOS_JWKS_URL. It also requires /vayada/prod/workos-client-id in SSM."
     }
 
-    precondition {
-      condition = (
-        each.key != "next-target-backend" ||
-        var.ask_intelligence_provider != "openai" ||
-        (
-          nonsensitive(length(trimspace(var.openai_api_key)) > 0) &&
-          length(trimspace(var.ask_intelligence_model)) > 0
-        )
-      )
-      error_message = "ASK_INTELLIGENCE_PROVIDER=openai requires TF_VAR_OPENAI_API_KEY and TF_VAR_ASK_INTELLIGENCE_MODEL for next-api.vayada.com."
-    }
   }
 }
 
