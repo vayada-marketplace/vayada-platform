@@ -77,6 +77,7 @@ jobs:
           TF_VAR_workos_issuer: ${{ secrets.TF_VAR_WORKOS_ISSUER }}
           TF_VAR_workos_jwks_url: ${{ secrets.TF_VAR_WORKOS_JWKS_URL }}
           TF_VAR_auth_cookie_secret: ${{ secrets.TF_VAR_AUTH_COOKIE_SECRET }}
+          TF_VAR_openai_api_key: ${{ secrets.TF_VAR_OPENAI_API_KEY }}
           TF_VAR_cloudflare_api_token: ${{ secrets.TF_VAR_CLOUDFLARE_API_TOKEN }}
           TF_VAR_enable_cloudflare_dns: ${{ secrets.TF_VAR_ENABLE_CLOUDFLARE_DNS || 'false' }}
           TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}
@@ -114,6 +115,7 @@ jobs:
           TF_VAR_workos_issuer: ${{ secrets.TF_VAR_WORKOS_ISSUER }}
           TF_VAR_workos_jwks_url: ${{ secrets.TF_VAR_WORKOS_JWKS_URL }}
           TF_VAR_auth_cookie_secret: ${{ secrets.TF_VAR_AUTH_COOKIE_SECRET }}
+          TF_VAR_openai_api_key: ${{ secrets.TF_VAR_OPENAI_API_KEY }}
           TF_VAR_cloudflare_api_token: ${{ secrets.TF_VAR_CLOUDFLARE_API_TOKEN }}
           TF_VAR_enable_cloudflare_dns: ${{ secrets.TF_VAR_ENABLE_CLOUDFLARE_DNS || 'false' }}
           TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}
