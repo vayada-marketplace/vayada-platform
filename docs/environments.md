@@ -194,7 +194,6 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/workos-client-id`       | `next-api`                         |
 | `/vayada/prod/workos-webhook-secret`  | `next-api`                         |
 | `/vayada/prod/auth-cookie-secret`     | `next-api`                         |
-| `/vayada/prod/openai-api-key`         | Temporarily retained during Ask runtime removal; no longer injected |
 
 The `next-api` task maps those SSM parameters to the backend's runtime
 environment as:
@@ -213,8 +212,7 @@ Set the required GitHub Actions repository secrets before merging or applying a
 live `next-api` task definition: `TF_VAR_TARGET_DATABASE_URL`,
 `TF_VAR_WORKOS_API_KEY`, `TF_VAR_WORKOS_WEBHOOK_SECRET`,
 `TF_VAR_WORKOS_AUDIENCE`, `TF_VAR_WORKOS_ISSUER`, `TF_VAR_WORKOS_JWKS_URL`,
-`TF_VAR_AUTH_COOKIE_SECRET`, and temporarily `TF_VAR_OPENAI_API_KEY` until the
-retained OpenAI parameter is deleted after the runtime rollout.
+`TF_VAR_AUTH_COOKIE_SECRET`.
 
 Provider callback/API secrets remain outside the `next-api` task definition
 while provider dashboard callbacks stay on accepted legacy production paths.

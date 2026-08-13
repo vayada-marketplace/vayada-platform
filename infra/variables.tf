@@ -214,13 +214,6 @@ variable "auth_cookie_secret" {
   default     = ""
 }
 
-variable "openai_api_key" {
-  description = "OpenAI API key retained until deployed task definitions no longer reference it"
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
 variable "staging_pms_database_url" {
   description = "PMS database URL used by the frozen staging PMS backend runtime"
   type        = string

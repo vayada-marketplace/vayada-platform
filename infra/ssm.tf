@@ -30,14 +30,7 @@ locals {
     "resend-api-key"        = var.resend_api_key
   }
 
-  prod_next_api_retained_ssm_secrets = {
-    "openai-api-key" = var.openai_api_key
-  }
-
-  prod_next_api_ssm_secrets = merge(
-    local.prod_next_api_required_ssm_secrets,
-    local.prod_next_api_retained_ssm_secrets,
-  )
+  prod_next_api_ssm_secrets = local.prod_next_api_required_ssm_secrets
 
   prod_ssm_secrets = merge(local.prod_core_ssm_secrets, local.prod_next_api_ssm_secrets)
 
