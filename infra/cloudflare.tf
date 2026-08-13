@@ -87,3 +87,44 @@ resource "cloudflare_record" "next_affiliate" {
   content = data.aws_lb.main.dns_name
   proxied = false
 }
+
+resource "cloudflare_record" "resend_dkim" {
+  count = var.enable_cloudflare_dns ? 1 : 0
+
+  zone_id = var.cloudflare_zone_id
+  name    = "resend._domainkey"
+  type    = "TXT"
+  content = "p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDuEYFDTOSW7z3C7zZL01/rbx5UoZbiISOBZmC4ZrgWEtc0PepMYiPHdGU/DqhMFofH6SWHGljgcav/BTBObjHDRMhixd2YIcJ+0w9sjVnHGZPU8RUrBAvNqLGIQa5YM7IWuPRt6Ib3HvfSVhKqs/SzZaR+wVdCtcA+5U7xMuC8GQIDAQAB"
+  proxied = false
+}
+
+resource "cloudflare_record" "resend_return_path" {
+  count = var.enable_cloudflare_dns ? 1 : 0
+
+  zone_id  = var.cloudflare_zone_id
+  name     = "send"
+  type     = "MX"
+  content  = "feedback-smtp.eu-west-1.amazonses.com"
+  priority = 10
+  proxied  = false
+}
+
+resource "cloudflare_record" "resend_spf" {
+  count = var.enable_cloudflare_dns ? 1 : 0
+
+  zone_id = var.cloudflare_zone_id
+  name    = "send"
+  type    = "TXT"
+  content = "v=spf1 include:amazonses.com ~all"
+  proxied = false
+}
+
+resource "cloudflare_record" "resend_dmarc" {
+  count = var.enable_cloudflare_dns ? 1 : 0
+
+  zone_id = var.cloudflare_zone_id
+  name    = "_dmarc"
+  type    = "TXT"
+  content = "v=DMARC1; p=none;"
+  proxied = false
+}
