@@ -84,13 +84,6 @@ variable "smtp_password" {
   default     = ""
 }
 
-variable "resend_api_key" {
-  description = "Resend API key for production booking emails"
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
 variable "stripe_secret_key" {
   description = "Stripe secret key"
   type        = string
