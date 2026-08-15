@@ -124,6 +124,22 @@ jobs:
           TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
           TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
 
+      - name: Assign transactional SES event tracking
+        run: |
+          set -euo pipefail
+          aws sesv2 put-email-identity-configuration-set-attributes \
+            --region "${AWS_REGION}" \
+            --email-identity vayada.com \
+            --configuration-set-name vayada-transactional
+          configured_set="$(
+            aws sesv2 get-email-identity \
+              --region "${AWS_REGION}" \
+              --email-identity vayada.com \
+              --query ConfigurationSetName \
+              --output text
+          )"
+          test "${configured_set}" = "vayada-transactional"
+
       - name: Check next-api task definition drift
         id: next_api_task
         run: |

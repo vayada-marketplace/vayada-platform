@@ -214,6 +214,42 @@ live `next-api` task definition: `TF_VAR_TARGET_DATABASE_URL`,
 `TF_VAR_WORKOS_AUDIENCE`, `TF_VAR_WORKOS_ISSUER`, `TF_VAR_WORKOS_JWKS_URL`,
 `TF_VAR_AUTH_COOKIE_SECRET`.
 
+### Transactional email delivery
+
+SES uses the `vayada-transactional` configuration set by default for the
+`vayada.com` sending identity. Send, delivery, delay, rejection, bounce, and
+complaint events are retained for 30 days in the
+`/aws/events/vayada-ses-events` CloudWatch log group. Use the recipient address
+or SES message ID to trace a specific email; an SMTP success only means SES
+accepted the message, while `Email Delivered` confirms handoff to the
+recipient's mail server.
+
+The three SES DKIM CNAMEs are managed directly in the authoritative Cloudflare
+zone because general Cloudflare Terraform ownership remains gated by
+`enable_cloudflare_dns`. Do not remove them when rolling back event tracking.
+
+The SES configuration set and event log group are protected from Terraform
+destroy plans and by explicit deny statements in the external
+`vayada-github-actions-platform-deploy` role's
+`platform-ses-observability` inline policy. Keep those denies out of Terraform
+so a configuration revert cannot remove the final safety boundary. To retire
+event tracking without interrupting email, first clear the identity default,
+then remove the protected resources from Terraform state before deleting their
+declarations:
+
+```bash
+aws sesv2 put-email-identity-configuration-set-attributes \
+  --region eu-west-1 \
+  --email-identity vayada.com
+terraform -chdir=infra state rm \
+  aws_sesv2_configuration_set.transactional \
+  aws_cloudwatch_log_group.ses_events
+```
+
+Only after the state removal and an explicit decommission decision should an
+AWS administrator change the inline deny policy and delete the orphaned remote
+resources.
+
 Provider callback/API secrets remain outside the `next-api` task definition
 while provider dashboard callbacks stay on accepted legacy production paths.
 Add production-owned `/vayada/prod/*` names for those providers in the explicit
