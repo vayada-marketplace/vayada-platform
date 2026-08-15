@@ -5,6 +5,8 @@ on:
     paths:
       - "infra/**"
       - ".github/workflows/tf-plan.yml"
+      - ".github/workflows/tf-apply.yml"
+      - "scripts/assert-terraform-protected-resources.sh"
 
 permissions:
   id-token: write
@@ -80,6 +82,11 @@ jobs:
           TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
           TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
 
+      - name: Block protected Terraform deletes
+        id: protected_resources
+        run: bash ../scripts/assert-terraform-protected-resources.sh tfplan
+        working-directory: infra
+
       - name: Post plan to PR
         uses: actions/github-script@v9
         if: always()
@@ -89,6 +96,8 @@ jobs:
             const plan = fs.readFileSync('infra/plan.txt', 'utf8');
             const truncated = plan.length > 60000 ? plan.slice(0, 60000) + '\n\n... (truncated)' : plan;
             const output = `#### Terraform Plan \`${{ steps.plan.outcome }}\`
+
+            Protected-resource guard: \`${{ steps.protected_resources.outcome }}\`
 
             <details><summary>Show Plan</summary>
 

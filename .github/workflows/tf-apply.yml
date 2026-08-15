@@ -8,6 +8,7 @@ on:
       - "infra/**"
       - "scripts/roll-forward-auth-gateways.sh"
       - "scripts/smoke-auth-gateway.sh"
+      - "scripts/assert-terraform-protected-resources.sh"
       - ".github/workflows/tf-apply.yml"
   workflow_dispatch:
 
@@ -84,6 +85,10 @@ jobs:
           TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}
           TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
           TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
+
+      - name: Block protected Terraform deletes
+        run: bash ../scripts/assert-terraform-protected-resources.sh tfplan
+        working-directory: infra
 
       - name: Terraform apply
         run: terraform apply -no-color tfplan
