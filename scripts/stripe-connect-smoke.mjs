@@ -108,10 +108,16 @@ try {
     if (retrieved.status !== "succeeded" || !breakdown) {
       throw new Error("Stripe did not return the captured balance-transaction breakdown.");
     }
+    const expectedConvertedApplicationFee = Math.round(
+      (breakdown.grossAmountMinor * APPLICATION_FEE_MINOR) / AMOUNT_MINOR,
+    );
     if (
-      breakdown.grossAmountMinor !== AMOUNT_MINOR ||
-      breakdown.applicationFeeAmountMinor !== APPLICATION_FEE_MINOR ||
-      breakdown.currency !== CURRENCY.toUpperCase() ||
+      retrieved.amountMinor !== AMOUNT_MINOR ||
+      retrieved.currency !== CURRENCY.toUpperCase() ||
+      breakdown.grossAmountMinor <= 0 ||
+      breakdown.processorFeeAmountMinor <= 0 ||
+      !/^[A-Z]{3}$/.test(breakdown.currency) ||
+      Math.abs(breakdown.applicationFeeAmountMinor - expectedConvertedApplicationFee) > 1 ||
       breakdown.netPayoutAmountMinor !==
         breakdown.grossAmountMinor -
           breakdown.processorFeeAmountMinor -
@@ -187,10 +193,25 @@ async function cleanupStripePayment(paymentIntentId, providerAccountRef) {
       providerAccountRef,
       `vay-1301:${paymentIntentId}:refund`,
     );
-    if (refund.livemode !== false || refund.status !== "succeeded") {
-      throw new Error("Stripe did not confirm the test refund.");
+    const refundId = text(refund.id);
+    if (!refundId?.startsWith("re_") || refund.status !== "succeeded") {
+      throw new Error("Stripe did not return a succeeded test refund.");
     }
-    return { action: "refunded", refundId: text(refund.id) };
+    const refreshedIntent = await stripeRequest(
+      "GET",
+      `/payment_intents/${encodeURIComponent(paymentIntentId)}`,
+      [["expand[]", "latest_charge"]],
+      providerAccountRef,
+    );
+    const refreshedCharge = object(refreshedIntent.latest_charge);
+    if (
+      refreshedIntent.livemode !== false ||
+      text(refreshedCharge.id) !== chargeId ||
+      refreshedCharge.refunded !== true
+    ) {
+      throw new Error("Stripe did not confirm the test refund on the charge.");
+    }
+    return { action: "refunded", refundId, refundStatus: text(refund.status) };
   }
   if (intent.status === "canceled") return { action: "already_canceled" };
 
