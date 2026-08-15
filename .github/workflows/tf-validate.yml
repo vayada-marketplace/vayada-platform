@@ -6,6 +6,8 @@ on:
       - "infra/**"
       - "scripts/roll-forward-auth-gateways.sh"
       - "scripts/smoke-auth-gateway.sh"
+      - "scripts/run-stripe-connect-smoke.sh"
+      - "scripts/stripe-connect-smoke.mjs"
       - "scripts/validate-auth-gateway-contract.sh"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/tf-apply.yml"
@@ -23,11 +25,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Validate auth gateway smoke script
+      - name: Validate operations scripts
         run: |
           bash -n scripts/roll-forward-auth-gateways.sh
           bash -n scripts/validate-auth-gateway-contract.sh
           bash -n scripts/smoke-auth-gateway.sh
+          bash -n scripts/run-stripe-connect-smoke.sh
+          node --check scripts/stripe-connect-smoke.mjs
 
       - name: Validate auth gateway contract
         run: bash scripts/validate-auth-gateway-contract.sh
