@@ -306,10 +306,52 @@ API or duplicate target background workers by accident.
 
 The task receives the production-owned target database URL for isolated QA
 property checks and a dedicated restricted `rk_test_` Stripe credential from
-`/vayada/staging/next-stripe-test-secret-key`. Never point this task at a real
-property or use the production Stripe key. Start it only with an explicit
-one-off command override, wait for the task to stop, review its CloudWatch
-output, and remove every QA database mutation that the smoke created.
+`/vayada/staging/next-stripe-test-secret-key`. The restricted key must keep all
+unrelated permissions at `None` and grant only these connected-account
+permissions in the Stripe sandbox:
+
+| Resource | Platform permission | Connect permission |
+| --- | --- | --- |
+| Balance Transaction Sources | None | Read |
+| Charges and Refunds | None | Write |
+| Payment Intents | Write | Write |
+
+Edit the existing `VAY-1274 next checkout staging` key in place; do not rotate
+it or create a broader replacement key.
+
+Never point this task at a real property or use the production Stripe key. The
+smoke program is hard-locked to the isolated QA property and refuses any key
+that does not begin with `rk_test_`.
+
+Run the one-off smoke from the platform repository:
+
+```bash
+./scripts/run-stripe-connect-smoke.sh
+```
+
+The launcher reuses the network configuration of
+`vayada-next-api-service`, overrides the inert task command, waits for the task
+to stop, and prints its CloudWatch log. A successful run reports the test
+PaymentIntent, charge, and balance-transaction IDs plus exact gross, Stripe
+fee, application fee, and net payout. It refunds the direct charge and its
+application fee before reporting `PASS`. The program performs no target DB
+writes and fails unless a final query verifies that zero `finance.payments`
+rows reference its PaymentIntent. It logs the PaymentIntent ID immediately
+after creation so an interrupted run can always be recovered.
+
+If the task is interrupted after Stripe creates the PaymentIntent, copy the
+`pi_...` identifier from the `stripe-test-smoke` CloudWatch stream and run:
+
+```bash
+./scripts/run-stripe-connect-smoke.sh --cleanup pi_test_payment_intent_id
+```
+
+Cleanup uses the same restricted key and connected-account context, refunds a
+captured charge or cancels an uncaptured PaymentIntent, refuses live objects,
+refuses PaymentIntents without this smoke's QA property metadata, and again
+verifies that no target payment row remains. The task definition
+remains unattached to an ECS service, listener, public route, or task role; its
+default command remains inert.
 
 ## IAM
 
