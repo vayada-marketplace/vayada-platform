@@ -138,6 +138,7 @@ locals {
         { name = "SMTP_PASSWORD", valueFrom = "/vayada/prod/smtp-password" },
         { name = "STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/stripe-secret-key" },
         { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/stripe-webhook-secret" },
+        { name = "STRIPE_CONNECT_WEBHOOK_SECRET", valueFrom = "/vayada/prod/stripe-connect-webhook-secret" },
         { name = "CHANNEX_API_KEY", valueFrom = "/vayada/prod/channex-api-key" },
         { name = "ANTHROPIC_API_KEY", valueFrom = "/vayada/prod/anthropic-api-key" },
         { name = "FIRECRAWL_API_KEY", valueFrom = "/vayada/prod/firecrawl-api-key" },
