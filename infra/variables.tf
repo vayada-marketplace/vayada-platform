@@ -118,6 +118,13 @@ variable "stripe_webhook_secret" {
   default     = ""
 }
 
+variable "stripe_connect_webhook_secret" {
+  description = "Stripe Connect webhook signing secret for connected-account events"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "target_database_url" {
   description = "Production-owned target database URL used by next-api.vayada.com"
   type        = string

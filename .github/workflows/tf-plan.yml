@@ -57,6 +57,7 @@ jobs:
           TF_VAR_next_stripe_test_secret_key: ${{ secrets.TF_VAR_NEXT_STRIPE_TEST_SECRET_KEY }}
           TF_VAR_stripe_publishable_key: ${{ secrets.TF_VAR_STRIPE_PUBLISHABLE_KEY }}
           TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
+          TF_VAR_stripe_connect_webhook_secret: ${{ secrets.TF_VAR_STRIPE_CONNECT_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
           TF_VAR_legacy_booking_api_desired_count: ${{ secrets.TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT || '1' }}
           TF_VAR_legacy_marketplace_api_desired_count: ${{ secrets.TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT || '1' }}

@@ -62,6 +62,7 @@ jobs:
           TF_VAR_next_stripe_test_secret_key: ${{ secrets.TF_VAR_NEXT_STRIPE_TEST_SECRET_KEY }}
           TF_VAR_stripe_publishable_key: ${{ secrets.TF_VAR_STRIPE_PUBLISHABLE_KEY }}
           TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
+          TF_VAR_stripe_connect_webhook_secret: ${{ secrets.TF_VAR_STRIPE_CONNECT_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
           TF_VAR_legacy_booking_api_desired_count: ${{ secrets.TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT || '1' }}
           TF_VAR_legacy_marketplace_api_desired_count: ${{ secrets.TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT || '1' }}
@@ -100,6 +101,7 @@ jobs:
           TF_VAR_next_stripe_test_secret_key: ${{ secrets.TF_VAR_NEXT_STRIPE_TEST_SECRET_KEY }}
           TF_VAR_stripe_publishable_key: ${{ secrets.TF_VAR_STRIPE_PUBLISHABLE_KEY }}
           TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
+          TF_VAR_stripe_connect_webhook_secret: ${{ secrets.TF_VAR_STRIPE_CONNECT_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
           TF_VAR_legacy_booking_api_desired_count: ${{ secrets.TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT || '1' }}
           TF_VAR_legacy_marketplace_api_desired_count: ${{ secrets.TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT || '1' }}
@@ -191,6 +193,94 @@ jobs:
         env:
           ECS_CLUSTER: vayada-backend-cluster
         run: bash scripts/roll-forward-auth-gateways.sh
+
+      - name: Check production PMS task definition drift
+        id: pms_backend_task
+        run: |
+          set -euo pipefail
+
+          current_task_definition="$(
+            aws ecs describe-services \
+              --cluster vayada-backend-cluster \
+              --services vayada-pms-backend-service \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'services[0].taskDefinition' \
+              --output text
+          )"
+          latest_task_definition="$(
+            aws ecs describe-task-definition \
+              --task-definition vayada-pms-backend \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'taskDefinition.taskDefinitionArn' \
+              --output text
+          )"
+
+          echo "current_task_definition=${current_task_definition}" >> "$GITHUB_OUTPUT"
+          echo "latest_task_definition=${latest_task_definition}" >> "$GITHUB_OUTPUT"
+
+          if [ "$current_task_definition" = "$latest_task_definition" ]; then
+            echo "deploy_required=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current_image="$(
+            aws ecs describe-task-definition \
+              --task-definition "$current_task_definition" \
+              --region "${{ env.AWS_REGION }}" \
+              --query "taskDefinition.containerDefinitions[?name=='vayada-pms-backend'].image | [0]" \
+              --output text
+          )"
+          echo "current_image=${current_image}" >> "$GITHUB_OUTPUT"
+          echo "deploy_required=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download latest production PMS task definition
+        if: steps.pms_backend_task.outputs.deploy_required == 'true'
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${{ steps.pms_backend_task.outputs.latest_task_definition }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --query taskDefinition > pms-backend-task-definition.json
+
+      - name: Render production PMS task definition with current image
+        if: steps.pms_backend_task.outputs.deploy_required == 'true'
+        id: render-pms-backend-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@6853cfae8c3a7d978fbf68b5a55453395541dfbb
+        with:
+          task-definition: pms-backend-task-definition.json
+          container-name: vayada-pms-backend
+          image: ${{ steps.pms_backend_task.outputs.current_image }}
+
+      - name: Deploy latest production PMS task definition
+        if: steps.pms_backend_task.outputs.deploy_required == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a310a830f5c14e583e35d84e4e1ec7dd177c3c9c
+        with:
+          task-definition: ${{ steps.render-pms-backend-task-def.outputs.task-definition }}
+          service: vayada-pms-backend-service
+          cluster: vayada-backend-cluster
+          wait-for-service-stability: true
+
+      - name: Verify production PMS Connect webhook secret mapping
+        run: |
+          set -euo pipefail
+          running_task_definition="$(
+            aws ecs describe-services \
+              --cluster vayada-backend-cluster \
+              --services vayada-pms-backend-service \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'services[0].taskDefinition' \
+              --output text
+          )"
+          secret_is_mapped="$(
+            aws ecs describe-task-definition \
+              --task-definition "$running_task_definition" \
+              --region "${{ env.AWS_REGION }}" \
+              --query "contains(taskDefinition.containerDefinitions[?name=='vayada-pms-backend'].secrets[].name, 'STRIPE_CONNECT_WEBHOOK_SECRET')" \
+              --output text
+          )"
+          if [ "$secret_is_mapped" != "True" ]; then
+            echo "::error::Running production PMS task definition lacks STRIPE_CONNECT_WEBHOOK_SECRET."
+            exit 1
+          fi
 
       - name: Check booking frontend task definition drift
         id: booking_frontend_task
