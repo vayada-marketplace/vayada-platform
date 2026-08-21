@@ -440,9 +440,42 @@ The deploy role must never receive pre-ARN `kms:CreateKey` or key-wildcard
 `kms:TagResource`: either permission can claim unrelated keys. The PR plan guard
 allows only the reviewed diagnostic plan (5 add, 0 change, 1 task-definition
 destroy). Production apply rejects every Finance KMS change until an administrator
-uses the separately reviewed, resumable bootstrap lane to create and import the
-exact key and alias. Do not translate the diagnostic plan into shell commands or
-apply it; the deploy role intentionally lacks the required creation permissions.
+runs the resumable bootstrap with production `TF_VAR_*` values loaded:
+
+```bash
+./scripts/bootstrap-finance-folio-kms.sh v1 /secure/operator-state/finance-folio-kms-v1.json
+```
+
+Keep that non-secret state file until rollout is complete and rerun the same
+command after interruption. The script records a recovery marker before calling
+`CreateKey`, records the response immediately, and recovers only the same tagged
+key. It pins the production backend, default workspace, and state lineage before
+locking the account/region/version lane. It refuses missing-state matches,
+multiple matches, a conflicting alias, the wrong account/region/key properties/
+tags, or an unverified Terraform import. A conditional one-hour DynamoDB lease
+serializes even copied state; normal exit releases it and a hard-crash lease can
+be resumed after expiry.
+It installs the rendered exact-ARN steady policy and removes the superseded broad
+bootstrap policy if present. Never translate the diagnostic plan into ad-hoc
+commands or apply it; the deploy role intentionally lacks creation permissions.
+
+The administrator needs `sts:GetCallerIdentity`; `kms:ListKeys`, `DescribeKey`,
+`ListResourceTags`, `CreateKey`, `TagResource`, `EnableKeyRotation`, `GetKeyRotationStatus`,
+`ListAliases`, and `CreateAlias`; `iam:PutRolePolicy`, `ListRolePolicies`, and
+`DeleteRolePolicy`; `dynamodb:PutItem` and `DeleteItem` restricted to
+`arn:aws:dynamodb:eu-west-1:269416271598:table/vayada-terraform-lock`;
+plus the normal Terraform state/read permissions. The unscoped creation
+authority stays on the administrator and is never attached to
+the deploy role. After import, use only the exact-ARN steady-state policy.
+
+Rotation is a paused, two-change lane. First merge only the new `vN` map entry
+while leaving `current` unchanged; the apply guard deliberately stops the
+unimported create. Run the same bootstrap for `vN`, which imports the now-declared
+address and verifies that the current alias still targets the old key. Review and
+apply the post-import key-policy/allowed-list plan, run the aggregate inventory,
+and validate decrypts. Only then use a separate reviewed promotion change to move
+`current`; never import before the `for_each` entry exists or move the alias from
+the bootstrap script.
 
 Before the first platform-media plan/apply, extend that bootstrapped role with
 CloudFront distribution and Origin Access Control lifecycle permissions, ACM
