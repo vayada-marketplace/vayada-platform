@@ -484,6 +484,7 @@ resource "aws_ecs_task_definition" "services" {
   requires_compatibilities = ["FARGATE"]
   cpu                      = each.value.cpu
   memory                   = each.value.memory
+  enable_fault_injection   = false
   execution_role_arn       = data.aws_iam_role.ecs_task_execution.arn
   task_role_arn            = try(each.value.task_role_arn, data.aws_iam_role.ecs_task.arn)
 

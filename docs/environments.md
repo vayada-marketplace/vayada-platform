@@ -148,7 +148,7 @@ Account root retains key-policy administration but is covered by that crypto den
 IAM enforces UUID shape and nonempty revision text, rejecting `0` and `-*`; the
 application enforces canonical UUIDs and positive safe integers before KMS calls.
 
-For a full-key rotation, first land `vN` in the map while leaving current unchanged;
+For a full-key rotation (365-day automatic period), first land `vN` in the map while leaving current unchanged;
 the apply guard pauses its unimported create. The stacked bootstrap lane then
 creates/imports that declared address. Apply its policy/allowlist, validate, and
 only then promote current separately. Retain old keys until inventory clears them.
@@ -476,6 +476,17 @@ apply the post-import key-policy/allowed-list plan, run the aggregate inventory,
 and validate decrypts. Only then use a separate reviewed promotion change to move
 `current`; never import before the `for_each` entry exists or move the alias from
 the bootstrap script.
+
+The post-import apply guard permits only the imported key policy update, task-role
+policy and inert inventory creation, and next-api create-before-destroy task
+replacement. The alias must be a no-op targeting the imported key. It validates
+the six tags, immutable key properties, outsider/grant denies, exact task actions
+and camelCase context, and matching task environment ARNs. Any KMS/alias create,
+alias retarget, or unrelated add/change/delete fails before `terraform apply`.
+After this one-time set is applied, ordinary plans remain allowed subject to the
+existing protected-resource checks; alias promotion requires its own reviewed
+guard change. A rotation map-entry PR must likewise add the exact `vN`
+post-import fixture/guard set before bootstrap; it must not retarget the alias.
 
 Before the first platform-media plan/apply, extend that bootstrapped role with
 CloudFront distribution and Origin Access Control lifecycle permissions, ACM

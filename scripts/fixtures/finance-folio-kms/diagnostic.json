@@ -1,0 +1,11 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.5.7",
+  "resource_changes": [
+    {"address":"aws_ecs_task_definition.finance_folio_recipient_inventory","type":"aws_ecs_task_definition","name":"finance_folio_recipient_inventory","change":{"actions":["create"]}},
+    {"address":"aws_ecs_task_definition.services[\"next-target-backend\"]","type":"aws_ecs_task_definition","name":"services","index":"next-target-backend","change":{"actions":["create","delete"]}},
+    {"address":"aws_iam_role_policy.next_api_finance_folio_recipient_kms","type":"aws_iam_role_policy","name":"next_api_finance_folio_recipient_kms","change":{"actions":["create"]}},
+    {"address":"aws_kms_alias.finance_folio_recipient_current","type":"aws_kms_alias","name":"finance_folio_recipient_current","change":{"actions":["create"]}},
+    {"address":"aws_kms_key.finance_folio_recipient[\"v1\"]","type":"aws_kms_key","name":"finance_folio_recipient","index":"v1","change":{"actions":["create"]}}
+  ]
+}
