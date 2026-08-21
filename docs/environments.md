@@ -487,6 +487,10 @@ After this one-time set is applied, ordinary plans remain allowed subject to the
 existing protected-resource checks; alias promotion requires its own reviewed
 guard change. A rotation map-entry PR must likewise add the exact `vN`
 post-import fixture/guard set before bootstrap; it must not retarget the alias.
+The hosted wrapper derives pre-import, post-import, or steady phase from the
+unique managed v1 key and alias plan state. PR diagnostics allow all three;
+production apply rejects pre-import and accepts only a validated post-import or
+steady plan.
 
 Before the first platform-media plan/apply, extend that bootstrapped role with
 CloudFront distribution and Origin Access Control lifecycle permissions, ACM
