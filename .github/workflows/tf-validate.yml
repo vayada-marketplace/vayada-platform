@@ -14,12 +14,16 @@ on:
       - "scripts/assert-finance-folio-kms-contract.sh"
       - "scripts/bootstrap-finance-folio-kms.sh"
       - "scripts/test-bootstrap-finance-folio-kms.sh"
+      - "scripts/assert-terraform-protected-resources.sh"
       - "scripts/test-finance-folio-kms-plan-guard.sh"
+      - "scripts/guard-finance-folio-kms-plan.sh"
+      - "scripts/test-finance-folio-kms-phase-guard.sh"
       - "scripts/fixtures/finance-folio-kms/**"
       - "docs/finance-folio-kms-steady-state-policy.template.json"
       - "scripts/validate-auth-gateway-contract.sh"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/tf-apply.yml"
+      - ".github/workflows/tf-plan.yml"
       - ".github/workflows/tf-validate.yml"
 
 permissions:
@@ -49,6 +53,8 @@ jobs:
           bash -n scripts/bootstrap-finance-folio-kms.sh
           bash scripts/test-bootstrap-finance-folio-kms.sh
           bash scripts/test-finance-folio-kms-plan-guard.sh
+          bash -n scripts/guard-finance-folio-kms-plan.sh
+          bash scripts/test-finance-folio-kms-phase-guard.sh
 
       - name: Validate auth gateway contract
         run: bash scripts/validate-auth-gateway-contract.sh

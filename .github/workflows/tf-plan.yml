@@ -7,6 +7,7 @@ on:
       - ".github/workflows/tf-plan.yml"
       - ".github/workflows/tf-apply.yml"
       - "scripts/assert-terraform-protected-resources.sh"
+      - "scripts/guard-finance-folio-kms-plan.sh"
 
 permissions:
   id-token: write
@@ -82,9 +83,9 @@ jobs:
           TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
           TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
 
-      - name: Block protected Terraform deletes
+      - name: Guard Terraform plan phase
         id: protected_resources
-        run: bash ../scripts/assert-terraform-protected-resources.sh tfplan finance-diagnostic
+        run: bash ../scripts/guard-finance-folio-kms-plan.sh tfplan plan
         working-directory: infra
 
       - name: Post plan to PR
