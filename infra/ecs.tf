@@ -122,7 +122,6 @@ locals {
         { name = "STRIPE_PLATFORM_ACCOUNT_ID", value = var.stripe_platform_account_id },
         { name = "BOOKING_ENGINE_API_URL", value = "https://booking-api.vayada.com" },
         { name = "CHANNEX_API_BASE_URL", value = "https://app.channex.io" },
-        { name = "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE", value = "target-owned" },
         { name = "ENVIRONMENT", value = "production" },
         { name = "DEBUG", value = "false" },
       ]
