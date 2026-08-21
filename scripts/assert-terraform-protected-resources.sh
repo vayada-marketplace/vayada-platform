@@ -88,6 +88,28 @@ case "${mode}" in
       $inventory_containers==[{command:["node","-e","console.log(JSON.stringify({status:\u0027INERT\u0027,message:\u0027use scripts/run-finance-folio-recipient-inventory.sh\u0027}))"],essential:true,image:"269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api:next-latest",logConfiguration:{logDriver:"awslogs",options:{"awslogs-group":"/ecs/vayada-next-api","awslogs-region":"eu-west-1","awslogs-stream-prefix":"folio-recipient-inventory"}},name:"vayada-next-api-finance-folio-recipient-inventory",secrets:[{name:"TARGET_DATABASE_URL",valueFrom:"arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-url"}]}]
     ' <<<"${plan_json}" >/dev/null || fail "Post-import KMS, policy, task, or inventory contract mismatch."
     ;;
+  finance-steady)
+    [[ "${finance_changes}" == "[]" && "${finance_task_drift}" == false ]] || fail "Steady Finance KMS resources must be no-op."
+    jq -e '
+      def as_set: (if type=="array" then . else [.] end)|sort;
+      def norm_policy: .Statement |= (map(.Action|=as_set | .Resource|=as_set | if ((.Principal?|type)=="object" and .Principal.AWS?) then .Principal.AWS|=as_set else . end | if has("Condition") then .Condition|=with_entries(.value|=with_entries(.value|=as_set)) else . end)|sort_by(.Sid));
+      [.resource_changes[]?|select(.type=="aws_kms_key" and .name=="finance_folio_recipient" and .index=="v1")] as $keys |
+      [.resource_changes[]?|select(.type=="aws_kms_alias" and .name=="finance_folio_recipient_current")] as $aliases |
+      ($keys[0]) as $key | ($aliases[0]) as $alias | ($key.change.after.id) as $id |
+      ("arn:aws:kms:eu-west-1:269416271598:key/"+$id) as $arn |
+      {Version:"2012-10-17",Statement:[
+        {Sid:"EnableAccountAdministration",Effect:"Allow",Principal:{AWS:"arn:aws:iam::269416271598:root"},Action:"kms:*",Resource:"*"},
+        {Sid:"DenyCryptographicUseOutsideNextApi",Effect:"Deny",Principal:"*",Action:["kms:Decrypt","kms:Encrypt","kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:ReEncryptFrom","kms:ReEncryptTo"],Resource:"*",Condition:{ArnNotEquals:{"aws:PrincipalArn":"arn:aws:iam::269416271598:role/vayada-next-api-media-task-role"}}},
+        {Sid:"DenyGrantCreation",Effect:"Deny",Principal:"*",Action:"kms:CreateGrant",Resource:"*"}
+      ]} as $policy |
+      ($keys|length)==1 and ($aliases|length)==1 and $key.change.actions==["no-op"] and $key.change.before==$key.change.after and (($key.change.after_unknown//{})|[..|select(.==true)]|length)==0 and
+      ($key.change.after|keys)==["arn","bypass_policy_lockout_safety_check","custom_key_store_id","customer_master_key_spec","deletion_window_in_days","description","enable_key_rotation","id","is_enabled","key_id","key_usage","multi_region","policy","rotation_period_in_days","tags","tags_all","timeouts","xks_key_id"] and
+      ($id|test("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")) and $key.change.after.arn==$arn and $key.change.after.key_id==$id and ($key.change.after.description|test("^Finance folio recipient v1; bootstrap=.+$")) and $key.change.after.bypass_policy_lockout_safety_check==false and $key.change.after.custom_key_store_id==null and $key.change.after.customer_master_key_spec=="SYMMETRIC_DEFAULT" and $key.change.after.deletion_window_in_days==30 and $key.change.after.enable_key_rotation==true and $key.change.after.rotation_period_in_days==365 and $key.change.after.is_enabled==true and $key.change.after.key_usage=="ENCRYPT_DECRYPT" and $key.change.after.multi_region==false and $key.change.after.xks_key_id==null and $key.change.after.timeouts==null and
+      $key.change.after.tags=={Environment:"production",ManagedBy:"terraform",Name:"vayada-finance-folio-recipient-v1",Project:"vayada",Purpose:"finance-folio-recipient",Version:"v1"} and $key.change.after.tags_all==$key.change.after.tags and (($key.change.after.policy|fromjson|norm_policy)==($policy|norm_policy)) and
+      $alias.change.actions==["no-op"] and $alias.change.before==$alias.change.after and (($alias.change.after_unknown//{})|[..|select(.==true)]|length)==0 and ($alias.change.after|keys)==["arn","id","name","name_prefix","target_key_arn","target_key_id"] and
+      $alias.change.after=={arn:"arn:aws:kms:eu-west-1:269416271598:alias/vayada/prod/finance-folio-recipient-current",id:"alias/vayada/prod/finance-folio-recipient-current",name:"alias/vayada/prod/finance-folio-recipient-current",name_prefix:null,target_key_arn:$arn,target_key_id:$id}
+    ' <<<"${plan_json}" >/dev/null || fail "Steady Finance KMS key or alias contract mismatch."
+    ;;
   apply)
     [[ "${finance_changes}" == "[]" && "${finance_task_drift}" == false ]] || fail "Finance KMS apply requires the reviewed post-import lane or a Finance no-op."
     ;;
