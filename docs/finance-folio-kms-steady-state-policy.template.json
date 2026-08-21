@@ -1,0 +1,26 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageExactFinanceFolioRecipientKey", "Effect": "Allow",
+      "Action": ["kms:DescribeKey", "kms:GetKeyPolicy", "kms:PutKeyPolicy", "kms:GetKeyRotationStatus", "kms:EnableKeyRotation", "kms:ListResourceTags"],
+      "Resource": "arn:aws:kms:eu-west-1:269416271598:key/00000000-0000-0000-0000-000000000000",
+      "Condition": { "BoolIfExists": { "kms:BypassPolicyLockoutSafetyCheck": "false" } }
+    },
+    {
+      "Sid": "MaintainExactFinanceFolioRecipientKeyTags", "Effect": "Allow", "Action": ["kms:TagResource", "kms:UntagResource"],
+      "Resource": "arn:aws:kms:eu-west-1:269416271598:key/00000000-0000-0000-0000-000000000000",
+      "Condition": { "ForAllValues:StringEquals": { "aws:TagKeys": ["Name", "Version", "ManagedBy"] } }
+    },
+    {
+      "Sid": "UpdateFinanceFolioRecipientAlias", "Effect": "Allow", "Action": "kms:UpdateAlias",
+      "Resource": ["arn:aws:kms:eu-west-1:269416271598:alias/vayada/prod/finance-folio-recipient-current", "arn:aws:kms:eu-west-1:269416271598:key/00000000-0000-0000-0000-000000000000"]
+    },
+    { "Sid": "ListAliasesForTerraformRefresh", "Effect": "Allow", "Action": "kms:ListAliases", "Resource": "*" },
+    {
+      "Sid": "BlockExactFinanceFolioRecipientKeyDecommission", "Effect": "Deny",
+      "Action": ["kms:DisableKey", "kms:DisableKeyRotation", "kms:ScheduleKeyDeletion"],
+      "Resource": "arn:aws:kms:eu-west-1:269416271598:key/00000000-0000-0000-0000-000000000000"
+    }
+  ]
+}

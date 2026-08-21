@@ -8,6 +8,10 @@ on:
       - "scripts/smoke-auth-gateway.sh"
       - "scripts/run-stripe-connect-smoke.sh"
       - "scripts/stripe-connect-smoke.mjs"
+      - "scripts/run-finance-folio-recipient-inventory.sh"
+      - "scripts/finance-folio-recipient-inventory.mjs"
+      - "scripts/assert-finance-folio-kms-contract.sh"
+      - "docs/finance-folio-kms-steady-state-policy.template.json"
       - "scripts/validate-auth-gateway-contract.sh"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/tf-apply.yml"
@@ -32,6 +36,10 @@ jobs:
           bash -n scripts/smoke-auth-gateway.sh
           bash -n scripts/run-stripe-connect-smoke.sh
           node --check scripts/stripe-connect-smoke.mjs
+          bash -n scripts/run-finance-folio-recipient-inventory.sh
+          node --check scripts/finance-folio-recipient-inventory.mjs
+          jq empty docs/finance-folio-kms-steady-state-policy.template.json
+          bash scripts/assert-finance-folio-kms-contract.sh
 
       - name: Validate auth gateway contract
         run: bash scripts/validate-auth-gateway-contract.sh

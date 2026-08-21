@@ -133,6 +133,26 @@ first deploy the previous `next-api` task definition or remove its
 `PLATFORM_MEDIA_*` values. Keep the new bucket and CDN in place while references
 may exist; do not delete media objects or use `terraform destroy` as rollback.
 
+### Finance folio recipient encryption
+
+Terraform injects the non-secret current full key ARN as
+`FINANCE_FOLIO_RECIPIENT_KMS_CURRENT_KEY_ARN` and all retained full ARNs as the
+comma-separated `FINANCE_FOLIO_RECIPIENT_KMS_ALLOWED_KEY_ARNS`. Only current can
+encrypt; all allowed versions can decrypt/describe. Persist the full ARN.
+
+Encrypt/decrypt must supply exactly `purpose=finance-folio-recipient-v1`,
+`propertyId=<UUID>`, `folioId=<UUID>`, and `revision=<positive decimal>`. The
+task policy also requires `SYMMETRIC_DEFAULT`; the key policy denies cryptographic
+use to every principal except the next-api task role, including the execution role.
+Account root retains key-policy administration but is covered by that crypto deny.
+IAM enforces UUID shape and nonempty revision text, rejecting `0` and `-*`; the
+application enforces canonical UUIDs and positive safe integers before KMS calls.
+
+For a full-key rotation, first land `vN` in the map while leaving current unchanged;
+the apply guard pauses its unimported create. The stacked bootstrap lane then
+creates/imports that declared address. Apply its policy/allowlist, validate, and
+only then promote current separately. Retain old keys until inventory clears them.
+
 ### Deployment flow
 
 1. App CI pushes a Docker image to ECR with a moving environment tag and
@@ -333,6 +353,22 @@ Parallel next-stack service keys: `next-target-backend`, `next-pms-frontend`.
 `next-target-backend` serves `next-api.vayada.com`; `next-pms-frontend` remains
 the parallel PMS frontend validation lane.
 
+### Finance folio recipient inventory
+
+Terraform publishes the inert, service-less
+`vayada-next-api-finance-folio-recipient-inventory` task definition. It has no
+listener, route, or task role; its default command does not connect. After apply
+and before folio activation, run:
+
+```bash
+./scripts/run-finance-folio-recipient-inventory.sh
+```
+
+It reuses the next-api network and emits only counts grouped by scheme, recipient
+key version, and fingerprint-key version from a repeatable-read, read-only
+transaction. It never selects/logs ciphertext, PII, identifiers, or the DB URL.
+Do not activate if a persisted recipient key version is outside the ARN allowlist.
+
 ### Stripe test-mode checkout smoke
 
 Terraform also publishes the `vayada-next-api-stripe-test-smoke` task
@@ -399,6 +435,14 @@ GitHub Actions authenticates via OIDC using the `vayada-github-actions-platform-
 The `vayada-github-actions-platform-deploy` role is bootstrapped outside this
 Terraform module, so changes to that role must be applied before platform
 Terraform can use the new permission.
+
+The deploy role must never receive pre-ARN `kms:CreateKey` or key-wildcard
+`kms:TagResource`: either permission can claim unrelated keys. The PR plan guard
+allows only the reviewed diagnostic plan (5 add, 0 change, 1 task-definition
+destroy). Production apply rejects every Finance KMS change until an administrator
+uses the separately reviewed, resumable bootstrap lane to create and import the
+exact key and alias. Do not translate the diagnostic plan into shell commands or
+apply it; the deploy role intentionally lacks the required creation permissions.
 
 Before the first platform-media plan/apply, extend that bootstrapped role with
 CloudFront distribution and Origin Access Control lifecycle permissions, ACM

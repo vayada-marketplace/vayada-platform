@@ -87,7 +87,7 @@ jobs:
           TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
 
       - name: Block protected Terraform deletes
-        run: bash ../scripts/assert-terraform-protected-resources.sh tfplan
+        run: bash ../scripts/assert-terraform-protected-resources.sh tfplan apply
         working-directory: infra
 
       - name: Terraform apply

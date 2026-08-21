@@ -84,7 +84,7 @@ jobs:
 
       - name: Block protected Terraform deletes
         id: protected_resources
-        run: bash ../scripts/assert-terraform-protected-resources.sh tfplan
+        run: bash ../scripts/assert-terraform-protected-resources.sh tfplan finance-diagnostic
         working-directory: infra
 
       - name: Post plan to PR
