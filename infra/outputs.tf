@@ -45,6 +45,14 @@ output "private_profile_media_cdn_url" {
   value       = local.private_profile_media_cdn_base_url
 }
 
+output "finance_folio_recipient_kms" {
+  description = "Non-secret Finance folio recipient KMS runtime contract"
+  value = {
+    current_key_arn  = local.finance_folio_recipient_kms_current_key_arn
+    allowed_key_arns = local.finance_folio_recipient_kms_allowed_key_arns
+  }
+}
+
 output "platform_media_cdn_url" {
   description = "CloudFront base URL for immutable public platform media"
   value       = "https://${aws_cloudfront_distribution.platform_media.domain_name}"
