@@ -14,6 +14,9 @@ on:
       image_sha:
         description: "Full 40-char git SHA of the image to deploy"
         required: true
+      source_sha:
+        description: "Optional source Git SHA exposed by the application health route"
+        required: false
       image_digest:
         description: "Optional sha256 digest captured by the publishing workflow"
         required: false
@@ -126,9 +129,23 @@ jobs:
 
       - name: Download current task definition
         run: |
+          set -euo pipefail
+          current_task_definition="$(
+            aws ecs describe-services \
+              --cluster "${{ env.ECS_CLUSTER }}" \
+              --services "${{ steps.resolve.outputs.ecs_service }}" \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'services[0].taskDefinition' \
+              --output text
+          )"
+          expected_prefix="arn:aws:ecs:${{ env.AWS_REGION }}:${{ env.AWS_ACCOUNT_ID }}:task-definition/${{ steps.resolve.outputs.task_family }}:"
+          if [[ "$current_task_definition" != "${expected_prefix}"* ]]; then
+            echo "::error::ECS did not return the deployed task definition for ${{ steps.resolve.outputs.ecs_service }}."
+            exit 1
+          fi
           aws ecs describe-task-definition \
-            --task-definition ${{ steps.resolve.outputs.task_family }} \
-            --region ${{ env.AWS_REGION }} \
+            --task-definition "$current_task_definition" \
+            --region "${{ env.AWS_REGION }}" \
             --query taskDefinition > task-definition.json
 
       - name: Resolve and verify image digest in ECR
@@ -182,9 +199,22 @@ jobs:
         env:
           ECR_REPOSITORY: ${{ github.event.client_payload.ecr_repo || inputs.ecr_repo }}
           ROLLBACK_IMAGE: ${{ github.event.client_payload.rollback_image || inputs.rollback_image }}
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+          TASK_FAMILY: ${{ steps.resolve.outputs.task_family }}
         run: |
           set -euo pipefail
+          if [ -z "$ROLLBACK_IMAGE" ] && [ "$SERVICE" = "next-booking-frontend" ]; then
+            ROLLBACK_IMAGE="$(
+              jq -r --arg name "$TASK_FAMILY" \
+                '.containerDefinitions[] | select(.name == $name) | .image // empty' \
+                task-definition.json
+            )"
+          fi
           if [ -z "$ROLLBACK_IMAGE" ]; then
+            if [ "$SERVICE" = "next-booking-frontend" ]; then
+              echo "::error::Could not resolve the pre-cutover Booking image for rollback."
+              exit 1
+            fi
             echo "available=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -267,8 +297,17 @@ jobs:
           SERVICE: ${{ github.event.client_payload.service || inputs.service }}
         run: bash scripts/smoke-auth-gateway.sh "$SERVICE"
 
+      - name: Smoke test public Booking tenant
+        id: booking-public-smoke
+        env:
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+          EXPECTED_BUILD_SHA: ${{ github.event.client_payload.source_sha || inputs.source_sha || github.event.client_payload.image_sha || inputs.image_sha }}
+          NEXT_BOOKING_CANARY_URL: ${{ vars.NEXT_BOOKING_CANARY_URL }}
+          NEXT_BOOKING_CANARY_NAME: ${{ vars.NEXT_BOOKING_CANARY_NAME }}
+        run: bash scripts/smoke-next-booking-public.sh "$SERVICE"
+
       - name: Roll back failed ECS cutover
-        if: failure() && steps.resolve-rollback.outputs.available == 'true' && (steps.deploy.outcome == 'failure' || steps.auth-gateway-smoke.outcome == 'failure')
+        if: failure() && steps.resolve-rollback.outputs.available == 'true' && (steps.deploy.outcome == 'failure' || steps.auth-gateway-smoke.outcome == 'failure' || steps.booking-public-smoke.outcome == 'failure')
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-rollback-task-def.outputs.task-definition }}
