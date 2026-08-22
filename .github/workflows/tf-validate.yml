@@ -6,6 +6,7 @@ on:
       - "infra/**"
       - "scripts/roll-forward-auth-gateways.sh"
       - "scripts/smoke-auth-gateway.sh"
+      - "scripts/smoke-next-booking-public.sh"
       - "scripts/run-stripe-connect-smoke.sh"
       - "scripts/stripe-connect-smoke.mjs"
       - "scripts/validate-auth-gateway-contract.sh"
@@ -30,6 +31,7 @@ jobs:
           bash -n scripts/roll-forward-auth-gateways.sh
           bash -n scripts/validate-auth-gateway-contract.sh
           bash -n scripts/smoke-auth-gateway.sh
+          bash -n scripts/smoke-next-booking-public.sh
           bash -n scripts/run-stripe-connect-smoke.sh
           node --check scripts/stripe-connect-smoke.mjs
 

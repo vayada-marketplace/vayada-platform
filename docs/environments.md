@@ -143,6 +143,14 @@ may exist; do not delete media objects or use `terraform destroy` as rollback.
 4. Platform CI downloads the current ECS task definition, renders a new revision with the SHA-pinned image, and deploys it to the ECS service
 5. The workflow waits for service stability before marking success
 6. Auth-gateway-enabled frontends are probed through their public own-origin routes: session must return HTTP 401 `missing_session`, and Google auth start must return HTTP 302 to WorkOS
+7. Next Booking Web waits for the exact deployed source SHA at `/api/health`, then verifies the configured persistent tenant's host resolution, public-bookability profile, and public page
+
+   A failed Booking public smoke redeploys the pre-cutover task image automatically.
+
+The Booking canary uses the repository variables `NEXT_BOOKING_CANARY_URL` and
+`NEXT_BOOKING_CANARY_NAME`. The URL must be a dedicated, permanently published
+tenant origin on `*.next-booking.vayada.com`; changing or retiring that tenant
+requires updating both variables in the same operational change.
 
 Gateway service names, origins, and surfaces come from
 [`infra/auth-gateways.json`](../infra/auth-gateways.json). See the
