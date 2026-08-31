@@ -67,13 +67,13 @@ else
   [[ "${current_version}" != "${version}" ]] || { echo "Rotation key cannot already be configured current." >&2; exit 1; }
   current_address="aws_kms_key.${resource_name}[\"${current_version}\"]"
   current_state="$(terraform -chdir="${repo_dir}/infra" state show -no-color "${current_address}")"
-  managed_current_key_id="$(sed -n 's/^[[:space:]]*id[[:space:]]*=[[:space:]]*//p' <<<"${current_state}" | tr -d '"' | head -1)"
+  managed_current_key_id="$(sed -n 's/^[[:space:]]*id[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' <<<"${current_state}")"
   [[ -n "${managed_current_key_id}" ]] || { echo "Terraform current key state mismatch." >&2; exit 1; }
   if [[ "${key_kind}" == recipient ]]; then
     alias_state="$(terraform -chdir="${repo_dir}/infra" state show -no-color aws_kms_alias.finance_folio_recipient_current)"
-    managed_alias_target="$(sed -n 's/^[[:space:]]*target_key_id[[:space:]]*=[[:space:]]*//p' <<<"${alias_state}" | tr -d '"' | head -1)"
-    grep -Fq "id = \"${alias_name}\"" <<<"${alias_state}"
-    [[ "${managed_alias_target}" == "${managed_current_key_id}" ]] || { echo "Terraform current key/alias state mismatch." >&2; exit 1; }
+    managed_alias_id="$(sed -n 's/^[[:space:]]*id[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' <<<"${alias_state}")"
+    managed_alias_target="$(sed -n 's/^[[:space:]]*target_key_id[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' <<<"${alias_state}")"
+    [[ "${managed_alias_id}" == "${alias_name}" && "${managed_alias_target}" == "${managed_current_key_id}" ]] || { echo "Terraform current key/alias state mismatch." >&2; exit 1; }
   fi
 fi
 
@@ -223,8 +223,9 @@ if [[ "${version}" == v1 && "${key_kind}" == recipient ]]; then
   alias_address="aws_kms_alias.finance_folio_recipient_current"
   if ! terraform -chdir="${repo_dir}/infra" state show -no-color "${alias_address}" >/dev/null 2>&1; then terraform -chdir="${repo_dir}/infra" import "${alias_address}" "${alias_name}"; fi
   imported_alias_state="$(terraform -chdir="${repo_dir}/infra" state show -no-color "${alias_address}")"
-  grep -Fq "id = \"${alias_name}\"" <<<"${imported_alias_state}"
-  grep -Fq "target_key_id = \"${key_id}\"" <<<"${imported_alias_state}"
+  imported_alias_id="$(sed -n 's/^[[:space:]]*id[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' <<<"${imported_alias_state}")"
+  imported_alias_target="$(sed -n 's/^[[:space:]]*target_key_id[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' <<<"${imported_alias_state}")"
+  [[ "${imported_alias_id}" == "${alias_name}" && "${imported_alias_target}" == "${key_id}" ]] || { echo "Terraform alias import verification failed." >&2; exit 1; }
 fi
 policies="$(aws iam list-role-policies --role-name "${role_name}" --output json)" || { echo "Cannot verify deploy-role inline policies." >&2; exit 1; }
 if jq -e '.PolicyNames | index("platform-finance-folio-kms-bootstrap")' <<<"${policies}" >/dev/null; then
