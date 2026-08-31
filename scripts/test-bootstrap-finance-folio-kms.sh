@@ -7,6 +7,8 @@ cleanup() { find "${test_dir}" -type f -delete; rmdir "${test_dir}"; }
 trap cleanup EXIT
 export MOCK_DIR="${test_dir}" MOCK_LOG="${test_dir}/commands.log" TMPDIR="${test_dir}"
 export TF_VAR_db_master_password=x TF_VAR_db_booking_password=x TF_VAR_db_pms_password=x TF_VAR_db_auth_password=x TF_VAR_jwt_secret_key=x
+export TF_VAR_target_database_url=x TF_VAR_workos_api_key=x TF_VAR_workos_webhook_secret=x TF_VAR_auth_cookie_secret=x TF_VAR_resend_api_key=x
+export TF_VAR_stripe_secret_key=x TF_VAR_next_stripe_test_secret_key=rk_test_x TF_VAR_stripe_webhook_secret=x TF_VAR_workos_audience=x TF_VAR_workos_issuer=x TF_VAR_workos_jwks_url=x TF_VAR_cloudflare_api_token=x
 key_id="11111111-2222-3333-4444-555555555555"
 key_arn="arn:aws:kms:eu-west-1:269416271598:key/${key_id}"
 export MOCK_KEY_ID="${key_id}" MOCK_KEY_ARN="${key_arn}"
@@ -78,6 +80,19 @@ terraform() {
   esac
 }
 export -f aws terraform
+
+unset TF_VAR_cloudflare_api_token
+if bash scripts/bootstrap-finance-folio-kms.sh v1 "${test_dir}/missing-runtime-variable.json" >/dev/null 2>&1; then echo "Missing Terraform runtime variable reached bootstrap." >&2; exit 1; fi
+export TF_VAR_cloudflare_api_token=x
+[[ ! -e "${test_dir}/missing-runtime-variable.json" ]]
+unset TF_VAR_next_stripe_test_secret_key
+if bash scripts/bootstrap-finance-folio-kms.sh v1 "${test_dir}/missing-next-stripe-test-key.json" >/dev/null 2>&1; then echo "Missing next Stripe test key reached bootstrap." >&2; exit 1; fi
+[[ ! -e "${test_dir}/missing-next-stripe-test-key.json" ]]
+export TF_VAR_next_stripe_test_secret_key=x
+if bash scripts/bootstrap-finance-folio-kms.sh v1 "${test_dir}/invalid-next-stripe-test-key.json" >/dev/null 2>&1; then echo "Invalid next Stripe test key reached bootstrap." >&2; exit 1; fi
+[[ ! -e "${test_dir}/invalid-next-stripe-test-key.json" ]]
+export TF_VAR_next_stripe_test_secret_key=rk_test_x
+if grep -q '^kms create-key ' "${MOCK_LOG}"; then echo "Missing Terraform runtime variable reached CreateKey." >&2; exit 1; fi
 
 state="${test_dir}/bootstrap.json"
 export MOCK_BOOTSTRAP_STATE="${state}"

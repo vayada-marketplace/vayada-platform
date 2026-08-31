@@ -457,7 +457,15 @@ The deploy role must never receive pre-ARN `kms:CreateKey` or key-wildcard
 `kms:TagResource`: either permission can claim unrelated keys. The PR plan guard
 allows only the reviewed diagnostic plan (6 add, 0 change, 1 task-definition
 destroy). Production apply rejects every Finance KMS change until an administrator
-runs both resumable bootstraps with production `TF_VAR_*` values loaded:
+runs both resumable bootstraps with production `TF_VAR_*` values loaded.
+
+The script requires the database/JWT values plus the target database, WorkOS API,
+webhook and issuer values, auth cookie, Resend, Stripe secret/webhook, and
+Cloudflare token used by the current Terraform configuration. Load the same
+production values as `.github/workflows/tf-apply.yml`; missing values stop before
+state-file creation or `CreateKey`.
+
+Then run:
 
 ```bash
 ./scripts/bootstrap-finance-folio-kms.sh v1 /secure/operator-state/finance-folio-kms-v1.json

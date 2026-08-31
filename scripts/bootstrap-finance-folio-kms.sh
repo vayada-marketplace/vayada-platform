@@ -46,9 +46,12 @@ configured_region="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get regio
 [[ -z "${configured_region}" || "${configured_region}" == "${region}" ]] || { echo "Configured AWS region must be ${region}." >&2; exit 1; }
 identity="$(aws sts get-caller-identity --region "${region}" --output json)"
 [[ "$(jq -r .Account <<<"${identity}")" == "${account}" ]] || { echo "AWS account must be ${account}." >&2; exit 1; }
-for name in db_master_password db_booking_password db_pms_password db_auth_password jwt_secret_key; do
+for name in db_master_password db_booking_password db_pms_password db_auth_password jwt_secret_key \
+  target_database_url workos_api_key workos_webhook_secret auth_cookie_secret resend_api_key \
+  stripe_secret_key next_stripe_test_secret_key stripe_webhook_secret workos_audience workos_issuer workos_jwks_url cloudflare_api_token; do
   variable="TF_VAR_${name}"; [[ -n "${!variable:-}" ]] || { echo "Load production ${variable} before bootstrap." >&2; exit 1; }
 done
+[[ "${TF_VAR_next_stripe_test_secret_key}" == rk_test_* ]] || { echo "TF_VAR_next_stripe_test_secret_key must start with rk_test_." >&2; exit 1; }
 terraform -chdir="${repo_dir}/infra" init -reconfigure -input=false \
   -backend-config="bucket=vayada-terraform-state" -backend-config="key=platform/terraform.tfstate" \
   -backend-config="region=${region}" -backend-config="dynamodb_table=vayada-terraform-lock" -backend-config="encrypt=true" >/dev/null
