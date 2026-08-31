@@ -3,7 +3,9 @@ set -euo pipefail
 
 fixtures="scripts/fixtures/finance-folio-kms"
 wrapper="scripts/guard-finance-folio-kms-plan.sh"
-terraform() { jq "${MOCK_FILTER:-.}" "$3"; }
+augment="scripts/fixtures/finance-folio-kms/add-fingerprint.jq"
+export augment
+terraform() { jq -f "${augment}" "$3" | jq "${MOCK_FILTER:-.}"; }
 export -f terraform
 accept() { local output; output="$(MOCK_FILTER="$4" bash "${wrapper}" "${fixtures}/$1.json" "$2")"; [[ "${output##*$'\n'}" == "$3" ]] || { echo "Wrong phase for $5." >&2; exit 1; }; }
 reject() { jq "$4" "${fixtures}/$1.json" >/dev/null || { echo "Invalid hosted regression for $3." >&2; exit 1; }; if MOCK_FILTER="$4" bash "${wrapper}" "${fixtures}/$1.json" "$2" >/dev/null 2>&1; then echo "Hosted guard accepted $3." >&2; exit 1; fi; }
@@ -28,6 +30,7 @@ reject steady apply "privileged no-op inventory" '(.resource_changes[]|select(.n
 reject steady apply "wrong no-op alias name" '(.resource_changes[]|select(.type=="aws_kms_alias").change.after.name)="alias/vayada/prod/wrong" | (.resource_changes[]|select(.type=="aws_kms_alias").change.before)=(.resource_changes[]|select(.type=="aws_kms_alias").change.after)'
 reject steady apply "alias retarget" '(.resource_changes[]|select(.type=="aws_kms_alias").change.actions)=["update"]'
 reject steady plan "ambiguous v2 state" '.resource_changes += [(.resource_changes[]|select(.type=="aws_kms_key") | .index="v2")]'
+reject steady plan "missing fingerprint key state" 'del(.resource_changes[]|select(.name=="finance_folio_recipient_fingerprint"))'
 reject steady plan "partial alias state" '(.resource_changes[]|select(.type=="aws_kms_alias").change.actions)=["create"]'
 reject steady plan "unknown managed key identity" '(.resource_changes[]|select(.type=="aws_kms_key").change.after_unknown.id)=true'
 

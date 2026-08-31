@@ -3,10 +3,12 @@ set -euo pipefail
 
 fixtures="scripts/fixtures/finance-folio-kms"
 guard="scripts/assert-terraform-protected-resources.sh"
-terraform() { jq "${MOCK_FILTER:-.}" "$3"; }
+augment="scripts/fixtures/finance-folio-kms/add-fingerprint.jq"
+export augment
+terraform() { jq -f "${augment}" "$3" | jq "${MOCK_FILTER:-.}"; }
 export -f terraform
 accept() { MOCK_FILTER="$3" bash "${guard}" "${fixtures}/$1.json" "$2" >/dev/null || { echo "Plan guard rejected $4." >&2; exit 1; }; }
-reject() { local original mutated; original="$(jq -cS . "${fixtures}/$1.json")"; mutated="$(jq -cS "$3" "${fixtures}/$1.json")" || { echo "Invalid regression for $4." >&2; exit 1; }; [[ "${mutated}" != "${original}" ]] || { echo "No-op regression for $4." >&2; exit 1; }; if MOCK_FILTER="$3" bash "${guard}" "${fixtures}/$1.json" "$2" >/dev/null 2>&1; then echo "Plan guard accepted $4." >&2; exit 1; fi; }
+reject() { local original mutated; original="$(jq -f "${augment}" "${fixtures}/$1.json" | jq -cS .)"; mutated="$(jq -f "${augment}" "${fixtures}/$1.json" | jq -cS "$3")" || { echo "Invalid regression for $4." >&2; exit 1; }; [[ "${mutated}" != "${original}" ]] || { echo "No-op regression for $4." >&2; exit 1; }; if MOCK_FILTER="$3" bash "${guard}" "${fixtures}/$1.json" "$2" >/dev/null 2>&1; then echo "Plan guard accepted $4." >&2; exit 1; fi; }
 reject_without_leak() { local output; if output="$(MOCK_FILTER="$3" bash "${guard}" "${fixtures}/$1.json" "$2" 2>&1)"; then echo "Plan guard accepted $4." >&2; exit 1; fi; [[ "${output}" != *"$5"* ]] || { echo "Plan guard leaked $4." >&2; exit 1; }; }
 steady='(.resource_changes[]|select(.name!="services").change.actions)=["no-op"] | (.resource_changes[]|select(.name=="services").change.before.container_definitions)=(.resource_changes[]|select(.name=="services").change.after.container_definitions)'
 
@@ -16,6 +18,8 @@ reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_km
 reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after_unknown.key_usage)=true' "an unknown diagnostic key usage"
 reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after.custom_key_store_id)="cks-unreviewed"' "a diagnostic custom key store"
 reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after.unreviewed)=true' "an unreviewed diagnostic key field"
+reject diagnostic finance-diagnostic '(.resource_changes[]|select(.name=="finance_folio_recipient_fingerprint").change.after.key_usage)="SIGN_VERIFY"' "an invalid fingerprint key usage"
+reject diagnostic finance-diagnostic '(.resource_changes[]|select(.name=="finance_folio_recipient_fingerprint").change.after_unknown.rotation_period_in_days)=false | (.resource_changes[]|select(.name=="finance_folio_recipient_fingerprint").change.after.rotation_period_in_days)=365' "a known fingerprint rotation period"
 reject_without_leak diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after.tags.Secret)="SUPERSECRET" | (.resource_changes[]|select(.type=="aws_kms_key").change.after_sensitive.tags.Secret)=true' "a sensitive diagnostic tag" "SUPERSECRET"
 reject diagnostic finance-diagnostic '.resource_changes += [{address:"aws_s3_bucket.unrelated",type:"aws_s3_bucket",name:"unrelated",change:{actions:["create"]}}]' "unrelated diagnostic drift"
 accept post-import finance-post-import . "the captured post-import plan"
@@ -46,7 +50,10 @@ reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_
 reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_iam_role_policy").change.after.policy)|=(fromjson | (.Statement[]|select(.Sid=="EncryptCurrentFinanceFolioRecipientKey").Resource)="*" | tojson)' "a wildcard task-policy resource"
 reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_iam_role_policy").change.after.policy)|=(fromjson | (.Statement[]|select(.Sid=="EncryptCurrentFinanceFolioRecipientKey").Effect)="Deny" | tojson)' "the wrong task-policy effect"
 reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_iam_role_policy").change.after.policy)|=(fromjson | del(.Statement[]|select(.Sid=="EncryptCurrentFinanceFolioRecipientKey").Condition.StringLike) | tojson)' "an incomplete context condition"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_iam_role_policy").change.after.policy)|=(fromjson | del(.Statement[]|select(.Sid=="GenerateFinanceFolioRecipientFingerprint")) | tojson)' "a missing fingerprint MAC permission"
 reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_ecs_task_definition" and .name=="services").change.after.container_definitions)|=(fromjson | (.[0].environment[]|select(.name=="FINANCE_FOLIO_RECIPIENT_KMS_CURRENT_KEY_ARN").value)="arn:aws:kms:eu-west-1:269416271598:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" | tojson)' "a mismatched environment ARN"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_ecs_task_definition" and .name=="services").change.after.container_definitions)|=(fromjson | (.[0].environment[]|select(.name=="FINANCE_FOLIO_RECIPIENT_KMS_FINGERPRINT_KEY_ARN").value)="arn:aws:kms:eu-west-1:269416271598:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" | tojson)' "a mismatched fingerprint environment ARN"
+reject post-import finance-post-import '(.resource_changes[]|select(.name=="finance_folio_recipient_fingerprint").change.actions)=["delete"]' "a fingerprint key deletion"
 reject post-import finance-post-import 'walk(if type=="string" then gsub("11111111-2222-3333-4444-555555555555";"not-a-key") else . end)' "a consistently arbitrary key identifier"
 reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_ecs_task_definition" and .name=="services").change.after.container_definitions)|=(fromjson | ([.[0].environment[]|select(.name=="FINANCE_FOLIO_RECIPIENT_KMS_CURRENT_KEY_ARN")][0]) as $env | .[0].environment += [$env] | tojson)' "a duplicate environment binding"
 reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_ecs_task_definition" and .name=="services").change.after.container_definitions)|=(fromjson | .[0].image="piggyback:latest" | tojson)' "piggyback image drift"

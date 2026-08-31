@@ -20,6 +20,7 @@ on:
       - "scripts/test-finance-folio-kms-phase-guard.sh"
       - "scripts/fixtures/finance-folio-kms/**"
       - "docs/finance-folio-kms-steady-state-policy.template.json"
+      - "docs/finance-folio-kms-fingerprint-steady-state-policy.template.json"
       - "scripts/validate-auth-gateway-contract.sh"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/tf-apply.yml"
@@ -49,6 +50,7 @@ jobs:
           bash -n scripts/run-finance-folio-recipient-inventory.sh
           node --check scripts/finance-folio-recipient-inventory.mjs
           jq empty docs/finance-folio-kms-steady-state-policy.template.json
+          jq empty docs/finance-folio-kms-fingerprint-steady-state-policy.template.json
           bash scripts/assert-finance-folio-kms-contract.sh
           bash -n scripts/bootstrap-finance-folio-kms.sh
           bash scripts/test-bootstrap-finance-folio-kms.sh
