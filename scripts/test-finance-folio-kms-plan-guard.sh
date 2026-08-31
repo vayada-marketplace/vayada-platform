@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fixtures="scripts/fixtures/finance-folio-kms"
+guard="scripts/assert-terraform-protected-resources.sh"
+terraform() { jq "${MOCK_FILTER:-.}" "$3"; }
+export -f terraform
+accept() { MOCK_FILTER="$3" bash "${guard}" "${fixtures}/$1.json" "$2" >/dev/null || { echo "Plan guard rejected $4." >&2; exit 1; }; }
+reject() { local original mutated; original="$(jq -cS . "${fixtures}/$1.json")"; mutated="$(jq -cS "$3" "${fixtures}/$1.json")" || { echo "Invalid regression for $4." >&2; exit 1; }; [[ "${mutated}" != "${original}" ]] || { echo "No-op regression for $4." >&2; exit 1; }; if MOCK_FILTER="$3" bash "${guard}" "${fixtures}/$1.json" "$2" >/dev/null 2>&1; then echo "Plan guard accepted $4." >&2; exit 1; fi; }
+reject_without_leak() { local output; if output="$(MOCK_FILTER="$3" bash "${guard}" "${fixtures}/$1.json" "$2" 2>&1)"; then echo "Plan guard accepted $4." >&2; exit 1; fi; [[ "${output}" != *"$5"* ]] || { echo "Plan guard leaked $4." >&2; exit 1; }; }
+steady='(.resource_changes[]|select(.name!="services").change.actions)=["no-op"] | (.resource_changes[]|select(.name=="services").change.before.container_definitions)=(.resource_changes[]|select(.name=="services").change.after.container_definitions)'
+
+accept diagnostic finance-diagnostic . "the captured diagnostic"
+reject diagnostic finance-diagnostic '(.resource_changes[].address) |= ("module.reviewed."+.) | .resource_changes[].module_address="module.reviewed"' "module-qualified diagnostic addresses"
+reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after) |= (.key_usage="SIGN_VERIFY" | .enable_key_rotation=false | .policy="{}")' "invalid diagnostic key semantics"
+reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after_unknown.key_usage)=true' "an unknown diagnostic key usage"
+reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after.custom_key_store_id)="cks-unreviewed"' "a diagnostic custom key store"
+reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after.unreviewed)=true' "an unreviewed diagnostic key field"
+reject_without_leak diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after.tags.Secret)="SUPERSECRET" | (.resource_changes[]|select(.type=="aws_kms_key").change.after_sensitive.tags.Secret)=true' "a sensitive diagnostic tag" "SUPERSECRET"
+reject diagnostic finance-diagnostic '.resource_changes += [{address:"aws_s3_bucket.unrelated",type:"aws_s3_bucket",name:"unrelated",change:{actions:["create"]}}]' "unrelated diagnostic drift"
+accept post-import finance-post-import . "the captured post-import plan"
+reject post-import finance-post-import '(.resource_changes[].address) |= ("module.reviewed."+.) | .resource_changes[].module_address="module.reviewed"' "module-qualified post-import addresses"
+reject post-import finance-post-import '.resource_changes += [(.resource_changes[]|select(.type=="aws_kms_alias") | .address="module.reviewed.aws_kms_alias.finance_folio_recipient_current" | .module_address="module.reviewed")]' "a module-qualified no-op alias duplicate"
+accept post-import finance-post-import '(.resource_changes[]|select(.change.after.policy?).change.after.policy)|=(fromjson | def flip: if type=="array" then if length==1 then .[0] else reverse end else [.] end; .Statement|=(reverse|map(.Action|=flip|.Resource|=flip|if ((.Principal?|type)=="object" and .Principal.AWS?) then .Principal.AWS|=flip else . end|if has("Condition") then .Condition|=with_entries(.value|=with_entries(.value|=flip)) else . end)) | tojson)' "semantic IAM set ordering and singleton forms"
+accept post-import apply '.resource_changes |= map(.change.actions=["no-op"])' "an ordinary no-op apply"
+accept post-import apply '.resource_changes=[{address:"aws_s3_bucket.ordinary",type:"aws_s3_bucket",name:"ordinary",change:{actions:["update"]}}]' "an unrelated apply"
+accept post-import apply "${steady}" "an ordinary target-task replacement"
+reject post-import apply "${steady} | (.resource_changes[]|select(.name==\"services\").change.after.task_role_arn)=\"arn:aws:iam::269416271598:role/other\"" "a changed target task role"
+reject post-import apply "${steady} | (.resource_changes[]|select(.name==\"services\").change.after.container_definitions)|=(fromjson | .[0].name=\"renamed\" | tojson)" "a renamed target container"
+reject post-import apply "${steady} | (.resource_changes[]|select(.name==\"services\").change.after.container_definitions)|=(fromjson | ([.[0].environment[]|select(.name|startswith(\"FINANCE_FOLIO_RECIPIENT_KMS_\"))]) as \$f | .[0].environment|=map(select(.name|startswith(\"FINANCE_FOLIO_RECIPIENT_KMS_\")|not)) | .+=[{name:\"sidecar\",environment:\$f}] | tojson)" "Finance bindings moved to a sidecar"
+
+reject post-import finance-post-import '.resource_changes += [{address:"aws_s3_bucket.unrelated",type:"aws_s3_bucket",name:"unrelated",change:{actions:["update"]}}]' "post-import unrelated drift"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_ecs_task_definition" and .name=="services").change.actions)=["delete","create"]' "unsafe task replacement order"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").change.after_unknown.policy)=true' "unknown key policy"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").change.after.is_enabled)=false' "a disabled key"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").change.after.bypass_policy_lockout_safety_check)=true' "a policy-lockout bypass"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").change.after.multi_region)=true' "an unreviewed multi-region key"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").change.after.deletion_window_in_days)=7' "a shortened deletion window"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").change.after.rotation_period_in_days)=90' "a changed rotation period"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").change.after_unknown.rotation_period_in_days)=true' "an unknown rotation period"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").change.after.unreviewed)=true' "an incomplete key shape contract"
+reject post-import finance-post-import 'del(.resource_changes[]|select(.type=="aws_kms_key").change.after.tags.Purpose)' "incomplete key tags"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").change.after.policy)|=(fromjson | (.Statement[]|select(.Sid=="DenyCryptographicUseOutsideNextApi").Effect)="Allow" | tojson)' "an allow-shaped outsider statement"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").change.after.policy)|=(fromjson | (.Statement[]|select(.Sid=="DenyCryptographicUseOutsideNextApi").Condition.ArnNotEquals["aws:PrincipalArn"])=":role/narrowed" | tojson)' "a narrowed outsider deny"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").change.after.policy)|=(fromjson | del(.Statement[]|select(.Sid=="DenyGrantCreation")) | tojson)' "a missing grant deny"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_iam_role_policy").change.after.policy)|=(fromjson | (.Statement[]|select(.Sid=="EncryptCurrentFinanceFolioRecipientKey").Resource)="*" | tojson)' "a wildcard task-policy resource"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_iam_role_policy").change.after.policy)|=(fromjson | (.Statement[]|select(.Sid=="EncryptCurrentFinanceFolioRecipientKey").Effect)="Deny" | tojson)' "the wrong task-policy effect"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_iam_role_policy").change.after.policy)|=(fromjson | del(.Statement[]|select(.Sid=="EncryptCurrentFinanceFolioRecipientKey").Condition.StringLike) | tojson)' "an incomplete context condition"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_ecs_task_definition" and .name=="services").change.after.container_definitions)|=(fromjson | (.[0].environment[]|select(.name=="FINANCE_FOLIO_RECIPIENT_KMS_CURRENT_KEY_ARN").value)="arn:aws:kms:eu-west-1:269416271598:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" | tojson)' "a mismatched environment ARN"
+reject post-import finance-post-import 'walk(if type=="string" then gsub("11111111-2222-3333-4444-555555555555";"not-a-key") else . end)' "a consistently arbitrary key identifier"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_ecs_task_definition" and .name=="services").change.after.container_definitions)|=(fromjson | ([.[0].environment[]|select(.name=="FINANCE_FOLIO_RECIPIENT_KMS_CURRENT_KEY_ARN")][0]) as $env | .[0].environment += [$env] | tojson)' "a duplicate environment binding"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_ecs_task_definition" and .name=="services").change.after.container_definitions)|=(fromjson | .[0].image="piggyback:latest" | tojson)' "piggyback image drift"
+reject post-import finance-post-import '(.resource_changes[]|select(.name=="services").change.after.cpu)="2048"' "task CPU drift"
+reject post-import finance-post-import '(.resource_changes[]|select(.name=="services").change.after.family)="piggyback"' "task family drift"
+reject post-import finance-post-import '(.resource_changes[]|select(.name=="services").change.after.task_role_arn)="arn:aws:iam::269416271598:role/other"' "task-role drift"
+reject post-import finance-post-import '(.resource_changes[]|select(.name=="services").change.after.container_definitions)|=(fromjson + [{name:"sidecar",environment:[{name:"FINANCE_FOLIO_RECIPIENT_KMS_CURRENT_KEY_ARN",value:"stolen"}]}] | tojson)' "sidecar Finance environment injection"
+reject post-import finance-post-import '(.resource_changes[]|select(.name=="services").change.after_unknown.cpu)=true' "unknown task CPU"
+reject post-import finance-post-import '(.resource_changes[]|select(.name=="finance_folio_recipient_inventory").change.after.task_role_arn)="arn:aws:iam::269416271598:role/ecsTaskRole"' "an inventory task role"
+reject post-import finance-post-import '(.resource_changes[]|select(.name=="finance_folio_recipient_inventory").change.after_unknown.container_definitions)=true' "an unknown inventory command"
+reject post-import finance-post-import '(.resource_changes[]|select(.name=="finance_folio_recipient_inventory").change.after.enable_fault_injection)=true' "inventory fault injection"
+reject post-import finance-post-import '(.resource_changes[]|select(.name=="finance_folio_recipient_inventory").change.after.skip_destroy)=true' "inventory lifecycle drift"
+reject post-import finance-post-import '(.resource_changes[]|select(.name=="finance_folio_recipient_inventory").change.after_unknown.volume)=true' "unknown inventory volumes"
+reject post-import apply '.testMutation=true' "Finance task environment drift in ordinary apply"
+reject post-import apply "${steady} | (.resource_changes[]|select(.name==\"services\").change.after_unknown.cpu)=true" "unknown target task CPU in ordinary apply"
+reject post-import apply "${steady} | (.resource_changes[]|select(.name==\"services\").address)=\"module.reviewed.aws_ecs_task_definition.services[\\\"next-target-backend\\\"]\" | (.resource_changes[]|select(.name==\"services\").module_address)=\"module.reviewed\"" "a module-qualified target task in ordinary apply"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_alias").change.after.target_key_id)="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"' "an alias retarget"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_alias").change.after_unknown.target_key_id)=true' "an unknown alias target"
+reject post-import finance-post-import '.resource_changes += [(.resource_changes[]|select(.type=="aws_kms_key"))]' "a duplicate semantic key"
+reject post-import finance-post-import '(.resource_changes[]|select(.type=="aws_kms_key").index)="v2"' "an unreviewed v2 key update"
+
+jq -e '.format_version=="1.2" and .terraform_version=="1.5.7"' "${fixtures}/post-import.json" >/dev/null
+echo "semantic address, policy, key, alias, task, environment, and inventory guard checks passed"
