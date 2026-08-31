@@ -55,9 +55,9 @@ terraform -chdir="${repo_dir}/infra" init -reconfigure -input=false \
 [[ "$(terraform -chdir="${repo_dir}/infra" workspace show)" == default ]] || { echo "Terraform workspace must be default." >&2; exit 1; }
 remote_state="$(terraform -chdir="${repo_dir}/infra" state pull)"
 [[ "$(jq -er .lineage <<<"${remote_state}")" == "${state_lineage}" ]] || { echo "Terraform state lineage mismatch." >&2; exit 1; }
-declared="$(printf 'contains(keys(local.%s), "%s")\n' "${version_map}" "${version}" | terraform -chdir="${repo_dir}/infra" console -no-color)"
+declared="$(printf 'contains(keys(local.%s), "%s")\n' "${version_map}" "${version}" | terraform -chdir="${repo_dir}/infra" console -no-color | awk '$0=="true" || $0=="false" { value=$0; count++ } END { if (count==1) print value; else exit 1 }')"
 [[ "${declared}" == true ]] || { echo "Declare ${version} in the Terraform version map before bootstrap; do not apply it." >&2; exit 1; }
-current_version="$(printf 'local.%s\n' "${current_local}" | terraform -chdir="${repo_dir}/infra" console -no-color | tr -d '"')"
+current_version="$(printf 'local.%s\n' "${current_local}" | terraform -chdir="${repo_dir}/infra" console -no-color | awk '/^"[^"]*"$/ { value=substr($0,2,length($0)-2); count++ } END { if (count==1) print value; else exit 1 }')"
 if [[ "${version}" == v1 ]]; then
   [[ "${current_version}" == v1 ]] || { echo "Initial bootstrap requires current v1." >&2; exit 1; }
 else
