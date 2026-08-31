@@ -134,6 +134,50 @@ case "${mode}" in
       $inventory_containers==[{command:["node","-e","console.log(JSON.stringify({status:\u0027INERT\u0027,message:\u0027use scripts/run-finance-folio-recipient-inventory.sh\u0027}))"],essential:true,image:"269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api:next-latest",logConfiguration:{logDriver:"awslogs",options:{"awslogs-group":"/ecs/vayada-next-api","awslogs-region":"eu-west-1","awslogs-stream-prefix":"folio-recipient-inventory"}},name:"vayada-next-api-finance-folio-recipient-inventory",secrets:[{name:"TARGET_DATABASE_URL",valueFrom:"arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-url"}]}]
     ' <<<"${plan_json}" >/dev/null || fail "Post-import KMS, policy, task, or inventory contract mismatch."
     ;;
+  finance-steady)
+    [[ "${finance_changes}" == "[]" && "${finance_task_drift}" == false ]] || fail "Steady Finance KMS resources must be no-op."
+    jq -e '
+      def as_set: (if type=="array" then . else [.] end)|sort;
+      def norm_policy: .Statement |= (map(.Action|=as_set | .Resource|=as_set | if ((.Principal?|type)=="object" and .Principal.AWS?) then .Principal.AWS|=as_set else . end | if has("Condition") then .Condition|=with_entries(.value|=with_entries(.value|=as_set)) else . end)|sort_by(.Sid));
+      [.resource_changes[]?|select(.type=="aws_kms_key" and .name=="finance_folio_recipient" and .index=="v1")] as $keys |
+      [.resource_changes[]?|select(.type=="aws_kms_alias" and .name=="finance_folio_recipient_current")] as $aliases |
+      [.resource_changes[]?|select(.type=="aws_iam_role_policy" and .name=="next_api_finance_folio_recipient_kms")] as $policies |
+      [.resource_changes[]?|select(.type=="aws_ecs_task_definition" and .name=="services" and .index=="next-target-backend")] as $tasks |
+      [.resource_changes[]?|select(.type=="aws_ecs_task_definition" and .name=="finance_folio_recipient_inventory")] as $inventories |
+      ($keys[0]) as $key | ($aliases[0]) as $alias | ($policies[0]) as $task_policy | ($tasks[0]) as $task | ($inventories[0]) as $inventory |
+      ($key.change.after.id) as $id |
+      ("arn:aws:kms:eu-west-1:269416271598:key/"+$id) as $arn |
+      "arn:aws:iam::269416271598:role/vayada-next-api-media-task-role" as $role |
+      {Version:"2012-10-17",Statement:[
+        {Sid:"EnableAccountAdministration",Effect:"Allow",Principal:{AWS:"arn:aws:iam::269416271598:root"},Action:"kms:*",Resource:"*"},
+        {Sid:"DenyCryptographicUseOutsideNextApi",Effect:"Deny",Principal:"*",Action:["kms:Decrypt","kms:Encrypt","kms:GenerateDataKey","kms:GenerateDataKeyWithoutPlaintext","kms:ReEncryptFrom","kms:ReEncryptTo"],Resource:"*",Condition:{ArnNotEquals:{"aws:PrincipalArn":$role}}},
+        {Sid:"DenyGrantCreation",Effect:"Deny",Principal:"*",Action:"kms:CreateGrant",Resource:"*"}
+      ]} as $policy |
+      {StringEquals:{"kms:EncryptionAlgorithm":"SYMMETRIC_DEFAULT","kms:EncryptionContext:purpose":"finance-folio-recipient-v1"},StringLike:{"kms:EncryptionContext:propertyId":"????????-????-????-????-????????????","kms:EncryptionContext:folioId":"????????-????-????-????-????????????","kms:EncryptionContext:revision":"?*"},StringNotLike:{"kms:EncryptionContext:revision":["0","-*"]},"ForAllValues:StringEquals":{"kms:EncryptionContextKeys":["purpose","propertyId","folioId","revision"]}} as $context |
+      {Version:"2012-10-17",Statement:[
+        {Sid:"EncryptCurrentFinanceFolioRecipientKey",Effect:"Allow",Action:["kms:Encrypt"],Resource:$arn,Condition:$context},
+        {Sid:"DecryptAllowedFinanceFolioRecipientKeys",Effect:"Allow",Action:["kms:Decrypt"],Resource:[$arn],Condition:$context},
+        {Sid:"DescribeAllowedFinanceFolioRecipientKeys",Effect:"Allow",Action:["kms:DescribeKey"],Resource:[$arn]}
+      ]} as $expected_task_policy |
+      {container_definitions:$inventory.change.after.container_definitions,cpu:"256",enable_fault_injection:false,ephemeral_storage:[],execution_role_arn:"arn:aws:iam::269416271598:role/ecsTaskExecutionRole",family:"vayada-next-api-finance-folio-recipient-inventory",inference_accelerator:[],ipc_mode:null,memory:"512",network_mode:"awsvpc",pid_mode:null,placement_constraints:[],proxy_configuration:[],requires_compatibilities:["FARGATE"],runtime_platform:[],skip_destroy:false,tags:{Environment:"production",Project:"vayada",Purpose:"finance-folio-recipient-inventory"},tags_all:{Environment:"production",Project:"vayada",Purpose:"finance-folio-recipient-inventory"},task_role_arn:null,track_latest:false,volume:[]} as $expected_inventory |
+      ($task.change.after.container_definitions|fromjson) as $task_containers |
+      ([$task_containers[]|select(.name=="vayada-next-api")]) as $next_api |
+      ($next_api[0].environment//[]) as $env |
+      ($keys|length)==1 and ($aliases|length)==1 and ($policies|length)==1 and ($tasks|length)==1 and ($inventories|length)==1 and
+      $key.change.actions==["no-op"] and $key.change.before==$key.change.after and (($key.change.after_unknown//{})|[..|select(.==true)]|length)==0 and
+      ($key.change.after|keys)==["arn","bypass_policy_lockout_safety_check","custom_key_store_id","customer_master_key_spec","deletion_window_in_days","description","enable_key_rotation","id","is_enabled","key_id","key_usage","multi_region","policy","rotation_period_in_days","tags","tags_all","timeouts","xks_key_id"] and
+      ($id|test("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")) and $key.change.after.arn==$arn and $key.change.after.key_id==$id and ($key.change.after.description|test("^Finance folio recipient v1; bootstrap=.+$")) and $key.change.after.bypass_policy_lockout_safety_check==false and $key.change.after.custom_key_store_id==null and $key.change.after.customer_master_key_spec=="SYMMETRIC_DEFAULT" and $key.change.after.deletion_window_in_days==30 and $key.change.after.enable_key_rotation==true and $key.change.after.rotation_period_in_days==365 and $key.change.after.is_enabled==true and $key.change.after.key_usage=="ENCRYPT_DECRYPT" and $key.change.after.multi_region==false and $key.change.after.xks_key_id==null and $key.change.after.timeouts==null and
+      $key.change.after.tags=={Environment:"production",ManagedBy:"terraform",Name:"vayada-finance-folio-recipient-v1",Project:"vayada",Purpose:"finance-folio-recipient",Version:"v1"} and $key.change.after.tags_all==$key.change.after.tags and (($key.change.after.policy|fromjson|norm_policy)==($policy|norm_policy)) and
+      $alias.change.actions==["no-op"] and $alias.change.before==$alias.change.after and (($alias.change.after_unknown//{})|[..|select(.==true)]|length)==0 and ($alias.change.after|keys)==["arn","id","name","name_prefix","target_key_arn","target_key_id"] and
+      $alias.change.after=={arn:"arn:aws:kms:eu-west-1:269416271598:alias/vayada/prod/finance-folio-recipient-current",id:"alias/vayada/prod/finance-folio-recipient-current",name:"alias/vayada/prod/finance-folio-recipient-current",name_prefix:null,target_key_arn:$arn,target_key_id:$id} and
+      $task_policy.change.actions==["no-op"] and $task_policy.change.before==$task_policy.change.after and (($task_policy.change.after_unknown//{})|[..|select(.==true)]|length)==0 and $task_policy.change.after.name=="finance-folio-recipient-kms-access" and $task_policy.change.after.role=="vayada-next-api-media-task-role" and (($task_policy.change.after.policy|fromjson|norm_policy)==($expected_task_policy|norm_policy)) and
+      (($task.change.after_unknown//{})|del(.arn,.arn_without_revision,.id,.revision,.tags_all)|[..|select(.==true)]|length)==0 and $task.change.after.task_role_arn==$role and ($next_api|length)==1 and
+      ([$env[]|select(.name|startswith("FINANCE_FOLIO_RECIPIENT_KMS_"))]|sort_by(.name))==[{name:"FINANCE_FOLIO_RECIPIENT_KMS_ALLOWED_KEY_ARNS",value:$arn},{name:"FINANCE_FOLIO_RECIPIENT_KMS_CURRENT_KEY_ARN",value:$arn}] and
+      all($task_containers[]; .name=="vayada-next-api" or ([.environment[]?|select(.name|startswith("FINANCE_FOLIO_RECIPIENT_KMS_"))]|length)==0) and
+      $inventory.change.actions==["no-op"] and $inventory.change.before==$inventory.change.after and (($inventory.change.after_unknown//{})|[..|select(.==true)]|length)==0 and ($inventory.change.after|del(.arn,.arn_without_revision,.id,.revision))==$expected_inventory and
+      ($inventory.change.after.container_definitions|fromjson)==[{command:["node","-e","console.log(JSON.stringify({status:\u0027INERT\u0027,message:\u0027use scripts/run-finance-folio-recipient-inventory.sh\u0027}))"],essential:true,image:"269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api:next-latest",logConfiguration:{logDriver:"awslogs",options:{"awslogs-group":"/ecs/vayada-next-api","awslogs-region":"eu-west-1","awslogs-stream-prefix":"folio-recipient-inventory"}},name:"vayada-next-api-finance-folio-recipient-inventory",secrets:[{name:"TARGET_DATABASE_URL",valueFrom:"arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-url"}]}]
+    ' <<<"${plan_json}" >/dev/null || fail "Steady Finance KMS key, alias, policy, task, environment, or inventory contract mismatch."
+    ;;
   apply)
     [[ "${finance_changes}" == "[]" && "${finance_task_drift}" == false ]] || fail "Finance KMS apply requires the reviewed post-import lane or a Finance no-op."
     ;;
