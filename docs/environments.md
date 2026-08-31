@@ -138,7 +138,9 @@ may exist; do not delete media objects or use `terraform destroy` as rollback.
 Terraform injects the non-secret current full key ARN as
 `FINANCE_FOLIO_RECIPIENT_KMS_CURRENT_KEY_ARN` and all retained full ARNs as the
 comma-separated `FINANCE_FOLIO_RECIPIENT_KMS_ALLOWED_KEY_ARNS`. Only current can
-encrypt; all allowed versions can decrypt/describe. Persist the full ARN.
+encrypt; all allowed versions can decrypt/describe. The separate HMAC key ARN is
+injected as `FINANCE_FOLIO_RECIPIENT_KMS_FINGERPRINT_KEY_ARN`; it can generate
+only `HMAC_SHA_256` recipient fingerprints. Persist both full ARNs.
 
 Encrypt/decrypt must supply exactly `purpose=finance-folio-recipient-v1`,
 `propertyId=<UUID>`, `folioId=<UUID>`, and `revision=<positive decimal>`. The
@@ -152,6 +154,13 @@ For a full-key rotation (365-day automatic period), first land `vN` in the map w
 the apply guard pauses its unimported create. The stacked bootstrap lane then
 creates/imports that declared address. Apply its policy/allowlist, validate, and
 only then promote current separately. Retain old keys until inventory clears them.
+The fingerprint HMAC key does not support AWS automatic rotation. Rotate it by
+declaring and bootstrapping/importing a new version with the `fingerprint` lane,
+but do not promote it from `finance_folio_recipient_fingerprint_current_key_version`
+until separately reviewed application compatibility can verify retained-key
+fingerprints or an explicitly approved re-fingerprinting migration has re-derived
+and verified every stored fingerprint with a tested rollback. VAY-1132 bootstraps
+only `v1`; creating or importing a future HMAC key never authorizes promotion.
 
 ### Deployment flow
 
@@ -446,12 +455,13 @@ Terraform can use the new permission.
 
 The deploy role must never receive pre-ARN `kms:CreateKey` or key-wildcard
 `kms:TagResource`: either permission can claim unrelated keys. The PR plan guard
-allows only the reviewed diagnostic plan (5 add, 0 change, 1 task-definition
+allows only the reviewed diagnostic plan (6 add, 0 change, 1 task-definition
 destroy). Production apply rejects every Finance KMS change until an administrator
-runs the resumable bootstrap with production `TF_VAR_*` values loaded:
+runs both resumable bootstraps with production `TF_VAR_*` values loaded:
 
 ```bash
 ./scripts/bootstrap-finance-folio-kms.sh v1 /secure/operator-state/finance-folio-kms-v1.json
+./scripts/bootstrap-finance-folio-kms.sh v1 /secure/operator-state/finance-folio-fingerprint-kms-v1.json fingerprint
 ```
 
 Keep that non-secret state file until rollout is complete and rerun the same
@@ -466,6 +476,10 @@ be resumed after expiry.
 It installs the rendered exact-ARN steady policy and removes the superseded broad
 bootstrap policy if present. Never translate the diagnostic plan into ad-hoc
 commands or apply it; the deploy role intentionally lacks creation permissions.
+The fingerprint lane installs its own exact-ARN policy with only the read-only
+`GetKeyRotationStatus` call Terraform needs during refresh, no rotation mutation
+or alias permissions, because HMAC keys support neither this recipient-key
+rotation path nor the recipient alias contract.
 
 The administrator needs `sts:GetCallerIdentity`; `kms:ListKeys`, `DescribeKey`,
 `ListResourceTags`, `CreateKey`, `TagResource`, `EnableKeyRotation`, `GetKeyRotationStatus`,

@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageExactFinanceFolioRecipientFingerprintKey",
+      "Effect": "Allow",
+      "Action": ["kms:DescribeKey", "kms:GetKeyPolicy", "kms:PutKeyPolicy", "kms:GetKeyRotationStatus", "kms:ListResourceTags"],
+      "Resource": "arn:aws:kms:eu-west-1:269416271598:key/00000000-0000-0000-0000-000000000000",
+      "Condition": { "BoolIfExists": { "kms:BypassPolicyLockoutSafetyCheck": "false" } }
+    },
+    {
+      "Sid": "MaintainExactFinanceFolioRecipientFingerprintKeyTags",
+      "Effect": "Allow",
+      "Action": ["kms:TagResource", "kms:UntagResource"],
+      "Resource": "arn:aws:kms:eu-west-1:269416271598:key/00000000-0000-0000-0000-000000000000",
+      "Condition": { "ForAllValues:StringEquals": { "aws:TagKeys": ["Name", "Version", "ManagedBy"] } }
+    },
+    {
+      "Sid": "BlockExactFinanceFolioRecipientFingerprintKeyDecommission",
+      "Effect": "Deny",
+      "Action": ["kms:DisableKey", "kms:ScheduleKeyDeletion"],
+      "Resource": "arn:aws:kms:eu-west-1:269416271598:key/00000000-0000-0000-0000-000000000000"
+    }
+  ]
+}

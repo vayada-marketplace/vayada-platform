@@ -19,12 +19,15 @@ aws() {
     'sts get-caller-identity --region') echo '{"Account":"269416271598","Arn":"arn:aws:iam::269416271598:user/reviewer"}' ;;
     'kms list-keys --region') [[ "${MOCK_DISCOVERY_FAIL:-}" != 1 ]] || return 1; [[ -f "${MOCK_DIR}/created" ]] && echo "${MOCK_KEY_ID}" || echo None ;;
     'kms describe-key --region')
-      if [[ -f "${MOCK_BOOTSTRAP_STATE}" ]]; then marker="$(jq -r .bootstrapId "${MOCK_BOOTSTRAP_STATE}")" version="$(jq -r .version "${MOCK_BOOTSTRAP_STATE}")"; else marker=orphan version=v1; fi
-      jq -cn --arg id "${MOCK_KEY_ID}" --arg arn "${MOCK_KEY_ARN}" --arg description "Finance folio recipient ${version}; bootstrap=${marker}" '{KeyMetadata:{KeyId:$id,Arn:$arn,AWSAccountId:"269416271598",KeyManager:"CUSTOMER",KeySpec:"SYMMETRIC_DEFAULT",KeyUsage:"ENCRYPT_DECRYPT",Enabled:true,KeyState:"Enabled",Description:$description}}'
+      if [[ -f "${MOCK_BOOTSTRAP_STATE}" ]]; then marker="$(jq -r .bootstrapId "${MOCK_BOOTSTRAP_STATE}")" version="$(jq -r .version "${MOCK_BOOTSTRAP_STATE}")" kind="$(jq -r '.kind // "recipient"' "${MOCK_BOOTSTRAP_STATE}")"; else marker=orphan version=v1 kind=recipient; fi
+      if [[ "${kind}" == fingerprint ]]; then description="Finance folio recipient fingerprint ${version}; bootstrap=${marker}" spec=HMAC_256 usage=GENERATE_VERIFY_MAC; else description="Finance folio recipient ${version}; bootstrap=${marker}" spec=SYMMETRIC_DEFAULT usage=ENCRYPT_DECRYPT; fi
+      jq -cn --arg id "${MOCK_KEY_ID}" --arg arn "${MOCK_KEY_ARN}" --arg description "${description}" --arg spec "${spec}" --arg usage "${usage}" '{KeyMetadata:{KeyId:$id,Arn:$arn,AWSAccountId:"269416271598",KeyManager:"CUSTOMER",KeySpec:$spec,KeyUsage:$usage,Enabled:true,KeyState:"Enabled",Description:$description}}'
       ;;
     'kms list-resource-tags --region')
       version="$(jq -r '.version // "v1"' "${MOCK_BOOTSTRAP_STATE}" 2>/dev/null || echo v1)"
-      jq -cn --arg version "${version}" '{Tags:[{TagKey:"Name",TagValue:("vayada-finance-folio-recipient-"+$version)},{TagKey:"Project",TagValue:"vayada"},{TagKey:"Environment",TagValue:"production"},{TagKey:"Purpose",TagValue:"finance-folio-recipient"},{TagKey:"Version",TagValue:$version},{TagKey:"ManagedBy",TagValue:"terraform"}]}'
+      kind="$(jq -r '.kind // "recipient"' "${MOCK_BOOTSTRAP_STATE}" 2>/dev/null || echo recipient)"
+      if [[ "${kind}" == fingerprint ]]; then name=vayada-finance-folio-recipient-fingerprint purpose=finance-folio-recipient-fingerprint; else name=vayada-finance-folio-recipient purpose=finance-folio-recipient; fi
+      jq -cn --arg version "${version}" --arg name "${name}" --arg purpose "${purpose}" '{Tags:[{TagKey:"Name",TagValue:($name+"-"+$version)},{TagKey:"Project",TagValue:"vayada"},{TagKey:"Environment",TagValue:"production"},{TagKey:"Purpose",TagValue:$purpose},{TagKey:"Version",TagValue:$version},{TagKey:"ManagedBy",TagValue:"terraform"}]}'
       ;;
     'kms list-aliases --region') [[ "$(grep -c '^kms list-aliases ' "${MOCK_LOG}")" != "${MOCK_ALIAS_FAIL_ON:-0}" ]] || return 1; [[ -f "${MOCK_DIR}/alias" ]] && cat "${MOCK_DIR}/alias" || echo None ;;
     'kms create-key --region') : >"${MOCK_DIR}/created"; jq -cn --arg id "${MOCK_KEY_ID}" '{KeyMetadata:{KeyId:$id}}' ;;
@@ -34,7 +37,7 @@ aws() {
     'iam put-role-policy --role-name') : >"${MOCK_DIR}/exact-policy" ;;
     'iam list-role-policies --role-name')
       [[ "${MOCK_IAM_LIST_FAIL:-}" != 1 ]] || return 1
-      policies=(); [[ -f "${MOCK_DIR}/exact-policy" ]] && policies+=("platform-finance-folio-kms-$(jq -r .version "${MOCK_BOOTSTRAP_STATE}")"); [[ -f "${MOCK_DIR}/broad-policy" ]] && policies+=(platform-finance-folio-kms-bootstrap)
+      policies=(); if [[ -f "${MOCK_DIR}/exact-policy" ]]; then kind="$(jq -r '.kind // "recipient"' "${MOCK_BOOTSTRAP_STATE}")"; version="$(jq -r .version "${MOCK_BOOTSTRAP_STATE}")"; [[ "${kind}" == recipient ]] && policies+=("platform-finance-folio-kms-${version}") || policies+=("platform-finance-folio-kms-${kind}-${version}"); fi; [[ -f "${MOCK_DIR}/broad-policy" ]] && policies+=(platform-finance-folio-kms-bootstrap)
       printf '%s\n' "$(printf '%s\n' "${policies[@]}" | jq -Rsc 'split("\n")[:-1] | {PolicyNames:.}')"
       ;;
     'iam delete-role-policy --role-name') unlink "${MOCK_DIR}/broad-policy" ;;
@@ -161,3 +164,39 @@ if bash scripts/bootstrap-finance-folio-kms.sh v2 "${MOCK_BOOTSTRAP_STATE}" >/de
 if aws dynamodb put-item --condition-expression 'Owner = :owner' >/dev/null 2>&1; then echo "Mock accepted a reserved expression name." >&2; exit 1; fi
 grep -Fq 'LeaseUntil < :now' "${MOCK_LOG}" && grep -Fq 'condition-expression #owner = :owner' "${MOCK_LOG}"
 echo "backend, state, discovery, lock, cleanup, and rotation failures closed"
+
+unset MOCK_CURRENT_VERSION MOCK_MANAGED_CURRENT_ID MOCK_TERRAFORM_ALIAS_TARGET
+find "${test_dir}" -type f ! -name commands.log -delete
+fingerprint_state="${test_dir}/fingerprint.json"
+export MOCK_BOOTSTRAP_STATE="${fingerprint_state}"
+rotations_before="$(grep -c '^kms enable-key-rotation ' "${MOCK_LOG}")"
+aliases_before="$(grep -c '^kms create-alias ' "${MOCK_LOG}")"
+bash scripts/bootstrap-finance-folio-kms.sh v1 "${fingerprint_state}" fingerprint >/dev/null
+jq -e '.phase=="complete" and .kind=="fingerprint"' "${fingerprint_state}" >/dev/null
+grep -Fq -- '--key-spec HMAC_256 --key-usage GENERATE_VERIFY_MAC' "${MOCK_LOG}"
+grep -Fq 'aws_kms_key.finance_folio_recipient_fingerprint["v1"]' "${MOCK_LOG}"
+jq --arg exact "${key_arn}" -e '
+  . == {
+    Version: "2012-10-17",
+    Statement: [
+      {
+        Sid: "ManageExactFinanceFolioRecipientFingerprintKey", Effect: "Allow",
+        Action: ["kms:DescribeKey", "kms:GetKeyPolicy", "kms:PutKeyPolicy", "kms:GetKeyRotationStatus", "kms:ListResourceTags"],
+        Resource: $exact,
+        Condition: {BoolIfExists: {"kms:BypassPolicyLockoutSafetyCheck": "false"}}
+      },
+      {
+        Sid: "MaintainExactFinanceFolioRecipientFingerprintKeyTags", Effect: "Allow",
+        Action: ["kms:TagResource", "kms:UntagResource"], Resource: $exact,
+        Condition: {"ForAllValues:StringEquals": {"aws:TagKeys": ["Name", "Version", "ManagedBy"]}}
+      },
+      {
+        Sid: "BlockExactFinanceFolioRecipientFingerprintKeyDecommission", Effect: "Deny",
+        Action: ["kms:DisableKey", "kms:ScheduleKeyDeletion"], Resource: $exact
+      }
+    ]
+  }
+' "${fingerprint_state}.policy.json" >/dev/null
+[[ "$(grep -c '^kms enable-key-rotation ' "${MOCK_LOG}")" == "${rotations_before}" ]]
+[[ "$(grep -c '^kms create-alias ' "${MOCK_LOG}")" == "${aliases_before}" ]]
+echo "fingerprint bootstrap uses a manual-rotation HMAC key without an alias"

@@ -48,8 +48,9 @@ output "private_profile_media_cdn_url" {
 output "finance_folio_recipient_kms" {
   description = "Non-secret Finance folio recipient KMS runtime contract"
   value = {
-    current_key_arn  = local.finance_folio_recipient_kms_current_key_arn
-    allowed_key_arns = local.finance_folio_recipient_kms_allowed_key_arns
+    current_key_arn             = local.finance_folio_recipient_kms_current_key_arn
+    allowed_key_arns            = local.finance_folio_recipient_kms_allowed_key_arns
+    fingerprint_current_key_arn = local.finance_folio_recipient_fingerprint_current_key_arn
   }
 }
 

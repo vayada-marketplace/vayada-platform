@@ -279,6 +279,7 @@ locals {
         { name = "AWS_REGION", value = var.aws_region },
         { name = "FINANCE_FOLIO_RECIPIENT_KMS_CURRENT_KEY_ARN", value = local.finance_folio_recipient_kms_current_key_arn },
         { name = "FINANCE_FOLIO_RECIPIENT_KMS_ALLOWED_KEY_ARNS", value = join(",", local.finance_folio_recipient_kms_allowed_key_arns) },
+        { name = "FINANCE_FOLIO_RECIPIENT_KMS_FINGERPRINT_KEY_ARN", value = local.finance_folio_recipient_fingerprint_current_key_arn },
         { name = "PLATFORM_MEDIA_BUCKET", value = aws_s3_bucket.private_profile_media.id },
         { name = "PLATFORM_MEDIA_CDN_BASE_URL", value = local.private_profile_media_cdn_base_url },
         { name = "PLATFORM_MEDIA_CDN_ORIGIN_HOST", value = aws_s3_bucket.private_profile_media.bucket_regional_domain_name },
