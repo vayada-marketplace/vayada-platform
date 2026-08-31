@@ -7,6 +7,7 @@ terraform() { jq "${MOCK_FILTER:-.}" "$3"; }
 export -f terraform
 accept() { MOCK_FILTER="$3" bash "${guard}" "${fixtures}/$1.json" "$2" >/dev/null || { echo "Plan guard rejected $4." >&2; exit 1; }; }
 reject() { local original mutated; original="$(jq -cS . "${fixtures}/$1.json")"; mutated="$(jq -cS "$3" "${fixtures}/$1.json")" || { echo "Invalid regression for $4." >&2; exit 1; }; [[ "${mutated}" != "${original}" ]] || { echo "No-op regression for $4." >&2; exit 1; }; if MOCK_FILTER="$3" bash "${guard}" "${fixtures}/$1.json" "$2" >/dev/null 2>&1; then echo "Plan guard accepted $4." >&2; exit 1; fi; }
+reject_without_leak() { local output; if output="$(MOCK_FILTER="$3" bash "${guard}" "${fixtures}/$1.json" "$2" 2>&1)"; then echo "Plan guard accepted $4." >&2; exit 1; fi; [[ "${output}" != *"$5"* ]] || { echo "Plan guard leaked $4." >&2; exit 1; }; }
 steady='(.resource_changes[]|select(.name!="services").change.actions)=["no-op"] | (.resource_changes[]|select(.name=="services").change.before.container_definitions)=(.resource_changes[]|select(.name=="services").change.after.container_definitions)'
 
 accept diagnostic finance-diagnostic . "the captured diagnostic"
@@ -15,6 +16,7 @@ reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_km
 reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after_unknown.key_usage)=true' "an unknown diagnostic key usage"
 reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after.custom_key_store_id)="cks-unreviewed"' "a diagnostic custom key store"
 reject diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after.unreviewed)=true' "an unreviewed diagnostic key field"
+reject_without_leak diagnostic finance-diagnostic '(.resource_changes[]|select(.type=="aws_kms_key").change.after.tags.Secret)="SUPERSECRET" | (.resource_changes[]|select(.type=="aws_kms_key").change.after_sensitive.tags.Secret)=true' "a sensitive diagnostic tag" "SUPERSECRET"
 reject diagnostic finance-diagnostic '.resource_changes += [{address:"aws_s3_bucket.unrelated",type:"aws_s3_bucket",name:"unrelated",change:{actions:["create"]}}]' "unrelated diagnostic drift"
 accept post-import finance-post-import . "the captured post-import plan"
 reject post-import finance-post-import '(.resource_changes[].address) |= ("module.reviewed."+.) | .resource_changes[].module_address="module.reviewed"' "module-qualified post-import addresses"
