@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 kms="infra/finance_folio_kms.tf" steady="docs/finance-folio-kms-steady-state-policy.template.json"
+test -x scripts/run-finance-folio-recipient-inventory.sh
 grep -Fq 'finance_folio_recipient_kms_context_keys        = ["purpose", "propertyId", "folioId", "revision"]' "$kms"
 for condition in 'EncryptionContext:propertyId" = "????????-????-????-????-????????????' 'EncryptionContext:folioId"    = "????????-????-????-????-????????????' 'EncryptionContext:revision"   = "?*"' 'StringNotLike' '["0", "-*"]'; do grep -Fq "$condition" "$kms"; done
 ! grep -Eq 'EncryptionContext:(property_id|folio_id)' "$kms"
