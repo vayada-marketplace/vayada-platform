@@ -73,6 +73,7 @@ terraform() {
     *' state show -no-color aws_kms_alias.'*)
       [[ -f "${MOCK_DIR}/alias-imported" || -n "${MOCK_MANAGED_CURRENT_ID:-}" ]] || return 1
       printf '  id = "alias/vayada/prod/finance-folio-recipient-current"\n  target_key_id = "%s"\n' "${MOCK_TERRAFORM_ALIAS_TARGET:-$(cat "${MOCK_DIR}/alias")}"
+      if [[ "${MOCK_LARGE_ALIAS_STATE:-}" == 1 ]]; then for ((line = 0; line < 20000; line++)); do printf '  filler = "keeps terraform writing after grep matches"\n'; done; fi
       ;;
     *' import aws_kms_key.'*) : >"${MOCK_DIR}/key-imported" ;;
     *' import aws_kms_alias.'*) : >"${MOCK_DIR}/alias-imported" ;;
@@ -96,7 +97,9 @@ if grep -q '^kms create-key ' "${MOCK_LOG}"; then echo "Missing Terraform runtim
 
 state="${test_dir}/bootstrap.json"
 export MOCK_BOOTSTRAP_STATE="${state}"
+export MOCK_LARGE_ALIAS_STATE=1
 bash scripts/bootstrap-finance-folio-kms.sh v1 "${state}" >/dev/null
+unset MOCK_LARGE_ALIAS_STATE
 jq -e --arg id "${key_id}" '.phase=="complete" and .keyId==$id' "${state}" >/dev/null || { jq . "${state}"; exit 1; }
 [[ "$(grep -c '^kms create-key ' "${MOCK_LOG}")" == 1 ]]
 for tag in Name Project Environment Purpose Version ManagedBy; do grep -Fq "TagKey=${tag}," "${MOCK_LOG}"; done

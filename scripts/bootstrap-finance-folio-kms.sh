@@ -222,8 +222,9 @@ imported_key_id="$(sed -n 's/^[[:space:]]*id[[:space:]]*=[[:space:]]*//p' <<<"${
 if [[ "${version}" == v1 && "${key_kind}" == recipient ]]; then
   alias_address="aws_kms_alias.finance_folio_recipient_current"
   if ! terraform -chdir="${repo_dir}/infra" state show -no-color "${alias_address}" >/dev/null 2>&1; then terraform -chdir="${repo_dir}/infra" import "${alias_address}" "${alias_name}"; fi
-  terraform -chdir="${repo_dir}/infra" state show -no-color "${alias_address}" | grep -Fq "id = \"${alias_name}\""
-  terraform -chdir="${repo_dir}/infra" state show -no-color "${alias_address}" | grep -Fq "target_key_id = \"${key_id}\""
+  imported_alias_state="$(terraform -chdir="${repo_dir}/infra" state show -no-color "${alias_address}")"
+  grep -Fq "id = \"${alias_name}\"" <<<"${imported_alias_state}"
+  grep -Fq "target_key_id = \"${key_id}\"" <<<"${imported_alias_state}"
 fi
 policies="$(aws iam list-role-policies --role-name "${role_name}" --output json)" || { echo "Cannot verify deploy-role inline policies." >&2; exit 1; }
 if jq -e '.PolicyNames | index("platform-finance-folio-kms-bootstrap")' <<<"${policies}" >/dev/null; then
