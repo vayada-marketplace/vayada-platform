@@ -58,7 +58,13 @@ terraform() {
     *' init -reconfigure '*) [[ "${MOCK_BACKEND_FAIL:-}" != 1 ]] ;;
     *' workspace show') echo "${MOCK_WORKSPACE:-default}" ;;
     *' state pull') jq -cn --arg lineage "${MOCK_LINEAGE:-3c8d6f2b-d4c4-f0ac-3be0-2a6280d72fe0}" '{lineage:$lineage}' ;;
-    *' console -no-color') read -r expression; [[ "${expression}" == contains* ]] && echo true || printf '"%s"\n' "${MOCK_CURRENT_VERSION:-v1}" ;;
+    *' console -no-color')
+      echo 'Acquiring state lock. This may take a few moments...'
+      read -r expression
+      if [[ "${expression}" == contains* ]]; then echo true; else printf '"%s"\n' "${MOCK_CURRENT_VERSION:-v1}"; fi
+      [[ -z "${MOCK_CONSOLE_EXTRA_SCALAR:-}" ]] || echo "${MOCK_CONSOLE_EXTRA_SCALAR}"
+      echo 'Releasing state lock. This may take a few moments...'
+      ;;
     *' state show -no-color aws_kms_key.'*)
       if [[ "$*" == *"[\"${MOCK_CURRENT_VERSION:-v1}\"]"* && -n "${MOCK_MANAGED_CURRENT_ID:-}" ]]; then printf '  id = "%s"\n' "${MOCK_MANAGED_CURRENT_ID}"; else [[ -f "${MOCK_DIR}/key-imported" ]] || return 1; printf '  id = "%s"\n' "${MOCK_KEY_ID}"; fi
       ;;
@@ -120,6 +126,16 @@ for failure in backend workspace lineage; do
   if bash scripts/bootstrap-finance-folio-kms.sh v1 "${MOCK_BOOTSTRAP_STATE}" >/dev/null 2>&1; then echo "Wrong Terraform ${failure} was accepted." >&2; exit 1; fi
   unset MOCK_BACKEND_FAIL MOCK_WORKSPACE MOCK_LINEAGE
 done
+[[ "$(grep -c '^kms create-key ' "${MOCK_LOG}")" == "${creates_before}" ]]
+find "${test_dir}" -type f ! -name commands.log -delete
+export MOCK_CONSOLE_EXTRA_SCALAR=true MOCK_BOOTSTRAP_STATE="${test_dir}/ambiguous-console.json"
+if bash scripts/bootstrap-finance-folio-kms.sh v1 "${MOCK_BOOTSTRAP_STATE}" >/dev/null 2>&1; then echo "Ambiguous Terraform console output was accepted." >&2; exit 1; fi
+unset MOCK_CONSOLE_EXTRA_SCALAR
+[[ "$(grep -c '^kms create-key ' "${MOCK_LOG}")" == "${creates_before}" ]]
+find "${test_dir}" -type f ! -name commands.log -delete
+export MOCK_CONSOLE_EXTRA_SCALAR='"v2"' MOCK_BOOTSTRAP_STATE="${test_dir}/ambiguous-version-console.json"
+if bash scripts/bootstrap-finance-folio-kms.sh v1 "${MOCK_BOOTSTRAP_STATE}" >/dev/null 2>&1; then echo "Ambiguous Terraform version output was accepted." >&2; exit 1; fi
+unset MOCK_CONSOLE_EXTRA_SCALAR
 [[ "$(grep -c '^kms create-key ' "${MOCK_LOG}")" == "${creates_before}" ]]
 find "${test_dir}" -type f ! -name commands.log -delete
 export MOCK_DISCOVERY_FAIL=1 MOCK_BOOTSTRAP_STATE="${test_dir}/discovery.json"
