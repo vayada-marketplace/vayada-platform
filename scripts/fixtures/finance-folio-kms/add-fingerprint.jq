@@ -18,7 +18,7 @@ def fingerprint_key:
         .customer_master_key_spec = "HMAC_256"
         | .key_usage = "GENERATE_VERIFY_MAC"
         | .enable_key_rotation = false
-        | .rotation_period_in_days = null
+        | .rotation_period_in_days = 0
         | .description |= if type == "string" then sub("Finance folio recipient "; "Finance folio recipient fingerprint ") else . end
         | .policy |= fingerprint_policy
         | .tags.Name |= sub("finance-folio-recipient-"; "finance-folio-recipient-fingerprint-")
