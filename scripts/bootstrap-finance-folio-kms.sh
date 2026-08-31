@@ -174,7 +174,9 @@ grep -Fq "${key_arn}" "${policy_file}" && ! grep -Fq '00000000-0000-0000-0000-00
 aws iam put-role-policy --role-name "${role_name}" --policy-name "platform-finance-folio-kms-${version}" --policy-document "file://${policy_file}"
 
 if ! terraform -chdir="${repo_dir}/infra" state show -no-color "${address}" >/dev/null 2>&1; then terraform -chdir="${repo_dir}/infra" import "${address}" "${key_id}"; fi
-terraform -chdir="${repo_dir}/infra" state show -no-color "${address}" | grep -Eq "^[[:space:]]*id[[:space:]]*=[[:space:]]*${key_id}$"
+imported_state="$(terraform -chdir="${repo_dir}/infra" state show -no-color "${address}")"
+imported_key_id="$(sed -n 's/^[[:space:]]*id[[:space:]]*=[[:space:]]*//p' <<<"${imported_state}" | tr -d '"' | head -1)"
+[[ "${imported_key_id}" == "${key_id}" ]] || { echo "Terraform key import verification failed." >&2; exit 1; }
 if [[ "${version}" == v1 ]]; then
   alias_address="aws_kms_alias.finance_folio_recipient_current"
   if ! terraform -chdir="${repo_dir}/infra" state show -no-color "${alias_address}" >/dev/null 2>&1; then terraform -chdir="${repo_dir}/infra" import "${alias_address}" "${alias_name}"; fi

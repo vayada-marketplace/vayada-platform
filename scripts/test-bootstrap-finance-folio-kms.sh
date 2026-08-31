@@ -57,7 +57,7 @@ terraform() {
     *' state pull') jq -cn --arg lineage "${MOCK_LINEAGE:-3c8d6f2b-d4c4-f0ac-3be0-2a6280d72fe0}" '{lineage:$lineage}' ;;
     *' console -no-color') read -r expression; [[ "${expression}" == contains* ]] && echo true || printf '"%s"\n' "${MOCK_CURRENT_VERSION:-v1}" ;;
     *' state show -no-color aws_kms_key.'*)
-      if [[ "$*" == *"[\"${MOCK_CURRENT_VERSION:-v1}\"]"* && -n "${MOCK_MANAGED_CURRENT_ID:-}" ]]; then printf '  id = %s\n' "${MOCK_MANAGED_CURRENT_ID}"; else [[ -f "${MOCK_DIR}/key-imported" ]] || return 1; printf '  id = %s\n' "${MOCK_KEY_ID}"; fi
+      if [[ "$*" == *"[\"${MOCK_CURRENT_VERSION:-v1}\"]"* && -n "${MOCK_MANAGED_CURRENT_ID:-}" ]]; then printf '  id = "%s"\n' "${MOCK_MANAGED_CURRENT_ID}"; else [[ -f "${MOCK_DIR}/key-imported" ]] || return 1; printf '  id = "%s"\n' "${MOCK_KEY_ID}"; fi
       ;;
     *' state show -no-color aws_kms_alias.'*)
       [[ -f "${MOCK_DIR}/alias-imported" || -n "${MOCK_MANAGED_CURRENT_ID:-}" ]] || return 1
