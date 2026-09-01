@@ -315,6 +315,15 @@ observe-only runtime or a newly accepted plan that preserves one mutating owner.
 Do not change the live target mode merely to collect evidence because production
 target checkout requires the current Stripe contract.
 
+Under the VAY-1349 master plan, VAY-947 is the provider sub-runbook for the
+VAY-1362 production execution window, not an independent cutover. After VAY-1361
+rehearsal and an approved preproduction dry run, VAY-1362 must freeze legacy
+writers, schedulers, and providers; complete final extraction, apply, parity,
+and target-only smoke; then switch application data ownership and provider
+callbacks within the same human-approved VAY-1362 execution window, in the
+VAY-947 sub-runbook's approved order. VAY-1363 retirement starts only after the
+observation and rollback window.
+
 Before any provider callback change, VAY-947 must record a current provider
 dashboard export, matching endpoint-secret ownership, signed receipt and replay
 evidence, the legacy freeze state, and an independently approved rollback order.
