@@ -218,8 +218,9 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/db-auth-url-ssl`        | all APIs                           |
 | `/vayada/prod/db-marketplace-url`     | `marketplace-api`                  |
 | `/vayada/prod/jwt-secret-key`         | all APIs                           |
-| `/vayada/prod/stripe-secret-key`      | `booking-api`                      |
-| `/vayada/prod/stripe-webhook-secret`  | `booking-api`, `next-api`          |
+| `/vayada/prod/stripe-secret-key`      | `pms-api`, `next-api`              |
+| `/vayada/prod/stripe-webhook-secret`  | `pms-api`, `next-api`              |
+| `/vayada/prod/stripe-connect-webhook-secret` | `pms-api`                 |
 | `/vayada/prod/smtp-username`          | `booking-api`, `marketplace-api`   |
 | `/vayada/prod/smtp-password`          | `booking-api`, `marketplace-api`   |
 | `/vayada/prod/anthropic-api-key`      | `pms-api`                          |
@@ -231,6 +232,7 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/workos-client-id`       | `next-api`                         |
 | `/vayada/prod/workos-webhook-secret`  | `next-api`                         |
 | `/vayada/prod/auth-cookie-secret`     | `next-api`                         |
+| `/vayada/prod/resend-api-key`         | `next-api`                         |
 
 The `next-api` task maps those SSM parameters to the backend's runtime
 environment as:
@@ -242,6 +244,8 @@ environment as:
 | `WORKOS_CLIENT_ID` | `/vayada/prod/workos-client-id` |
 | `WORKOS_WEBHOOK_SECRET` | `/vayada/prod/workos-webhook-secret` |
 | `AUTH_COOKIE_SECRET` | `/vayada/prod/auth-cookie-secret` |
+| `RESEND_API_KEY` | `/vayada/prod/resend-api-key` |
+| `STRIPE_SECRET_KEY` | `/vayada/prod/stripe-secret-key` |
 | `STRIPE_WEBHOOK_SECRET` | `/vayada/prod/stripe-webhook-secret` |
 | `WORKOS_AUDIENCE`, `WORKOS_ISSUER`, `WORKOS_JWKS_URL` | Terraform variables from matching GitHub Actions secrets |
 
@@ -249,7 +253,8 @@ Set the required GitHub Actions repository secrets before merging or applying a
 live `next-api` task definition: `TF_VAR_TARGET_DATABASE_URL`,
 `TF_VAR_WORKOS_API_KEY`, `TF_VAR_WORKOS_WEBHOOK_SECRET`,
 `TF_VAR_WORKOS_AUDIENCE`, `TF_VAR_WORKOS_ISSUER`, `TF_VAR_WORKOS_JWKS_URL`,
-`TF_VAR_AUTH_COOKIE_SECRET`.
+`TF_VAR_AUTH_COOKIE_SECRET`, `TF_VAR_RESEND_API_KEY`,
+`TF_VAR_STRIPE_SECRET_KEY`, and `TF_VAR_STRIPE_WEBHOOK_SECRET`.
 
 ### Transactional email delivery
 
@@ -287,10 +292,49 @@ Only after the state removal and an explicit decommission decision should an
 AWS administrator change the inline deny policy and delete the orphaned remote
 resources.
 
-Provider callback/API secrets remain outside the `next-api` task definition
-while provider dashboard callbacks stay on accepted legacy production paths.
-Add production-owned `/vayada/prod/*` names for those providers in the explicit
-provider cutover ticket that first routes their traffic to the TypeScript API.
+### Provider callback routing
+
+Secret availability does not establish callback ownership. The production
+listener has no provider-specific path rules: all requests for
+`pms-api.vayada.com`, including `/webhooks/*`, go to the legacy PMS target group.
+`next-api.vayada.com` goes to the TypeScript target group.
+
+| Callback                                  | Routing result for documented path                                                                                       | Target posture                                                                                                                 |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| Stripe platform `/webhooks/stripe`        | `pms-api.vayada.com/webhooks/stripe` reaches legacy; provider Dashboard URL and enablement are unverified                | `next-api` has the same signing-secret parameter and uses `STRIPE_WEBHOOK_INTAKE_MODE=mutating` for target checkout            |
+| Stripe Connect `/webhooks/stripe/connect` | `pms-api.vayada.com/webhooks/stripe/connect` reaches legacy; provider Dashboard URL and enablement are unverified        | The target has no Connect callback route or `STRIPE_CONNECT_WEBHOOK_SECRET`; keep this documented path on legacy               |
+| Channex `/webhooks/channex`               | `pms-api.vayada.com/webhooks/channex` reaches a legacy route; the runtime has no injected `CHANNEX_WEBHOOK_SECRET`; provider Dashboard URL, enablement, and header-secret configuration are unverified | `next-api` is `observe_only` and has no Channex callback secret; the Channex API key is not a callback secret                  |
+
+This matrix records Terraform and deployed routing only, not provider callback
+ownership. Provider Dashboard endpoint state requires a separate authenticated
+export; do not infer it from an existing route or secret parameter.
+
+Do not point Stripe shadow traffic at the existing production `next-api`: its
+Stripe intake is intentionally mutating. Shadow evidence needs a separate
+observe-only runtime or a newly accepted plan that preserves one mutating owner.
+Do not change the live target mode merely to collect evidence because production
+target checkout requires the current Stripe contract.
+
+Under the VAY-1349 master plan, VAY-947 is the provider sub-runbook for the
+VAY-1362 production execution window, not an independent cutover. After VAY-1361
+rehearsal and an approved preproduction dry run, VAY-1362 must freeze legacy
+writers, schedulers, and providers; complete final extraction, apply, parity,
+and target-only smoke; then switch application data ownership and provider
+callbacks within the same human-approved VAY-1362 execution window, in the
+VAY-947 sub-runbook's approved order. VAY-1363 retirement starts only after the
+observation and rollback window.
+
+Before any provider callback change, VAY-947 must record a current provider
+dashboard export, matching endpoint-secret ownership, signed receipt and replay
+evidence, the legacy freeze state, and an independently approved rollback order.
+Stripe evidence must distinguish platform events from connected-account events.
+Any future exact ALB rule for `/webhooks/stripe` must not capture
+`/webhooks/stripe/connect`.
+
+Channex also remains blocked on the callback event policy, accepted
+property-adoption proof, and live ownership gates tracked by VAY-844, VAY-1320,
+and VAY-845. Do not add a Channex callback secret, repoint its dashboard, freeze
+legacy polling, or enable target mutation as an evidence-gathering shortcut.
 
 SSM parameters are referenced by ARN in ECS task definitions — containers read them at startup via the `ecsTaskExecutionRole`.
 
