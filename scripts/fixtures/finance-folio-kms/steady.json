@@ -11,7 +11,7 @@
           "no-op"
         ],
         "before": {
-          "container_definitions": "[{\"command\":[\"node\",\"-e\",\"console.log(JSON.stringify({status:'INERT',message:'use scripts/run-finance-folio-recipient-inventory.sh'}))\"],\"essential\":true,\"image\":\"269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api:next-latest\",\"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"/ecs/vayada-next-api\",\"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"folio-recipient-inventory\"}},\"name\":\"vayada-next-api-finance-folio-recipient-inventory\",\"secrets\":[{\"name\":\"TARGET_DATABASE_URL\",\"valueFrom\":\"arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-url\"}]}]",
+          "container_definitions": "[{\"command\":[\"node\",\"-e\",\"console.log(JSON.stringify({status:'INERT',message:'use scripts/run-finance-folio-recipient-inventory.sh'}))\"],\"environment\":[],\"essential\":true,\"image\":\"269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api:next-latest\",\"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"/ecs/vayada-next-api\",\"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"folio-recipient-inventory\"}},\"mountPoints\":[],\"name\":\"vayada-next-api-finance-folio-recipient-inventory\",\"portMappings\":[],\"secrets\":[{\"name\":\"TARGET_DATABASE_URL\",\"valueFrom\":\"arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-url\"}],\"systemControls\":[],\"volumesFrom\":[]}]",
           "cpu": "256",
           "ephemeral_storage": [],
           "execution_role_arn": "arn:aws:iam::269416271598:role/ecsTaskExecutionRole",
@@ -38,7 +38,7 @@
             "Project": "vayada",
             "Purpose": "finance-folio-recipient-inventory"
           },
-          "task_role_arn": null,
+          "task_role_arn": "",
           "track_latest": false,
           "volume": [],
           "enable_fault_injection": false,
@@ -48,7 +48,7 @@
           "revision": 1
         },
         "after": {
-          "container_definitions": "[{\"command\":[\"node\",\"-e\",\"console.log(JSON.stringify({status:'INERT',message:'use scripts/run-finance-folio-recipient-inventory.sh'}))\"],\"essential\":true,\"image\":\"269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api:next-latest\",\"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"/ecs/vayada-next-api\",\"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"folio-recipient-inventory\"}},\"name\":\"vayada-next-api-finance-folio-recipient-inventory\",\"secrets\":[{\"name\":\"TARGET_DATABASE_URL\",\"valueFrom\":\"arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-url\"}]}]",
+          "container_definitions": "[{\"command\":[\"node\",\"-e\",\"console.log(JSON.stringify({status:'INERT',message:'use scripts/run-finance-folio-recipient-inventory.sh'}))\"],\"environment\":[],\"essential\":true,\"image\":\"269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api:next-latest\",\"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"/ecs/vayada-next-api\",\"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"folio-recipient-inventory\"}},\"mountPoints\":[],\"name\":\"vayada-next-api-finance-folio-recipient-inventory\",\"portMappings\":[],\"secrets\":[{\"name\":\"TARGET_DATABASE_URL\",\"valueFrom\":\"arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-url\"}],\"systemControls\":[],\"volumesFrom\":[]}]",
           "cpu": "256",
           "ephemeral_storage": [],
           "execution_role_arn": "arn:aws:iam::269416271598:role/ecsTaskExecutionRole",
@@ -75,7 +75,7 @@
             "Project": "vayada",
             "Purpose": "finance-folio-recipient-inventory"
           },
-          "task_role_arn": null,
+          "task_role_arn": "",
           "track_latest": false,
           "volume": [],
           "enable_fault_injection": false,
@@ -194,7 +194,7 @@
           "arn": "arn:aws:kms:eu-west-1:269416271598:alias/vayada/prod/finance-folio-recipient-current",
           "id": "alias/vayada/prod/finance-folio-recipient-current",
           "name": "alias/vayada/prod/finance-folio-recipient-current",
-          "name_prefix": null,
+          "name_prefix": "",
           "target_key_arn": "arn:aws:kms:eu-west-1:269416271598:key/11111111-2222-3333-4444-555555555555",
           "target_key_id": "11111111-2222-3333-4444-555555555555"
         },
@@ -202,7 +202,7 @@
           "arn": "arn:aws:kms:eu-west-1:269416271598:alias/vayada/prod/finance-folio-recipient-current",
           "id": "alias/vayada/prod/finance-folio-recipient-current",
           "name": "alias/vayada/prod/finance-folio-recipient-current",
-          "name_prefix": null,
+          "name_prefix": "",
           "target_key_arn": "arn:aws:kms:eu-west-1:269416271598:key/11111111-2222-3333-4444-555555555555",
           "target_key_id": "11111111-2222-3333-4444-555555555555"
         },
