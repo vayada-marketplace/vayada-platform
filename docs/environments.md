@@ -449,9 +449,80 @@ GitHub Actions authenticates via OIDC using the `vayada-github-actions-platform-
 - **Trust**: `repo:vayada-marketplace/vayada-platform:*`
 - **Permissions**: ECS deploy (RegisterTaskDefinition, CreateService, UpdateService, Describe\*), Terraform state (S3 + DynamoDB), ALB, ACM, Route53, CloudWatch, SSM, ECR management (create/describe repositories — not push)
 
-The `vayada-github-actions-platform-deploy` role is bootstrapped outside this
-Terraform module, so changes to that role must be applied before platform
-Terraform can use the new permission.
+Terraform owns the role trust policy and the
+`vayada-platform-deploy-policy` base inline policy in
+`infra/github_actions_iam.tf`. Other named inline policies are independent
+bootstrap or safety boundaries; Terraform must not absorb or remove them. This
+keeps the base permissions reviewable without letting the deploy role rewrite
+its own trust or grant itself new permissions.
+
+The first apply uses Terraform 1.5 declarative import blocks to adopt the live
+role and base policy. The base policy update also removes the invalid
+`s3:DeleteBucketCORS` action; the retained `s3:PutBucketCORS` action authorizes
+both updating and deleting bucket CORS configuration. It additionally
+limits SSM access to `/vayada/prod/*` and `/vayada/staging/*`, and restricts
+`iam:PassRole` and IAM reads to the roles used by the platform task definitions.
+`iam:PutRolePolicy` remains limited to `ecsTaskExecutionRole` because Terraform
+manages that role's SSM secret-access inline policy. Do not broaden that write
+target or the `iam:PassRole` list without a separate IAM threat review.
+The rendered base policy deliberately omits optional `Sid` fields to preserve
+room under IAM's aggregate inline-policy quota; the Terraform statement blocks
+remain the review source.
+The pull-request plan must show both resources as imports, one in-place update
+to the base policy, and no IAM create or delete:
+
+```text
+aws_iam_role.github_actions_platform_deploy
+aws_iam_role_policy.github_actions_platform_deploy
+```
+
+The role intentionally cannot update its own inline policy. An AWS
+administrator must therefore run the one-time targeted import/update before
+merge while platform applies are paused. Use non-secret placeholders for the
+unrelated required Terraform variables, review the saved plan, and apply only
+that plan:
+
+```bash
+export TF_VAR_db_master_password=not-used-by-vay-843-target
+export TF_VAR_db_booking_password=not-used-by-vay-843-target
+export TF_VAR_db_pms_password=not-used-by-vay-843-target
+export TF_VAR_db_auth_password=not-used-by-vay-843-target
+export TF_VAR_jwt_secret_key=not-used-by-vay-843-target
+
+terraform -chdir=infra init
+terraform -chdir=infra plan \
+  -target=aws_iam_role.github_actions_platform_deploy \
+  -target=aws_iam_role_policy.github_actions_platform_deploy \
+  -out=/tmp/vay-843-import.tfplan
+terraform -chdir=infra apply /tmp/vay-843-import.tfplan
+
+unset TF_VAR_db_master_password TF_VAR_db_booking_password \
+  TF_VAR_db_pms_password TF_VAR_db_auth_password TF_VAR_jwt_secret_key
+rm /tmp/vay-843-import.tfplan
+```
+
+Compare the plan with read-only `aws iam get-role` and
+`aws iam get-role-policy` results. Stop unless it contains exactly the two
+imports and the reviewed base-policy tightening described above. Merge the
+same reviewed commit before resuming platform applies so shared state never
+runs against an older `main` configuration. Then rerun the normal
+`Terraform Apply` workflow and verify the state without printing Terraform
+state or policy values:
+
+```bash
+terraform -chdir=infra state list | grep '^aws_iam_role\.github_actions_platform_deploy$'
+terraform -chdir=infra state list | grep '^aws_iam_role_policy\.github_actions_platform_deploy$'
+```
+
+If the targeted apply fails after recording the imports, keep platform applies
+paused and leave both resources in state. Correct the reported cause in the
+same reviewed commit, generate a new targeted plan, and apply that saved plan;
+do not remove the state entries or repeat the adoption with ad-hoc IAM changes.
+
+Do not run standalone `terraform import` commands or recreate the changes with
+`aws iam put-role-policy`. The saved targeted Terraform plan keeps the import
+and policy update reviewable and atomic. Future trust or base-policy changes
+likewise require an AWS administrator to review and apply the IAM-only plan.
 
 The deploy role must never receive pre-ARN `kms:CreateKey` or key-wildcard
 `kms:TagResource`: either permission can claim unrelated keys. The PR plan guard
