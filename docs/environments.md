@@ -89,7 +89,11 @@ currently exported dashboard URLs, such as
 The TypeScript platform media service uses the private, encrypted, versioned
 `vayada-media-production` bucket. Browser uploads use signed `PUT` requests to
 `staging/*`; the `vayada-next-api-media-task-role` can read, publish, and delete
-objects only under `staging/*`, `public/*`, and `private/*`.
+target objects only under `staging/*`, `public/*`, and `private/*`. For the
+guarded legacy migration, the role also has read-only object access to
+the `creators/*` and `listings/*` prefixes in `vayada-uploads-prod`, plus
+`vayada-creator-marketplace-images`; it cannot list or mutate either legacy
+bucket. Remove that legacy read access after retirement evidence is accepted.
 
 Public media is served at `https://images.vayada.com`. CloudFront signs origin
 requests with Origin Access Control and can read only `public/*`. Its `/public`
