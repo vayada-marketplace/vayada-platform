@@ -203,11 +203,13 @@ Terraform-owned `latest` image reference.
 `vayada-next-api-service` and reads production-owned target runtime secrets
 from `/vayada/prod/*`, not `/vayada/staging/*`.
 
-Public platform media is written to `vayada-uploads-prod` and served through the
-Terraform-managed `vayada-platform-media` CloudFront distribution. The
-`PLATFORM_MEDIA_BUCKET`, `PLATFORM_MEDIA_CDN_BASE_URL`, and
+TypeScript platform media is written to `vayada-media-production` and served at
+`https://images.vayada.com` through its Terraform-managed CloudFront
+distribution. The `PLATFORM_MEDIA_BUCKET`, `PLATFORM_MEDIA_CDN_BASE_URL`, and
 `PLATFORM_MEDIA_CDN_ORIGIN_HOST` values are injected directly into the
-`next-api` task definition.
+`next-api` task definition. `vayada-uploads-prod` and the separate
+`vayada-platform-media` CloudFront distribution remain the legacy media path
+during migration and rollback.
 
 ### Secrets
 
