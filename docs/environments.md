@@ -89,7 +89,11 @@ currently exported dashboard URLs, such as
 The TypeScript platform media service uses the private, encrypted, versioned
 `vayada-media-production` bucket. Browser uploads use signed `PUT` requests to
 `staging/*`; the `vayada-next-api-media-task-role` can read, publish, and delete
-objects only under `staging/*`, `public/*`, and `private/*`.
+target objects only under `staging/*`, `public/*`, and `private/*`. For the
+guarded legacy migration, the role also has read-only object access to
+the `creators/*` and `listings/*` prefixes in `vayada-uploads-prod`, plus
+`vayada-creator-marketplace-images`; it cannot list or mutate either legacy
+bucket. Remove that legacy read access after retirement evidence is accepted.
 
 Public media is served at `https://images.vayada.com`. CloudFront signs origin
 requests with Origin Access Control and can read only `public/*`. Its `/public`
@@ -199,11 +203,13 @@ Terraform-owned `latest` image reference.
 `vayada-next-api-service` and reads production-owned target runtime secrets
 from `/vayada/prod/*`, not `/vayada/staging/*`.
 
-Public platform media is written to `vayada-uploads-prod` and served through the
-Terraform-managed `vayada-platform-media` CloudFront distribution. The
-`PLATFORM_MEDIA_BUCKET`, `PLATFORM_MEDIA_CDN_BASE_URL`, and
+TypeScript platform media is written to `vayada-media-production` and served at
+`https://images.vayada.com` through its Terraform-managed CloudFront
+distribution. The `PLATFORM_MEDIA_BUCKET`, `PLATFORM_MEDIA_CDN_BASE_URL`, and
 `PLATFORM_MEDIA_CDN_ORIGIN_HOST` values are injected directly into the
-`next-api` task definition.
+`next-api` task definition. `vayada-uploads-prod` and the separate
+`vayada-platform-media` CloudFront distribution remain the legacy media path
+during migration and rollback.
 
 ### Secrets
 

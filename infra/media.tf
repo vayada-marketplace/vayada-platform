@@ -311,6 +311,16 @@ resource "aws_iam_role_policy" "next_api_media" {
           "${aws_s3_bucket.private_profile_media.arn}/public/*",
           "${aws_s3_bucket.private_profile_media.arn}/private/*",
         ]
+      },
+      {
+        Sid    = "ReadReviewedLegacyMediaObjects"
+        Effect = "Allow"
+        Action = "s3:GetObject"
+        Resource = [
+          "${aws_s3_bucket.uploads.arn}/creators/*",
+          "${aws_s3_bucket.uploads.arn}/listings/*",
+          "arn:aws:s3:::vayada-creator-marketplace-images/*",
+        ]
       }
     ]
   })
