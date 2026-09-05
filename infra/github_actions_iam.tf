@@ -139,6 +139,13 @@ data "aws_iam_policy_document" "github_actions_platform_deploy" {
     ]
   }
 
+  # Rehearsal bucket configuration only; no task-role writes or PassRole grant.
+  statement {
+    effect    = "Allow"
+    actions   = ["s3:PutBucketTagging", "s3:PutBucketOwnershipControls"]
+    resources = ["arn:aws:s3:::vayada-migration-rehearsal-media-${var.aws_account_id}"]
+  }
+
   statement {
     effect    = "Allow"
     actions   = ["elasticloadbalancing:*"]
@@ -228,6 +235,7 @@ data "aws_iam_policy_document" "github_actions_platform_deploy" {
       "arn:aws:iam::${var.aws_account_id}:role/ecsTaskRole",
       "arn:aws:iam::${var.aws_account_id}:role/vayada-github-actions-platform-deploy",
       "arn:aws:iam::${var.aws_account_id}:role/vayada-next-api-media-task-role",
+      "arn:aws:iam::${var.aws_account_id}:role/vayada-migration-rehearsal-media-task-role",
     ]
   }
 
