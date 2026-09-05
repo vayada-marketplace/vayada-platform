@@ -277,6 +277,8 @@ locals {
         { name = "NODE_ENV", value = "production" },
         { name = "ENVIRONMENT", value = "production" },
         { name = "AWS_REGION", value = var.aws_region },
+        { name = "FINANCE_BANK_TRANSFER_KMS_CURRENT_KEY_ARN", value = local.finance_bank_transfer_kms_current_key_arn },
+        { name = "FINANCE_BANK_TRANSFER_KMS_ALLOWED_KEY_ARNS", value = join(",", local.finance_bank_transfer_kms_allowed_key_arns) },
         { name = "FINANCE_FOLIO_RECIPIENT_KMS_CURRENT_KEY_ARN", value = local.finance_folio_recipient_kms_current_key_arn },
         { name = "FINANCE_FOLIO_RECIPIENT_KMS_ALLOWED_KEY_ARNS", value = join(",", local.finance_folio_recipient_kms_allowed_key_arns) },
         { name = "FINANCE_FOLIO_RECIPIENT_KMS_FINGERPRINT_KEY_ARN", value = local.finance_folio_recipient_fingerprint_current_key_arn },
