@@ -23,6 +23,7 @@ locals {
 resource "aws_kms_key" "finance_bank_transfer" {
   for_each = local.finance_bank_transfer_kms_key_versions
 
+  description              = "Finance bank transfer v1; VAY-1041 bootstrap"
   key_usage                = "ENCRYPT_DECRYPT"
   customer_master_key_spec = "SYMMETRIC_DEFAULT"
   enable_key_rotation      = true
@@ -109,4 +110,15 @@ resource "aws_iam_role_policy" "next_api_finance_bank_transfer_kms" {
       },
     ]
   })
+}
+
+# Import the approved bootstrap resources; subsequent plans are idempotent.
+import {
+  to = aws_kms_key.finance_bank_transfer["v1"]
+  id = "735fc88a-7043-47ba-96d2-4cc6fdfaa06d"
+}
+
+import {
+  to = aws_kms_alias.finance_bank_transfer_current
+  id = "alias/vayada/prod/finance-bank-transfer-current"
 }
