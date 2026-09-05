@@ -16,11 +16,25 @@ production routing, or complete the application-smoke gate.
   task-local HTTP only, with no ALB, DNS record, public listener or ECS service.
   Build any required frontend runner from the reviewed application source with
   test-local API/origin configuration. Never use a shared frontend as evidence.
-- Inject only the exact isolated target connection and WorkOS **test** tenant
-  configuration through execution-role secret bindings. Do not inject the
-  migration connection bundle, source-reader credentials or an administrator
-  connection into the app. Create only synthetic test identities; never remap
-  migrated people by email or impersonate their provider identities.
+- Use the operator's authorized reusable test accounts, preserving their shared
+  property and memberships. Obtain a short-lived session through normal next
+  login; use the packaged WorkOS verifier for signature, issuer and client
+  validation against public provider metadata. These test accounts use WorkOS
+  Production identities, not a sandbox tenant. This authorizes login only, not
+  provider management or shared-product mutations. No new provider user is needed.
+- Inject only the exact isolated target connection and short-lived test session
+  into the bounded test task. The app receives public WorkOS verifier metadata,
+  **no WorkOS API key or live cookie-sealing secret**, and no migration bundle,
+  source-reader credentials or administrator connection. Keep credentials out
+  of command arguments, logs, source and evidence. Any required local identity
+  mapping must be explicitly synthetic and target-scoped; never remap migrated
+  people by email or impersonate their provider identities.
+- Start with a database-enforced read-only application role. Unmapped reusable
+  identities must fail closed; record those denials, not an authenticated-read
+  success. A separately reviewed target-only mapping step is required before
+  claiming authorized migrated-data reads. Login on next alone is not isolated
+  application smoke. Tokens expire quickly; expiry is a failed check, not a
+  reason to disable verification or export long-lived credentials.
 - Use `API_RUNTIME=next`, every tested domain's target source and a non-production
   Node environment. The existing production startup requires live delivery
   configuration; do not invent provider credentials to satisfy that guard.
