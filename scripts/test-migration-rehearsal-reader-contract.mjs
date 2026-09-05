@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   binding,
   guardedConnection,
   scramVerifier,
   unsafePrivilegesSql,
+  verifyPgSettings,
 } from "./migration-rehearsal-reader-contract.mjs";
 
 const password = "A".repeat(43); // Synthetic vector, never a deployed credential.
@@ -58,4 +60,40 @@ for (const privilege of [
   "pg_auth_members",
 ])
   assert(unsafePrivilegesSql.includes(privilege));
-console.log("PASS: reader contract URL/TLS denial matrix and SCRAM vector");
+const settings = JSON.parse(
+  readFileSync(
+    new URL("./fixtures/migration-rehearsal-pg-settings.json", import.meta.url),
+    "utf8",
+  ),
+);
+verifyPgSettings([settings]);
+for (const changed of [
+  [],
+  [settings, settings],
+  [{ ...settings, triggers: 1 }],
+  [{ ...settings, owner: binding.reader }],
+  [{ ...settings, relkind: "r" }],
+  [{ ...settings, definition: "SELECT 1" }],
+  [{ ...settings, rules: [] }],
+  [{ ...settings, rules: [...settings.rules, settings.rules[1]] }],
+  [
+    {
+      ...settings,
+      rules: settings.rules.map((r) => ({ ...r, definition: "unexpected" })),
+    },
+  ],
+]) {
+  assert.throws(() => verifyPgSettings(changed), /PG_SETTINGS_CONTRACT/);
+}
+assert(
+  unsafePrivilegesSql.includes("c.oid <> 'pg_catalog.pg_settings'::regclass"),
+);
+assert(unsafePrivilegesSql.includes("CASE WHEN c.relkind='S'"));
+assert(
+  unsafePrivilegesSql.includes(
+    "INSERT,DELETE,TRUNCATE,TRIGGER,REFERENCES,MAINTAIN",
+  ),
+);
+console.log(
+  "PASS: URL/TLS denial matrix, SCRAM vector and native settings tamper matrix",
+);

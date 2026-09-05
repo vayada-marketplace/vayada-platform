@@ -89,11 +89,21 @@ enters SQL. Its explicit READ WRITE / zero-row UPDATE denial proves table ACLs,
 not merely a client read-only setting. Trigger creation, sequence writes and
 PostgreSQL 17 MAINTAIN privileges are also forbidden.
 
+The only table-permission exception is UPDATE/column-UPDATE on the native
+`pg_catalog.pg_settings` view, whose standard rules only change session settings.
+Before any role creation, verify its exact reviewed RDS17.9 owner, view/rule
+definitions and zero triggers against the retained fixture hash. Unexpected
+rules, another view, or any INSERT/DELETE/TRUNCATE/TRIGGER/REFERENCES/MAINTAIN
+privilege still fail closed. CASE guards keep sequence-only checks type-safe.
+
 Containment covers migrated business/evidence tables for this fixed reviewed
 application. PostgreSQL PUBLIC CONNECT and built-in capabilities are not a
 hostile-SQL sandbox. Do not change global PUBLIC privileges or expose arbitrary
 SQL. Every app connection must use the guarded target URL with read-only startup
 options. A reader bootstrap PASS is not application, job or browser acceptance.
+If proof fails after COMMIT, the expiring role and secret deliberately remain;
+inspect them before any retry. Never rotate/reset or grant additional privileges
+to make a failed proof pass, and never give an app that credential before PASS.
 
 Run the read-only deployed IAM/key check, then a reviewed bounded runtime test.
 Record actual login/session allow/deny checks, migrated Booking/PMS/Finance/

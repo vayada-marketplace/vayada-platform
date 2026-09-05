@@ -1,0 +1,20 @@
+{
+  "relkind": "v",
+  "owner": "rdsadmin",
+  "definition": " SELECT name,\n    setting,\n    unit,\n    category,\n    short_desc,\n    extra_desc,\n    context,\n    vartype,\n    source,\n    min_val,\n    max_val,\n    enumvals,\n    boot_val,\n    reset_val,\n    sourcefile,\n    sourceline,\n    pending_restart\n   FROM pg_show_all_settings() a(name, setting, unit, category, short_desc, extra_desc, context, vartype, source, min_val, max_val, enumvals, boot_val, reset_val, sourcefile, sourceline, pending_restart);",
+  "rules": [
+    {
+      "name": "_RETURN",
+      "definition": "CREATE RULE \"_RETURN\" AS\n    ON SELECT TO pg_catalog.pg_settings DO INSTEAD  SELECT name,\n    setting,\n    unit,\n    category,\n    short_desc,\n    extra_desc,\n    context,\n    vartype,\n    source,\n    min_val,\n    max_val,\n    enumvals,\n    boot_val,\n    reset_val,\n    sourcefile,\n    sourceline,\n    pending_restart\n   FROM pg_show_all_settings() a(name, setting, unit, category, short_desc, extra_desc, context, vartype, source, min_val, max_val, enumvals, boot_val, reset_val, sourcefile, sourceline, pending_restart);"
+    },
+    {
+      "name": "pg_settings_n",
+      "definition": "CREATE RULE pg_settings_n AS\n    ON UPDATE TO pg_catalog.pg_settings DO INSTEAD NOTHING;"
+    },
+    {
+      "name": "pg_settings_u",
+      "definition": "CREATE RULE pg_settings_u AS\n    ON UPDATE TO pg_catalog.pg_settings\n   WHERE (new.name = old.name) DO  SELECT set_config(old.name, new.setting, false) AS set_config;"
+    }
+  ],
+  "triggers": 0
+}

@@ -158,6 +158,24 @@ export async function verifyTarget(client) {
 }
 
 // Default read-only is defence in depth, not a substitute for privilege checks.
+export const pgSettingsSql = `SELECT c.relkind, pg_get_userbyid(c.relowner) AS owner,
+  pg_get_viewdef(c.oid,false) AS definition,
+  COALESCE((SELECT jsonb_agg(jsonb_build_object('name',r.rulename,'definition',pg_get_ruledef(r.oid,false)) ORDER BY r.rulename)
+    FROM pg_rewrite r WHERE r.ev_class=c.oid),'[]'::jsonb) AS rules,
+  (SELECT count(*)::int FROM pg_trigger t WHERE t.tgrelid=c.oid) AS triggers
+  FROM pg_class c WHERE c.oid='pg_catalog.pg_settings'::regclass`;
+
+export function verifyPgSettings(rows) {
+  requireTrue(
+    rows.length === 1 &&
+      sha(rows[0]) ===
+        "5879369c92d3d2f7b8cedea90a108a080cf9454a7e7c7145f6d06fc8b79f68dc",
+    "PG_SETTINGS_CONTRACT",
+  );
+}
+
+// Only the pinned native view's UPDATE uses set_config (session state). Other
+// privileges on that view, and UPDATE on every other relation, stay forbidden.
 export const unsafePrivilegesSql = `SELECT flags.*,
   (role_attributes OR memberships OR database_create OR schema_create OR table_write OR sequence_write OR privileged_functions) AS unsafe
 FROM (SELECT
@@ -165,11 +183,14 @@ FROM (SELECT
   EXISTS (SELECT 1 FROM pg_auth_members WHERE member=r.oid) AS memberships,
   has_database_privilege(r.rolname,current_database(),'CREATE') AS database_create,
   EXISTS (SELECT 1 FROM pg_namespace n WHERE has_schema_privilege(r.rolname,n.oid,'CREATE')) AS schema_create,
-  EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind IN ('r','p','v','m','f') AND (
-    has_table_privilege(r.rolname,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES,MAINTAIN')
-    OR has_any_column_privilege(r.rolname,c.oid,'INSERT,UPDATE,REFERENCES'))) AS table_write,
-  EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind='S'
-    AND has_sequence_privilege(r.rolname,c.oid,'USAGE,UPDATE')) AS sequence_write,
+  EXISTS (SELECT 1 FROM pg_class c WHERE CASE WHEN c.relkind IN ('r','p','v','m','f') THEN (
+    has_table_privilege(r.rolname,c.oid,'INSERT,DELETE,TRUNCATE,TRIGGER,REFERENCES,MAINTAIN')
+    OR has_any_column_privilege(r.rolname,c.oid,'INSERT,REFERENCES')
+    OR CASE WHEN c.oid <> 'pg_catalog.pg_settings'::regclass THEN (
+      has_table_privilege(r.rolname,c.oid,'UPDATE') OR has_any_column_privilege(r.rolname,c.oid,'UPDATE')) ELSE false END
+    ) ELSE false END) AS table_write,
+  EXISTS (SELECT 1 FROM pg_class c WHERE CASE WHEN c.relkind='S'
+    THEN has_sequence_privilege(r.rolname,c.oid,'USAGE,UPDATE') ELSE false END) AS sequence_write,
   EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
     WHERE p.prosecdef AND p.prorettype NOT IN ('trigger'::regtype,'event_trigger'::regtype)
     AND has_schema_privilege(r.rolname,n.oid,'USAGE') AND has_function_privilege(r.rolname,p.oid,'EXECUTE')) AS privileged_functions

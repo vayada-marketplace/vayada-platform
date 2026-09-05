@@ -26,6 +26,7 @@ on:
       - "scripts/test-migration-rehearsal-media.sh"
       - "scripts/migration-rehearsal-reader-contract.mjs"
       - "scripts/test-migration-rehearsal-reader-contract.mjs"
+      - "scripts/fixtures/migration-rehearsal-pg-settings.json"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/tf-apply.yml"
       - ".github/workflows/tf-plan.yml"
