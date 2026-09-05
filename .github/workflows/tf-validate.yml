@@ -24,6 +24,8 @@ on:
       - "scripts/validate-auth-gateway-contract.sh"
       - "scripts/check-migration-rehearsal-media.sh"
       - "scripts/test-migration-rehearsal-media.sh"
+      - "scripts/check-migration-rehearsal-application.mjs"
+      - "scripts/test-migration-rehearsal-application.mjs"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/tf-apply.yml"
       - ".github/workflows/tf-plan.yml"
@@ -45,6 +47,7 @@ jobs:
         run: |
           bash -n scripts/check-migration-rehearsal-media.sh
           bash scripts/test-migration-rehearsal-media.sh
+          node scripts/test-migration-rehearsal-application.mjs
           bash -n scripts/roll-forward-auth-gateways.sh
           bash -n scripts/validate-auth-gateway-contract.sh
           bash -n scripts/smoke-auth-gateway.sh
