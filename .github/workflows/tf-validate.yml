@@ -22,6 +22,8 @@ on:
       - "docs/finance-folio-kms-steady-state-policy.template.json"
       - "docs/finance-folio-kms-fingerprint-steady-state-policy.template.json"
       - "scripts/validate-auth-gateway-contract.sh"
+      - "scripts/check-migration-rehearsal-media.sh"
+      - "scripts/test-migration-rehearsal-media.sh"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/tf-apply.yml"
       - ".github/workflows/tf-plan.yml"
@@ -41,6 +43,8 @@ jobs:
 
       - name: Validate operations scripts
         run: |
+          bash -n scripts/check-migration-rehearsal-media.sh
+          bash scripts/test-migration-rehearsal-media.sh
           bash -n scripts/roll-forward-auth-gateways.sh
           bash -n scripts/validate-auth-gateway-contract.sh
           bash -n scripts/smoke-auth-gateway.sh
