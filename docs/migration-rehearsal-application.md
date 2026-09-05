@@ -70,6 +70,31 @@ Finance keys/policies or the VAY-1470 migration task role.
 
 ## Remaining evidence gates
 
+### Read-only database prerequisite
+
+The read-only checks live in `scripts/migration-rehearsal-reader-contract.mjs`.
+The separate reader-bootstrap slice supplies the operations payload for the
+pinned rehearsal image, where `pg` is already installed. It requires explicit
+`REHEARSAL_READER_MODE=inspect|create`. Inspect uses a read-only transaction;
+create grants one expiring, connection-limited role SELECT/USAGE on the existing
+target domain tables and retained attestation only. The bootstrap task alone
+receives the isolated administrator URL. Never give that URL or a source/migration
+bundle to the application. Pass both URLs via secret injection, never arguments.
+
+The payload verifies the exact RDS-host/database/OID, version, run, completed
+checkpoints, release, attestation and parity bindings before grants. Existing
+roles fail closed for operator inspection, not password rotation or repair.
+Passwords are randomly generated ASCII; only a client-derived SCRAM verifier
+enters SQL. Its explicit READ WRITE / zero-row UPDATE denial proves table ACLs,
+not merely a client read-only setting. Trigger creation, sequence writes and
+PostgreSQL 17 MAINTAIN privileges are also forbidden.
+
+Containment covers migrated business/evidence tables for this fixed reviewed
+application. PostgreSQL PUBLIC CONNECT and built-in capabilities are not a
+hostile-SQL sandbox. Do not change global PUBLIC privileges or expose arbitrary
+SQL. Every app connection must use the guarded target URL with read-only startup
+options. A reader bootstrap PASS is not application, job or browser acceptance.
+
 Run the read-only deployed IAM/key check, then a reviewed bounded runtime test.
 Record actual login/session allow/deny checks, migrated Booking/PMS/Finance/
 Marketplace reads, media delivery, public read-model privacy and controlled job
