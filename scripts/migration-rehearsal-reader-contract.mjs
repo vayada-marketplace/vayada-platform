@@ -145,7 +145,9 @@ export async function verifyTarget(client) {
     attestations.map((row) => [row.attestation_key, row.attestation_value]),
   );
   requireTrue(
-    values["vayada.target_environment"] === "staging" &&
+    attestations.length === 5 &&
+      Object.keys(values).length === 5 &&
+      values["vayada.target_environment"] === "staging" &&
       values["vayada.target_identity_sha256"] === binding.identity &&
       values["vayada.target_clean_run_id"] === binding.runId &&
       values["vayada.target_clean_proof_sha256"] === binding.clean &&
