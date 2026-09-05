@@ -73,7 +73,7 @@ Finance keys/policies or the VAY-1470 migration task role.
 ### Read-only database prerequisite
 
 The read-only checks live in `scripts/migration-rehearsal-reader-contract.mjs`.
-The separate reader-bootstrap slice supplies the operations payload for the
+`scripts/migration-rehearsal-reader.mjs` supplies the operations payload for the
 pinned rehearsal image, where `pg` is already installed. It requires explicit
 `REHEARSAL_READER_MODE=inspect|create`. Inspect uses a read-only transaction;
 create grants one expiring, connection-limited role SELECT/USAGE on the existing
