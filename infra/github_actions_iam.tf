@@ -236,6 +236,7 @@ data "aws_iam_policy_document" "github_actions_platform_deploy" {
       "arn:aws:iam::${var.aws_account_id}:role/vayada-github-actions-platform-deploy",
       "arn:aws:iam::${var.aws_account_id}:role/vayada-next-api-media-task-role",
       "arn:aws:iam::${var.aws_account_id}:role/vayada-migration-rehearsal-media-task-role",
+      local.migration_rehearsal_application_role_arn,
     ]
   }
 
