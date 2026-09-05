@@ -27,6 +27,8 @@ on:
       - "scripts/migration-rehearsal-reader-contract.mjs"
       - "scripts/test-migration-rehearsal-reader-contract.mjs"
       - "scripts/fixtures/migration-rehearsal-pg-settings.json"
+      - "scripts/check-migration-rehearsal-application.mjs"
+      - "scripts/test-migration-rehearsal-application.mjs"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/tf-apply.yml"
       - ".github/workflows/tf-plan.yml"
@@ -50,6 +52,7 @@ jobs:
           bash scripts/test-migration-rehearsal-media.sh
           node --check scripts/migration-rehearsal-reader-contract.mjs
           node scripts/test-migration-rehearsal-reader-contract.mjs
+          node scripts/test-migration-rehearsal-application.mjs
           bash -n scripts/roll-forward-auth-gateways.sh
           bash -n scripts/validate-auth-gateway-contract.sh
           bash -n scripts/smoke-auth-gateway.sh
