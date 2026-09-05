@@ -158,20 +158,22 @@ export async function verifyTarget(client) {
 }
 
 // Default read-only is defence in depth, not a substitute for privilege checks.
-export const unsafePrivilegesSql = `SELECT (
-  r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls OR r.rolinherit
-  OR EXISTS (SELECT 1 FROM pg_auth_members WHERE member=r.oid)
-  OR has_database_privilege(r.rolname,current_database(),'CREATE')
-  OR EXISTS (SELECT 1 FROM pg_namespace n WHERE has_schema_privilege(r.rolname,n.oid,'CREATE'))
-  OR EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind IN ('r','p','v','m','f') AND (
+export const unsafePrivilegesSql = `SELECT flags.*,
+  (role_attributes OR memberships OR database_create OR schema_create OR table_write OR sequence_write OR privileged_functions) AS unsafe
+FROM (SELECT
+  (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls OR r.rolinherit) AS role_attributes,
+  EXISTS (SELECT 1 FROM pg_auth_members WHERE member=r.oid) AS memberships,
+  has_database_privilege(r.rolname,current_database(),'CREATE') AS database_create,
+  EXISTS (SELECT 1 FROM pg_namespace n WHERE has_schema_privilege(r.rolname,n.oid,'CREATE')) AS schema_create,
+  EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind IN ('r','p','v','m','f') AND (
     has_table_privilege(r.rolname,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES,MAINTAIN')
-    OR has_any_column_privilege(r.rolname,c.oid,'INSERT,UPDATE,REFERENCES')))
-  OR EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind='S'
-    AND has_sequence_privilege(r.rolname,c.oid,'USAGE,UPDATE'))
-  OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+    OR has_any_column_privilege(r.rolname,c.oid,'INSERT,UPDATE,REFERENCES'))) AS table_write,
+  EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind='S'
+    AND has_sequence_privilege(r.rolname,c.oid,'USAGE,UPDATE')) AS sequence_write,
+  EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
     WHERE p.prosecdef AND p.prorettype NOT IN ('trigger'::regtype,'event_trigger'::regtype)
-    AND has_schema_privilege(r.rolname,n.oid,'USAGE') AND has_function_privilege(r.rolname,p.oid,'EXECUTE'))
-) AS unsafe FROM pg_roles r WHERE r.rolname=$1`;
+    AND has_schema_privilege(r.rolname,n.oid,'USAGE') AND has_function_privilege(r.rolname,p.oid,'EXECUTE')) AS privileged_functions
+  FROM pg_roles r WHERE r.rolname=$1) flags`;
 
 // Send PostgreSQL only its stored verifier, never the raw password in SQL.
 // The fixed ASCII base64url credential has no SASLprep normalization ambiguity.
