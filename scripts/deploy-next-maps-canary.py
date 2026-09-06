@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--image-sha", required=True)
     parser.add_argument("--plan", action="store_true")
     parser.add_argument("--remove", action="store_true")
+    parser.add_argument("--activate-guest", action="store_true")
     args = parser.parse_args()
     if not re.fullmatch(r"next-[a-f0-9]{40}", args.image_sha):
         raise ValueError("Expected immutable next-<40-character SHA> image tag")
@@ -77,6 +78,21 @@ def main():
     digest = aws("ecr", "describe-images", repositoryName="vayada-next-api",
                  imageIds=[{"imageTag": args.image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
+    if args.activate_guest:
+        assert group and existing and len(owned_rules) == 3
+        primary = next(d for d in existing[0]["deployments"] if d["status"] == "PRIMARY")
+        assert primary["taskDefinition"] == existing[0]["taskDefinition"] and primary.get("rolloutState") == "COMPLETED"
+        deployed = aws("ecs", "describe-task-definition", taskDefinition=existing[0]["taskDefinition"])["taskDefinition"]
+        container = next(c for c in deployed["containerDefinitions"] if c["name"] == "vayada-next-api")
+        assert container["image"].endswith("@" + digest)
+        assert {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"} in container["environment"]
+        health = aws("elbv2", "describe-target-health", TargetGroupArn=group["TargetGroupArn"])["TargetHealthDescriptions"]
+        assert any(t["TargetHealth"]["State"] == "healthy" for t in health)
+        guest = [r for r in owned_rules if SLUG in json.dumps(r["Conditions"])]
+        assert len(guest) == 1
+        aws("elbv2", "modify-rule", RuleArn=guest[0]["RuleArn"], Actions=[{"Type": "forward", "TargetGroupArn": group["TargetGroupArn"]}])
+        print(json.dumps({"guestActivated": SLUG, "imageDigest": digest}))
+        return
     # Inspect metadata only. ECS injects the existing server credential; CI never retrieves its value.
     parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [SECRET.split(":parameter")[1]]}])["Parameters"]
     assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
@@ -134,6 +150,8 @@ def main():
         else:
             raise RuntimeError("Canary did not become healthy")
         for rule in owned_rules:
+            if SLUG in json.dumps(rule["Conditions"]):
+                continue
             aws("elbv2", "modify-rule", RuleArn=rule["RuleArn"], Actions=[{"Type": "forward", "TargetGroupArn": group["TargetGroupArn"]}])
     except Exception:
         for arn, actions in previous_actions.items():
@@ -146,7 +164,7 @@ def main():
             aws("ecs", "update-service", cluster=CLUSTER, service=SERVICE, desiredCount=0)
             aws("ecs", "delete-service", cluster=CLUSTER, service=SERVICE, force=True)
         raise
-    print(json.dumps({"taskDefinition": task, "imageDigest": digest, "rules": [r["RuleArn"] for r in owned_rules], "routedTestHotelOnly": True}))
+    print(json.dumps({"taskDefinition": task, "imageDigest": digest, "rules": [r["RuleArn"] for r in owned_rules], "ownerPathsActivated": True, "existingGuestRoutingPreserved": bool(previous_actions)}))
 
 
 if __name__ == "__main__":
