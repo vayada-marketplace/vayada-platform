@@ -48,11 +48,12 @@ def main():
         assert {"Key": "Task", "Value": "VAY-1480"} in tags
     rules = aws("elbv2", "describe-rules", ListenerArn=LISTENER)["Rules"]
     owned_rules = [r for r in rules if group and any(a.get("TargetGroupArn") == group["TargetGroupArn"] or any(t["TargetGroupArn"] == group["TargetGroupArn"] for t in a.get("ForwardConfig", {}).get("TargetGroups", [])) for a in r["Actions"])]
-    paths = [f"/api/hotel-setup/properties/{PROPERTY}", f"/api/booking/hotels/{PROPERTY}", f"/api/booking-web/hotels/{SLUG}"]
+    paths = [f"/api/hotel-setup/properties/{PROPERTY}", f"/api/booking/hotels/{PROPERTY}", f"/api/booking-web/hotels/{SLUG}", f"/api/booking/properties/{PROPERTY}"]
     conditions = [[
         {"Field": "host-header", "HostHeaderConfig": {"Values": ["next-api.vayada.com"]}},
         {"Field": "path-pattern", "PathPatternConfig": {"Values": [path, path + "/*"]}},
     ] for path in paths]
+    conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/pricing-source", f"/api/pms/properties/{PROPERTY}/mandatory-charge-confirmation"]}}])
     baseline_rules = [r for r in rules if r not in owned_rules and any(c.get("Field") == "host-header" and "next-api.vayada.com" in c.get("HostHeaderConfig", {}).get("Values", []) for c in r["Conditions"])]
     existing = aws("ecs", "describe-services", cluster=CLUSTER, services=[SERVICE], include=["TAGS"])["services"]
     if existing and existing[0]["status"] != "INACTIVE":
@@ -79,7 +80,7 @@ def main():
                  imageIds=[{"imageTag": args.image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
     if args.activate_guest:
-        assert group and existing and len(owned_rules) == 3
+        assert group and existing and len(owned_rules) == len(conditions)
         primary = next(d for d in existing[0]["deployments"] if d["status"] == "PRIMARY")
         assert primary["taskDefinition"] == existing[0]["taskDefinition"] and primary.get("rolloutState") == "COMPLETED"
         deployed = aws("ecs", "describe-task-definition", taskDefinition=existing[0]["taskDefinition"])["taskDefinition"]
@@ -117,18 +118,20 @@ def main():
     previous_task = existing[0]["taskDefinition"] if existing else None
     try:
         # Zero canary weight associates the group with ALB while every request stays on the baseline.
-        if not owned_rules:
-            used = {int(r["Priority"]) for r in rules if r["Priority"].isdigit()}
-            free = [p for p in range(1, before) if p not in used]
-            assert len(free) >= len(conditions)
-            for priority, condition in zip(free, conditions):
-                rule = aws("elbv2", "create-rule", ListenerArn=LISTENER, Priority=priority,
-                    Conditions=condition, Actions=[{"Type": "forward", "ForwardConfig": {"TargetGroups": [
-                        {"TargetGroupArn": baseline_group, "Weight": 1},
-                        {"TargetGroupArn": group["TargetGroupArn"], "Weight": 0},
-                    ]}}])["Rules"][0]
-                created_rules.append(rule)
-            owned_rules = created_rules
+        used = {int(r["Priority"]) for r in rules if r["Priority"].isdigit()}
+        free = [p for p in range(1, before) if p not in used]
+        for condition in conditions:
+            desired_paths = condition[1]["PathPatternConfig"]["Values"]
+            if any(any(c.get("PathPatternConfig", {}).get("Values") == desired_paths for c in r["Conditions"]) for r in owned_rules):
+                continue
+            assert free
+            rule = aws("elbv2", "create-rule", ListenerArn=LISTENER, Priority=free.pop(0),
+                Conditions=condition, Actions=[{"Type": "forward", "ForwardConfig": {"TargetGroups": [
+                    {"TargetGroupArn": baseline_group, "Weight": 1},
+                    {"TargetGroupArn": group["TargetGroupArn"], "Weight": 0},
+                ]}}])["Rules"][0]
+            created_rules.append(rule)
+            owned_rules.append(rule)
         assert len(owned_rules) == len(conditions)
         if existing:
             aws("ecs", "update-service", cluster=CLUSTER, service=SERVICE, taskDefinition=task, desiredCount=1)
