@@ -5,6 +5,8 @@ const now = Date.parse("2026-09-06T02:25:00Z");
 const role = { rolcanlogin: true, rolconnlimit: 16, rolvaliduntil: previousExpiry,
   rolconfig: ["statement_timeout=15s", "default_transaction_read_only=on", "idle_in_transaction_session_timeout=30s"] };
 assertRenewalWindow(role, now);
+assertRenewalWindow(role, Date.parse(renewedExpiry) - 8 * 3600000);
+assert.throws(() => assertRenewalWindow(role, Date.parse(renewedExpiry) - 8 * 3600000 - 1));
 for (const changed of [undefined, {...role,rolcanlogin:false}, {...role,rolconnlimit:-1},
   {...role,rolvaliduntil:renewedExpiry}, {...role,rolconfig:["default_transaction_read_only=off"]}])
   assert.throws(() => assertRenewalWindow(changed, now));
