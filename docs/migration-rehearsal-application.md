@@ -106,6 +106,17 @@ inspect them before any retry. Never rotate/reset or grant additional privileges
 to make a failed proof pass, and never give an app that credential before PASS.
 
 Run the read-only deployed IAM/key check, then a reviewed bounded runtime test.
+`scripts/migration-rehearsal-app-readonly.mjs` is the first runtime payload. It
+starts the packaged server on loopback only, with a whitelisted reader-only
+environment and no delivery/provider secrets. Before start and after process
+stop, it compares sorted SHA256 row fingerprints across the target domain and
+evidence tables. It checks health/readiness and missing/invalid-auth denials;
+raw application logs are not forwarded. This proves only boot, those denials
+and row preservation, not authorized reads or job acceptance. Run its unit
+test with an optional absolute packaged `apps/api/dist/config.js` argument to
+check that release's configuration as well; the payload always checks its own
+packaged configuration before connecting or starting the child.
+
 Record actual login/session allow/deny checks, migrated Booking/PMS/Finance/
 Marketplace reads, media delivery, public read-model privacy and controlled job
 idempotency. Preserve before/after hashes and identify every synthetic write.
