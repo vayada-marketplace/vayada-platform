@@ -86,7 +86,7 @@ export async function fingerprintTable(client, qualified) {
   } finally { await client.query("CLOSE rehearsal_rows").catch(() => {}); }
 }
 
-export async function runReadOnlyApplication(Client, env, checkAuthenticated) {
+export async function runReadOnlyApplication(Client, env, checkReads) {
   const childEnv = applicationEnvironment(env);
   const { loadConfig } = await import(pathToFileURL(process.cwd() + "/apps/api/dist/config.js").href);
   loadConfig(childEnv);
@@ -144,7 +144,7 @@ export async function runReadOnlyApplication(Client, env, checkAuthenticated) {
       requireTrue(!body.users && !body.email && !body.profile, "AUTH_RESPONSE_DISCLOSURE");
       checks.push(name);
     }
-    if (checkAuthenticated) await checkAuthenticated(get, client);
+    if (checkReads) await checkReads(get, client, before);
     // Brief observation under the reader ACL; this does not prove job completion.
     await delay(6000);
     requireTrue(!expired, "APPLICATION_DEADLINE");
