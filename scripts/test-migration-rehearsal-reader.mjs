@@ -75,6 +75,8 @@ class MockDatabase {
   }
   async query(sql) {
     queries.push(sql);
+    if (sql === "ROLLBACK" && variant === "rollback-failed")
+      throw new Error("READER_CLEANUP_FAILED");
     let rows = [];
     if (sql.startsWith("SELECT c.relkind"))
       rows = variant === "pg-settings" ? [] : [settings];
@@ -178,13 +180,14 @@ for (const [bad, code, committed] of [
   ["pg-settings", "PG_SETTINGS_CONTRACT", false],
   ["privileges", "READER_HAS_WRITE_PRIVILEGES", false],
   ["write-allowed", "WRITE_DENIAL_NOT_PROVEN", true],
+  ["rollback-failed", "READER_CLEANUP_FAILED", true],
 ]) {
   variant = bad;
   queries.length = 0;
   await assert.rejects(provisionReader(MockDatabase, env), new RegExp(code));
   assert.equal(queries.includes("COMMIT"), committed);
   assert(queries.includes("ROLLBACK"));
-  if (!["privileges", "write-allowed"].includes(bad))
+  if (!["privileges", "write-allowed", "rollback-failed"].includes(bad))
     assert(!queries.some((sql) => sql.startsWith("CREATE ROLE")));
 }
 variant = "database";
