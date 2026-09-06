@@ -14,16 +14,24 @@ aws() {
         '{ServerSideEncryptionConfiguration:{Rules:[{ApplyServerSideEncryptionByDefault:{SSEAlgorithm:$algorithm}}]}}' ;;
     'iam simulate-principal-policy')
       shift 2
-      local actions=() resource='' decision
+      local actions=() resource='' role='' decision
       while (($#)); do
         case "$1" in
           --action-names) shift; while (($#)) && [[ "$1" != --* ]]; do actions+=("$1"); shift; done ;;
           --resource-arns) resource="$2"; shift 2 ;;
+          --policy-source-arn) role="$2"; shift 2 ;;
           *) shift ;;
         esac
       done
+      local bucket=vayada-migration-rehearsal-media-269416271598
+      local expected_role=arn:aws:iam::269416271598:role/vayada-migration-rehearsal-media-task-role
+      if [[ "${MOCK_FIXED:-false}" == true ]]; then
+        bucket=vayada-rehearsal-2d1ef4ef-269416271598
+        expected_role=arn:aws:iam::269416271598:role/vayada-rehearsal-2d1ef4ef-media
+      fi
+      [[ "$role" == "$expected_role" ]] || return 1
       decision=explicitDeny
-      if [[ "$resource" == arn:aws:s3:::vayada-migration-rehearsal-media-269416271598/* ]]; then decision=allowed;
+      if [[ "$resource" == "arn:aws:s3:::${bucket}/public/media/"* || "$resource" == "arn:aws:s3:::${bucket}/private/media/"* ]]; then decision=allowed;
       elif [[ "${actions[0]}" == s3:ListBucket ]]; then decision=implicitDeny;
       elif [[ "${actions[0]}" == s3:GetObject ]]; then decision=allowed;
       elif [[ "${MOCK_PRODUCTION_WRITE:-false}" == true ]]; then decision=allowed; fi
@@ -35,11 +43,18 @@ aws() {
 }
 export -f aws
 check=scripts/check-migration-rehearsal-media.sh
-bash "$check"
+for mode in retained --fixed-release; do
+export MOCK_FIXED=false
+[[ "$mode" != --fixed-release ]] || export MOCK_FIXED=true
+bash "$check" "$mode"
 for fault in MOCK_ACCOUNT=wrong MOCK_BLOCKED=false MOCK_VERSIONING=Suspended \
   MOCK_ENCRYPTION=wrong MOCK_PRODUCTION_WRITE=true MOCK_MISSING=true MOCK_CONTEXT=true; do
-  if env "$fault" bash "$check" >/dev/null 2>&1; then
+  if env "$fault" bash "$check" "$mode" >/dev/null 2>&1; then
     echo "Isolation check accepted $fault" >&2; exit 1
   fi
 done
-echo 'Rehearsal media contract: valid fixture and seven unsafe/missing-evidence cases passed.'
+done
+if bash "$check" --unknown >/dev/null 2>&1 || bash "$check" retained extra >/dev/null 2>&1; then
+  echo 'Isolation check accepted an unknown boundary' >&2; exit 1
+fi
+echo 'Both rehearsal media boundaries: valid fixtures, fourteen unsafe cases, and unknown-boundary refusals passed.'
