@@ -170,6 +170,27 @@ Stop the task to rehearse abort-before-switch; prove legacy remains sole provide
 owner and no customer-facing replay occurred. This does not prove rollback after
 production writes, or measure the final production delta/freeze window.
 
+### Read-only public/profile and migrated-media probes
+
+`migration-rehearsal-public-media.mjs` reuses the reader-only runtime without
+the temporary admin or a token. It checks the retained publication/readiness
+inventory, samples eligible and blocked profile GETs, verifies public response
+privacy and non-fresh bookability handling, and requires any exposed images to
+belong to approved public media on the isolated CDN. Existing
+`/api/ai/hotels` is a public compatibility route, not an AI provider invocation.
+Contract: `vayada/engineering/public-hotel-profile-ownership.md` and
+`vayada/engineering/public-bookability-contract.md` in the application repo.
+
+Media probes select at most two public and two private image variants (5MiB
+each) with matching completed source-run migration ledger evidence. They hash
+S3 bytes in memory, require public CDN byte equality when a public sample exists,
+and require anonymous S3/CDN denial for private samples. No original URL is
+fetched, no object is uploaded, and no private bytes or identifiers are logged.
+Zero eligible profiles/public media is an explicit coverage gap, never a reason
+to republish old state or a claim that positive delivery passed. Counts and
+sample-level checks do not replace browser, authenticated-domain, job, or full
+cutover acceptance. Whole-target row preservation remains mandatory.
+
 Only complete `production-cutover-smoke.v1` after all required checks actually
 pass, then resume the same immutable orchestration with that report. Named owner
 approvals, production provider cutover and legacy retirement remain separate.
