@@ -91,6 +91,17 @@ variable "resend_api_key" {
   default     = ""
 }
 
+variable "resend_webhook_secret" {
+  description = "Optional Resend delivery webhook signing secret for next-api; empty leaves receipts unconfigured"
+  type        = string
+  sensitive   = true
+  default     = ""
+  validation {
+    condition     = var.resend_webhook_secret == "" || can(regex("^whsec_[A-Za-z0-9+/=]+$", var.resend_webhook_secret))
+    error_message = "Resend webhook signing secret must be empty or a whsec_ signing secret."
+  }
+}
+
 variable "stripe_secret_key" {
   description = "Stripe secret key"
   type        = string
