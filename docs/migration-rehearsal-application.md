@@ -127,6 +127,15 @@ test with an optional absolute packaged `apps/api/dist/config.js` argument to
 check that release's configuration as well; the payload always checks its own
 packaged configuration before connecting or starting the child.
 
+Before provisioning any synthetic principal, the separate read-only
+`migration-rehearsal-identity-readiness.mjs` audit checks presence of the four
+documented reusable test-account emails. It reports counts only and verifies
+the accepted migrated row fingerprint before and after. Email presence is not
+provider-subject verification or permission to join/remap an existing identity;
+even nonzero provider/membership counts do not prove the current session maps.
+Absent or ambiguous accounts need a separately reviewed test-identity plan.
+The audit never starts an app, provisions an identity, or accepts auth smoke.
+
 Record actual login/session allow/deny checks, migrated Booking/PMS/Finance/
 Marketplace reads, media delivery, public read-model privacy and controlled job
 idempotency. Preserve before/after hashes and identify every synthetic write.
