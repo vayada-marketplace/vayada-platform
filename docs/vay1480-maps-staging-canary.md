@@ -12,9 +12,22 @@ Initial ALB association uses baseline weight 1/canary weight 0. After ECS rollou
 
 Use the reusable owner, preserve all existing booking/calendar/Inbox data, and make no reservation/payment. Save/reload location and nearby curation, request an actual publication through the supported owner API, inspect the public page with real Google, test Hidden, then restore Approximate and reconfirm the test curation for review. Retain the original profile/curation privately for rollback; the retained fixture is explicitly synthetic. Record source/image digest, publication result and browser evidence; publication failure is not a passing smoke.
 
-Canary deploy/remove share a fixed, cancellation-disabled canary concurrency group. Normal platform mutations retain their existing group. Before execution, verify no conflicting migration allocation or concurrent ALB/Terraform change. Initial deployment activates only owner paths; the guest stays on baseline while its real publication is prepared. A second manual run with activate_guest=true verifies the pinned healthy canary and switches the guest rule after successful publication. This avoids breaking concurrent baseline guest smoke while publication is absent.
+Canary deploy/remove share a fixed, cancellation-disabled canary concurrency group. Normal platform mutations retain their existing group. Before execution, verify no conflicting migration allocation or concurrent ALB/Terraform change. Initial deployment activates only owner paths; the guest stays on baseline while its real publication is prepared. New guest activation is blocked pending a supported check of the current active publication.
 
-The six conditions cover scoped hotel setup, legacy Booking settings/publication, guest slug, canonical Booking configuration, exact PMS pricing/mandatory-charge evidence, and the exact PMS inventory-materialization endpoint. The guest condition alone requires explicit activation.
+`--activate-guest` now fails before any AWS call. The supported owner status API
+proves historical publication success, which is insufficient after revocation;
+it does not expose the current active publication pointer. New guest activation
+remains blocked until a supported current-active-publication contract exists.
+No owner token, additional credential, or ad-hoc database mechanism is required.
+This change leaves the existing active guest route unchanged.
+
+The canary job binds to GitHub environment `next`. Live OIDC trust accepts
+`repo:vayada-marketplace/vayada-platform:*`, including this environment subject;
+no IAM change is needed. The environment metadata lookup returned 404, so this
+binding does not attest that approval/protection rules are configured. Existing
+target groups are preserved; newly created groups copy baseline health settings.
+
+The six conditions cover scoped hotel setup, legacy Booking settings/publication, guest slug, canonical Booking configuration, exact PMS pricing/mandatory-charge evidence, and the exact PMS inventory-materialization endpoint. New activation of the guest condition remains blocked as described above.
 
 ## Stable frontend previews
 

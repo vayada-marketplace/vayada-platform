@@ -46,11 +46,12 @@ def deploy(spec, remove=False):
     baseline_rules = [r for r in rules if r not in prior_rules and owned(r, baseline_group['TargetGroupArn'])]
     before = min(int(r['Priority']) for r in baseline_rules if r['Priority'].isdigit())
     conditions = [{'Field': 'host-header', 'HostHeaderConfig': {'Values': [host]}}]
-    if kind == 'admin': conditions.append({'Field': 'http-header', 'HttpHeaderConfig': {'HttpHeaderName': 'Cookie', 'Values': ['*vay1480_preview=1*']}})
+    if kind == 'admin':
+        conditions.append({'Field': 'http-header', 'HttpHeaderConfig': {'HttpHeaderName': 'Cookie', 'Values': ['*vay1480_preview=1*']}})
     if prior_rules:
         assert int(prior_rules[0]['Priority']) < before
-        assert prior_rules[0]['Conditions'][0].get('HostHeaderConfig', {}).get('Values') == [host] or any(c.get('HostHeaderConfig', {}).get('Values') == [host] for c in prior_rules[0]['Conditions'])
-        if kind == 'admin': assert any(c.get('HttpHeaderConfig') == conditions[1]['HttpHeaderConfig'] for c in prior_rules[0]['Conditions'])
+        if not api['matching_conditions'](prior_rules[0]['Conditions'], conditions):
+            raise ValueError('Existing frontend rule has unexpected conditions')
     repo = baseline + ('-frontend' if kind == 'admin' else '')
     digest = aws('ecr', 'describe-images', repositoryName=repo, imageIds=[{'imageTag': 'next-' + sha}])['imageDetails'][0]['imageDigest']
     definition = aws('ecs', 'describe-task-definition', taskDefinition=current['taskDefinition'])['taskDefinition']
@@ -61,7 +62,7 @@ def deploy(spec, remove=False):
     payload.update(family=name, tags=TAGS)
     task = aws('ecs', 'register-task-definition', **payload)['taskDefinition']['taskDefinitionArn']
     if not group:
-        config = {k: baseline_group[k] for k in ('Protocol', 'Port', 'VpcId', 'TargetType', 'HealthCheckProtocol', 'HealthCheckPath', 'Matcher')}
+        config = api['target_group_config'](baseline_group)
         group = aws('elbv2', 'create-target-group', Name=name, **config, Tags=[{'Key': 'Task', 'Value': 'VAY-1480'}])['TargetGroups'][0]
     created_rule = None
     service_created = False

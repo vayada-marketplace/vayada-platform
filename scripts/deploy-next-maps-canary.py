@@ -18,6 +18,31 @@ SECRET = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/vayada/prod/next-google-plac
 TAGS = [{"key": "Task", "value": "VAY-1480"}]
 
 
+def target_group_config(source):
+    return {key: source[key] for key in (
+        "Protocol", "Port", "VpcId", "TargetType", "HealthCheckEnabled",
+        "HealthCheckProtocol", "HealthCheckPort", "HealthCheckPath",
+        "HealthCheckIntervalSeconds", "HealthCheckTimeoutSeconds",
+        "HealthyThresholdCount", "UnhealthyThresholdCount", "Matcher",
+    )}
+
+
+def matching_conditions(actual, expected):
+    # ALB repeats host/path values at the top level in describe-rules responses.
+    normalized = []
+    for condition in actual:
+        item = dict(condition)
+        config = {"host-header": "HostHeaderConfig", "path-pattern": "PathPatternConfig"}.get(item.get("Field"))
+        if config and "Values" in item:
+            if item["Values"] != item.get(config, {}).get("Values"):
+                return False
+            del item["Values"]
+        normalized.append(item)
+    return sorted(map(lambda c: json.dumps(c, sort_keys=True), normalized)) == sorted(
+        map(lambda c: json.dumps(c, sort_keys=True), expected)
+    )
+
+
 def aws(aws_service, operation, **values):
     result = subprocess.run(
         ["aws", aws_service, operation, "--region", REGION, "--output", "json",
@@ -34,6 +59,8 @@ def main():
     parser.add_argument("--remove", action="store_true")
     parser.add_argument("--activate-guest", action="store_true")
     args = parser.parse_args()
+    if args.activate_guest:
+        raise RuntimeError("Guest activation blocked: current active publication verification is unavailable")
     if not re.fullmatch(r"next-[a-f0-9]{40}", args.image_sha):
         raise ValueError("Expected immutable next-<40-character SHA> image tag")
     assert aws("sts", "get-caller-identity")["Account"] == ACCOUNT
@@ -55,6 +82,8 @@ def main():
     ] for path in paths]
     conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/pricing-source", f"/api/pms/properties/{PROPERTY}/mandatory-charge-confirmation"]}}])
     conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/inventory-materialization"]}}])
+    if any(not any(matching_conditions(rule["Conditions"], expected) for expected in conditions) for rule in owned_rules):
+        raise ValueError("Existing API rule has unexpected conditions")
     baseline_rules = [r for r in rules if r not in owned_rules and any(c.get("Field") == "host-header" and "next-api.vayada.com" in c.get("HostHeaderConfig", {}).get("Values", []) for c in r["Conditions"])]
     existing = aws("ecs", "describe-services", cluster=CLUSTER, services=[SERVICE], include=["TAGS"])["services"]
     if existing and existing[0]["status"] != "INACTIVE":
@@ -80,21 +109,6 @@ def main():
     digest = aws("ecr", "describe-images", repositoryName="vayada-next-api",
                  imageIds=[{"imageTag": args.image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
-    if args.activate_guest:
-        assert group and existing and len(owned_rules) == len(conditions)
-        primary = next(d for d in existing[0]["deployments"] if d["status"] == "PRIMARY")
-        assert primary["taskDefinition"] == existing[0]["taskDefinition"] and primary.get("rolloutState") == "COMPLETED"
-        deployed = aws("ecs", "describe-task-definition", taskDefinition=existing[0]["taskDefinition"])["taskDefinition"]
-        container = next(c for c in deployed["containerDefinitions"] if c["name"] == "vayada-next-api")
-        assert container["image"].endswith("@" + digest)
-        assert {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"} in container["environment"]
-        health = aws("elbv2", "describe-target-health", TargetGroupArn=group["TargetGroupArn"])["TargetHealthDescriptions"]
-        assert any(t["TargetHealth"]["State"] == "healthy" for t in health)
-        guest = [r for r in owned_rules if SLUG in json.dumps(r["Conditions"])]
-        assert len(guest) == 1
-        aws("elbv2", "modify-rule", RuleArn=guest[0]["RuleArn"], Actions=[{"Type": "forward", "TargetGroupArn": group["TargetGroupArn"]}])
-        print(json.dumps({"guestActivated": SLUG, "imageDigest": digest}))
-        return
     # Inspect metadata only. ECS injects the existing server credential; CI never retrieves its value.
     parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [SECRET.split(":parameter")[1]]}])["Parameters"]
     assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
@@ -109,9 +123,8 @@ def main():
     task = aws("ecs", "register-task-definition", **payload)["taskDefinition"]["taskDefinitionArn"]
     if not group:
         source_group = next(g for g in groups if g["TargetGroupArn"] == current["loadBalancers"][0]["targetGroupArn"])
-        group = aws("elbv2", "create-target-group", Name=GROUP, Protocol="HTTP", Port=8003,
-                    VpcId=source_group["VpcId"], TargetType="ip", HealthCheckPath="/health",
-                    Matcher={"HttpCode": "200"}, Tags=[{"Key": "Task", "Value": "VAY-1480"}])["TargetGroups"][0]
+        group = aws("elbv2", "create-target-group", Name=GROUP,
+                    **target_group_config(source_group), Tags=[{"Key": "Task", "Value": "VAY-1480"}])["TargetGroups"][0]
     baseline_group = current["loadBalancers"][0]["targetGroupArn"]
     previous_actions = {r["RuleArn"]: r["Actions"] for r in owned_rules}
     created_rules = []

@@ -24,7 +24,7 @@ on:
         description: "Optional image URI to deploy automatically if cutover fails"
         required: false
       activate_guest:
-        description: "Canary only: activate guest routing after successful real publication"
+        description: "Blocked: guest activation awaits current active-publication verification"
         type: boolean
         default: false
       environment:
@@ -321,6 +321,7 @@ jobs:
           wait-for-service-stability: true
 
   maps-canary:
+    environment: next
     if: github.event_name == 'workflow_dispatch' && (inputs.service == 'next-maps-canary' || inputs.service == 'next-maps-canary-remove' || inputs.service == 'next-maps-frontends' || inputs.service == 'next-maps-frontends-remove')
     runs-on: ubuntu-latest
     steps:
