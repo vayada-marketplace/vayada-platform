@@ -15,3 +15,11 @@ Use the reusable owner, preserve all existing booking/calendar/Inbox data, and m
 Canary deploy/remove share a fixed, cancellation-disabled canary concurrency group. Normal platform mutations retain their existing group. Before execution, verify no conflicting migration allocation or concurrent ALB/Terraform change. Initial deployment activates only owner paths; the guest stays on baseline while its real publication is prepared. A second manual run with activate_guest=true verifies the pinned healthy canary and switches the guest rule after successful publication. This avoids breaking concurrent baseline guest smoke while publication is absent.
 
 The six conditions cover scoped hotel setup, legacy Booking settings/publication, guest slug, canonical Booking configuration, exact PMS pricing/mandatory-charge evidence, and the exact PMS inventory-materialization endpoint. The guest condition alone requires explicit activation.
+
+## Stable frontend previews
+
+`next-maps-frontends` pins separate `vayada-next-maps-guest-service` and `vayada-next-maps-admin-service` to the tested guest976c8519a and admin1241b0330 builds. Only `codex-test-hotel-not-bookable.next-booking.vayada.com` routes to the guest preview. The baseline deployment smoke uses the different `codex-qa-hotel-20260813-1927` tenant. Admin routing additionally requires the non-secret opt-in Cookie `vay1480_preview=1`; authentication still applies. Normal admin sessions and all other guest hosts retain baseline routing.
+
+Each frontend activates after healthy rollout. Failures restore prior rule conditions/actions and task definitions; an initially created failed service/rule is removed. If the second frontend fails, the first successful frontend remains available. `next-maps-frontends-remove` removes these owned routes and services without changing baseline services. This shares the isolated canary concurrency group. Service names retain the existing IAM-permitted `vayada-` prefix; permissions were not broadened.
+
+Real test-hotel publication succeeded on 2026-09-06, operation/content revision `682cf105-6365-46dd-b77d-c0d45e781d29`, using API62d46aae0. Guest routing was then activated through CI run34021596500. The test hotel remains synthetic; no booking, payment or message was created by this validation.

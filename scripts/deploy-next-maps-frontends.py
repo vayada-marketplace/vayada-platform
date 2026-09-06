@@ -46,11 +46,11 @@ def deploy(spec, remove=False):
     baseline_rules = [r for r in rules if r not in prior_rules and owned(r, baseline_group['TargetGroupArn'])]
     before = min(int(r['Priority']) for r in baseline_rules if r['Priority'].isdigit())
     conditions = [{'Field': 'host-header', 'HostHeaderConfig': {'Values': [host]}}]
-    conditions.append({'Field': 'http-header', 'HttpHeaderConfig': {'HttpHeaderName': 'Cookie', 'Values': ['*vay1480_preview=1*']}})
+    if kind == 'admin': conditions.append({'Field': 'http-header', 'HttpHeaderConfig': {'HttpHeaderName': 'Cookie', 'Values': ['*vay1480_preview=1*']}})
     if prior_rules:
         assert int(prior_rules[0]['Priority']) < before
         assert prior_rules[0]['Conditions'][0].get('HostHeaderConfig', {}).get('Values') == [host] or any(c.get('HostHeaderConfig', {}).get('Values') == [host] for c in prior_rules[0]['Conditions'])
-        assert any(c.get('HttpHeaderConfig') == conditions[1]['HttpHeaderConfig'] for c in prior_rules[0]['Conditions'])
+        if kind == 'admin': assert any(c.get('HttpHeaderConfig') == conditions[1]['HttpHeaderConfig'] for c in prior_rules[0]['Conditions'])
     repo = baseline + ('-frontend' if kind == 'admin' else '')
     digest = aws('ecr', 'describe-images', repositoryName=repo, imageIds=[{'imageTag': 'next-' + sha}])['imageDetails'][0]['imageDigest']
     definition = aws('ecs', 'describe-task-definition', taskDefinition=current['taskDefinition'])['taskDefinition']
@@ -88,13 +88,13 @@ def deploy(spec, remove=False):
         else:
             raise RuntimeError('Frontend health timeout')
         rule = created_rule or prior_rules[0]
-        aws('elbv2', 'modify-rule', RuleArn=rule['RuleArn'], Actions=[{'Type': 'forward', 'TargetGroupArn': group['TargetGroupArn']}])
-        print(json.dumps({'frontend': kind, 'host': host, 'previewCookieRequired': True, 'imageDigest': digest, 'taskDefinition': task}), flush=True)
+        aws('elbv2', 'modify-rule', RuleArn=rule['RuleArn'], Conditions=conditions, Actions=[{'Type': 'forward', 'TargetGroupArn': group['TargetGroupArn']}])
+        print(json.dumps({'frontend': kind, 'host': host, 'previewCookieRequired': kind == 'admin', 'imageDigest': digest, 'taskDefinition': task}), flush=True)
     except Exception:
         if created_rule:
             aws('elbv2', 'delete-rule', RuleArn=created_rule['RuleArn'])
         for rule in prior_rules:
-            aws('elbv2', 'modify-rule', RuleArn=rule['RuleArn'], Actions=rule['Actions'])
+            aws('elbv2', 'modify-rule', RuleArn=rule['RuleArn'], Conditions=rule['Conditions'], Actions=rule['Actions'])
         if service_created:
             aws('ecs', 'update-service', cluster=CLUSTER, service=service_name, desiredCount=0)
             aws('ecs', 'delete-service', cluster=CLUSTER, service=service_name, force=True)
