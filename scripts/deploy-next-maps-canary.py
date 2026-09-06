@@ -18,9 +18,9 @@ SECRET = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/vayada/prod/next-google-plac
 TAGS = [{"key": "Task", "value": "VAY-1480"}]
 
 
-def aws(service, operation, **values):
+def aws(aws_service, operation, **values):
     result = subprocess.run(
-        ["aws", service, operation, "--region", REGION, "--output", "json",
+        ["aws", aws_service, operation, "--region", REGION, "--output", "json",
          "--cli-input-json", json.dumps(values)],
         check=True, capture_output=True, text=True,
     )
