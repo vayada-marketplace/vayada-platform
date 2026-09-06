@@ -26,7 +26,7 @@ The six conditions cover scoped hotel setup, legacy Booking settings/publication
 
 ## Stable frontend previews
 
-`next-maps-frontends` pins separate `vayada-next-maps-guest-service` and `vayada-next-maps-admin-service` to the tested guest976c8519a and admin1241b0330 builds. Only `codex-test-hotel-not-bookable.next-booking.vayada.com` routes to the guest preview. The baseline deployment smoke uses the different `codex-qa-hotel-20260813-1927` tenant. Admin routing additionally requires the non-secret opt-in Cookie `vay1480_preview=1`; authentication still applies. Normal admin sessions and all other guest hosts retain baseline routing.
+`next-maps-frontends` pins separate `vayada-next-maps-guest-service` and `vayada-next-maps-admin-service` to the tested reconciled1df359250 builds, including current consent fixes and the tested nearby UI. Only `codex-test-hotel-not-bookable.next-booking.vayada.com` routes to the guest preview. The baseline deployment smoke uses the different `codex-qa-hotel-20260813-1927` tenant. Admin routing additionally requires the non-secret opt-in Cookie `vay1480_preview=1`; authentication still applies. Normal admin sessions and all other guest hosts retain baseline routing.
 
 Each frontend activates after healthy rollout. Failures restore prior rule conditions/actions and task definitions; an initially created failed service/rule is removed. If the second frontend fails, the first successful frontend remains available. `next-maps-frontends-remove` removes these owned routes and services without changing baseline services. This shares the isolated canary concurrency group. Service names retain the existing IAM-permitted `vayada-` prefix; permissions were not broadened.
 

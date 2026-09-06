@@ -9,8 +9,8 @@ api = runpy.run_path(str(pathlib.Path(__file__).with_name('deploy-next-maps-cana
 aws, ACCOUNT, REGION, CLUSTER, LISTENER = [api[k] for k in ('aws', 'ACCOUNT', 'REGION', 'CLUSTER', 'LISTENER')]
 TAGS = [{'key': 'Task', 'value': 'VAY-1480'}]
 SPECS = [
-    ('guest', 'vayada-next-booking-frontend', '976c8519acbfbe38ac104a981fdc46c9194a9c22', 'codex-test-hotel-not-bookable.next-booking.vayada.com'),
-    ('admin', 'vayada-next-booking-admin', '1241b0330e36ba404cc35a108725be91326be867', 'next-booking-admin.vayada.com'),
+    ('guest', 'vayada-next-booking-frontend', '1df3592501100e40b12451ea38bbcda3da5332fd', 'codex-test-hotel-not-bookable.next-booking.vayada.com'),
+    ('admin', 'vayada-next-booking-admin', '1df3592501100e40b12451ea38bbcda3da5332fd', 'next-booking-admin.vayada.com'),
 ]
 
 
