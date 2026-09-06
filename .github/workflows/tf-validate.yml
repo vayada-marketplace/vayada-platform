@@ -35,6 +35,8 @@ on:
       - "scripts/test-migration-rehearsal-reader-renewal.mjs"
       - "scripts/migration-rehearsal-identity-readiness.mjs"
       - "scripts/test-migration-rehearsal-identity-readiness.mjs"
+      - "scripts/migration-rehearsal-temporary-admin.mjs"
+      - "scripts/test-migration-rehearsal-temporary-admin.mjs"
       - "scripts/check-migration-rehearsal-application.mjs"
       - "scripts/test-migration-rehearsal-application.mjs"
       - ".github/workflows/deploy.yml"
@@ -68,6 +70,8 @@ jobs:
           node scripts/test-migration-rehearsal-reader-renewal.mjs
           node --check scripts/migration-rehearsal-identity-readiness.mjs
           node scripts/test-migration-rehearsal-identity-readiness.mjs
+          node --check scripts/migration-rehearsal-temporary-admin.mjs
+          node scripts/test-migration-rehearsal-temporary-admin.mjs
           node scripts/test-migration-rehearsal-application.mjs
           bash -n scripts/roll-forward-auth-gateways.sh
           bash -n scripts/validate-auth-gateway-contract.sh

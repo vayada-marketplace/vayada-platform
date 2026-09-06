@@ -49,7 +49,12 @@ export function applicationEnvironment(env) {
 
 export async function captureRows(client) {
   await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-  try {
+  try { return await captureRowsSnapshot(client); }
+  finally { await client.query("ROLLBACK"); }
+}
+
+// Caller owns the transaction; permits checking tentative cleanup before COMMIT.
+export async function captureRowsSnapshot(client) {
     requireTrue(await verifyTarget(client) === evidence, "TARGET_EVIDENCE_CHANGED");
     const { rows: tables } = await client.query(`SELECT n.nspname AS schema, c.relname AS name, c.relrowsecurity AS rls
       FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -63,7 +68,6 @@ export async function captureRows(client) {
       records.push({ ...table, ...await fingerprintTable(client, qualified) });
     }
     return { sha256: digest(records), tables: records.length, rows: records.reduce((sum, row) => sum + row.count, 0) };
-  } finally { await client.query("ROLLBACK"); }
 }
 
 export async function fingerprintTable(client, qualified) {
@@ -82,7 +86,7 @@ export async function fingerprintTable(client, qualified) {
   } finally { await client.query("CLOSE rehearsal_rows").catch(() => {}); }
 }
 
-export async function runReadOnlyApplication(Client, env) {
+export async function runReadOnlyApplication(Client, env, checkAuthenticated) {
   const childEnv = applicationEnvironment(env);
   const { loadConfig } = await import(pathToFileURL(process.cwd() + "/apps/api/dist/config.js").href);
   loadConfig(childEnv);
@@ -93,7 +97,8 @@ export async function runReadOnlyApplication(Client, env) {
   const diagnosticCodes = new Set();
   const checks = [];
   let closed;
-  const deadline = setTimeout(() => { child?.kill("SIGKILL"); process.exit(2); }, 240000);
+  let expired = false;
+  const deadline = setTimeout(() => { expired = true; child?.kill("SIGKILL"); }, 240000);
   try {
     await client.connect();
     await client.query("SET search_path=pg_catalog");
@@ -102,6 +107,7 @@ export async function runReadOnlyApplication(Client, env) {
     requireTrue((await client.query("SELECT current_user=session_user AND current_user=$1 AS ok", [binding.reader])).rows[0]?.ok,
       "READER_LOGIN");
     before = await captureRows(client);
+    requireTrue(!expired, "APPLICATION_DEADLINE");
     console.log(JSON.stringify({ status: "BASELINE", scope: "application-read-only", runId: binding.runId, ...before }));
     child = spawn(process.execPath, ["apps/api/dist/server.js"], { env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
     closed = new Promise((resolve) => {
@@ -138,8 +144,10 @@ export async function runReadOnlyApplication(Client, env) {
       requireTrue(!body.users && !body.email && !body.profile, "AUTH_RESPONSE_DISCLOSURE");
       checks.push(name);
     }
+    if (checkAuthenticated) await checkAuthenticated(get, client);
     // Brief observation under the reader ACL; this does not prove job completion.
     await delay(6000);
+    requireTrue(!expired, "APPLICATION_DEADLINE");
     requireTrue(child.exitCode === null && child.signalCode === null, "APPLICATION_EXITED");
   } catch (error) { failure = error; }
   finally {
