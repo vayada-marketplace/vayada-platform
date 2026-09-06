@@ -54,6 +54,7 @@ def main():
         {"Field": "path-pattern", "PathPatternConfig": {"Values": [path, path + "/*"]}},
     ] for path in paths]
     conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/pricing-source", f"/api/pms/properties/{PROPERTY}/mandatory-charge-confirmation"]}}])
+    conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/inventory-materialization"]}}])
     baseline_rules = [r for r in rules if r not in owned_rules and any(c.get("Field") == "host-header" and "next-api.vayada.com" in c.get("HostHeaderConfig", {}).get("Values", []) for c in r["Conditions"])]
     existing = aws("ecs", "describe-services", cluster=CLUSTER, services=[SERVICE], include=["TAGS"])["services"]
     if existing and existing[0]["status"] != "INACTIVE":
