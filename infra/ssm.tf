@@ -31,7 +31,10 @@ locals {
     "resend-api-key"        = var.resend_api_key
   }
 
-  prod_next_api_ssm_secrets = local.prod_next_api_required_ssm_secrets
+  resend_receipts_enabled = nonsensitive(var.resend_webhook_secret != "")
+  prod_next_api_ssm_secrets = merge(local.prod_next_api_required_ssm_secrets,
+    local.resend_receipts_enabled ? { "resend-webhook-secret" = var.resend_webhook_secret } : {}
+  )
 
   prod_ssm_secrets = merge(local.prod_core_ssm_secrets, local.prod_next_api_ssm_secrets)
 

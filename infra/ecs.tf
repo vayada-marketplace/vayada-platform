@@ -332,7 +332,7 @@ locals {
         { name = "AUTH_AFFILIATE_DASHBOARD_SUCCESS_URL", value = "https://next-affiliate.vayada.com/dashboard" },
         { name = "AUTH_AFFILIATE_DASHBOARD_LOGOUT_URL", value = "https://next-affiliate.vayada.com/login" },
       ]
-      secrets = [
+      secrets = concat([
         { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
         { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
         { name = "STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/stripe-secret-key" },
@@ -346,7 +346,9 @@ locals {
         { name = "AUTH_LEGACY_BOOKING_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_AFFILIATE_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
-      ]
+        ], local.resend_receipts_enabled ? [
+        { name = "RESEND_WEBHOOK_SECRET", valueFrom = "/vayada/prod/resend-webhook-secret" },
+      ] : [])
     }
     next-pms-frontend = {
       name           = "vayada-next-pms-frontend"
