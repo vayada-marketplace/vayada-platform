@@ -105,6 +105,16 @@ If proof fails after COMMIT, the expiring role and secret deliberately remain;
 inspect them before any retry. Never rotate/reset or grant additional privileges
 to make a failed proof pass, and never give an app that credential before PASS.
 
+After the user explicitly resumes testing beyond the accepted reader's expiry,
+`scripts/migration-rehearsal-reader-renewal.mjs` permits one fixed, reviewed test
+window. It requires the exact previous expired timestamp, original role defaults,
+current safe ACLs and unchanged accepted row/evidence hashes. Its only persistent
+SQL changes VALID UNTIL; it never resets a password or modifies grants. The new
+end time must be within eight hours and cannot be renewed again by rerunning the
+same payload. Actual same-credential login and ACL denial must pass again before
+any app launcher may use the renewed window; failed post-commit proof is retained
+for inspection, not automatic repair.
+
 Run the read-only deployed IAM/key check, then a reviewed bounded runtime test.
 `scripts/migration-rehearsal-app-readonly.mjs` is the first runtime payload. It
 starts the packaged server on loopback only, with a whitelisted reader-only

@@ -31,6 +31,8 @@ on:
       - "scripts/test-migration-rehearsal-reader.mjs"
       - "scripts/migration-rehearsal-app-readonly.mjs"
       - "scripts/test-migration-rehearsal-app-readonly.mjs"
+      - "scripts/migration-rehearsal-reader-renewal.mjs"
+      - "scripts/test-migration-rehearsal-reader-renewal.mjs"
       - "scripts/check-migration-rehearsal-application.mjs"
       - "scripts/test-migration-rehearsal-application.mjs"
       - ".github/workflows/deploy.yml"
@@ -60,6 +62,8 @@ jobs:
           node scripts/test-migration-rehearsal-reader.mjs
           node --check scripts/migration-rehearsal-app-readonly.mjs
           node scripts/test-migration-rehearsal-app-readonly.mjs
+          node --check scripts/migration-rehearsal-reader-renewal.mjs
+          node scripts/test-migration-rehearsal-reader-renewal.mjs
           node scripts/test-migration-rehearsal-application.mjs
           bash -n scripts/roll-forward-auth-gateways.sh
           bash -n scripts/validate-auth-gateway-contract.sh
