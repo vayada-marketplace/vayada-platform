@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import time
+import urllib.request
 
 REGION = "eu-west-1"
 ACCOUNT = "269416271598"
@@ -43,6 +44,62 @@ def matching_conditions(actual, expected):
     )
 
 
+
+PROBE_PATH = f"/api/ai/hotels/{SLUG}"
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def verify_active_publication():
+    request = urllib.request.Request("https://next-api.vayada.com" + PROBE_PATH,
+                                     headers={"Cache-Control": "no-cache", "Accept": "application/json"})
+    with urllib.request.build_opener(NoRedirect).open(request, timeout=15) as response:
+        if response.status != 200 or "no-store" not in response.headers.get("Cache-Control", "").lower().split(", "):
+            raise RuntimeError("Current publication probe must return uncached HTTP 200")
+        raw = response.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            raise RuntimeError("Current publication probe exceeded size limit")
+        profile = json.loads(raw)
+    hotel = profile.get("hotel", {})
+    if not (profile.get("contractVersion") == "public-bookability.v1"
+            and profile.get("publicVisibility") == "public_safe"
+            and hotel.get("propertyId") == PROPERTY and hotel.get("slug") == SLUG
+            and hotel.get("trust", {}).get("bookabilityStatus") == "bookable"
+            and profile.get("freshness", {}).get("status") == "fresh"):
+        raise RuntimeError("Test hotel has no current, fresh active publication")
+
+
+def activate_guest(existing, group, owned_rules, conditions, digest):
+    if not (group and existing and len(owned_rules) == len(conditions)):
+        raise RuntimeError("Deploy all scoped canary routes before activation")
+    primary = next(d for d in existing[0]["deployments"] if d["status"] == "PRIMARY")
+    assert len(existing[0]["deployments"]) == 1
+    assert primary["taskDefinition"] == existing[0]["taskDefinition"] and primary.get("rolloutState") == "COMPLETED"
+    deployed = aws("ecs", "describe-task-definition", taskDefinition=existing[0]["taskDefinition"])["taskDefinition"]
+    container = next(c for c in deployed["containerDefinitions"] if c["name"] == "vayada-next-api")
+    assert container["image"].endswith("@" + digest)
+    for name, value in [("API_BACKGROUND_WORKERS_ENABLED", "false"), ("PUBLIC_HOTEL_PROFILE_SOURCE", "active_publication"), ("GOOGLE_NEARBY_ENABLED", "true")]:
+        assert {"name": name, "value": value} in container["environment"]
+    health = aws("elbv2", "describe-target-health", TargetGroupArn=group["TargetGroupArn"])["TargetHealthDescriptions"]
+    assert health and all(t["TargetHealth"]["State"] == "healthy" for t in health)
+    probe = [r for r in owned_rules if matching_conditions(r["Conditions"], conditions[-1])]
+    guest = [r for r in owned_rules if matching_conditions(r["Conditions"], conditions[2])]
+    assert len(probe) == len(guest) == 1
+    # A separate public-profile route reaches the same active-publication repository
+    # as booking-web, without activating guest traffic or relying on old publish attempts.
+    assert len(probe[0]["Actions"]) == 1
+    action = probe[0]["Actions"][0]
+    assert action["Type"] == "forward" and action.get("TargetGroupArn") == group["TargetGroupArn"]
+    forwards = action.get("ForwardConfig", {}).get("TargetGroups", [])
+    assert not forwards or (len(forwards) == 1 and forwards[0]["TargetGroupArn"] == group["TargetGroupArn"] and forwards[0].get("Weight", 1) > 0)
+    verify_active_publication()
+    aws("elbv2", "modify-rule", RuleArn=guest[0]["RuleArn"], Actions=[{"Type": "forward", "TargetGroupArn": group["TargetGroupArn"]}])
+    print(json.dumps({"guestActivated": SLUG, "imageDigest": digest, "currentPublicationVerified": True}))
+
+
 def aws(aws_service, operation, **values):
     result = subprocess.run(
         ["aws", aws_service, operation, "--region", REGION, "--output", "json",
@@ -59,8 +116,8 @@ def main():
     parser.add_argument("--remove", action="store_true")
     parser.add_argument("--activate-guest", action="store_true")
     args = parser.parse_args()
-    if args.activate_guest:
-        raise RuntimeError("Guest activation blocked: current active publication verification is unavailable")
+    if args.activate_guest and args.remove:
+        raise ValueError("Activation and removal are mutually exclusive")
     if not re.fullmatch(r"next-[a-f0-9]{40}", args.image_sha):
         raise ValueError("Expected immutable next-<40-character SHA> image tag")
     assert aws("sts", "get-caller-identity")["Account"] == ACCOUNT
@@ -82,6 +139,7 @@ def main():
     ] for path in paths]
     conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/pricing-source", f"/api/pms/properties/{PROPERTY}/mandatory-charge-confirmation"]}}])
     conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/inventory-materialization"]}}])
+    conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [PROBE_PATH]}}])
     if any(not any(matching_conditions(rule["Conditions"], expected) for expected in conditions) for rule in owned_rules):
         raise ValueError("Existing API rule has unexpected conditions")
     baseline_rules = [r for r in rules if r not in owned_rules and any(c.get("Field") == "host-header" and "next-api.vayada.com" in c.get("HostHeaderConfig", {}).get("Values", []) for c in r["Conditions"])]
@@ -109,6 +167,9 @@ def main():
     digest = aws("ecr", "describe-images", repositoryName="vayada-next-api",
                  imageIds=[{"imageTag": args.image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
+    if args.activate_guest:
+        activate_guest(existing, group, owned_rules, conditions, digest)
+        return
     # Inspect metadata only. ECS injects the existing server credential; CI never retrieves its value.
     parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [SECRET.split(":parameter")[1]]}])["Parameters"]
     assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
@@ -167,7 +228,7 @@ def main():
         else:
             raise RuntimeError("Canary did not become healthy")
         for rule in owned_rules:
-            if SLUG in json.dumps(rule["Conditions"]):
+            if matching_conditions(rule["Conditions"], conditions[2]):
                 continue
             aws("elbv2", "modify-rule", RuleArn=rule["RuleArn"], Actions=[{"Type": "forward", "TargetGroupArn": group["TargetGroupArn"]}])
     except Exception:

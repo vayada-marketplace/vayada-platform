@@ -6,20 +6,15 @@ The user authorized connecting Google/publication and exercising the real hotel-
 
 The approved Places server credential lives in SecureString `/vayada/prod/next-google-places-server-test` (existing ECS execution-role path); only the canary references it. It is not a browser key. Both rebuilt frontend workflows supply the browser key at build time.
 
-Read-only preflight on 2026-09-06 found all 153 applied migration checksums match the candidate, with only new nearby tables 0154/0155 pending. Historical failed attempts remain untouched. Startup performs ordinary additive migrations; rollback retains those tables/data. Never rewrite an applied ledger. Recheck before launch if another schema release lands.
+Read-only preflight on 2026-09-06 found all 153 applied migration checksums match the candidate, with only new nearby tables 0154/0155 pending. Historical failed attempts remain untouched. Startup performs ordinary additive migrations; rollback retains those tables/data. The later collision with main0154/0155 is handled by the separately reviewed VAY-1480 history adoption: preserve the original entries as rolled_forward, adopt byte-identical maps at0158/0159, then run ordinary main0154–0157 under the migration advisory lock. Never deploy the obsolete0154/0155map catalog after adoption. Recheck before launch if another schema release lands.
 
-Initial ALB association uses baseline weight 1/canary weight 0. After ECS rollout and target health succeed, only the five owner rules switch; the sixth guest rule remains on baseline. On initial failure, new rules and service are removed; on update failure the previous task definition is restored. Explicit removal deletes the rules first, then stops/deletes the canary service. Empty target group/task revisions remain as diagnostic infrastructure and can be reused. Baseline API image/configuration is not rolled back or changed by this workflow.
+Initial ALB association uses baseline weight 1/canary weight 0. After ECS rollout and target health succeed, the five owner rules and public-profile probe switch; initial guest routing remains on baseline. On initial failure, new rules and service are removed; on update failure the previous task definition is restored. Explicit removal deletes the rules first, then stops/deletes the canary service. Empty target group/task revisions remain as diagnostic infrastructure and can be reused. Baseline API image/configuration is not rolled back or changed by this workflow.
 
 Use the reusable owner, preserve all existing booking/calendar/Inbox data, and make no reservation/payment. Save/reload location and nearby curation, request an actual publication through the supported owner API, inspect the public page with real Google, test Hidden, then restore Approximate and reconfirm the test curation for review. Retain the original profile/curation privately for rollback; the retained fixture is explicitly synthetic. Record source/image digest, publication result and browser evidence; publication failure is not a passing smoke.
 
-Canary deploy/remove share a fixed, cancellation-disabled canary concurrency group. Normal platform mutations retain their existing group. Before execution, verify no conflicting migration allocation or concurrent ALB/Terraform change. Initial deployment activates only owner paths; the guest stays on baseline while its real publication is prepared. New guest activation is blocked pending a supported check of the current active publication.
+Canary deploy/remove share a fixed, cancellation-disabled canary concurrency group. Normal platform mutations retain their existing group. Before execution, verify no conflicting migration allocation or concurrent ALB/Terraform change. Initial deployment activates only owner paths; the guest stays on baseline while its real publication is prepared. Guest activation uses the current-publication probe described below.
 
-`--activate-guest` now fails before any AWS call. The supported owner status API
-proves historical publication success, which is insufficient after revocation;
-it does not expose the current active publication pointer. New guest activation
-remains blocked until a supported current-active-publication contract exists.
-No owner token, additional credential, or ad-hoc database mechanism is required.
-This change leaves the existing active guest route unchanged.
+`--activate-guest` verifies the pinned, healthy canary and its `active_publication` source, then calls the existing anonymous `/api/ai/hotels/codex-test-hotel-not-bookable` endpoint. This seventh, exact ALB rule reaches the canary separately from the guest route. The endpoint uses the same current active-publication repository as Booking Web. Activation requires an uncached, public-safe, fresh response for the exact test property and slug. Missing/revoked publication, redirects, network errors, stale evidence or wrong identity prevent activation. No owner token or new API endpoint is introduced.
 
 The canary job binds to GitHub environment `next`. Live OIDC trust accepts
 `repo:vayada-marketplace/vayada-platform:*`, including this environment subject;
@@ -27,7 +22,7 @@ no IAM change is needed. The environment metadata lookup returned 404, so this
 binding does not attest that approval/protection rules are configured. Existing
 target groups are preserved; newly created groups copy baseline health settings.
 
-The six conditions cover scoped hotel setup, legacy Booking settings/publication, guest slug, canonical Booking configuration, exact PMS pricing/mandatory-charge evidence, and the exact PMS inventory-materialization endpoint. New activation of the guest condition remains blocked as described above.
+The six conditions cover scoped hotel setup, legacy Booking settings/publication, guest slug, canonical Booking configuration, exact PMS pricing/mandatory-charge evidence, and the exact PMS inventory-materialization endpoint. A seventh exact AI public-profile condition provides current publication evidence before guest activation.
 
 ## Stable frontend previews
 
