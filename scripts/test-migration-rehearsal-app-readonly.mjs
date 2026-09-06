@@ -14,6 +14,7 @@ const env = {
   STRIPE_SECRET_KEY: "never-forward", RESEND_API_KEY: "never-forward",
   NODE_OPTIONS: "never-forward", AWS_ACCESS_KEY_ID: "never-forward",
   REHEARSAL_SESSION: "never-forward", HOST: "0.0.0.0", NODE_ENV: "production",
+  REHEARSAL_TEST_SESSION: "never-forward", VAYADA_TEST_ADMIN_PASSWORD: "never-forward",
 };
 const child = applicationEnvironment(env);
 assert.equal(child.HOST, "127.0.0.1");

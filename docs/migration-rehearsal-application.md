@@ -140,6 +140,29 @@ of email. It counts exact target mappings without retaining tokens or copying
 shared-next user state. This still does not prove route permissions or requests.
 The audit never starts an app, provisions an identity, or accepts auth smoke.
 
+With explicit approval for temporary existing-admin access, the Identity-owned
+`migration-rehearsal-temporary-admin.mjs` test boundary inserts only five new
+fixed-ID test rows. It refuses existing IDs/email/provider/org mappings, unknown
+triggers or missing seeded permissions; it never invokes email-joining upserts.
+The existing 0105 delegation constraint trigger and both called functions are
+definition-pinned; deferred constraints execute before dataset proofs.
+The runtime independently verifies a real short-lived WorkOS session and pins
+its subject/org hashes. The runner alone holds the admin credential and token;
+the loopback application receives only the existing reader environment.
+
+Before committing, a savepoint removal proves that just those five rows restore
+the original whole-dataset hash. Tests cover self and migrated identity reads,
+missing permission, inactive membership, missing platform link and restored
+access. Temporary status changes are restored; no global permission or tenant
+ownership changes are allowed. After the application stops, cleanup requires
+the exact installed dataset hash, deletes only fixed test IDs, and verifies the
+original hash before committing. A mismatch rolls cleanup back for inspection.
+The outer task deadline can interrupt cleanup: retain PREPARED/INSTALLED hashes
+and inspect exact task/data state before any retry. Never rerun provisioning
+over retained test rows or infer full cutover smoke from this Identity-only test.
+Recovery uses `runTemporaryAdminCleanup` with the exact retained installed hash;
+it cannot provision rows or start the application and refuses any data drift.
+
 Record actual login/session allow/deny checks, migrated Booking/PMS/Finance/
 Marketplace reads, media delivery, public read-model privacy and controlled job
 idempotency. Preserve before/after hashes and identify every synthetic write.
