@@ -20,7 +20,7 @@ def owned(rule, arn):
 
 def deploy(spec, remove=False):
     kind, baseline, sha, host = spec
-    name = 'vay1480-maps-' + kind
+    name = 'vayada-next-maps-' + kind
     service_name = name + '-service'
     current = aws('ecs', 'describe-services', cluster=CLUSTER, services=[baseline + '-service'])['services'][0]
     groups = aws('elbv2', 'describe-target-groups')['TargetGroups']
