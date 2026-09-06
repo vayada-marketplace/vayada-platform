@@ -134,6 +134,10 @@ the accepted migrated row fingerprint before and after. Email presence is not
 provider-subject verification or permission to join/remap an existing identity;
 even nonzero provider/membership counts do not prove the current session maps.
 Absent or ambiguous accounts need a separately reviewed test-identity plan.
+For the reusable admin, a separate provider-ID query uses the subject and org
+hashes observed after real JWT signature/issuer/client verification, independent
+of email. It counts exact target mappings without retaining tokens or copying
+shared-next user state. This still does not prove route permissions or requests.
 The audit never starts an app, provisions an identity, or accepts auth smoke.
 
 Record actual login/session allow/deny checks, migrated Booking/PMS/Finance/

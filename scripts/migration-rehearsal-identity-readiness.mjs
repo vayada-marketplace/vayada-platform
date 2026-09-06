@@ -3,7 +3,25 @@ import { binding, requireTrue, verifyPgSettings, pgSettingsSql, unsafePrivileges
 import { applicationEnvironment, captureRows } from "./migration-rehearsal-app-readonly.mjs";
 
 export const readinessAccounts = ["creator", "hotel", "staff", "admin"];
+// Sep6 normal reusable-admin login: JWT signature/issuer/client/sub/org verified.
+// Retain only hashes; no token, password, raw provider ID or shared-next user state.
+export const verifiedAdminHashes = [
+  "1db71651043667105f6c270e800029bba9fdc7161fdbcb1c528a86db21e76c2b",
+  "0222289cdc132448e75e88f11cdaf10e74206e4f45b47a0ec46ca120f206fa62",
+];
 const acceptedData = "c373af9f2d23564c437a1457fd5cd506df92965c608e195c40d86b96a2bf2959";
+export const providerReadinessSql = `WITH provider_users AS (
+  SELECT u.id,u.status FROM identity.external_identities e JOIN identity.users u ON u.id=e.user_id
+  WHERE e.provider='workos' AND encode(sha256(convert_to(e.provider_user_id,'UTF8')),'hex')=$1
+), provider_organizations AS (
+  SELECT id,status FROM identity.organizations
+  WHERE encode(sha256(convert_to(workos_org_id,'UTF8')),'hex')=$2
+)
+SELECT (SELECT count(*)::int FROM provider_users) AS users,
+  (SELECT count(*)::int FROM provider_organizations) AS organizations,
+  (SELECT count(*)::int FROM provider_users u JOIN identity.organization_memberships m ON m.user_id=u.id
+    JOIN provider_organizations o ON o.id=m.organization_id
+    WHERE u.status='active' AND o.status='active' AND m.status='active') AS active_memberships`;
 export const readinessSql = `WITH expected AS (
   SELECT label, 'f.maliqi+codex-' || label || '@vayada.com' AS email
   FROM unnest($1::text[]) AS label
@@ -28,6 +46,13 @@ export function summarizeReadiness(rows) {
     providerIdentityVerified: false, authenticatedReadsProven: false, mappingChanged: false };
 }
 
+export function summarizeProviderReadiness(rows) {
+  requireTrue(rows.length === 1 && Object.keys(rows[0]).length === 3
+    && [rows[0].users, rows[0].organizations, rows[0].active_memberships]
+      .every(value => Number.isSafeInteger(value) && value >= 0), "PROVIDER_AUDIT_SHAPE");
+  return { ...rows[0], verifiedSubjectLookup: true, permissionVerified: false, authenticatedRequestProven: false };
+}
+
 export async function auditIdentityReadiness(Client, env) {
   const scoped = applicationEnvironment(env);
   const client = new Client({ connectionString: scoped.TARGET_DATABASE_URL,
@@ -41,10 +66,11 @@ export async function auditIdentityReadiness(Client, env) {
     const before = await captureRows(client);
     requireTrue(before.sha256 === acceptedData, "MIGRATED_ROWS_CHANGED");
     const summary = summarizeReadiness((await client.query(readinessSql, [readinessAccounts])).rows);
+    const verifiedAdmin = summarizeProviderReadiness((await client.query(providerReadinessSql, verifiedAdminHashes)).rows);
     const after = await captureRows(client);
     requireTrue(after.sha256 === before.sha256 && after.tables === before.tables && after.rows === before.rows, "MIGRATED_ROWS_CHANGED");
     return { status: "PASS", scope: "identity-presence-audit-only", runId: binding.runId, release: binding.release,
-      ...summary, dataSha256: after.sha256, tables: after.tables, rows: after.rows,
+      ...summary, verifiedAdmin, dataSha256: after.sha256, tables: after.tables, rows: after.rows,
       applicationStarted: false, fullSmokeAccepted: false };
   } finally { await client.end().catch(() => {}); }
 }
