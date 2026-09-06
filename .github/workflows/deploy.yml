@@ -43,6 +43,7 @@ env:
 
 jobs:
   deploy:
+    if: (github.event.client_payload.service || inputs.service) != 'next-maps-canary' && (github.event.client_payload.service || inputs.service) != 'next-maps-canary-remove'
     name: Deploy ${{ github.event.client_payload.service || inputs.service }}
     runs-on: ubuntu-latest
 
@@ -314,3 +315,24 @@ jobs:
           service: ${{ steps.resolve.outputs.ecs_service }}
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
+
+  maps-canary:
+    if: github.event_name == 'workflow_dispatch' && (inputs.service == 'next-maps-canary' || inputs.service == 'next-maps-canary-remove')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Deploy test-hotel staging API
+        env:
+          IMAGE_SHA: ${{ inputs.image_sha }}
+          SERVICE: ${{ inputs.service }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          test "$ENVIRONMENT" = next
+          args=(--image-sha "$IMAGE_SHA")
+          if [ "$SERVICE" = next-maps-canary-remove ]; then args+=(--remove); fi
+          python3 scripts/deploy-next-maps-canary.py "${args[@]}"
