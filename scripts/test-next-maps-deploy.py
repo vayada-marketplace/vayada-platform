@@ -123,5 +123,56 @@ class DeploymentGuards(unittest.TestCase):
                 self.assertFalse(matches(actual, expected))
 
 
+class GuestFrontendSelection(unittest.TestCase):
+    def setUp(self):
+        self.frontend = runpy.run_path(str(pathlib.Path(__file__).with_name("deploy-next-maps-frontends.py")))
+
+    def test_guest_only_selection_and_legacy_default(self):
+        main = self.frontend["main"]
+        deploy = MagicMock()
+        aws = MagicMock(return_value={"Account": self.frontend["ACCOUNT"]})
+        sha, digest = "a" * 40, "sha256:" + "b" * 64
+        with patch.dict(main.__globals__, {"deploy": deploy, "aws": aws}):
+            main(["--guest-image-sha", "next-" + sha, "--guest-image-digest", digest])
+            kind, baseline, _, host = self.frontend["SPECS"][0]
+            deploy.assert_called_once_with((kind, baseline, sha, host), False, digest)
+            deploy.reset_mock()
+            main([])
+            self.assertEqual([call.args[0] for call in deploy.call_args_list], self.frontend["SPECS"])
+
+    def test_invalid_selection_rejected_before_aws(self):
+        main = self.frontend["main"]
+        aws, deploy = MagicMock(), MagicMock()
+        for argv in (["--guest-image-sha", "", "--guest-image-digest", ""],
+                     ["--guest-image-digest", ""],
+                     ["--guest-image-sha", "next-latest"],
+                     ["--guest-image-sha", "next-" + "a" * 40],
+                     ["--guest-image-digest", "sha256:" + "b" * 64],
+                     ["--remove", "--guest-image-sha", "next-" + "a" * 40]):
+            with self.subTest(argv=argv), patch.dict(main.__globals__, {"aws": aws, "deploy": deploy}):
+                with self.assertRaises(SystemExit):
+                    main(argv)
+        aws.assert_not_called()
+        deploy.assert_not_called()
+
+    def test_digest_mismatch_prevents_task_or_route_mutation(self):
+        deploy = self.frontend["deploy"]
+        def aws(service, op, **kwargs):
+            if op == "describe-services":
+                if kwargs["services"] == ["vayada-next-maps-guest-service"]:
+                    return {"services": []}
+                return {"services": [{"loadBalancers": [{"targetGroupArn": "baseline"}]}]}
+            if op == "describe-target-groups":
+                return {"TargetGroups": [{"TargetGroupName": "baseline", "TargetGroupArn": "baseline"}]}
+            if op == "describe-rules":
+                return {"Rules": [{"Priority": "10", "Actions": [{"TargetGroupArn": "baseline"}]}]}
+            if op == "describe-images":
+                return {"imageDetails": [{"imageDigest": "sha256:" + "c" * 64}]}
+            raise AssertionError("Unexpected AWS call: " + op)
+        with patch.dict(deploy.__globals__, {"aws": aws}):
+            with self.assertRaisesRegex(ValueError, "digest does not match"):
+                deploy(self.frontend["SPECS"][0], expected_digest="sha256:" + "b" * 64)
+
+
 if __name__ == "__main__":
     unittest.main()

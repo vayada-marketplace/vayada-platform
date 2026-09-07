@@ -2,6 +2,7 @@
 import argparse
 import json
 import pathlib
+import re
 import runpy
 import time
 
@@ -18,7 +19,7 @@ def owned(rule, arn):
     return any(a.get('TargetGroupArn') == arn or any(t['TargetGroupArn'] == arn for t in a.get('ForwardConfig', {}).get('TargetGroups', [])) for a in rule['Actions'])
 
 
-def deploy(spec, remove=False):
+def deploy(spec, remove=False, expected_digest=None):
     kind, baseline, sha, host = spec
     name = 'vayada-next-maps-' + kind
     service_name = name + '-service'
@@ -54,6 +55,8 @@ def deploy(spec, remove=False):
             raise ValueError('Existing frontend rule has unexpected conditions')
     repo = baseline + ('-frontend' if kind == 'admin' else '')
     digest = aws('ecr', 'describe-images', repositoryName=repo, imageIds=[{'imageTag': 'next-' + sha}])['imageDetails'][0]['imageDigest']
+    if expected_digest and digest != expected_digest:
+        raise ValueError('Guest image digest does not match the reviewed candidate')
     definition = aws('ecs', 'describe-task-definition', taskDefinition=current['taskDefinition'])['taskDefinition']
     container = next(c for c in definition['containerDefinitions'] if c['name'] == baseline)
     container['image'] = f'{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{repo}@{digest}'
@@ -104,10 +107,27 @@ def deploy(spec, remove=False):
         raise
 
 
-if __name__ == '__main__':
+def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--remove', action='store_true')
-    args = parser.parse_args()
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument('--remove', action='store_true')
+    selection.add_argument('--guest-image-sha')
+    parser.add_argument('--guest-image-digest')
+    args = parser.parse_args(argv)
+    specs = SPECS
+    if args.guest_image_sha is not None:
+        if not re.fullmatch(r'next-[0-9a-f]{40}', args.guest_image_sha):
+            parser.error('Guest image must be an immutable next-<40-character SHA> tag')
+        if not re.fullmatch(r'sha256:[0-9a-f]{64}', args.guest_image_digest or ''):
+            parser.error('Guest image requires its reviewed SHA-256 digest')
+        kind, baseline, _, host = SPECS[0]
+        specs = [(kind, baseline, args.guest_image_sha[5:], host)]
+    elif args.guest_image_digest is not None:
+        parser.error('Guest digest requires --guest-image-sha')
     assert aws('sts', 'get-caller-identity')['Account'] == ACCOUNT
-    for spec in SPECS:
-        deploy(spec, args.remove)
+    for spec in specs:
+        deploy(spec, args.remove, args.guest_image_digest)
+
+
+if __name__ == '__main__':
+    main()
