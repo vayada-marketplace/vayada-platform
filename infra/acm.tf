@@ -173,11 +173,19 @@ resource "aws_acm_certificate_validation" "wildcard_next_booking" {
 resource "aws_lb_listener_certificate" "wildcard_vayada" {
   listener_arn    = data.aws_lb_listener.https.arn
   certificate_arn = aws_acm_certificate_validation.wildcard_vayada.certificate_arn
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_lb_listener_certificate" "wildcard_booking" {
   listener_arn    = data.aws_lb_listener.https.arn
   certificate_arn = aws_acm_certificate_validation.wildcard_booking.certificate_arn
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_lb_listener_certificate" "wildcard_next_booking" {
