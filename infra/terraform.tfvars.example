@@ -14,3 +14,4 @@ staging_rehearsal_secret_expires_at = "2026-06-30T18:00:00Z"
 staging_pms_database_url            = "postgresql://staging-pms-user:staging-pms-password@target-host:5432/staging-pms-db?sslmode=require"
 staging_pms_auth_database_url           = "postgresql://staging-auth-readonly-user:staging-auth-password@target-host:5432/staging-auth-db?sslmode=require"
 staging_pms_booking_engine_database_url = "postgresql://staging-booking-readonly-user:staging-booking-password@target-host:5432/staging-booking-db?sslmode=require"
+# Temporary VAY-1381 plan trigger; this branch is not intended to merge.
