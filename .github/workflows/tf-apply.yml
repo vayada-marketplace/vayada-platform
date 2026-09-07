@@ -100,8 +100,22 @@ jobs:
           terraform show -no-color tfplan
         working-directory: infra
 
-      - name: Guard Terraform apply phase
-        run: bash ../scripts/guard-finance-folio-kms-plan.sh tfplan apply
+      - name: Assert exact VAY-1381 resource delta
+        run: |
+          terraform show -json tfplan | jq -e '
+            [.resource_changes[]
+              | select(.change.actions != ["no-op"])
+              | {address, actions: .change.actions}] as $changes
+            | ($changes | length == 2)
+              and ($changes | any(
+                .address == "aws_ssm_parameter.secrets[\"resend-webhook-secret\"]"
+                and .actions == ["create"]
+              ))
+              and ($changes | any(
+                .address == "aws_ecs_task_definition.services[\"next-target-backend\"]"
+                and .actions == ["create", "delete"]
+              ))
+          '
         working-directory: infra
 
       - name: Terraform targeted apply
