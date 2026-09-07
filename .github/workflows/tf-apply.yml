@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: production-ecs-mutations
+  group: ${{ inputs.apply && 'production-ecs-mutations' || 'vay1381-plan-only' }}
   queue: max
 
 env:
