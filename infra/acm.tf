@@ -30,11 +30,6 @@ resource "aws_route53_record" "wildcard_vayada_validation" {
   zone_id         = data.aws_route53_zone.main.zone_id
 }
 
-resource "aws_acm_certificate_validation" "wildcard_vayada" {
-  certificate_arn         = aws_acm_certificate.wildcard_vayada.arn
-  validation_record_fqdns = [for record in aws_route53_record.wildcard_vayada_validation : record.fqdn]
-}
-
 # Wildcard cert for *.booking.vayada.com
 # Covers: <hotel-slug>.booking.vayada.com multi-tenant subdomains
 resource "aws_acm_certificate" "wildcard_booking" {
@@ -65,11 +60,6 @@ resource "aws_route53_record" "wildcard_booking_validation" {
   ttl             = 60
   type            = each.value.type
   zone_id         = data.aws_route53_zone.main.zone_id
-}
-
-resource "aws_acm_certificate_validation" "wildcard_booking" {
-  certificate_arn         = aws_acm_certificate.wildcard_booking.arn
-  validation_record_fqdns = [for record in aws_route53_record.wildcard_booking_validation : record.fqdn]
 }
 
 # Wildcard cert for *.next-booking.vayada.com
@@ -132,12 +122,12 @@ resource "aws_acm_certificate_validation" "wildcard_next_booking" {
 # Attach wildcard certs to the existing ALB HTTPS listener
 resource "aws_lb_listener_certificate" "wildcard_vayada" {
   listener_arn    = data.aws_lb_listener.https.arn
-  certificate_arn = aws_acm_certificate_validation.wildcard_vayada.certificate_arn
+  certificate_arn = aws_acm_certificate.wildcard_vayada.arn
 }
 
 resource "aws_lb_listener_certificate" "wildcard_booking" {
   listener_arn    = data.aws_lb_listener.https.arn
-  certificate_arn = aws_acm_certificate_validation.wildcard_booking.certificate_arn
+  certificate_arn = aws_acm_certificate.wildcard_booking.arn
 }
 
 resource "aws_lb_listener_certificate" "wildcard_next_booking" {
