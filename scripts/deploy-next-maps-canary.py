@@ -111,15 +111,18 @@ def aws(aws_service, operation, **values):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
-def configure_channex_staging(container):
+def configure_channex_staging(container, meals=False):
     settings = {
         "CHANNEX_API_BASE_URL": "https://staging.channex.io",
         "PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID": PROPERTY,
         "PMS_CHANNEX_WORKER_ENABLED": "true",
         "PMS_CHANNEX_ARI_SYNC_MODE": "mutating",
+        "PMS_CHANNEX_STAGING_MEALS_ENABLED": "true" if meals else "false",
         **{f"PMS_CHANNEX_{mode}_MODE": "observe_only" for mode in
            ("CONNECTION", "PROVISIONING", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME")},
     }
+    if meals:
+        settings["PMS_CHANNEX_PROVISIONING_MODE"] = "mutating"
     container["environment"] = [e for e in container["environment"] if e["name"] not in settings and e["name"] != "CHANNEX_API_KEY"]
     container["environment"] += [{"name": k, "value": v} for k, v in settings.items()]
     container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in {*settings, "CHANNEX_API_KEY"}]
@@ -133,7 +136,10 @@ def main():
     parser.add_argument("--remove", action="store_true")
     parser.add_argument("--activate-guest", action="store_true")
     parser.add_argument("--channex-staging", action="store_true")
+    parser.add_argument("--channex-staging-meals", action="store_true")
     args = parser.parse_args()
+    if args.channex_staging_meals and not args.channex_staging:
+        raise ValueError("Staging meals require --channex-staging")
     if args.channex_staging and (args.activate_guest or args.remove):
         raise ValueError("Channex setup cannot activate guests or remove the service")
     if args.activate_guest and args.remove:
@@ -164,6 +170,12 @@ def main():
     has_channex = any(matching_conditions(rule["Conditions"], channex_condition) for rule in owned_rules)
     if args.channex_staging or has_channex:
         conditions.append(channex_condition)
+    meal_condition = [conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/room-types/*/flexible-rate-plan"]}}]
+    has_meals = any(matching_conditions(rule["Conditions"], meal_condition) for rule in owned_rules)
+    if args.channex_staging_meals or has_meals:
+        conditions.append(meal_condition)
+    if has_meals and not args.channex_staging_meals and not args.remove and not args.activate_guest:
+        raise ValueError("Existing staging meals require --channex-staging-meals to preserve configuration")
     if any(not any(matching_conditions(rule["Conditions"], expected) for expected in conditions) for rule in owned_rules):
         raise ValueError("Existing API rule has unexpected conditions")
     baseline_rules = [r for r in rules if r not in owned_rules and any(c.get("Field") == "host-header" and "next-api.vayada.com" in c.get("HostHeaderConfig", {}).get("Values", []) for c in r["Conditions"])]
@@ -202,7 +214,7 @@ def main():
     if args.channex_staging:
         parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_SECRET.split(":parameter")[1]]}])["Parameters"]
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
-        configure_channex_staging(source)
+        configure_channex_staging(source, meals=args.channex_staging_meals)
     source["image"] = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     source["environment"] = [e for e in source["environment"] if e["name"] not in {"PUBLIC_HOTEL_PROFILE_SOURCE", "GOOGLE_NEARBY_ENABLED", "API_BACKGROUND_WORKERS_ENABLED"}]
     source["environment"] += [{"name": "PUBLIC_HOTEL_PROFILE_SOURCE", "value": "active_publication"}, {"name": "GOOGLE_NEARBY_ENABLED", "value": "true"}, {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]

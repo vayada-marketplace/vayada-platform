@@ -1,4 +1,6 @@
 """Offline deployment guards; never calls AWS or the owner API."""
+import io
+import contextlib
 import pathlib
 import json
 import urllib.error
@@ -28,6 +30,42 @@ class DeploymentGuards(unittest.TestCase):
         self.assertEqual(source["image"], "pinned")
         self.assertEqual(source["secrets"], [{"name": "OTHER", "valueFrom": "preserve"},
                          {"name": "CHANNEX_API_KEY", "valueFrom": api["CHANNEX_SECRET"]}])
+
+    def test_meals_opt_in_scopes_config_and_route(self):
+        source = {"environment": [], "secrets": []}
+        api["configure_channex_staging"](source, meals=True)
+        env = {e["name"]: e["value"] for e in source["environment"]}
+        self.assertEqual(env["PMS_CHANNEX_STAGING_MEALS_ENABLED"], "true")
+        self.assertEqual(env["PMS_CHANNEX_PROVISIONING_MODE"], "mutating")
+        self.assertEqual(env["PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID"], api["PROPERTY"])
+        for mode in ("CONNECTION", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME"):
+            self.assertEqual(env[f"PMS_CHANNEX_{mode}_MODE"], "observe_only")
+        main = api["main"]
+        def aws(service, op, **kwargs):
+            if op == "get-caller-identity": return {"Account": api["ACCOUNT"]}
+            if op == "describe-services": return {"services": [{"taskDefinition": "baseline"}] if kwargs["services"] == ["vayada-next-api-service"] else []}
+            if op == "describe-task-definition": return {"taskDefinition": {"containerDefinitions": [{"name": "vayada-next-api"}]}}
+            if op == "describe-target-groups": return {"TargetGroups": []}
+            if op == "describe-rules": return {"Rules": []}
+            raise AssertionError(op)
+        for meals in (False, True):
+            args = ["deploy", "--image-sha", "next-" + "a" * 40, "--plan", "--channex-staging"]
+            if meals: args.append("--channex-staging-meals")
+            out = io.StringIO()
+            with patch("sys.argv", args), patch.dict(main.__globals__, {"aws": aws}), contextlib.redirect_stdout(out):
+                main()
+            conditions = json.loads(out.getvalue())["conditions"]
+            paths = [v for c in conditions for part in c for v in part.get("PathPatternConfig", {}).get("Values", [])]
+            self.assertEqual([p for p in paths if "flexible-rate-plan" in p],
+                             [f"/api/pms/properties/{api['PROPERTY']}/room-types/*/flexible-rate-plan"] if meals else [])
+
+    def test_meals_require_staging_before_aws(self):
+        main = api["main"]
+        aws = MagicMock(side_effect=AssertionError("AWS must not be called"))
+        with patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, "--channex-staging-meals"]), patch.dict(main.__globals__, {"aws": aws}):
+            with self.assertRaisesRegex(ValueError, "require --channex-staging"):
+                main()
+        aws.assert_not_called()
 
     def test_channex_cannot_activate_or_remove(self):
         main = api["main"]
