@@ -1,11 +1,11 @@
 # Third isolated destination: deterministic media keys must never overwrite either retained run.
 locals {
-  migration_rehearsal_midnight_media_bucket = "vayada-rehearsal-9bb02329-${var.aws_account_id}"
+  migration_rehearsal_midnight_media_bucket = "vayada-rehearsal-0118fd1f-${var.aws_account_id}"
   migration_rehearsal_midnight_media_tags = {
     Project     = "vayada"
     Environment = "staging"
     Purpose     = "migration-rehearsal"
-    Release     = "9bb02329325d018adfc68c5b4b3244ab4d569e14"
+    Release     = "0118fd1f61b01e94dad63590a4452afb3cebac32"
     ManagedBy   = "terraform"
   }
   migration_rehearsal_midnight_media_objects = [
@@ -55,7 +55,7 @@ resource "aws_s3_bucket_versioning" "migration_rehearsal_midnight_media" {
 }
 
 resource "aws_cloudfront_origin_access_control" "migration_rehearsal_midnight_media" {
-  name                              = "vayada-rehearsal-9bb02329-media"
+  name                              = "vayada-rehearsal-0118fd1f-media"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
@@ -134,7 +134,7 @@ resource "aws_s3_bucket_policy" "migration_rehearsal_midnight_media" {
 }
 
 resource "aws_iam_role" "migration_rehearsal_midnight_media" {
-  name = "vayada-rehearsal-9bb02329-media"
+  name = "vayada-rehearsal-0118fd1f-media"
   tags = local.migration_rehearsal_midnight_media_tags
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -211,7 +211,7 @@ output "migration_rehearsal_midnight_media" {
 # Bootstrap this read/config-only policy with administrator credentials before merge.
 # No task PassRole, IAM mutation, object read/write, or inline-policy expansion.
 resource "aws_iam_policy" "github_actions_rehearsal_midnight_read" {
-  name = "vayada-rehearsal-9bb02329-deploy-read"
+  name = "vayada-rehearsal-0118fd1f-deploy-read"
   tags = local.migration_rehearsal_midnight_media_tags
   policy = jsonencode({
     Version = "2012-10-17"
@@ -219,12 +219,12 @@ resource "aws_iam_policy" "github_actions_rehearsal_midnight_read" {
       {
         Effect   = "Allow"
         Action   = ["iam:GetRole", "iam:ListRolePolicies", "iam:GetRolePolicy", "iam:ListAttachedRolePolicies"]
-        Resource = "arn:aws:iam::${var.aws_account_id}:role/vayada-rehearsal-9bb02329-media"
+        Resource = "arn:aws:iam::${var.aws_account_id}:role/vayada-rehearsal-0118fd1f-media"
       },
       {
         Effect   = "Allow"
         Action   = ["iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions"]
-        Resource = "arn:aws:iam::${var.aws_account_id}:policy/vayada-rehearsal-9bb02329-deploy-read"
+        Resource = "arn:aws:iam::${var.aws_account_id}:policy/vayada-rehearsal-0118fd1f-deploy-read"
       },
       {
         Effect   = "Allow"

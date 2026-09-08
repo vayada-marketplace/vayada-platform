@@ -29,8 +29,8 @@ aws() {
         bucket=vayada-rehearsal-2d1ef4ef-269416271598
         expected_role=arn:aws:iam::269416271598:role/vayada-rehearsal-2d1ef4ef-media
       elif [[ "${MOCK_MIDNIGHT:-false}" == true ]]; then
-        bucket=vayada-rehearsal-9bb02329-269416271598
-        expected_role=arn:aws:iam::269416271598:role/vayada-rehearsal-9bb02329-media
+        bucket=vayada-rehearsal-0118fd1f-269416271598
+        expected_role=arn:aws:iam::269416271598:role/vayada-rehearsal-0118fd1f-media
       fi
       [[ "$role" == "$expected_role" ]] || return 1
       decision=explicitDeny

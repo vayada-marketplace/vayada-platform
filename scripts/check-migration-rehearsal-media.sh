@@ -15,8 +15,8 @@ case "${1:-retained}" in
     role="arn:aws:iam::${account}:role/vayada-rehearsal-2d1ef4ef-media"
     owner_evidence=true ;;
   --midnight-release)
-    bucket="vayada-rehearsal-9bb02329-${account}"
-    role="arn:aws:iam::${account}:role/vayada-rehearsal-9bb02329-media"
+    bucket="vayada-rehearsal-0118fd1f-${account}"
+    role="arn:aws:iam::${account}:role/vayada-rehearsal-0118fd1f-media"
     owner_evidence=true ;;
   *) echo 'Expected retained (default), --fixed-release, or --midnight-release' >&2; exit 1 ;;
 esac
@@ -49,7 +49,7 @@ fi
 for other in \
   "vayada-migration-rehearsal-media-${account}" \
   "vayada-rehearsal-2d1ef4ef-${account}" \
-  "vayada-rehearsal-9bb02329-${account}"; do
+  "vayada-rehearsal-0118fd1f-${account}"; do
   [[ "$other" != "$bucket" ]] || continue
   for key in public/media/contract-check private/media/contract-check rehearsal-control/owner.json; do
     assert_decision explicitDeny "arn:aws:s3:::${other}/${key}" s3:PutObject s3:DeleteObject s3:DeleteObjectVersion

@@ -66,8 +66,9 @@ were rejected. Preserve its target, owner reservation, object versions, secret,
 roles and logs unchanged. Target migrations `0171` and `0172` mean that target
 must not be resumed after the application fix.
 
-Release `9bb02329325d018adfc68c5b4b3244ab4d569e14` contains the reviewed midnight
-semantics. Its fresh full rehearsal uses the additive
+Release `0118fd1f61b01e94dad63590a4452afb3cebac32` contains the reviewed midnight
+semantics from `9bb02329325d018adfc68c5b4b3244ab4d569e14` and is the exact descendant
+used by the final live acceptance. Its fresh full rehearsal uses the additive
 `migration_rehearsal_midnight_media` resources: another private, encrypted,
 versioned bucket, public-only CloudFront origin and isolated task role. Apply the
 same saved-plan/bootstrap rules above, requiring exactly twelve creates and no
