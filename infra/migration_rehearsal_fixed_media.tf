@@ -163,6 +163,18 @@ resource "aws_iam_role_policy" "migration_rehearsal_fixed_media" {
         Resource = local.migration_rehearsal_fixed_media_objects
       },
       {
+        Sid      = "ReadExactOwnerReservation"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:GetObjectVersion"]
+        Resource = "${aws_s3_bucket.migration_rehearsal_fixed_media.arn}/rehearsal-control/owner.json"
+      },
+      {
+        Sid      = "ListExactRehearsalVersions"
+        Effect   = "Allow"
+        Action   = "s3:ListBucketVersions"
+        Resource = aws_s3_bucket.migration_rehearsal_fixed_media.arn
+      },
+      {
         Sid    = "ReadReviewedLegacyMediaObjects"
         Effect = "Allow"
         Action = "s3:GetObject"
