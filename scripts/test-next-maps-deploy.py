@@ -10,6 +10,34 @@ api = runpy.run_path(str(pathlib.Path(__file__).with_name("deploy-next-maps-cana
 
 
 class DeploymentGuards(unittest.TestCase):
+    def test_channex_secret_reference_and_disabled_capabilities(self):
+        source = {"image": "pinned", "environment": [
+            {"name": "PMS_CHANNEX_CONNECTION_MODE", "value": "mutating"},
+            {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"},
+            {"name": "CHANNEX_API_KEY", "value": "must-remove"}],
+            "secrets": [{"name": "CHANNEX_API_KEY", "valueFrom": "production"},
+                        {"name": "OTHER", "valueFrom": "preserve"}]}
+        api["configure_channex_staging"](source)
+        env = {e["name"]: e["value"] for e in source["environment"]}
+        self.assertEqual(env["API_BACKGROUND_WORKERS_ENABLED"], "false")
+        self.assertEqual(env["CHANNEX_API_BASE_URL"], "https://staging.channex.io")
+        self.assertEqual(env["PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID"], api["PROPERTY"])
+        self.assertNotIn("CHANNEX_API_KEY", env)
+        for mode in ("CONNECTION", "PROVISIONING", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME"):
+            self.assertEqual(env[f"PMS_CHANNEX_{mode}_MODE"], "observe_only")
+        self.assertEqual(source["image"], "pinned")
+        self.assertEqual(source["secrets"], [{"name": "OTHER", "valueFrom": "preserve"},
+                         {"name": "CHANNEX_API_KEY", "valueFrom": api["CHANNEX_SECRET"]}])
+
+    def test_channex_cannot_activate_or_remove(self):
+        main = api["main"]
+        aws = MagicMock(side_effect=AssertionError("AWS must not be called"))
+        for mode in ("--remove", "--activate-guest"):
+            with patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, "--channex-staging", mode]), patch.dict(main.__globals__, {"aws": aws}):
+                with self.assertRaises(ValueError):
+                    main()
+        aws.assert_not_called()
+
     def test_activation_removal_conflict_before_aws(self):
         main = api["main"]
         aws = MagicMock(side_effect=AssertionError("AWS must not be called"))
@@ -60,7 +88,9 @@ class DeploymentGuards(unittest.TestCase):
 
     def test_publication_failure_never_activates_guest(self):
         activate = api["activate_guest"]
-        conditions = [[{"Field": "path-pattern", "PathPatternConfig": {"Values": [str(i)]}}] for i in range(7)]
+        conditions = [[{"Field": "path-pattern", "PathPatternConfig": {"Values": [str(i)]}}] for i in range(8)]
+        conditions[6] = [{"Field": "path-pattern", "PathPatternConfig": {"Values": [api["PROBE_PATH"]]}}]
+        conditions[7] = [{"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{api["PROPERTY"]}/channex/*"]}}]
         group = {"TargetGroupArn": "canary"}
         rules = [{"Conditions": c, "RuleArn": str(i), "Actions": [{"Type": "forward", "TargetGroupArn": "canary"}]} for i, c in enumerate(conditions)]
         existing = [{"taskDefinition": "task", "deployments": [{"status": "PRIMARY", "taskDefinition": "task", "rolloutState": "COMPLETED"}]}]

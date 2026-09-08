@@ -65,6 +65,7 @@ locals {
     ],
     [
       "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/next-stripe-test-secret-key",
+      "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/staging/next-channex-test-api-key",
     ],
   )
 

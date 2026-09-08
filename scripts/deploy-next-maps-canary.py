@@ -16,6 +16,7 @@ LISTENER = f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:listener/app/vayada
 PROPERTY = "65f6b2fc-c783-4963-9d6b-a85f82319769"
 SLUG = "codex-test-hotel-not-bookable"
 SECRET = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/vayada/prod/next-google-places-server-test"
+CHANNEX_SECRET = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/vayada/staging/next-channex-test-api-key"
 TAGS = [{"key": "Task", "value": "VAY-1480"}]
 
 
@@ -85,7 +86,8 @@ def activate_guest(existing, group, owned_rules, conditions, digest):
         assert {"name": name, "value": value} in container["environment"]
     health = aws("elbv2", "describe-target-health", TargetGroupArn=group["TargetGroupArn"])["TargetHealthDescriptions"]
     assert health and all(t["TargetHealth"]["State"] == "healthy" for t in health)
-    probe = [r for r in owned_rules if matching_conditions(r["Conditions"], conditions[-1])]
+    probe_condition = next(c for c in conditions if any(PROBE_PATH in item.get("PathPatternConfig", {}).get("Values", []) for item in c))
+    probe = [r for r in owned_rules if matching_conditions(r["Conditions"], probe_condition)]
     guest = [r for r in owned_rules if matching_conditions(r["Conditions"], conditions[2])]
     assert len(probe) == len(guest) == 1
     # A separate public-profile route reaches the same active-publication repository
@@ -109,13 +111,31 @@ def aws(aws_service, operation, **values):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
+def configure_channex_staging(container):
+    settings = {
+        "CHANNEX_API_BASE_URL": "https://staging.channex.io",
+        "PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID": PROPERTY,
+        "PMS_CHANNEX_WORKER_ENABLED": "true",
+        "PMS_CHANNEX_ARI_SYNC_MODE": "mutating",
+        **{f"PMS_CHANNEX_{mode}_MODE": "observe_only" for mode in
+           ("CONNECTION", "PROVISIONING", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME")},
+    }
+    container["environment"] = [e for e in container["environment"] if e["name"] not in settings and e["name"] != "CHANNEX_API_KEY"]
+    container["environment"] += [{"name": k, "value": v} for k, v in settings.items()]
+    container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in {*settings, "CHANNEX_API_KEY"}]
+    container["secrets"].append({"name": "CHANNEX_API_KEY", "valueFrom": CHANNEX_SECRET})
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image-sha", required=True)
     parser.add_argument("--plan", action="store_true")
     parser.add_argument("--remove", action="store_true")
     parser.add_argument("--activate-guest", action="store_true")
+    parser.add_argument("--channex-staging", action="store_true")
     args = parser.parse_args()
+    if args.channex_staging and (args.activate_guest or args.remove):
+        raise ValueError("Channex setup cannot activate guests or remove the service")
     if args.activate_guest and args.remove:
         raise ValueError("Activation and removal are mutually exclusive")
     if not re.fullmatch(r"next-[a-f0-9]{40}", args.image_sha):
@@ -140,6 +160,10 @@ def main():
     conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/pricing-source", f"/api/pms/properties/{PROPERTY}/mandatory-charge-confirmation"]}}])
     conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/inventory-materialization"]}}])
     conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [PROBE_PATH]}}])
+    channex_condition = [conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/channex", f"/api/pms/properties/{PROPERTY}/channex/*"]}}]
+    has_channex = any(matching_conditions(rule["Conditions"], channex_condition) for rule in owned_rules)
+    if args.channex_staging or has_channex:
+        conditions.append(channex_condition)
     if any(not any(matching_conditions(rule["Conditions"], expected) for expected in conditions) for rule in owned_rules):
         raise ValueError("Existing API rule has unexpected conditions")
     baseline_rules = [r for r in rules if r not in owned_rules and any(c.get("Field") == "host-header" and "next-api.vayada.com" in c.get("HostHeaderConfig", {}).get("Values", []) for c in r["Conditions"])]
@@ -150,6 +174,8 @@ def main():
         existing = []
     print(json.dumps({"action": "remove" if args.remove else "deploy", "sourceDefinition": current["taskDefinition"],
                       "canaryService": SERVICE, "conditions": conditions, "sharedApiUnchanged": True}))
+    if has_channex and not args.channex_staging and not args.remove and not args.activate_guest:
+        raise ValueError("Existing Channex staging requires --channex-staging to preserve its configuration")
     if args.plan:
         return
     if args.remove:
@@ -173,6 +199,10 @@ def main():
     # Inspect metadata only. ECS injects the existing server credential; CI never retrieves its value.
     parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [SECRET.split(":parameter")[1]]}])["Parameters"]
     assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
+    if args.channex_staging:
+        parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_SECRET.split(":parameter")[1]]}])["Parameters"]
+        assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
+        configure_channex_staging(source)
     source["image"] = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     source["environment"] = [e for e in source["environment"] if e["name"] not in {"PUBLIC_HOTEL_PROFILE_SOURCE", "GOOGLE_NEARBY_ENABLED", "API_BACKGROUND_WORKERS_ENABLED"}]
     source["environment"] += [{"name": "PUBLIC_HOTEL_PROFILE_SOURCE", "value": "active_publication"}, {"name": "GOOGLE_NEARBY_ENABLED", "value": "true"}, {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]
