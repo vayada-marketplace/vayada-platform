@@ -6,13 +6,19 @@ region=eu-west-1
 account=269416271598
 bucket="vayada-migration-rehearsal-media-${account}"
 role="arn:aws:iam::${account}:role/vayada-migration-rehearsal-media-task-role"
+owner_evidence=false
 [[ $# -le 1 ]]
 case "${1:-retained}" in
   retained) ;;
   --fixed-release)
     bucket="vayada-rehearsal-2d1ef4ef-${account}"
-    role="arn:aws:iam::${account}:role/vayada-rehearsal-2d1ef4ef-media" ;;
-  *) echo 'Expected retained (default) or --fixed-release' >&2; exit 1 ;;
+    role="arn:aws:iam::${account}:role/vayada-rehearsal-2d1ef4ef-media"
+    owner_evidence=true ;;
+  --midnight-release)
+    bucket="vayada-rehearsal-9bb02329-${account}"
+    role="arn:aws:iam::${account}:role/vayada-rehearsal-9bb02329-media"
+    owner_evidence=true ;;
+  *) echo 'Expected retained (default), --fixed-release, or --midnight-release' >&2; exit 1 ;;
 esac
 [[ "$(aws sts get-caller-identity --query Account --output text)" == "$account" ]]
 aws s3api get-public-access-block --bucket "$bucket" --region "$region" --output json |
@@ -34,8 +40,16 @@ for prefix in public private; do
   assert_decision allowed "arn:aws:s3:::${bucket}/${prefix}/media/contract-check" \
     s3:GetObject s3:PutObject s3:DeleteObject
 done
+if [[ "$owner_evidence" == true ]]; then
+  assert_decision allowed "arn:aws:s3:::${bucket}/rehearsal-control/owner.json" \
+    s3:GetObject s3:GetObjectVersion
+  assert_decision allowed "arn:aws:s3:::${bucket}" s3:ListBucketVersions
+fi
 # Each run must also deny mutation of the other run's destination/reservation.
-for other in "vayada-migration-rehearsal-media-${account}" "vayada-rehearsal-2d1ef4ef-${account}"; do
+for other in \
+  "vayada-migration-rehearsal-media-${account}" \
+  "vayada-rehearsal-2d1ef4ef-${account}" \
+  "vayada-rehearsal-9bb02329-${account}"; do
   [[ "$other" != "$bucket" ]] || continue
   for key in public/media/contract-check private/media/contract-check rehearsal-control/owner.json; do
     assert_decision explicitDeny "arn:aws:s3:::${other}/${key}" s3:PutObject s3:DeleteObject s3:DeleteObjectVersion
