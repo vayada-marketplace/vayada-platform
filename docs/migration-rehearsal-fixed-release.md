@@ -57,3 +57,22 @@ parity, authenticated-domain/browser/job/rollback checks, positive public media,
 final-delta timing and named approvals remain required. VAY-1283's identified
 legacy check-in/out range preservation gap must be reconciled before final
 migration acceptance; source compilation alone does not close that gap.
+
+## Post-midnight-fix rerun
+
+The first fixed-release run `vay1360-794408820af79d3f3c63aa6d` stopped safely
+before Catalog committed because two valid legacy `14:00–00:00` check-in windows
+were rejected. Preserve its target, owner reservation, object versions, secret,
+roles and logs unchanged. Target migrations `0171` and `0172` mean that target
+must not be resumed after the application fix.
+
+Release `0118fd1f61b01e94dad63590a4452afb3cebac32` contains the reviewed midnight
+semantics from `9bb02329325d018adfc68c5b4b3244ab4d569e14` and is the exact descendant
+used by the final live acceptance. Its fresh full rehearsal uses the additive
+`migration_rehearsal_midnight_media` resources: another private, encrypted,
+versioned bucket, public-only CloudFront origin and isolated task role. Apply the
+same saved-plan/bootstrap rules above, requiring exactly twelve creates and no
+changes, deletes, replacements or imports. Run the deployed media checker with
+`--midnight-release`, reserve a new owner without overwriting either existing
+owner, and bind a new run ID, database, role, secret, image digest and storage
+tuple before starting ETL.

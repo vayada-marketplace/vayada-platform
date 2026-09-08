@@ -28,11 +28,17 @@ aws() {
       if [[ "${MOCK_FIXED:-false}" == true ]]; then
         bucket=vayada-rehearsal-2d1ef4ef-269416271598
         expected_role=arn:aws:iam::269416271598:role/vayada-rehearsal-2d1ef4ef-media
+      elif [[ "${MOCK_MIDNIGHT:-false}" == true ]]; then
+        bucket=vayada-rehearsal-0118fd1f-269416271598
+        expected_role=arn:aws:iam::269416271598:role/vayada-rehearsal-0118fd1f-media
       fi
       [[ "$role" == "$expected_role" ]] || return 1
       decision=explicitDeny
       if [[ "$resource" == "arn:aws:s3:::${bucket}/public/media/"* || "$resource" == "arn:aws:s3:::${bucket}/private/media/"* ]]; then decision=allowed;
+      elif [[ "${MOCK_OWNER_READ_DENIED:-false}" == true && "$resource" == "arn:aws:s3:::${bucket}/rehearsal-control/owner.json" ]]; then decision=explicitDeny;
+      elif [[ "${MOCK_VERSION_LIST_DENIED:-false}" == true && "${actions[0]}" == s3:ListBucketVersions ]]; then decision=explicitDeny;
       elif [[ "${actions[0]}" == s3:ListBucket ]]; then decision=implicitDeny;
+      elif [[ "${actions[0]}" == s3:ListBucketVersions ]]; then decision=allowed;
       elif [[ "${actions[0]}" == s3:GetObject ]]; then decision=allowed;
       elif [[ "${MOCK_PRODUCTION_WRITE:-false}" == true ]]; then decision=allowed; fi
       jq -cn --arg decision "$decision" --argjson count "${#actions[@]}" \
@@ -43,12 +49,18 @@ aws() {
 }
 export -f aws
 check=scripts/check-migration-rehearsal-media.sh
-for mode in retained --fixed-release; do
+for mode in retained --fixed-release --midnight-release; do
 export MOCK_FIXED=false
+export MOCK_MIDNIGHT=false
 [[ "$mode" != --fixed-release ]] || export MOCK_FIXED=true
+[[ "$mode" != --midnight-release ]] || export MOCK_MIDNIGHT=true
 bash "$check" "$mode"
-for fault in MOCK_ACCOUNT=wrong MOCK_BLOCKED=false MOCK_VERSIONING=Suspended \
-  MOCK_ENCRYPTION=wrong MOCK_PRODUCTION_WRITE=true MOCK_MISSING=true MOCK_CONTEXT=true; do
+faults=(MOCK_ACCOUNT=wrong MOCK_BLOCKED=false MOCK_VERSIONING=Suspended \
+  MOCK_ENCRYPTION=wrong MOCK_PRODUCTION_WRITE=true MOCK_MISSING=true MOCK_CONTEXT=true)
+if [[ "$mode" != retained ]]; then
+  faults+=(MOCK_OWNER_READ_DENIED=true MOCK_VERSION_LIST_DENIED=true)
+fi
+for fault in "${faults[@]}"; do
   if env "$fault" bash "$check" "$mode" >/dev/null 2>&1; then
     echo "Isolation check accepted $fault" >&2; exit 1
   fi
@@ -57,4 +69,4 @@ done
 if bash "$check" --unknown >/dev/null 2>&1 || bash "$check" retained extra >/dev/null 2>&1; then
   echo 'Isolation check accepted an unknown boundary' >&2; exit 1
 fi
-echo 'Both rehearsal media boundaries: valid fixtures, fourteen unsafe cases, and unknown-boundary refusals passed.'
+echo 'All three rehearsal media boundaries: valid fixtures, twenty-five unsafe cases, and unknown-boundary refusals passed.'
