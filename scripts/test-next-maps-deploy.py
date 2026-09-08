@@ -34,7 +34,8 @@ class DeploymentGuards(unittest.TestCase):
         aws = MagicMock(side_effect=AssertionError("AWS must not be called"))
         for mode in ("--remove", "--activate-guest"):
             with patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, "--channex-staging", mode]), patch.dict(main.__globals__, {"aws": aws}):
-                with self.assertRaises(ValueError): main()
+                with self.assertRaises(ValueError):
+                    main()
         aws.assert_not_called()
 
     def test_activation_removal_conflict_before_aws(self):

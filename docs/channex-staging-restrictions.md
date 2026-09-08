@@ -1,6 +1,7 @@
 # VAY-1528 isolated Channex staging
 
-Requires the application scoped-restrictions worker change before deployment.
+Requires [application PR1776](https://github.com/vayada-marketplace/vayada/pull/1776)
+and its reviewed scoped-restrictions worker image before deployment.
 Use deploy.yml with next-maps-canary, environment next, the reviewed immutable
 image SHA and channex_staging=true. This preserves existing routes and adds only
 the reusable synthetic property's Channex path. Guest activation stays separate.
