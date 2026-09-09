@@ -38,6 +38,11 @@ on:
         required: false
         type: boolean
         default: false
+      room_closure:
+        description: "Enable room closure on the already-paused synthetic canary"
+        required: false
+        type: boolean
+        default: false
       channex_worker_state:
         description: "Preserve worker state, or pause/resume on the current canary image"
         required: false
@@ -78,6 +83,7 @@ jobs:
 
       - name: Validate Channex worker state scope
         env:
+          ROOM_CLOSURE: ${{ inputs.room_closure }}
           CHANNEX_WORKER_STATE: ${{ inputs.channex_worker_state }}
           SERVICE: ${{ github.event.client_payload.service || inputs.service }}
           ENVIRONMENT: ${{ inputs.environment }}
@@ -358,6 +364,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Validate Channex worker state scope
         env:
+          ROOM_CLOSURE: ${{ inputs.room_closure }}
           CHANNEX_WORKER_STATE: ${{ inputs.channex_worker_state }}
           SERVICE: ${{ github.event.client_payload.service || inputs.service }}
           ENVIRONMENT: ${{ inputs.environment }}
@@ -379,6 +386,7 @@ jobs:
           CHANNEX_STAGING: ${{ inputs.channex_staging }}
           CHANNEX_STAGING_MEALS: ${{ inputs.channex_staging_meals }}
           CHANNEX_STAGING_INVENTORY: ${{ inputs.channex_staging_inventory }}
+          ROOM_CLOSURE: ${{ inputs.room_closure }}
           CHANNEX_WORKER_STATE: ${{ inputs.channex_worker_state }}
         run: |
           set -euo pipefail
@@ -391,6 +399,7 @@ jobs:
           if [ "$CHANNEX_STAGING" = true ]; then args+=(--channex-staging); fi
           if [ "$CHANNEX_STAGING_MEALS" = true ]; then args+=(--channex-staging-meals); fi
           if [ "$CHANNEX_STAGING_INVENTORY" = true ]; then args+=(--channex-staging-inventory); fi
+          if [ "$ROOM_CLOSURE" = true ]; then args+=(--room-closure); fi
           if [ "$SERVICE" = next-maps-canary-remove ]; then args+=(--remove); fi
           if [ "$ACTIVATE_GUEST" = true ]; then args+=(--activate-guest); fi
           python3 scripts/deploy-next-maps-canary.py "${args[@]}"

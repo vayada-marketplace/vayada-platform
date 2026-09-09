@@ -14,6 +14,24 @@ api = runpy.run_path(str(pathlib.Path(__file__).with_name("deploy-next-maps-cana
 
 
 class DeploymentGuards(unittest.TestCase):
+    def test_room_closure_requires_pause_and_clears_stale_flag(self):
+        source = {"environment": [], "secrets": []}
+        with self.assertRaisesRegex(ValueError, "paused"):
+            api["configure_channex_staging"](source, closure=True)
+        api["configure_channex_staging"](source, worker_enabled="false", closure=True)
+        self.assertIn({"name": "PMS_ROOM_CLOSURE_ENABLED", "value": "true"}, source["environment"])
+        api["configure_channex_staging"](source, worker_enabled="false")
+        self.assertNotIn("PMS_ROOM_CLOSURE_ENABLED", [e["name"] for e in source["environment"]])
+
+    def test_closure_scope_rejected_before_aws(self):
+        main = api["main"]
+        for extra in ([], ["--channex-staging"], ["--channex-staging", "--channex-staging-inventory", "--channex-worker-state", "running"]):
+            aws = MagicMock()
+            with patch.dict(main.__globals__, {"aws": aws}), patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, "--room-closure", *extra]):
+                with self.assertRaisesRegex(ValueError, "Room closure requires"):
+                    main()
+            aws.assert_not_called()
+
     def test_channex_secret_reference_and_disabled_capabilities(self):
         source = {"image": "pinned", "environment": [
             {"name": "PMS_CHANNEX_CONNECTION_MODE", "value": "mutating"},
@@ -242,6 +260,35 @@ class WorkerStateChanges(unittest.TestCase):
         definition = {"containerDefinitions": [container], "cpu": "512", "memory": "1024", "taskRoleArn": "role", "revision": 15, "family": api["FAMILY"], "tags": [*api["TAGS"], {"key": "Other", "value": "keep"}], "pidMode": "task", "ipcMode": "none", "proxyConfiguration": {"type": "APPMESH", "containerName": "proxy"}, "enableFaultInjection": False}
         existing = [{"taskDefinition": "previous", "deployments": [{"status": "PRIMARY", "taskDefinition": "previous", "rolloutState": "COMPLETED"}]}]
         return existing, definition
+
+    def test_closure_rejects_incomplete_pause_rollout(self):
+        existing, definition = self.fixture("false", inventory=True)
+        existing[0].update(pendingCount=0, runningCount=1, desiredCount=1)
+        api["require_paused_closure_service"](existing, definition)
+        for field, value in (("pendingCount", 1), ("runningCount", 0), ("desiredCount", 2)):
+            changed = json.loads(json.dumps(existing))
+            changed[0][field] = value
+            with self.assertRaisesRegex(ValueError, "completed"):
+                api["require_paused_closure_service"](changed, definition)
+        mixed = json.loads(json.dumps(existing))
+        mixed[0]["deployments"].append({"taskDefinition": "old-worker-enabled", "rolloutState": "COMPLETED"})
+        with self.assertRaisesRegex(ValueError, "completed"):
+            api["require_paused_closure_service"](mixed, definition)
+        for status in ("IN_PROGRESS", "FAILED"):
+            changed = json.loads(json.dumps(existing))
+            changed[0]["deployments"][0]["rolloutState"] = status
+            with self.assertRaisesRegex(ValueError, "completed"):
+                api["require_paused_closure_service"](changed, definition)
+
+    def test_worker_cannot_resume_with_closure_enabled(self):
+        existing, definition = self.fixture("false", inventory=True)
+        definition["containerDefinitions"][0]["environment"].append({"name": "PMS_ROOM_CLOSURE_ENABLED", "value": "true"})
+        fn = api["change_staging_worker"]
+        calls = MagicMock(return_value={"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]})
+        with patch.dict(fn.__globals__, {"aws": calls}):
+            with self.assertRaisesRegex(ValueError, "Disable room closure"):
+                fn(existing, definition, "next-" + "a" * 40, "running", True, inventory=True)
+        self.assertEqual(calls.call_count, 1)
 
     def test_pause_resume_preserve_every_other_task_field_and_never_touch_routes(self):
         for enabled, state, value in (("true", "paused", "false"), ("false", "running", "true")):
