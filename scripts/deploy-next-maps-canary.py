@@ -112,6 +112,27 @@ def aws(aws_service, operation, **values):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
+def verify_inventory_image(digest):
+    """Probe compiled config without AWS/DB credentials or container networking."""
+    image = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
+    password = subprocess.run(["aws", "ecr", "get-login-password", "--region", REGION],
+                              check=True, capture_output=True, text=True).stdout
+    subprocess.run(["docker", "login", "--username", "AWS", "--password-stdin",
+                    f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com"], input=password,
+                   check=True, capture_output=True, text=True)
+    subprocess.run(["docker", "pull", image], check=True, capture_output=True, text=True)
+    probe = """import { loadConfig } from '/app/apps/api/dist/config.js';
+const c = loadConfig({TARGET_DATABASE_URL:'postgresql://synthetic', PMS_OPERATIONS_SOURCE:'target',
+CHANNEX_API_BASE_URL:'https://staging.channex.io', CHANNEX_API_KEY:'synthetic',
+API_BACKGROUND_WORKERS_ENABLED:'false', PMS_CHANNEX_ARI_SYNC_MODE:'mutating',
+PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID:'%s', PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true'});
+if(c.channexManagement.stagingInventoryEnabled !== true) throw new Error('Inventory-capable image required');
+""" % PROPERTY
+    subprocess.run(["docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+                    "--entrypoint", "node", image, "--input-type=module", "-e", probe],
+                   check=True, capture_output=True, text=True)
+
+
 def configure_channex_staging(container, meals=False, worker_enabled="true", inventory=False):
     settings = {
         "CHANNEX_API_BASE_URL": "https://staging.channex.io",
@@ -289,6 +310,8 @@ def main():
     digest = aws("ecr", "describe-images", repositoryName="vayada-next-api",
                  imageIds=[{"imageTag": args.image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
+    if args.channex_staging_inventory:
+        verify_inventory_image(digest)
     if args.activate_guest:
         activate_guest(existing, group, owned_rules, conditions, digest)
         return

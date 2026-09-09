@@ -45,6 +45,25 @@ class DeploymentGuards(unittest.TestCase):
             for mode in ("CONNECTION", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME"):
                 self.assertEqual(env[f"PMS_CHANNEX_{mode}_MODE"], "observe_only")
 
+    def test_inventory_image_probe_is_pinned_and_isolated_and_fails_closed(self):
+        fn = api["verify_inventory_image"]
+        for fail in (False, True):
+            def run(command, **kwargs):
+                if command[:2] == ["docker", "run"] and fail:
+                    raise subprocess.CalledProcessError(1, "inventory-probe")
+                return subprocess.CompletedProcess(command, 0, stdout="synthetic-token", stderr="")
+            calls = MagicMock(side_effect=run)
+            with patch.object(subprocess, "run", calls):
+                if fail:
+                    with self.assertRaises(subprocess.CalledProcessError): fn("sha256:" + "a" * 64)
+                else: fn("sha256:" + "a" * 64)
+            probe = calls.call_args_list[-1].args[0]
+            self.assertIn("none", probe)
+            self.assertIn("--read-only", probe)
+            self.assertTrue(any(item.endswith("@sha256:" + "a" * 64) for item in probe))
+            self.assertIn("stagingInventoryEnabled !== true", probe[-1])
+            self.assertNotIn("synthetic-token", " ".join(probe))
+
     def test_inventory_requires_staging_before_aws(self):
         main = api["main"]
         aws = MagicMock(side_effect=AssertionError("AWS must not be called"))
