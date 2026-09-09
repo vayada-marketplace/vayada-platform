@@ -40,10 +40,10 @@ assert_decision() {
       '.EvaluationResults | length == $count and all(.[]; .EvalDecision == $expected and (.MissingContextValues | length) == 0)' >/dev/null
 }
 
-assert_version_list_decision() {
-  local expected="$1" prefix="$2"
+assert_bucket_list_decision() {
+  local expected="$1" action="$2" prefix="$3"
   aws iam simulate-principal-policy --policy-source-arn "$role" \
-    --action-names s3:ListBucketVersions --resource-arns "arn:aws:s3:::${bucket}" \
+    --action-names "$action" --resource-arns "arn:aws:s3:::${bucket}" \
     --context-entries "ContextKeyName=s3:prefix,ContextKeyValues=${prefix},ContextKeyType=string" \
     --output json |
     jq -e --arg expected "$expected" \
@@ -58,8 +58,8 @@ if [[ "$owner_evidence" == true ]]; then
   assert_decision allowed "arn:aws:s3:::${bucket}/rehearsal-control/owner.json" \
     s3:GetObject s3:GetObjectVersion
   if [[ "${1:-}" == --inbox-release ]]; then
-    assert_version_list_decision allowed rehearsal-control/owner.json
-    assert_version_list_decision implicitDeny public/media/
+    assert_bucket_list_decision allowed s3:ListBucketVersions rehearsal-control/owner.json
+    assert_bucket_list_decision implicitDeny s3:ListBucketVersions public/media/
   else
     assert_decision allowed "arn:aws:s3:::${bucket}" s3:ListBucketVersions
   fi
@@ -97,5 +97,9 @@ if [[ "${1:-}" == --inbox-release ]]; then
   assert_decision explicitDeny "arn:aws:s3:::vayada-rehearsal-0118fd1f-${account}" \
     s3:TagResource s3:UntagResource
 fi
-assert_decision implicitDeny "arn:aws:s3:::${bucket}" s3:ListBucket
+if [[ "${1:-}" == --inbox-release ]]; then
+  assert_bucket_list_decision implicitDeny s3:ListBucket public/media/
+else
+  assert_decision implicitDeny "arn:aws:s3:::${bucket}" s3:ListBucket
+fi
 echo 'Rehearsal bucket controls and task-role media isolation checks passed (read-only).'
