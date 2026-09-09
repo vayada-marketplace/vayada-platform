@@ -33,6 +33,12 @@ on:
         required: false
         type: boolean
         default: false
+      channex_worker_state:
+        description: "Preserve worker state, or pause/resume on the current canary image"
+        required: false
+        type: choice
+        options: [preserve, paused, running]
+        default: preserve
       activate_guest:
         description: "Blocked: guest activation awaits current active-publication verification"
         type: boolean
@@ -64,6 +70,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      - name: Validate Channex worker state scope
+        env:
+          CHANNEX_WORKER_STATE: ${{ inputs.channex_worker_state }}
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          CHANNEX_STAGING: ${{ inputs.channex_staging }}
+          ACTIVATE_GUEST: ${{ inputs.activate_guest }}
+        run: bash scripts/validate-channex-worker-state.sh
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -336,6 +351,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Validate Channex worker state scope
+        env:
+          CHANNEX_WORKER_STATE: ${{ inputs.channex_worker_state }}
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          CHANNEX_STAGING: ${{ inputs.channex_staging }}
+          ACTIVATE_GUEST: ${{ inputs.activate_guest }}
+        run: bash scripts/validate-channex-worker-state.sh
+
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
@@ -349,13 +373,15 @@ jobs:
           ACTIVATE_GUEST: ${{ inputs.activate_guest }}
           CHANNEX_STAGING: ${{ inputs.channex_staging }}
           CHANNEX_STAGING_MEALS: ${{ inputs.channex_staging_meals }}
+          CHANNEX_WORKER_STATE: ${{ inputs.channex_worker_state }}
         run: |
           set -euo pipefail
           test "$ENVIRONMENT" = next
+          if [ "${CHANNEX_WORKER_STATE:-preserve}" != preserve ]; then test "$SERVICE" = next-maps-canary; fi
           if [ "$SERVICE" = next-maps-guest ]; then python3 scripts/deploy-next-maps-frontends.py --guest-image-sha "$IMAGE_SHA" --guest-image-digest "$IMAGE_DIGEST"; exit 0; fi
           if [ "$SERVICE" = next-maps-frontends ]; then python3 scripts/deploy-next-maps-frontends.py; exit 0; fi
           if [ "$SERVICE" = next-maps-frontends-remove ]; then python3 scripts/deploy-next-maps-frontends.py --remove; exit 0; fi
-          args=(--image-sha "$IMAGE_SHA")
+          args=(--image-sha "$IMAGE_SHA" --channex-worker-state "${CHANNEX_WORKER_STATE:-preserve}")
           if [ "$CHANNEX_STAGING" = true ]; then args+=(--channex-staging); fi
           if [ "$CHANNEX_STAGING_MEALS" = true ]; then args+=(--channex-staging-meals); fi
           if [ "$SERVICE" = next-maps-canary-remove ]; then args+=(--remove); fi
