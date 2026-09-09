@@ -112,7 +112,7 @@ def aws(aws_service, operation, **values):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
-def configure_channex_staging(container, meals=False, worker_enabled="true"):
+def configure_channex_staging(container, meals=False, worker_enabled="true", inventory=False):
     settings = {
         "CHANNEX_API_BASE_URL": "https://staging.channex.io",
         "PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID": PROPERTY,
@@ -122,11 +122,13 @@ def configure_channex_staging(container, meals=False, worker_enabled="true"):
         **{f"PMS_CHANNEX_{mode}_MODE": "observe_only" for mode in
            ("CONNECTION", "PROVISIONING", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME")},
     }
+    if inventory:
+        settings["PMS_CHANNEX_STAGING_INVENTORY_ENABLED"] = "true"
     if meals:
         settings["PMS_CHANNEX_PROVISIONING_MODE"] = "mutating"
-    container["environment"] = [e for e in container["environment"] if e["name"] not in settings and e["name"] != "CHANNEX_API_KEY"]
+    container["environment"] = [e for e in container["environment"] if e["name"] not in settings and e["name"] not in {"CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED"}]
     container["environment"] += [{"name": k, "value": v} for k, v in settings.items()]
-    container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in {*settings, "CHANNEX_API_KEY"}]
+    container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in {*settings, "CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED"}]
     container["secrets"].append({"name": "CHANNEX_API_KEY", "valueFrom": CHANNEX_SECRET})
 
 
@@ -142,7 +144,7 @@ def staging_worker_value(definition):
     return values[0]
 
 
-def change_staging_worker(existing, definition, image_sha, state, meals, plan=False):
+def change_staging_worker(existing, definition, image_sha, state, meals, plan=False, inventory=False):
     service = existing[0]
     primary = service["deployments"]
     assert len(primary) == 1 and primary[0]["rolloutState"] == "COMPLETED"
@@ -153,7 +155,7 @@ def change_staging_worker(existing, definition, image_sha, state, meals, plan=Fa
     assert not (definition.keys() - TASK_FIELDS - {"taskDefinitionArn", "revision", "status", "requiresAttributes", "compatibilities", "registeredAt", "registeredBy", "deregisteredAt"}), "Unrecognized task settings require review"
     env = {e["name"]: e["value"] for e in container["environment"]}
     expected = {"environment": [], "secrets": []}
-    configure_channex_staging(expected, meals=meals, worker_enabled=staging_worker_value(definition))
+    configure_channex_staging(expected, meals=meals, worker_enabled=staging_worker_value(definition), inventory=inventory)
     for e in expected["environment"]:
         assert [x for x in container["environment"] if x["name"] == e["name"]] == [e]
     assert [e for e in container["environment"] if e["name"] == "API_BACKGROUND_WORKERS_ENABLED"] == [{"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]
@@ -197,10 +199,13 @@ def main():
     parser.add_argument("--activate-guest", action="store_true")
     parser.add_argument("--channex-staging", action="store_true")
     parser.add_argument("--channex-staging-meals", action="store_true")
+    parser.add_argument("--channex-staging-inventory", action="store_true")
     parser.add_argument("--channex-worker-state", choices=("preserve", "paused", "running"), default="preserve")
     args = parser.parse_args()
     if args.channex_worker_state != "preserve" and not args.channex_staging:
         raise ValueError("Worker state changes require --channex-staging")
+    if args.channex_staging_inventory and not args.channex_staging:
+        raise ValueError("Staging inventory requires --channex-staging")
     if args.channex_staging_meals and not args.channex_staging:
         raise ValueError("Staging meals require --channex-staging")
     if args.channex_staging and (args.activate_guest or args.remove):
@@ -257,10 +262,15 @@ def main():
             raise ValueError("Existing staging routes require an existing service")
         described = aws("ecs", "describe-task-definition", taskDefinition=existing[0]["taskDefinition"], include=["TAGS"])
         staging_definition = {**described["taskDefinition"], "tags": described.get("tags", [])}
+    if staging_definition:
+        container = next(c for c in staging_definition["containerDefinitions"] if c["name"] == "vayada-next-api")
+        has_inventory = any(e["name"] == "PMS_CHANNEX_STAGING_INVENTORY_ENABLED" and e["value"] == "true" for e in container.get("environment", []))
+        if has_inventory and not args.channex_staging_inventory:
+            raise ValueError("Existing staging inventory requires --channex-staging-inventory to preserve configuration")
     if args.channex_worker_state != "preserve":
         if not staging_definition:
             raise ValueError("Pause/resume requires an existing configured staging service")
-        change_staging_worker(existing, staging_definition, args.image_sha, args.channex_worker_state, args.channex_staging_meals, args.plan)
+        change_staging_worker(existing, staging_definition, args.image_sha, args.channex_worker_state, args.channex_staging_meals, args.plan, inventory=args.channex_staging_inventory)
         return
     if args.plan:
         return
@@ -288,7 +298,7 @@ def main():
     if args.channex_staging:
         parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_SECRET.split(":parameter")[1]]}])["Parameters"]
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
-        configure_channex_staging(source, meals=args.channex_staging_meals,
+        configure_channex_staging(source, meals=args.channex_staging_meals, inventory=args.channex_staging_inventory,
                                   worker_enabled=staging_worker_value(staging_definition) if staging_definition else "true")
     source["image"] = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     source["environment"] = [e for e in source["environment"] if e["name"] not in {"PUBLIC_HOTEL_PROFILE_SOURCE", "GOOGLE_NEARBY_ENABLED", "API_BACKGROUND_WORKERS_ENABLED"}]

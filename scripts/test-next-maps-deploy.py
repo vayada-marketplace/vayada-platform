@@ -33,6 +33,26 @@ class DeploymentGuards(unittest.TestCase):
         self.assertEqual(source["secrets"], [{"name": "OTHER", "valueFrom": "preserve"},
                          {"name": "CHANNEX_API_KEY", "valueFrom": api["CHANNEX_SECRET"]}])
 
+    def test_inventory_opt_in_preserves_meals_and_other_capability_guards(self):
+        for inventory in (False, True):
+            source = {"environment": [{"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}], "secrets": []}
+            api["configure_channex_staging"](source, meals=True, inventory=inventory)
+            env = {e["name"]: e["value"] for e in source["environment"]}
+            self.assertEqual(env.get("PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "false"), str(inventory).lower())
+            self.assertEqual(env["PMS_CHANNEX_STAGING_MEALS_ENABLED"], "true")
+            self.assertEqual(env["PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID"], api["PROPERTY"])
+            self.assertEqual(env["API_BACKGROUND_WORKERS_ENABLED"], "false")
+            for mode in ("CONNECTION", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME"):
+                self.assertEqual(env[f"PMS_CHANNEX_{mode}_MODE"], "observe_only")
+
+    def test_inventory_requires_staging_before_aws(self):
+        main = api["main"]
+        aws = MagicMock(side_effect=AssertionError("AWS must not be called"))
+        with patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, "--channex-staging-inventory"]), patch.dict(main.__globals__, {"aws": aws}):
+            with self.assertRaisesRegex(ValueError, "requires --channex-staging"):
+                main()
+        aws.assert_not_called()
+
     def test_meals_opt_in_scopes_config_and_route(self):
         source = {"environment": [], "secrets": []}
         api["configure_channex_staging"](source, meals=True)
@@ -195,18 +215,18 @@ class DeploymentGuards(unittest.TestCase):
 
 
 class WorkerStateChanges(unittest.TestCase):
-    def fixture(self, enabled="true"):
+    def fixture(self, enabled="true", inventory=False):
         container = {"name": "vayada-next-api", "image": f"{api['ACCOUNT']}.dkr.ecr.{api['REGION']}.amazonaws.com/vayada-next-api@sha256:" + "b" * 64,
                      "environment": [{"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}, {"name": "UNRELATED", "value": "preserve"}],
                      "secrets": [{"name": "OTHER", "valueFrom": "preserve"}]}
-        api["configure_channex_staging"](container, meals=True, worker_enabled=enabled)
+        api["configure_channex_staging"](container, meals=True, worker_enabled=enabled, inventory=inventory)
         definition = {"containerDefinitions": [container], "cpu": "512", "memory": "1024", "taskRoleArn": "role", "revision": 15, "family": api["FAMILY"], "tags": [*api["TAGS"], {"key": "Other", "value": "keep"}], "pidMode": "task", "ipcMode": "none", "proxyConfiguration": {"type": "APPMESH", "containerName": "proxy"}, "enableFaultInjection": False}
         existing = [{"taskDefinition": "previous", "deployments": [{"status": "PRIMARY", "taskDefinition": "previous", "rolloutState": "COMPLETED"}]}]
         return existing, definition
 
     def test_pause_resume_preserve_every_other_task_field_and_never_touch_routes(self):
         for enabled, state, value in (("true", "paused", "false"), ("false", "running", "true")):
-            existing, definition = self.fixture(enabled)
+            existing, definition = self.fixture(enabled, inventory=True)
             before = json.loads(json.dumps(definition))
             def aws(aws_service, op, **kw):
                 if op == "describe-images": return {"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]}
@@ -217,7 +237,7 @@ class WorkerStateChanges(unittest.TestCase):
             calls = MagicMock(side_effect=aws)
             fn = api["change_staging_worker"]
             with self.subTest(state=state), patch.dict(fn.__globals__, {"aws": calls}):
-                fn(existing, definition, "next-" + "a" * 40, state, True)
+                fn(existing, definition, "next-" + "a" * 40, state, True, inventory=True)
             self.assertEqual(definition, before)
             payload = next(c.kwargs for c in calls.call_args_list if c.args[1] == "register-task-definition")
             expected = {k: v for k, v in before.items() if k != "revision"}
