@@ -1,5 +1,6 @@
 """VAY-1480: CI-only staging API, routed exclusively to the reusable test hotel."""
 import argparse
+import copy
 import json
 import re
 import subprocess
@@ -111,11 +112,11 @@ def aws(aws_service, operation, **values):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
-def configure_channex_staging(container, meals=False):
+def configure_channex_staging(container, meals=False, worker_enabled="true"):
     settings = {
         "CHANNEX_API_BASE_URL": "https://staging.channex.io",
         "PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID": PROPERTY,
-        "PMS_CHANNEX_WORKER_ENABLED": "true",
+        "PMS_CHANNEX_WORKER_ENABLED": worker_enabled,
         "PMS_CHANNEX_ARI_SYNC_MODE": "mutating",
         "PMS_CHANNEX_STAGING_MEALS_ENABLED": "true" if meals else "false",
         **{f"PMS_CHANNEX_{mode}_MODE": "observe_only" for mode in
@@ -129,6 +130,65 @@ def configure_channex_staging(container, meals=False):
     container["secrets"].append({"name": "CHANNEX_API_KEY", "valueFrom": CHANNEX_SECRET})
 
 
+
+TASK_FIELDS = {"taskRoleArn", "executionRoleArn", "networkMode", "containerDefinitions", "volumes", "placementConstraints", "requiresCompatibilities", "cpu", "memory", "runtimePlatform", "ephemeralStorage", "pidMode", "ipcMode", "proxyConfiguration", "inferenceAccelerators", "enableFaultInjection", "family", "tags"}
+
+
+def staging_worker_value(definition):
+    container = next(c for c in definition["containerDefinitions"] if c["name"] == "vayada-next-api")
+    values = [e["value"] for e in container.get("environment", []) if e["name"] == "PMS_CHANNEX_WORKER_ENABLED"]
+    if len(values) != 1 or values[0] not in ("true", "false"):
+        raise ValueError("Existing staging worker state is missing or ambiguous")
+    return values[0]
+
+
+def change_staging_worker(existing, definition, image_sha, state, meals, plan=False):
+    service = existing[0]
+    primary = service["deployments"]
+    assert len(primary) == 1 and primary[0]["rolloutState"] == "COMPLETED"
+    assert primary[0]["taskDefinition"] == service["taskDefinition"]
+    container = next(c for c in definition["containerDefinitions"] if c["name"] == "vayada-next-api")
+    assert definition["family"] == FAMILY
+    assert {"key": "Task", "value": "VAY-1480"} in definition["tags"]
+    assert not (definition.keys() - TASK_FIELDS - {"taskDefinitionArn", "revision", "status", "requiresAttributes", "compatibilities", "registeredAt", "registeredBy", "deregisteredAt"}), "Unrecognized task settings require review"
+    env = {e["name"]: e["value"] for e in container["environment"]}
+    expected = {"environment": [], "secrets": []}
+    configure_channex_staging(expected, meals=meals, worker_enabled=staging_worker_value(definition))
+    for e in expected["environment"]:
+        assert [x for x in container["environment"] if x["name"] == e["name"]] == [e]
+    assert [e for e in container["environment"] if e["name"] == "API_BACKGROUND_WORKERS_ENABLED"] == [{"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]
+    assert "CHANNEX_API_KEY" not in env
+    assert [x for x in container["secrets"] if x["name"] == "CHANNEX_API_KEY"] == expected["secrets"]
+    assert not any(x["name"] in {e["name"] for e in expected["environment"]} | {"API_BACKGROUND_WORKERS_ENABLED"} for x in container["secrets"])
+    digest = aws("ecr", "describe-images", repositoryName="vayada-next-api", imageIds=[{"imageTag": image_sha}])["imageDetails"][0]["imageDigest"]
+    assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
+    assert container["image"] == f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}", "Pause/resume must retain the deployed image"
+    value = "false" if state == "paused" else "true"
+    summary = {"workerState": state, "previousTaskDefinition": service["taskDefinition"], "imageDigest": digest, "routesUnchanged": True}
+    if plan or staging_worker_value(definition) == value:
+        print(json.dumps({**summary, "plan": plan, "unchanged": staging_worker_value(definition) == value}))
+        return
+    payload = copy.deepcopy({k: v for k, v in definition.items() if k in TASK_FIELDS})
+    target = next(c for c in payload["containerDefinitions"] if c["name"] == "vayada-next-api")
+    next(e for e in target["environment"] if e["name"] == "PMS_CHANNEX_WORKER_ENABLED")["value"] = value
+    task = aws("ecs", "register-task-definition", **payload)["taskDefinition"]["taskDefinitionArn"]
+    try:
+        aws("ecs", "update-service", cluster=CLUSTER, service=SERVICE, taskDefinition=task)
+        for _ in range(80):
+            current = aws("ecs", "describe-services", cluster=CLUSTER, services=[SERVICE])["services"][0]
+            deployment = next(d for d in current["deployments"] if d["status"] == "PRIMARY")
+            if deployment.get("rolloutState") == "FAILED":
+                raise RuntimeError("Worker state rollout failed")
+            if len(current["deployments"]) == 1 and deployment["taskDefinition"] == task and deployment.get("rolloutState") == "COMPLETED":
+                print(json.dumps({**summary, "taskDefinition": task}))
+                return
+            time.sleep(10)
+        raise RuntimeError("Worker state rollout did not complete")
+    except Exception:
+        aws("ecs", "update-service", cluster=CLUSTER, service=SERVICE, taskDefinition=service["taskDefinition"])
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image-sha", required=True)
@@ -137,7 +197,10 @@ def main():
     parser.add_argument("--activate-guest", action="store_true")
     parser.add_argument("--channex-staging", action="store_true")
     parser.add_argument("--channex-staging-meals", action="store_true")
+    parser.add_argument("--channex-worker-state", choices=("preserve", "paused", "running"), default="preserve")
     args = parser.parse_args()
+    if args.channex_worker_state != "preserve" and not args.channex_staging:
+        raise ValueError("Worker state changes require --channex-staging")
     if args.channex_staging_meals and not args.channex_staging:
         raise ValueError("Staging meals require --channex-staging")
     if args.channex_staging and (args.activate_guest or args.remove):
@@ -188,6 +251,17 @@ def main():
                       "canaryService": SERVICE, "conditions": conditions, "sharedApiUnchanged": True}))
     if has_channex and not args.channex_staging and not args.remove and not args.activate_guest:
         raise ValueError("Existing Channex staging requires --channex-staging to preserve its configuration")
+    staging_definition = None
+    if has_channex:
+        if not existing:
+            raise ValueError("Existing staging routes require an existing service")
+        described = aws("ecs", "describe-task-definition", taskDefinition=existing[0]["taskDefinition"], include=["TAGS"])
+        staging_definition = {**described["taskDefinition"], "tags": described.get("tags", [])}
+    if args.channex_worker_state != "preserve":
+        if not staging_definition:
+            raise ValueError("Pause/resume requires an existing configured staging service")
+        change_staging_worker(existing, staging_definition, args.image_sha, args.channex_worker_state, args.channex_staging_meals, args.plan)
+        return
     if args.plan:
         return
     if args.remove:
@@ -214,14 +288,14 @@ def main():
     if args.channex_staging:
         parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_SECRET.split(":parameter")[1]]}])["Parameters"]
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
-        configure_channex_staging(source, meals=args.channex_staging_meals)
+        configure_channex_staging(source, meals=args.channex_staging_meals,
+                                  worker_enabled=staging_worker_value(staging_definition) if staging_definition else "true")
     source["image"] = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     source["environment"] = [e for e in source["environment"] if e["name"] not in {"PUBLIC_HOTEL_PROFILE_SOURCE", "GOOGLE_NEARBY_ENABLED", "API_BACKGROUND_WORKERS_ENABLED"}]
     source["environment"] += [{"name": "PUBLIC_HOTEL_PROFILE_SOURCE", "value": "active_publication"}, {"name": "GOOGLE_NEARBY_ENABLED", "value": "true"}, {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]
     source["secrets"] = [e for e in source["secrets"] if e["name"] != "GOOGLE_PLACES_SERVER_API_KEY"]
     source["secrets"].append({"name": "GOOGLE_PLACES_SERVER_API_KEY", "valueFrom": SECRET})
-    accepted = {"taskRoleArn", "executionRoleArn", "networkMode", "containerDefinitions", "volumes", "placementConstraints", "requiresCompatibilities", "cpu", "memory", "runtimePlatform", "ephemeralStorage"}
-    payload = {k: v for k, v in definition.items() if k in accepted}
+    payload = {k: v for k, v in definition.items() if k in TASK_FIELDS}
     payload.update(family=FAMILY, tags=TAGS)
     task = aws("ecs", "register-task-definition", **payload)["taskDefinition"]["taskDefinitionArn"]
     if not group:

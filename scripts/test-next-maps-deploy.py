@@ -1,5 +1,7 @@
 """Offline deployment guards; never calls AWS or the owner API."""
 import io
+import os
+import subprocess
 import contextlib
 import pathlib
 import json
@@ -189,6 +191,116 @@ class DeploymentGuards(unittest.TestCase):
         ):
             with self.subTest(actual=actual):
                 self.assertFalse(matches(actual, expected))
+
+
+
+class WorkerStateChanges(unittest.TestCase):
+    def fixture(self, enabled="true"):
+        container = {"name": "vayada-next-api", "image": f"{api['ACCOUNT']}.dkr.ecr.{api['REGION']}.amazonaws.com/vayada-next-api@sha256:" + "b" * 64,
+                     "environment": [{"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}, {"name": "UNRELATED", "value": "preserve"}],
+                     "secrets": [{"name": "OTHER", "valueFrom": "preserve"}]}
+        api["configure_channex_staging"](container, meals=True, worker_enabled=enabled)
+        definition = {"containerDefinitions": [container], "cpu": "512", "memory": "1024", "taskRoleArn": "role", "revision": 15, "family": api["FAMILY"], "tags": [*api["TAGS"], {"key": "Other", "value": "keep"}], "pidMode": "task", "ipcMode": "none", "proxyConfiguration": {"type": "APPMESH", "containerName": "proxy"}, "enableFaultInjection": False}
+        existing = [{"taskDefinition": "previous", "deployments": [{"status": "PRIMARY", "taskDefinition": "previous", "rolloutState": "COMPLETED"}]}]
+        return existing, definition
+
+    def test_pause_resume_preserve_every_other_task_field_and_never_touch_routes(self):
+        for enabled, state, value in (("true", "paused", "false"), ("false", "running", "true")):
+            existing, definition = self.fixture(enabled)
+            before = json.loads(json.dumps(definition))
+            def aws(aws_service, op, **kw):
+                if op == "describe-images": return {"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]}
+                if op == "register-task-definition": return {"taskDefinition": {"taskDefinitionArn": "changed"}}
+                if op == "update-service": return {}
+                if op == "describe-services": return {"services": [{"deployments": [{"status": "PRIMARY", "taskDefinition": "changed", "rolloutState": "COMPLETED"}]}]}
+                raise AssertionError((aws_service, op))
+            calls = MagicMock(side_effect=aws)
+            fn = api["change_staging_worker"]
+            with self.subTest(state=state), patch.dict(fn.__globals__, {"aws": calls}):
+                fn(existing, definition, "next-" + "a" * 40, state, True)
+            self.assertEqual(definition, before)
+            payload = next(c.kwargs for c in calls.call_args_list if c.args[1] == "register-task-definition")
+            expected = {k: v for k, v in before.items() if k != "revision"}
+            next(e for e in expected["containerDefinitions"][0]["environment"] if e["name"] == "PMS_CHANNEX_WORKER_ENABLED")["value"] = value
+            self.assertEqual(payload, expected)
+            self.assertTrue(all(c.args[0] in ("ecs", "ecr") for c in calls.call_args_list))
+
+    def test_plan_and_same_state_are_read_only(self):
+        fn = api["change_staging_worker"]
+        for enabled, plan in (("true", True), ("false", False)):
+            existing, definition = self.fixture(enabled)
+            calls = MagicMock(return_value={"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]})
+            with patch.dict(fn.__globals__, {"aws": calls}):
+                fn(existing, definition, "next-" + "a" * 40, "paused", True, plan)
+            self.assertEqual([c.args[1] for c in calls.call_args_list], ["describe-images"])
+
+    def test_invalid_runtime_or_new_image_rejected_before_mutation(self):
+        fn = api["change_staging_worker"]
+        for mutation in ("scope", "base", "global", "secret", "duplicate", "image", "inflight", "meals", "globalduplicate", "unknown"):
+            existing, definition = self.fixture()
+            c = definition["containerDefinitions"][0]
+            if mutation == "scope": next(e for e in c["environment"] if e["name"] == "PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID")["value"] = "other"
+            if mutation == "base": next(e for e in c["environment"] if e["name"] == "CHANNEX_API_BASE_URL")["value"] = "production"
+            if mutation == "global": c["environment"][0]["value"] = "true"
+            if mutation == "secret": c["secrets"][-1]["valueFrom"] = "production"
+            if mutation == "duplicate": c["environment"].append({"name": "PMS_CHANNEX_WORKER_ENABLED", "value": "true"})
+            if mutation == "image": c["image"] = "other@sha256:" + "c" * 64
+            if mutation == "inflight": existing[0]["deployments"][0]["rolloutState"] = "IN_PROGRESS"
+            if mutation == "globalduplicate": c["environment"].insert(0, {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "true"})
+            if mutation == "unknown": definition["newTaskSetting"] = "preserve-or-reject"
+            calls = MagicMock(return_value={"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]})
+            with self.subTest(mutation=mutation), patch.dict(fn.__globals__, {"aws": calls}):
+                with self.assertRaises((ValueError, AssertionError)):
+                    fn(existing, definition, "next-" + "a" * 40, "paused", mutation != "meals")
+            self.assertTrue(all(c.args[1] == "describe-images" for c in calls.call_args_list))
+
+    def test_failed_rollout_restores_previous_definition(self):
+        existing, definition = self.fixture()
+        def aws(aws_service, op, **kw):
+            if op == "describe-images": return {"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]}
+            if op == "register-task-definition": return {"taskDefinition": {"taskDefinitionArn": "changed"}}
+            if op == "update-service": return {}
+            if op == "describe-services": return {"services": [{"deployments": [{"status": "PRIMARY", "taskDefinition": "changed", "rolloutState": "FAILED"}]}]}
+            raise AssertionError(op)
+        calls = MagicMock(side_effect=aws)
+        fn = api["change_staging_worker"]
+        with patch.dict(fn.__globals__, {"aws": calls}), self.assertRaisesRegex(RuntimeError, "rollout failed"):
+            fn(existing, definition, "next-" + "a" * 40, "paused", True)
+        self.assertEqual([c.kwargs["taskDefinition"] for c in calls.call_args_list if c.args[1] == "update-service"], ["changed", "previous"])
+
+    def test_pause_survives_regular_image_configuration(self):
+        _, definition = self.fixture("false")
+        baseline = {"environment": [], "secrets": []}
+        api["configure_channex_staging"](baseline, meals=True, worker_enabled=api["staging_worker_value"](definition))
+        self.assertEqual(next(e["value"] for e in baseline["environment"] if e["name"] == "PMS_CHANNEX_WORKER_ENABLED"), "false")
+
+    def test_workflow_guard_rejects_wrong_service_before_aws(self):
+        script = pathlib.Path(__file__).with_name("validate-channex-worker-state.sh")
+        for service, state, staging, environment, activation, ok in (
+            ("next-maps-canary", "paused", "true", "next", "false", True),
+            ("next-maps-canary", "running", "true", "next", "false", True),
+            ("next-target-backend", "paused", "true", "next", "false", False),
+            ("next-maps-guest", "running", "true", "next", "false", False),
+            ("next-maps-canary", "paused", "false", "next", "false", False),
+            ("next-maps-canary", "paused", "true", "production", "false", False),
+            ("next-maps-canary", "paused", "true", "next", "true", False),
+            ("next-target-backend", "preserve", "false", "production", "false", True),
+        ):
+            env = {**os.environ, "SERVICE": service, "CHANNEX_WORKER_STATE": state,
+                   "CHANNEX_STAGING": staging, "ENVIRONMENT": environment, "ACTIVATE_GUEST": activation}
+            result = subprocess.run(["bash", str(script)], env=env, capture_output=True)
+            self.assertEqual(result.returncode == 0, ok, (service, state, staging, environment, activation))
+        workflow = pathlib.Path(__file__).parent.parent.joinpath(".github/workflows/deploy.yml").read_text()
+        for section in workflow.split("    steps:")[1:]:
+            self.assertLess(section.index("bash scripts/validate-channex-worker-state.sh"), section.index("aws-actions/configure-aws-credentials"))
+
+    def test_worker_state_requires_staging_before_aws(self):
+        fn = api["main"]
+        calls = MagicMock()
+        with patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, "--channex-worker-state", "paused"]), patch.dict(fn.__globals__, {"aws": calls}):
+            with self.assertRaisesRegex(ValueError, "require --channex-staging"):
+                fn()
+        calls.assert_not_called()
 
 
 class GuestFrontendSelection(unittest.TestCase):
