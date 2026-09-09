@@ -14,12 +14,13 @@ aws() {
         '{ServerSideEncryptionConfiguration:{Rules:[{ApplyServerSideEncryptionByDefault:{SSEAlgorithm:$algorithm}}]}}' ;;
     'iam simulate-principal-policy')
       shift 2
-      local actions=() resource='' role='' decision
+      local actions=() resource='' role='' context_entry='' decision
       while (($#)); do
         case "$1" in
           --action-names) shift; while (($#)) && [[ "$1" != --* ]]; do actions+=("$1"); shift; done ;;
           --resource-arns) resource="$2"; shift 2 ;;
           --policy-source-arn) role="$2"; shift 2 ;;
+          --context-entries) context_entry="$2"; shift 2 ;;
           *) shift ;;
         esac
       done
@@ -31,6 +32,9 @@ aws() {
       elif [[ "${MOCK_MIDNIGHT:-false}" == true ]]; then
         bucket=vayada-rehearsal-0118fd1f-269416271598
         expected_role=arn:aws:iam::269416271598:role/vayada-rehearsal-0118fd1f-media
+      elif [[ "${MOCK_INBOX:-false}" == true ]]; then
+        bucket=vayada-rehearsal-7200a43a-269416271598
+        expected_role=arn:aws:iam::269416271598:role/vayada-rehearsal-7200a43a-media
       fi
       [[ "$role" == "$expected_role" ]] || return 1
       decision=explicitDeny
@@ -38,6 +42,12 @@ aws() {
       elif [[ "${MOCK_OWNER_READ_DENIED:-false}" == true && "$resource" == "arn:aws:s3:::${bucket}/rehearsal-control/owner.json" ]]; then decision=explicitDeny;
       elif [[ "${MOCK_VERSION_LIST_DENIED:-false}" == true && "${actions[0]}" == s3:ListBucketVersions ]]; then decision=explicitDeny;
       elif [[ "${actions[0]}" == s3:ListBucket ]]; then decision=implicitDeny;
+      elif [[ "${actions[0]}" == s3:ListBucketVersions && "${MOCK_INBOX:-false}" == true ]]; then
+        if [[ "${MOCK_VERSION_PREFIX_LEAK:-false}" == true || "$context_entry" == *'ContextKeyValues=rehearsal-control/owner.json'* ]]; then
+          decision=allowed
+        else
+          decision=implicitDeny
+        fi
       elif [[ "${actions[0]}" == s3:ListBucketVersions ]]; then decision=allowed;
       elif [[ "${actions[0]}" == s3:GetObject ]]; then decision=allowed;
       elif [[ "${MOCK_PRODUCTION_WRITE:-false}" == true ]]; then decision=allowed; fi
@@ -49,16 +59,21 @@ aws() {
 }
 export -f aws
 check=scripts/check-migration-rehearsal-media.sh
-for mode in retained --fixed-release --midnight-release; do
+for mode in retained --fixed-release --midnight-release --inbox-release; do
 export MOCK_FIXED=false
 export MOCK_MIDNIGHT=false
+export MOCK_INBOX=false
 [[ "$mode" != --fixed-release ]] || export MOCK_FIXED=true
 [[ "$mode" != --midnight-release ]] || export MOCK_MIDNIGHT=true
+[[ "$mode" != --inbox-release ]] || export MOCK_INBOX=true
 bash "$check" "$mode"
 faults=(MOCK_ACCOUNT=wrong MOCK_BLOCKED=false MOCK_VERSIONING=Suspended \
   MOCK_ENCRYPTION=wrong MOCK_PRODUCTION_WRITE=true MOCK_MISSING=true MOCK_CONTEXT=true)
 if [[ "$mode" != retained ]]; then
   faults+=(MOCK_OWNER_READ_DENIED=true MOCK_VERSION_LIST_DENIED=true)
+fi
+if [[ "$mode" == --inbox-release ]]; then
+  faults+=(MOCK_VERSION_PREFIX_LEAK=true)
 fi
 for fault in "${faults[@]}"; do
   if env "$fault" bash "$check" "$mode" >/dev/null 2>&1; then
@@ -69,4 +84,4 @@ done
 if bash "$check" --unknown >/dev/null 2>&1 || bash "$check" retained extra >/dev/null 2>&1; then
   echo 'Isolation check accepted an unknown boundary' >&2; exit 1
 fi
-echo 'All three rehearsal media boundaries: valid fixtures, twenty-five unsafe cases, and unknown-boundary refusals passed.'
+echo 'All four rehearsal media boundaries: valid fixtures, thirty-five unsafe cases, and unknown-boundary refusals passed.'
