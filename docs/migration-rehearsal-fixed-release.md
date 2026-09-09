@@ -76,3 +76,24 @@ changes, deletes, replacements or imports. Run the deployed media checker with
 `--midnight-release`, reserve a new owner without overwriting either existing
 owner, and bind a new run ID, database, role, secret, image digest and storage
 tuple before starting ETL.
+
+## Post-Inbox-classifier-fix rerun
+
+The post-midnight run `vay1360-ff36172f0b07d84e5782856b` stopped safely at
+PMS after Schema, Extraction, Identity, Catalog, and Booking completed. Its PMS
+transaction rolled back because 21 ordinary Channex messages carried the generic
+`meta.live_feed_event_id` envelope field and were incorrectly classified as
+inquiries. Preserve that run's target, owner reservation, 4,224 object versions,
+secret, roles, and logs unchanged; it must not be resumed after the application
+fix.
+
+Release `7200a43a8ced02df98c518bf72a4101060434337`, immutable image digest
+`sha256:fab6bafdd04009d5807b9e9362b2c0e0974e15077592343a02d23f18f27c8689`,
+contains the reviewed migration-only classifier repair. Its fresh rehearsal uses
+the additive `migration_rehearsal_inbox_media` resources. Apply the same
+administrator bootstrap and saved-plan gates above: exactly twelve creates, no
+changes, deletes, replacements, or imports, with every prior boundary unchanged.
+After deployment, run the checker with `--inbox-release` and complete the live
+public/private storage smoke before atomically reserving a new owner. Bind a new
+run ID, database, role, versioned secret, exact image digest, and storage tuple;
+do not reuse the failed target or any previous owner.
