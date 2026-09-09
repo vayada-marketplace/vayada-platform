@@ -252,7 +252,7 @@ def main():
     if has_channex and not args.channex_staging and not args.remove and not args.activate_guest:
         raise ValueError("Existing Channex staging requires --channex-staging to preserve its configuration")
     staging_definition = None
-    if has_channex:
+    if has_channex and args.channex_staging:
         if not existing:
             raise ValueError("Existing staging routes require an existing service")
         described = aws("ecs", "describe-task-definition", taskDefinition=existing[0]["taskDefinition"], include=["TAGS"])

@@ -294,6 +294,26 @@ class WorkerStateChanges(unittest.TestCase):
         for section in workflow.split("    steps:")[1:]:
             self.assertLess(section.index("bash scripts/validate-channex-worker-state.sh"), section.index("aws-actions/configure-aws-credentials"))
 
+    def test_orphan_staging_routes_can_still_be_removed(self):
+        fn = api["main"]
+        condition = [{"Field": "host-header", "HostHeaderConfig": {"Values": ["next-api.vayada.com"]}},
+                     {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{api['PROPERTY']}/channex", f"/api/pms/properties/{api['PROPERTY']}/channex/*"]}}]
+        def aws(aws_service, op, **kw):
+            if op == "get-caller-identity": return {"Account": api["ACCOUNT"]}
+            if op == "describe-services": return {"services": [{"taskDefinition": "baseline"}] if kw["services"] == ["vayada-next-api-service"] else []}
+            if op == "describe-task-definition":
+                assert kw["taskDefinition"] == "baseline"
+                return {"taskDefinition": {"containerDefinitions": [{"name": "vayada-next-api"}]}}
+            if op == "describe-target-groups": return {"TargetGroups": [{"TargetGroupName": api["GROUP"], "TargetGroupArn": "canary"}]}
+            if op == "describe-tags": return {"TagDescriptions": [{"Tags": [{"Key": "Task", "Value": "VAY-1480"}]}]}
+            if op == "describe-rules": return {"Rules": [{"RuleArn": "orphan", "Conditions": condition, "Actions": [{"TargetGroupArn": "canary"}]}]}
+            if op == "delete-rule": return {}
+            raise AssertionError(op)
+        calls = MagicMock(side_effect=aws)
+        with patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, "--remove"]), patch.dict(fn.__globals__, {"aws": calls}):
+            fn()
+        self.assertEqual([c.kwargs for c in calls.call_args_list if c.args[1] == "delete-rule"], [{"RuleArn": "orphan"}])
+
     def test_worker_state_requires_staging_before_aws(self):
         fn = api["main"]
         calls = MagicMock()
