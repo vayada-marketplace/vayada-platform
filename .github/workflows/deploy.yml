@@ -62,6 +62,11 @@ on:
         description: "Target environment"
         required: true
         default: production
+      adaptive_onboarding:
+        description: "Next Marketplace adaptive onboarding runtime flag"
+        type: choice
+        options: [preserve, enabled, disabled]
+        default: preserve
 
 permissions:
   id-token: write
@@ -85,6 +90,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      - name: Validate adaptive onboarding scope
+        env:
+          ADAPTIVE_ONBOARDING: ${{ inputs.adaptive_onboarding }}
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: python3 scripts/set-adaptive-onboarding.py --validate-only
 
       - name: Validate Channex worker state scope
         env:
@@ -249,7 +262,7 @@ jobs:
           TASK_FAMILY: ${{ steps.resolve.outputs.task_family }}
         run: |
           set -euo pipefail
-          if [ -z "$ROLLBACK_IMAGE" ] && [ "$SERVICE" = "next-booking-frontend" ]; then
+          if [ -z "$ROLLBACK_IMAGE" ] && { [ "$SERVICE" = "next-booking-frontend" ] || [ "$SERVICE" = "next-marketplace-frontend" ]; }; then
             ROLLBACK_IMAGE="$(
               jq -r --arg name "$TASK_FAMILY" \
                 '.containerDefinitions[] | select(.name == $name) | .image // empty' \
@@ -257,8 +270,8 @@ jobs:
             )"
           fi
           if [ -z "$ROLLBACK_IMAGE" ]; then
-            if [ "$SERVICE" = "next-booking-frontend" ]; then
-              echo "::error::Could not resolve the pre-cutover Booking image for rollback."
+            if [ "$SERVICE" = "next-booking-frontend" ] || [ "$SERVICE" = "next-marketplace-frontend" ]; then
+              echo "::error::Could not resolve the pre-cutover image for rollback."
               exit 1
             fi
             echo "available=false" >> "$GITHUB_OUTPUT"
@@ -327,6 +340,16 @@ jobs:
           task-definition: task-definition.json
           container-name: ${{ steps.resolve.outputs.task_family }}
           image: ${{ steps.resolve-rollback.outputs.image_uri }}
+
+      - name: Set adaptive onboarding on deployment task
+        env:
+          ADAPTIVE_ONBOARDING: ${{ inputs.adaptive_onboarding }}
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          EVENT_NAME: ${{ github.event_name }}
+          TASK_DEFINITION: ${{ steps.render-task-def.outputs.task-definition }}
+          CURRENT_TASK_DEFINITION: task-definition.json
+        run: python3 scripts/set-adaptive-onboarding.py
 
       - name: Deploy to ECS
         id: deploy
