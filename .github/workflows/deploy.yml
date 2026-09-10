@@ -43,6 +43,11 @@ on:
         required: false
         type: boolean
         default: false
+      channex_staging_no_show:
+        description: "Enable property-scoped no-show reporting (requires reviewed no-show image)"
+        required: false
+        type: boolean
+        default: false
       channex_worker_state:
         description: "Preserve worker state, or pause/resume on the current canary image"
         required: false
@@ -387,6 +392,7 @@ jobs:
           CHANNEX_STAGING_MEALS: ${{ inputs.channex_staging_meals }}
           CHANNEX_STAGING_INVENTORY: ${{ inputs.channex_staging_inventory }}
           ROOM_CLOSURE: ${{ inputs.room_closure }}
+          CHANNEX_STAGING_NO_SHOW: ${{ inputs.channex_staging_no_show }}
           CHANNEX_WORKER_STATE: ${{ inputs.channex_worker_state }}
         run: |
           set -euo pipefail
@@ -400,6 +406,7 @@ jobs:
           if [ "$CHANNEX_STAGING_MEALS" = true ]; then args+=(--channex-staging-meals); fi
           if [ "$CHANNEX_STAGING_INVENTORY" = true ]; then args+=(--channex-staging-inventory); fi
           if [ "$ROOM_CLOSURE" = true ]; then args+=(--room-closure); fi
+          if [ "$CHANNEX_STAGING_NO_SHOW" = true ]; then args+=(--channex-staging-no-show); fi
           if [ "$SERVICE" = next-maps-canary-remove ]; then args+=(--remove); fi
           if [ "$ACTIVATE_GUEST" = true ]; then args+=(--activate-guest); fi
           python3 scripts/deploy-next-maps-canary.py "${args[@]}"

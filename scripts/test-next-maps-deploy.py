@@ -82,6 +82,33 @@ class DeploymentGuards(unittest.TestCase):
             self.assertIn("stagingInventoryEnabled !== true", probe[-1])
             self.assertNotIn("synthetic-token", " ".join(probe))
 
+    def test_no_show_preserves_other_scopes_and_booking_sync_guard(self):
+        source = {"environment": [{"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}], "secrets": []}
+        api["configure_channex_staging"](source, meals=True, inventory=True, no_show=True)
+        env = {e["name"]: e["value"] for e in source["environment"]}
+        for key in ("NO_SHOW", "MEALS", "INVENTORY"):
+            self.assertEqual(env[f"PMS_CHANNEX_STAGING_{key}_ENABLED"], "true")
+        self.assertEqual(env["PMS_CHANNEX_BOOKING_SYNC_MODE"], "observe_only")
+        self.assertEqual(env["API_BACKGROUND_WORKERS_ENABLED"], "false")
+
+    def test_no_show_image_probe_requires_compiled_opt_in(self):
+        calls = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="synthetic-token", stderr=""))
+        with patch.object(subprocess, "run", calls):
+            api["verify_inventory_image"]("sha256:" + "b" * 64, no_show=True)
+        probe = calls.call_args_list[-1].args[0]
+        self.assertIn("stagingNoShowEnabled !== true", probe[-1])
+        self.assertIn("PMS_CHANNEX_STAGING_NO_SHOW_ENABLED:'true'", probe[-1])
+        self.assertIn("--read-only", probe)
+        self.assertNotIn("synthetic-token", " ".join(probe))
+
+    def test_no_show_requires_staging_before_aws(self):
+        main = api["main"]
+        aws = MagicMock(side_effect=AssertionError("AWS must not be called"))
+        with patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, "--channex-staging-no-show"]), patch.dict(main.__globals__, {"aws": aws}):
+            with self.assertRaisesRegex(ValueError, "requires --channex-staging"):
+                main()
+        aws.assert_not_called()
+
     def test_inventory_requires_staging_before_aws(self):
         main = api["main"]
         aws = MagicMock(side_effect=AssertionError("AWS must not be called"))
@@ -252,11 +279,11 @@ class DeploymentGuards(unittest.TestCase):
 
 
 class WorkerStateChanges(unittest.TestCase):
-    def fixture(self, enabled="true", inventory=False):
+    def fixture(self, enabled="true", inventory=False, no_show=False):
         container = {"name": "vayada-next-api", "image": f"{api['ACCOUNT']}.dkr.ecr.{api['REGION']}.amazonaws.com/vayada-next-api@sha256:" + "b" * 64,
                      "environment": [{"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}, {"name": "UNRELATED", "value": "preserve"}],
                      "secrets": [{"name": "OTHER", "valueFrom": "preserve"}]}
-        api["configure_channex_staging"](container, meals=True, worker_enabled=enabled, inventory=inventory)
+        api["configure_channex_staging"](container, meals=True, worker_enabled=enabled, inventory=inventory, no_show=no_show)
         definition = {"containerDefinitions": [container], "cpu": "512", "memory": "1024", "taskRoleArn": "role", "revision": 15, "family": api["FAMILY"], "tags": [*api["TAGS"], {"key": "Other", "value": "keep"}], "pidMode": "task", "ipcMode": "none", "proxyConfiguration": {"type": "APPMESH", "containerName": "proxy"}, "enableFaultInjection": False}
         existing = [{"taskDefinition": "previous", "deployments": [{"status": "PRIMARY", "taskDefinition": "previous", "rolloutState": "COMPLETED"}]}]
         return existing, definition
@@ -292,7 +319,7 @@ class WorkerStateChanges(unittest.TestCase):
 
     def test_pause_resume_preserve_every_other_task_field_and_never_touch_routes(self):
         for enabled, state, value in (("true", "paused", "false"), ("false", "running", "true")):
-            existing, definition = self.fixture(enabled, inventory=True)
+            existing, definition = self.fixture(enabled, inventory=True, no_show=True)
             before = json.loads(json.dumps(definition))
             def aws(aws_service, op, **kw):
                 if op == "describe-images": return {"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]}
@@ -303,7 +330,7 @@ class WorkerStateChanges(unittest.TestCase):
             calls = MagicMock(side_effect=aws)
             fn = api["change_staging_worker"]
             with self.subTest(state=state), patch.dict(fn.__globals__, {"aws": calls}):
-                fn(existing, definition, "next-" + "a" * 40, state, True, inventory=True)
+                fn(existing, definition, "next-" + "a" * 40, state, True, inventory=True, no_show=True)
             self.assertEqual(definition, before)
             payload = next(c.kwargs for c in calls.call_args_list if c.args[1] == "register-task-definition")
             expected = {k: v for k, v in before.items() if k != "revision"}

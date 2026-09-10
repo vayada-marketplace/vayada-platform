@@ -112,7 +112,7 @@ def aws(aws_service, operation, **values):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
-def verify_inventory_image(digest, closure=False):
+def verify_inventory_image(digest, closure=False, no_show=False):
     """Probe compiled config without AWS/DB credentials or container networking."""
     image = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     password = subprocess.run(["aws", "ecr", "get-login-password", "--region", REGION],
@@ -133,12 +133,15 @@ if(c.channexManagement.stagingInventoryEnabled !== true) throw new Error('Invent
 if(loadConfig({}).pmsRoomClosureEnabled !== false) throw new Error('Closure must default off');
 if(loadConfig({PMS_ROOM_CLOSURE_ENABLED:'true'}).pmsRoomClosureEnabled !== true) throw new Error('Closure-capable image required');
 """
+    if no_show:
+        probe = probe.replace("PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true'", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true', PMS_CHANNEX_STAGING_NO_SHOW_ENABLED:'true'")
+        probe += "\nif(c.channexManagement.stagingNoShowEnabled !== true) throw new Error('No-show-capable image required');"
     subprocess.run(["docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
                     "--entrypoint", "node", image, "--input-type=module", "-e", probe],
                    check=True, capture_output=True, text=True)
 
 
-def configure_channex_staging(container, meals=False, worker_enabled="true", inventory=False, closure=False):
+def configure_channex_staging(container, meals=False, worker_enabled="true", inventory=False, closure=False, no_show=False):
     if closure and worker_enabled != "false":
         raise ValueError("Room closure requires a paused staging worker")
     settings = {
@@ -152,13 +155,15 @@ def configure_channex_staging(container, meals=False, worker_enabled="true", inv
     }
     if closure:
         settings["PMS_ROOM_CLOSURE_ENABLED"] = "true"
+    if no_show:
+        settings["PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"] = "true"
     if inventory:
         settings["PMS_CHANNEX_STAGING_INVENTORY_ENABLED"] = "true"
     if meals:
         settings["PMS_CHANNEX_PROVISIONING_MODE"] = "mutating"
-    container["environment"] = [e for e in container["environment"] if e["name"] not in settings and e["name"] not in {"CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_ROOM_CLOSURE_ENABLED"}]
+    container["environment"] = [e for e in container["environment"] if e["name"] not in settings and e["name"] not in {"CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_ROOM_CLOSURE_ENABLED", "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"}]
     container["environment"] += [{"name": k, "value": v} for k, v in settings.items()]
-    container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in {*settings, "CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_ROOM_CLOSURE_ENABLED"}]
+    container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in {*settings, "CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_ROOM_CLOSURE_ENABLED", "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"}]
     container["secrets"].append({"name": "CHANNEX_API_KEY", "valueFrom": CHANNEX_SECRET})
 
 
@@ -187,7 +192,7 @@ def require_paused_closure_service(existing, definition):
         raise ValueError("Room closure requires a completed paused-service rollout")
 
 
-def change_staging_worker(existing, definition, image_sha, state, meals, plan=False, inventory=False):
+def change_staging_worker(existing, definition, image_sha, state, meals, plan=False, inventory=False, no_show=False):
     service = existing[0]
     primary = service["deployments"]
     assert len(primary) == 1 and primary[0]["rolloutState"] == "COMPLETED"
@@ -198,7 +203,7 @@ def change_staging_worker(existing, definition, image_sha, state, meals, plan=Fa
     assert not (definition.keys() - TASK_FIELDS - {"taskDefinitionArn", "revision", "status", "requiresAttributes", "compatibilities", "registeredAt", "registeredBy", "deregisteredAt"}), "Unrecognized task settings require review"
     env = {e["name"]: e["value"] for e in container["environment"]}
     expected = {"environment": [], "secrets": []}
-    configure_channex_staging(expected, meals=meals, worker_enabled=staging_worker_value(definition), inventory=inventory)
+    configure_channex_staging(expected, meals=meals, worker_enabled=staging_worker_value(definition), inventory=inventory, no_show=no_show)
     for e in expected["environment"]:
         assert [x for x in container["environment"] if x["name"] == e["name"]] == [e]
     assert [e for e in container["environment"] if e["name"] == "API_BACKGROUND_WORKERS_ENABLED"] == [{"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]
@@ -246,12 +251,15 @@ def main():
     parser.add_argument("--channex-staging-meals", action="store_true")
     parser.add_argument("--channex-staging-inventory", action="store_true")
     parser.add_argument("--room-closure", action="store_true")
+    parser.add_argument("--channex-staging-no-show", action="store_true")
     parser.add_argument("--channex-worker-state", choices=("preserve", "paused", "running"), default="preserve")
     args = parser.parse_args()
     if args.room_closure and (not args.channex_staging or not args.channex_staging_inventory or args.channex_worker_state != "preserve"):
         raise ValueError("Room closure requires scoped inventory staging with worker state preserve")
     if args.channex_worker_state != "preserve" and not args.channex_staging:
         raise ValueError("Worker state changes require --channex-staging")
+    if args.channex_staging_no_show and not args.channex_staging:
+        raise ValueError("Staging no-show requires --channex-staging")
     if args.channex_staging_inventory and not args.channex_staging:
         raise ValueError("Staging inventory requires --channex-staging")
     if args.channex_staging_meals and not args.channex_staging:
@@ -290,6 +298,10 @@ def main():
     has_channex = any(matching_conditions(rule["Conditions"], channex_condition) for rule in owned_rules)
     if args.channex_staging or has_channex:
         conditions.append(channex_condition)
+    no_show_condition = [conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/reservations/*/no-show-report"]}}]
+    has_no_show = any(matching_conditions(rule["Conditions"], no_show_condition) for rule in owned_rules)
+    if args.channex_staging_no_show or has_no_show:
+        conditions.append(no_show_condition)
     meal_condition = [conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/room-types/*/flexible-rate-plan"]}}]
     has_meals = any(matching_conditions(rule["Conditions"], meal_condition) for rule in owned_rules)
     if args.channex_staging_meals or has_meals:
@@ -316,6 +328,9 @@ def main():
         staging_definition = {**described["taskDefinition"], "tags": described.get("tags", [])}
     if staging_definition:
         container = next(c for c in staging_definition["containerDefinitions"] if c["name"] == "vayada-next-api")
+        has_no_show_config = any(e["name"] == "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED" and e["value"] == "true" for e in container.get("environment", []))
+        if has_no_show_config and not args.channex_staging_no_show:
+            raise ValueError("Existing staging no-show requires --channex-staging-no-show to preserve configuration")
         has_inventory = any(e["name"] == "PMS_CHANNEX_STAGING_INVENTORY_ENABLED" and e["value"] == "true" for e in container.get("environment", []))
         if has_inventory and not args.channex_staging_inventory:
             raise ValueError("Existing staging inventory requires --channex-staging-inventory to preserve configuration")
@@ -324,7 +339,7 @@ def main():
     if args.channex_worker_state != "preserve":
         if not staging_definition:
             raise ValueError("Pause/resume requires an existing configured staging service")
-        change_staging_worker(existing, staging_definition, args.image_sha, args.channex_worker_state, args.channex_staging_meals, args.plan, inventory=args.channex_staging_inventory)
+        change_staging_worker(existing, staging_definition, args.image_sha, args.channex_worker_state, args.channex_staging_meals, args.plan, inventory=args.channex_staging_inventory, no_show=args.channex_staging_no_show)
         return
     if args.plan:
         return
@@ -343,8 +358,8 @@ def main():
     digest = aws("ecr", "describe-images", repositoryName="vayada-next-api",
                  imageIds=[{"imageTag": args.image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
-    if args.channex_staging_inventory:
-        verify_inventory_image(digest, closure=args.room_closure)
+    if args.channex_staging_inventory or args.channex_staging_no_show:
+        verify_inventory_image(digest, closure=args.room_closure, no_show=args.channex_staging_no_show)
     if args.activate_guest:
         activate_guest(existing, group, owned_rules, conditions, digest)
         return
@@ -354,7 +369,7 @@ def main():
     if args.channex_staging:
         parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_SECRET.split(":parameter")[1]]}])["Parameters"]
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
-        configure_channex_staging(source, meals=args.channex_staging_meals, inventory=args.channex_staging_inventory,
+        configure_channex_staging(source, meals=args.channex_staging_meals, inventory=args.channex_staging_inventory, no_show=args.channex_staging_no_show,
                                   worker_enabled=staging_worker_value(staging_definition) if staging_definition else "true", closure=args.room_closure)
     source["image"] = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     source["environment"] = [e for e in source["environment"] if e["name"] not in {"PUBLIC_HOTEL_PROFILE_SOURCE", "GOOGLE_NEARBY_ENABLED", "API_BACKGROUND_WORKERS_ENABLED"}]
