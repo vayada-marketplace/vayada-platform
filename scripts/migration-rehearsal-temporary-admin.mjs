@@ -255,6 +255,14 @@ JOIN marketplace.marketplace_hotel_profiles profile ON profile.property_id=offer
 JOIN hotel_catalog.properties property ON property.id=offer.property_id
 LEFT JOIN hotel_catalog.property_public_profile_read_model public_profile ON public_profile.property_id=offer.property_id`;
 
+export const distributionInventorySql = `SELECT
+  (SELECT count(*)::int FROM distribution.public_hotel_bookability_profiles) AS profiles,
+  (SELECT count(*)::int FROM distribution.public_hotel_bookability_profiles profile
+    JOIN hotel_catalog.properties property ON property.id=profile.property_id) AS "linkedProfiles",
+  (SELECT count(*)::int FROM distribution.active_public_booking_revision) AS revisions,
+  (SELECT count(*)::int FROM distribution.active_public_booking_revision revision
+    JOIN hotel_catalog.properties property ON property.id=revision.property_id) AS "linkedRevisions"`;
+
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
@@ -338,15 +346,26 @@ export async function checkAuthenticatedDomainRoutes(get, reader, admin, token, 
     requireTrue(sample, code);
     return sample;
   };
+  const distributionInventory = (await reader.query(distributionInventorySql)).rows[0];
+  requireTrue(Number.isSafeInteger(distributionInventory?.profiles) && distributionInventory.profiles >= 0
+    && Number.isSafeInteger(distributionInventory?.linkedProfiles) && distributionInventory.linkedProfiles >= 0
+    && Number.isSafeInteger(distributionInventory?.revisions) && distributionInventory.revisions >= 0
+    && Number.isSafeInteger(distributionInventory?.linkedRevisions) && distributionInventory.linkedRevisions >= 0,
+  "DISTRIBUTION_INVENTORY_INVALID");
+  requireTrue(distributionInventory.profiles === distributionInventory.linkedProfiles
+    && distributionInventory.revisions === distributionInventory.linkedRevisions, "DISTRIBUTION_ORPHAN_STATE");
+  const distributionSample = candidates.find(
+    sample => sample.distributionStatus !== null || sample.bookingRevisionActive);
+  requireTrue(distributionSample || distributionInventory.profiles + distributionInventory.revisions === 0,
+    "DISTRIBUTION_IMPACT_SAMPLE_MISSING");
   const domainSamples = [
     select("BOOKING_IMPACT_COVERAGE_GAP", sample => sample.totalBookings > 0),
     select("PMS_IMPACT_COVERAGE_GAP", sample => sample.roomTypes + sample.rooms > 0),
     select("FINANCE_IMPACT_COVERAGE_GAP",
       sample => sample.totalPayments + sample.totalPayouts + sample.billingEntitlements > 0),
     select("MEDIA_IMPACT_COVERAGE_GAP", sample => sample.mediaObjects > 0),
-    select("DISTRIBUTION_IMPACT_COVERAGE_GAP",
-      sample => sample.distributionStatus !== null || sample.bookingRevisionActive),
   ];
+  if (distributionSample) domainSamples.push(distributionSample);
   const marketplaceImpactSample = candidates.find(sample => sample.marketplaceActive);
   if (marketplaceImpactSample) domainSamples.push(marketplaceImpactSample);
   const uniqueSamples = [...new Map(domainSamples.map(sample => [sample.propertyId, sample])).values()];
@@ -398,11 +417,14 @@ export async function checkAuthenticatedDomainRoutes(get, reader, admin, token, 
     authorizationMode: "platform_organization_membership", collaborations: expectedCollaborations,
     pagination: { page: 1, pageSize: 2, total: collaborationTotal } };
   requireTrue(sameJson(await request(collaborationPath), expectedCollaborationBody), "MARKETPLACE_ROUTE_TARGET_MISMATCH");
-  return { checks: ["domain-auth-denials", "cross-domain-retirement-impact", "booking-admin-list", "marketplace-admin-list"],
+  return { checks: ["domain-auth-denials", "cross-domain-retirement-impact", "booking-admin-list", "marketplace-admin-list",
+    distributionSample ? "distribution-positive-state" : "distribution-empty-state"],
     coverage: { bookings: domainSamples[0].totalBookings, roomTypes: domainSamples[1].roomTypes,
       rooms: domainSamples[1].rooms,
       financeRecords: domainSamples[2].totalPayments + domainSamples[2].totalPayouts + domainSamples[2].billingEntitlements,
-      marketplaceImpactActiveSample: Boolean(marketplaceImpactSample), distributionStatePresent: true,
+      marketplaceImpactActiveSample: Boolean(marketplaceImpactSample), distributionStatePresent: Boolean(distributionSample),
+      distributionEmptyStateProven: !distributionSample,
+      distributionProfiles: distributionInventory.profiles, distributionBookingRevisions: distributionInventory.revisions,
       mediaObjects: domainSamples[3].mediaObjects, connectedChannels: domainSamples[1].connectedChannels,
       retirementPropertiesCompared: uniqueSamples.length,
       bookingRowsCompared: expectedBookings.length, collaborationRowsCompared: expectedCollaborations.length,
