@@ -38,7 +38,7 @@ const result = {
   network: {
     frontendRequests: 12,
     apiRequests: 1,
-    apiPreflightRequests: 1,
+    apiPreflightRequests: 0,
     userListRequests: 1,
     userListAuthorizationMatches: 1,
     blockedExternalRequests: 2,
@@ -61,7 +61,7 @@ for (const changed of [
   { runtimeImages: { ...expectedTaskImages, browser: "sha256:other" } },
   { checks: ["login-page"] },
   { network: { ...result.network, apiRequests: 0 } },
-  { network: { ...result.network, apiPreflightRequests: 0 } },
+  { network: { ...result.network, apiPreflightRequests: -1 } },
   { network: { ...result.network, userListAuthorizationMatches: 0 } },
   { network: { ...result.network, legacyRequests: 1 } },
   { authenticatedRows: 0 },
