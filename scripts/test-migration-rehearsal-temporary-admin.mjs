@@ -35,7 +35,7 @@ const context = { binding, requireTrue, console: { log() {} },
 // Substitute only imported boundaries; execute the actual implementation body.
 const source = readFileSync(new URL("./migration-rehearsal-temporary-admin.mjs", import.meta.url), "utf8");
 vm.runInNewContext(source.replace(/^import .*;\n/gm, "").replaceAll("export ", "")
-  + "\nObject.assign(globalThis,{temporaryAdmin,verifyAdminSession,installTemporaryAdmin,removeTemporaryAdmin,checkAdminRoutes,checkAuthenticatedDomainRoutes,domainImpactCandidatesSql,bookingOracleSql,collaborationOracleSql,collaborationCountSql,expectedBooking,expectedCollaboration,runTemporaryAdmin,runTemporaryAdminCleanup});", context);
+  + "\nObject.assign(globalThis,{temporaryAdmin,verifyAdminSession,installTemporaryAdmin,removeTemporaryAdmin,checkAdminRoutes,checkAuthenticatedDomainRoutes,domainImpactCandidatesSql,bookingOracleSql,collaborationOracleSql,collaborationCountSql,distributionInventorySql,expectedBooking,expectedCollaboration,runTemporaryAdmin,runTemporaryAdminCleanup});", context);
 const session = { workosUserId: "test_user", workosOrgId: "test_org", expiresAt: Math.floor(Date.now()/1000)+250 };
 context.verifyAdminSession(session);
 for (const changed of [{ workosUserId: "other" }, { workosOrgId: "other" }, { expiresAt: 1 }, { expiresAt: Math.floor(Date.now()/1000)+301 }])
@@ -99,6 +99,8 @@ const domainReader = { async query(sql, values = []) {
   if (sql === context.bookingOracleSql) return { rows: [bookingRow] };
   if (sql === context.collaborationOracleSql) return { rows: [collaborationRow] };
   if (sql === context.collaborationCountSql) return { rows: [{ total: 1 }] };
+  if (sql === context.distributionInventorySql) return { rows: [{ profiles: 1, linkedProfiles: 1,
+    revisions: 1, linkedRevisions: 1 }] };
   return { rows: [] };
 } };
 const impactBody = sample => {
@@ -129,26 +131,47 @@ const bookingBody = { bookings: [context.expectedBooking(bookingRow)] };
 const collaborationBody = { contractVersion: "marketplace-admin.v1", authorizationMode: "platform_organization_membership",
   collaborations: [context.expectedCollaboration(collaborationRow)], pagination: { page: 1, pageSize: 2, total: 1 } };
 const domainCalls = [];
-const domainGet = async (path, headers = {}) => {
-  domainCalls.push({ path, authorization: headers.authorization });
+const makeDomainGet = (samples, calls) => async (path, headers = {}) => {
+  calls.push({ path, authorization: headers.authorization });
   const status = !headers.authorization || headers.authorization.includes("deliberately-invalid") ? 401
     : settings.role_key !== "platform_admin" ? 403 : 200;
   const permission = path.includes("/marketplace/") ? "platform.user.suspend" : "platform.admin.read";
   return { status, json: async () => status !== 200 ? { statusCode: status,
     error: status === 401 ? "Unauthorized" : "Forbidden",
     message: status === 401 ? "A valid access token is required." : `Missing required permission: ${permission}` }
-    : path.includes("retirement-impact") ? impactBody(domainCandidates.find(sample => path.includes(sample.propertyId)))
+    : path.includes("retirement-impact") ? impactBody(samples.find(sample => path.includes(sample.propertyId)))
     : path.includes("/bookings?") ? bookingBody : collaborationBody };
 };
+const domainGet = makeDomainGet(domainCandidates, domainCalls);
 const domainResult = await context.checkAuthenticatedDomainRoutes(domainGet, domainReader, client, "synthetic", session);
-assert.equal(domainResult.checks.length, 4);
+assert.equal(domainResult.checks.length, 5);
 assert.deepEqual(JSON.parse(JSON.stringify(domainResult.coverage)), { bookings: 4, roomTypes: 2, rooms: 3,
   financeRecords: 8, marketplaceImpactActiveSample: true, distributionStatePresent: true, mediaObjects: 6, connectedChannels: 1,
+  distributionEmptyStateProven: false, distributionProfiles: 1, distributionBookingRevisions: 1,
   retirementPropertiesCompared: 5,
   bookingRowsCompared: 1, collaborationRowsCompared: 1, collaborationTotal: 1 });
 for (const path of [...domainCandidates.map(sample => sample.propertyId), "/bookings?", "/collaborations?"]) assert.deepEqual(
   domainCalls.filter(call => call.path.includes(path)).map(call => call.authorization),
   [undefined, "Bearer deliberately-invalid-rehearsal-token", "Bearer synthetic", "Bearer synthetic"]);
+const emptyDistributionCandidates = domainCandidates.map(sample => ({ ...sample, distributionStatus: null,
+  bookingRevisionActive: false }));
+const emptyDistributionReader = { ...domainReader, async query(sql) {
+  if (sql === context.domainImpactCandidatesSql) return { rows: emptyDistributionCandidates };
+  if (sql === context.distributionInventorySql) return { rows: [{ profiles: 0, linkedProfiles: 0,
+    revisions: 0, linkedRevisions: 0 }] };
+  return domainReader.query(sql);
+} };
+const emptyDistributionResult = await context.checkAuthenticatedDomainRoutes(
+  makeDomainGet(emptyDistributionCandidates, []), emptyDistributionReader, client, "synthetic", session);
+assert.equal(emptyDistributionResult.checks.at(-1), "distribution-empty-state");
+assert.equal(emptyDistributionResult.coverage.distributionStatePresent, false);
+assert.equal(emptyDistributionResult.coverage.distributionEmptyStateProven, true);
+await assert.rejects(context.checkAuthenticatedDomainRoutes(domainGet, { ...domainReader, async query(sql) {
+  if (sql === context.domainImpactCandidatesSql) return { rows: emptyDistributionCandidates };
+  if (sql === context.distributionInventorySql) return { rows: [{ profiles: 1, linkedProfiles: 0,
+    revisions: 0, linkedRevisions: 0 }] };
+  return domainReader.query(sql);
+} }, client, "synthetic", session), /DISTRIBUTION_ORPHAN_STATE/);
 await assert.rejects(context.checkAuthenticatedDomainRoutes(async (path, headers) => {
   const response = await domainGet(path, headers);
   if (!headers.authorization) return { status: 401, json: async () => ({ statusCode: 401, error: "Unauthorized",
