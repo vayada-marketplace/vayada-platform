@@ -170,6 +170,16 @@ Stop the task to rehearse abort-before-switch; prove legacy remains sole provide
 owner and no customer-facing replay occurred. This does not prove rollback after
 production writes, or measure the final production delta/freeze window.
 
+The controlled job proof lives in
+`scripts/migration-rehearsal-controlled-job.mjs`. It may run only when the exact
+email-worker queue has no eligible pre-existing work. It inserts one
+transaction-local, highest-priority synthetic email job, injects an in-memory
+delivery stub, requires exactly one successful attempt and audit, then runs the
+same packaged worker again and requires byte-identical target fingerprints with
+zero additional delivery calls. The database transaction is always rolled back;
+the worker receives an unused placeholder connection string because the pinned
+client is injected directly. No email-provider credential or endpoint is used.
+
 ### Read-only public/profile and migrated-media probes
 
 `migration-rehearsal-public-media.mjs` reuses the reader-only runtime without
