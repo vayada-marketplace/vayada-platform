@@ -116,3 +116,16 @@ exact resources; it grants no IAM writes, task-role passing, object access, or
 cryptographic use. Merge the same reviewed source before resuming normal
 platform applies. Retain every application resource until the rehearsal evidence
 is accepted.
+
+Exact-image read-only baseline task
+`46c70e7ce0f64c4c803b3d5ae0bc8e01` exited zero before any application-reader
+creation. It bound target evidence checksum
+`e6f0126a27e293044e510cda9e45131a1f6857952bb8ff967e7088215d7c8337` and
+whole-target checksum
+`d5c52a18f986911c1c33656eaad48e2ed0e154448c5874664599f625395e357b`
+across 210 tables and 449,379 rows in a repeatable-read, read-only transaction.
+The application smoke scripts are pinned to those fresh values, reader role
+`vayada_app_reader_27ba9106a4be3e023992ca59`, the exact new application role
+and keys, and the Inbox-release bucket/CDN. They must refuse every older run,
+target, bucket, role, key, checksum, or credential rather than silently falling
+back to retained rehearsal state.

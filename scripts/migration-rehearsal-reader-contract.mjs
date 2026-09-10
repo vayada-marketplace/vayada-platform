@@ -3,15 +3,15 @@ import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 
 export const binding = Object.freeze({
   host: "vayada-migration-rehearsal-20260831.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com",
-  database: "vayada_target_staging_824c10d8_b074ab",
-  owner: "vayada_cutover_staging_20260905_b074ab",
-  reader: "vayada_app_reader_b074ab30e0ff1559080d6942",
+  database: "vayada_target_staging_7200a43a_a14ef6",
+  owner: "vayada_cutover_staging_20260909_bce0a6",
+  reader: "vayada_app_reader_27ba9106a4be3e023992ca59",
   resourceId: "db-TEVNKEU27W4EIU3GRHXJZSYB74",
-  runId: "vay1360-b074ab30e0ff1559080d6942",
-  release: "824c10d89e11a84bc7ea298577f80040bf5ff840",
-  identity: "92947042f7fbe1f34957dfcb9c73816fd7231026a6277cafb9992e7e61a239d3",
-  clean: "c4145a8a928de24c1e1622bfb865fb2b1d6de09a8c1bde95162ec14b039acb11",
-  parity: "da2ea7b36d27296376ec3b0061f435300edce46e0867348ed5e2bf686f33c07c",
+  runId: "vay1360-27ba9106a4be3e023992ca59",
+  release: "7200a43a8ced02df98c518bf72a4101060434337",
+  identity: "5b6d3d747f33015856cb4bdd5fcb8f328c5a1acae2b4116512a741208aa9ac24",
+  clean: "57e3d5909f15d7f2bbb703bf3e18adab061d0ac88ac65a7b9e3cabc69367e5f4",
+  parity: "0e87a2a3a948297d0f7dd4c4a5641d5ddb146cbedf724c99f341ef9a4411ecfb",
   sourceRun: "vay1351-284859bacf5c049394f9f5e6",
 });
 const sha = (value) =>

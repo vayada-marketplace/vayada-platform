@@ -3,10 +3,10 @@ import { createHash as publicHash } from "node:crypto";
 import { createRequire as publicRequire } from "node:module";
 import { binding, requireTrue } from "./migration-rehearsal-reader-contract.mjs";
 import { runReadOnlyApplication } from "./migration-rehearsal-app-readonly.mjs";
-const publicBucket = "vayada-migration-rehearsal-media-269416271598";
-const publicCdn = "https://d2k267wlr5pr38.cloudfront.net/";
-const publicBaseline = "c373af9f2d23564c437a1457fd5cd506df92965c608e195c40d86b96a2bf2959";
-const missingSlug = "vay1361-absent-public-profile-b074ab30e0ff1559080d6942";
+const publicBucket = "vayada-rehearsal-7200a43a-269416271598";
+const publicCdn = "https://d30tn7en2eythj.cloudfront.net/";
+const publicBaseline = "d5c52a18f986911c1c33656eaad48e2ed0e154448c5874664599f625395e357b";
+const missingSlug = "vay1361-absent-public-profile-27ba9106a4be3e023992ca59";
 export const profileSamplesSql = `WITH candidates AS (
   SELECT p.canonical_slug AS slug,
     COALESCE(NULLIF(BTRIM(p.public_identity->>'name'),''),p.public_id) AS name,

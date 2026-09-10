@@ -3,10 +3,10 @@ import { binding, guardedConnection, verifyTarget, requireTrue,
   pgSettingsSql, verifyPgSettings, unsafePrivilegesSql } from "./migration-rehearsal-reader-contract.mjs";
 import { captureRows } from "./migration-rehearsal-app-readonly.mjs";
 
-export const previousExpiry = "2026-09-05T22:55:19.399Z";
-export const renewedExpiry = "2026-09-06T10:18:00.000Z";
-const renewalEvidence = "90fb12e32a1d26b535b836782a5ef93ed4be9788b575bbd6aaa33afb3c53e3ee";
-const renewalData = "c373af9f2d23564c437a1457fd5cd506df92965c608e195c40d86b96a2bf2959";
+export const previousExpiry = "2026-09-10T09:50:47.773Z";
+export const renewedExpiry = "2026-09-10T17:51:00.000Z";
+const renewalEvidence = "e6f0126a27e293044e510cda9e45131a1f6857952bb8ff967e7088215d7c8337";
+const renewalData = "d5c52a18f986911c1c33656eaad48e2ed0e154448c5874664599f625395e357b";
 
 export function assertRenewalWindow(role, now = Date.now()) {
   requireTrue(role?.rolcanlogin === true && role.rolconnlimit === 16

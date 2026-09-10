@@ -5,15 +5,15 @@ import { binding, guardedConnection, requireTrue } from "./migration-rehearsal-r
 import { applicationEnvironment, captureRows, captureRowsSnapshot, runReadOnlyApplication } from "./migration-rehearsal-app-readonly.mjs";
 
 export const temporaryAdmin = {
-  users: "253a344b-e7f0-4668-b966-b23383282127",
-  external_identities: "f6e30264-2608-44d1-b78e-bbc70752785a",
-  organizations: "e283bb6c-6628-4042-9409-ef1a20d03c4b",
-  organization_memberships: "009d8467-1dc2-4250-8026-7198e1d213b9",
-  organization_resource_links: "d140b638-724c-485b-a86e-6db45f76ecaf",
+  users: "21630265-3a7f-40f6-9569-cd06016bedac",
+  external_identities: "6c1428fb-16ba-468f-943e-d8a12d29b092",
+  organizations: "c75d2566-7488-4c48-8573-ba5f13208372",
+  organization_memberships: "2c8f1198-694d-476a-81e3-7546c2ac3aa6",
+  organization_resource_links: "a6ee4a9b-f579-4c0a-b688-8e3461506f4a",
 };
-const originalData = "c373af9f2d23564c437a1457fd5cd506df92965c608e195c40d86b96a2bf2959";
+const originalData = "d5c52a18f986911c1c33656eaad48e2ed0e154448c5874664599f625395e357b";
 const testEmail = "f.maliqi+codex-admin@vayada.com";
-const testSlug = "vay1361-b074ab-temporary-admin";
+const testSlug = "vay1361-27ba9106-temporary-admin";
 const hashIdentity = value => identityHash("sha256").update(value).digest("hex");
 // Exact read-only constraint trigger and its transitive function from release 0105.
 export const identityTriggerSql = `SELECT
@@ -77,7 +77,7 @@ export async function installTemporaryAdmin(client, session) {
       VALUES ($1,$2,'platform','platform','vayada','operator','active')`, [temporaryAdmin.organization_resource_links, temporaryAdmin.organizations]);
     await client.query("SET CONSTRAINTS ALL IMMEDIATE");
     const installed = await captureRowsSnapshot(client);
-    requireTrue(installed.tables === 197 && installed.rows === 449361, "TEMPORARY_ROW_DELTA");
+    requireTrue(installed.tables === 210 && installed.rows === 449384, "TEMPORARY_ROW_DELTA");
     // Prove before commit that deleting only these five rows restores the exact data.
     await client.query("SAVEPOINT cleanup_probe");
     await deleteTestRows(client);

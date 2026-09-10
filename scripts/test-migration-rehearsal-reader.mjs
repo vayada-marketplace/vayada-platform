@@ -84,7 +84,7 @@ class MockDatabase {
       rows = [
         {
           name: variant === "database" ? "wrong_database" : binding.database,
-          oid: variant === "oid" ? "1" : "180558",
+          oid: variant === "oid" ? "1" : "208400",
           owner: binding.owner,
           version: "170009",
         },
