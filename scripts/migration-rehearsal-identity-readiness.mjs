@@ -9,7 +9,7 @@ export const verifiedAdminHashes = [
   "1db71651043667105f6c270e800029bba9fdc7161fdbcb1c528a86db21e76c2b",
   "0222289cdc132448e75e88f11cdaf10e74206e4f45b47a0ec46ca120f206fa62",
 ];
-const acceptedData = "c373af9f2d23564c437a1457fd5cd506df92965c608e195c40d86b96a2bf2959";
+const acceptedData = "d5c52a18f986911c1c33656eaad48e2ed0e154448c5874664599f625395e357b";
 export const providerReadinessSql = `WITH provider_users AS (
   SELECT u.id,u.status FROM identity.external_identities e JOIN identity.users u ON u.id=e.user_id
   WHERE e.provider='workos' AND encode(sha256(convert_to(e.provider_user_id,'UTF8')),'hex')=$1

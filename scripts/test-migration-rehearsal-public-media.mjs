@@ -5,7 +5,7 @@ import {mediaReadTarget,checkMediaBytes,checkPublicProfiles,checkMigratedMedia,p
 const content=Buffer.from('synthetic image bytes');
 const checksum=createHash('sha256').update(content).digest('hex');
 const id='11111111-2222-4333-8444-555555555555';
-const bucket='vayada-migration-rehearsal-media-269416271598',cdn='https://d2k267wlr5pr38.cloudfront.net/';
+const bucket='vayada-rehearsal-7200a43a-269416271598',cdn='https://d30tn7en2eythj.cloudfront.net/';
 const privateRow={id,bucket,visibility:'private',approved:false,key:`private/media/${id}/provider_original/sha256-${checksum}.png`,url:null,mime:'image/png',bytes:content.length,checksum};
 const publicRow={...privateRow,visibility:'public',approved:true,key:`public/media/${id}/original_safe/sha256-${checksum}.png`};
 publicRow.url=cdn+publicRow.key.slice(7);

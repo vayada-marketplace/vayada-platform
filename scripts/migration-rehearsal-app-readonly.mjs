@@ -8,9 +8,9 @@ import {
   pgSettingsSql, verifyPgSettings, unsafePrivilegesSql,
 } from "./migration-rehearsal-reader-contract.mjs";
 
-const evidence = "90fb12e32a1d26b535b836782a5ef93ed4be9788b575bbd6aaa33afb3c53e3ee";
-const recipient = "arn:aws:kms:eu-west-1:269416271598:key/d621e8eb-c269-4176-8cf6-34d9b0d2835a";
-const fingerprint = "arn:aws:kms:eu-west-1:269416271598:key/a3a7deaf-e158-48d1-9fa8-7967743856b1";
+const evidence = "e6f0126a27e293044e510cda9e45131a1f6857952bb8ff967e7088215d7c8337";
+const recipient = "arn:aws:kms:eu-west-1:269416271598:key/fe106dcd-0aa7-44de-a2ad-431dcdb319b5";
+const fingerprint = "arn:aws:kms:eu-west-1:269416271598:key/b16e938e-7aae-4b02-bbaf-261c52fe522b";
 const domains = ["identity", "hotel_catalog", "booking", "pms", "finance", "marketplace", "distribution", "platform", "vayada_migration_evidence"];
 const digest = (value) => appHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -31,9 +31,9 @@ export function applicationEnvironment(env) {
     WORKOS_JWKS_URL: jwks.href, WORKOS_ISSUER: env.WORKOS_ISSUER, WORKOS_AUDIENCE: env.WORKOS_AUDIENCE,
     PUBLIC_HOTEL_PROFILE_SOURCE: "target", MARKETPLACE_ADMIN_SOURCE: "target",
     PMS_OPERATIONS_SOURCE: "target", FINANCE_SOURCE: "target", AFFILIATE_PUBLIC_SOURCE: "target",
-    PLATFORM_MEDIA_BUCKET: "vayada-migration-rehearsal-media-269416271598",
-    PLATFORM_MEDIA_CDN_BASE_URL: "https://d2k267wlr5pr38.cloudfront.net",
-    PLATFORM_MEDIA_CDN_ORIGIN_HOST: "vayada-migration-rehearsal-media-269416271598.s3.eu-west-1.amazonaws.com",
+    PLATFORM_MEDIA_BUCKET: "vayada-rehearsal-7200a43a-269416271598",
+    PLATFORM_MEDIA_CDN_BASE_URL: "https://d30tn7en2eythj.cloudfront.net",
+    PLATFORM_MEDIA_CDN_ORIGIN_HOST: "vayada-rehearsal-7200a43a-269416271598.s3.eu-west-1.amazonaws.com",
     PLATFORM_MEDIA_CLEANUP_ENABLED: "false", PROPERTY_SETUP_DRAFT_RETENTION_ENABLED: "false",
     PMS_INVENTORY_PUBLIC_OFFER_RETRY_ENABLED: "false", PMS_CHANNEX_WORKER_ENABLED: "false",
     CREATOR_PLATFORM_SYNC_ENABLED: "false", BOOKING_WEB_EVENT_SINK: "disabled",

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { createHash } from "node:crypto";
 import { binding, requireTrue } from "./migration-rehearsal-reader-contract.mjs";
-const original = "c373af9f2d23564c437a1457fd5cd506df92965c608e195c40d86b96a2bf2959", installed = "a".repeat(64);
+const original = "d5c52a18f986911c1c33656eaad48e2ed0e154448c5874664599f625395e357b", installed = "a".repeat(64);
 let rows, snapshot, savepoint, fault, mutations, settings;
 const reset = () => { rows = new Set(); fault = undefined; mutations = []; settings = { role_key: "platform_admin", member: "active", link: "active" }; };
 const client = { async query(sql, values = []) {
@@ -30,7 +30,7 @@ const context = { binding, requireTrue, console: { log() {} },
   identityHash: () => ({ update(value) { return { digest: () => value === "test_user" ? "1db71651043667105f6c270e800029bba9fdc7161fdbcb1c528a86db21e76c2b"
     : value === "test_org" ? "0222289cdc132448e75e88f11cdaf10e74206e4f45b47a0ec46ca120f206fa62"
     : value === '{"approved":true}' ? "0c4a4faa097a7c43cdcd22fc1929befd4944e6976fc48367762265bb5e75666c" : createHash("sha256").update(value).digest("hex") }; } }),
-  captureRowsSnapshot: async () => ({ sha256: fault === "hash" ? "b".repeat(64) : rows.size ? installed : original, tables: 197, rows: 449356 + rows.size }),
+  captureRowsSnapshot: async () => ({ sha256: fault === "hash" ? "b".repeat(64) : rows.size ? installed : original, tables: 210, rows: 449379 + rows.size }),
 };
 // Substitute only imported boundaries; execute the actual implementation body.
 const source = readFileSync(new URL("./migration-rehearsal-temporary-admin.mjs", import.meta.url), "utf8");
