@@ -7,12 +7,15 @@ import {
 } from "./migration-rehearsal-browser.mjs";
 import {
   apiPreflightResponse,
+  browserProcessEnv,
+  corsProofRequestKind,
   fetchTaskLocalRoute,
   installContextRouteFallback,
   installRoutes,
   isUserListGet,
   parseReadyJson,
   requireUserListResponse,
+  runBrowserCorsProof,
   runRoutedContext,
   routeTarget,
 } from "./migration-rehearsal-browser-runner.mjs";
@@ -23,6 +26,12 @@ import {
 } from "./migration-rehearsal-task-images.mjs";
 
 const token = "header.payload.signature";
+assert.deepEqual(browserProcessEnv, {
+  HOME: "/home/pwuser",
+  LANG: "C.UTF-8",
+  PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+  TMPDIR: "/tmp",
+});
 const taskArn =
   "arn:aws:ecs:eu-west-1:269416271598:task/vayada-backend-cluster/0123456789abcdef0123456789abcdef";
 const runtime = { taskArn, images: expectedTaskImages };
@@ -39,6 +48,9 @@ const result = {
     frontendRequests: 12,
     apiRequests: 1,
     apiPreflightRequests: 0,
+    corsProofPreflightRequests: 1,
+    corsProofGetRequests: 1,
+    corsProofAuthorizationMatches: 1,
     userListRequests: 1,
     userListAuthorizationMatches: 1,
     blockedExternalRequests: 2,
@@ -62,6 +74,9 @@ for (const changed of [
   { checks: ["login-page"] },
   { network: { ...result.network, apiRequests: 0 } },
   { network: { ...result.network, apiPreflightRequests: -1 } },
+  { network: { ...result.network, corsProofPreflightRequests: 0 } },
+  { network: { ...result.network, corsProofGetRequests: 0 } },
+  { network: { ...result.network, corsProofAuthorizationMatches: 0 } },
   { network: { ...result.network, userListAuthorizationMatches: 0 } },
   { network: { ...result.network, legacyRequests: 1 } },
   { authenticatedRows: 0 },
@@ -221,6 +236,17 @@ assert.throws(
     ),
   /BROWSER_API_PREFLIGHT/,
 );
+assert.throws(
+  () =>
+    apiPreflightResponse(
+      request("OPTIONS", {
+        origin: "https://next-admin.vayada.com",
+        "access-control-request-method": "GET",
+        "access-control-request-headers": "authorization, x-unreviewed",
+      }),
+    ),
+  /BROWSER_API_PREFLIGHT/,
+);
 const getRequest = request("GET", {
   origin: "https://next-admin.vayada.com",
   authorization: `Bearer ${token}`,
@@ -232,6 +258,9 @@ const network = {
   frontendRequests: 0,
   apiRequests: 0,
   apiPreflightRequests: 0,
+  corsProofPreflightRequests: 0,
+  corsProofGetRequests: 0,
+  corsProofAuthorizationMatches: 0,
   userListRequests: 0,
   userListAuthorizationMatches: 0,
   blockedExternalRequests: 0,
@@ -276,12 +305,191 @@ await routeHandler({
   async abort() {},
 });
 assert.equal(network.apiPreflightRequests, 1);
+assert.equal(network.corsProofPreflightRequests, 0);
+assert.equal(network.corsProofGetRequests, 0);
+assert.equal(network.corsProofAuthorizationMatches, 0);
 assert.equal(network.userListRequests, 1);
 assert.equal(network.userListAuthorizationMatches, 1);
 assert.equal(fulfilled[0].status, 204);
 assert.equal(
   fulfilled[1].headers["access-control-allow-origin"],
   "https://next-admin.vayada.com",
+);
+
+const corsSourceOrigin = "http://127.0.0.1:45678";
+assert.equal(
+  corsProofRequestKind(
+    {
+      method: "OPTIONS",
+      url: "/cors-proof",
+      headers: {
+        origin: corsSourceOrigin,
+        "access-control-request-method": "GET",
+        "access-control-request-headers": "authorization",
+      },
+    },
+    corsSourceOrigin,
+  ),
+  "preflight",
+);
+assert.equal(
+  corsProofRequestKind(
+    {
+      method: "GET",
+      url: "/cors-proof",
+      headers: {
+        origin: corsSourceOrigin,
+        authorization: "Bearer browser-cors-proof",
+      },
+    },
+    corsSourceOrigin,
+  ),
+  "get",
+);
+for (const invalid of [
+  { method: "GET", url: "/wrong", headers: {} },
+  {
+    method: "OPTIONS",
+    url: "/cors-proof",
+    headers: {
+      origin: "http://127.0.0.1:1",
+      "access-control-request-method": "GET",
+      "access-control-request-headers": "authorization",
+    },
+  },
+  {
+    method: "OPTIONS",
+    url: "/cors-proof",
+    headers: {
+      origin: corsSourceOrigin,
+      "access-control-request-method": "GET",
+      "access-control-request-headers": "authorization, x-unreviewed",
+    },
+  },
+  {
+    method: "GET",
+    url: "/cors-proof",
+    headers: {
+      origin: corsSourceOrigin,
+      authorization: "Bearer wrong",
+    },
+  },
+]) {
+  assert.throws(
+    () => corsProofRequestKind(invalid, corsSourceOrigin),
+    /BROWSER_CORS_PROOF/,
+  );
+}
+
+let corsContextCloses = 0;
+let navigatedSourceOrigin;
+let corsFetchCalls = 0;
+let corsNetwork;
+const corsTimeouts = [];
+const fakeCorsBrowser = (close) => ({
+  async newContext(options) {
+    assert.deepEqual(options, { serviceWorkers: "block" });
+    return {
+      async newPage() {
+        return {
+          async goto(url, options) {
+            assert.deepEqual(options, { waitUntil: "domcontentloaded" });
+            navigatedSourceOrigin = new URL(url).origin;
+          },
+          url() {
+            return `${navigatedSourceOrigin}/source`;
+          },
+          async evaluate(callback, targetUrl) {
+            return callback(targetUrl);
+          },
+        };
+      },
+      async close() {
+        corsContextCloses += 1;
+        await close?.();
+      },
+    };
+  },
+});
+const originalCorsFetch = globalThis.fetch;
+const originalCorsTimeout = AbortSignal.timeout;
+try {
+  AbortSignal.timeout = (milliseconds) => {
+    corsTimeouts.push(milliseconds);
+    return originalCorsTimeout(milliseconds);
+  };
+  globalThis.fetch = async (targetUrl, options) => {
+    corsFetchCalls += 1;
+    assert.equal(options.method, "GET");
+    assert.equal(options.credentials, "omit");
+    assert.equal(options.redirect, "error");
+    assert(options.signal instanceof AbortSignal);
+    assert.deepEqual(options.headers, {
+      authorization: "Bearer browser-cors-proof",
+    });
+    const preflight = await originalCorsFetch(targetUrl, {
+      method: "OPTIONS",
+      headers: {
+        origin: navigatedSourceOrigin,
+        "access-control-request-method": "GET",
+        "access-control-request-headers": "authorization",
+      },
+    });
+    assert.equal(preflight.status, 204);
+    return originalCorsFetch(targetUrl, {
+      method: options.method,
+      headers: { origin: navigatedSourceOrigin, ...options.headers },
+    });
+  };
+  corsNetwork = await runBrowserCorsProof(fakeCorsBrowser());
+  await assert.rejects(
+    runBrowserCorsProof(
+      fakeCorsBrowser(async () => {
+        const response = await originalCorsFetch(
+          `${navigatedSourceOrigin}/unexpected`,
+        );
+        assert.equal(response.status, 404);
+      }),
+    ),
+    /BROWSER_CORS_PROOF_RESPONSE/,
+  );
+} finally {
+  globalThis.fetch = originalCorsFetch;
+  AbortSignal.timeout = originalCorsTimeout;
+}
+assert.deepEqual(corsNetwork, {
+  corsProofPreflightRequests: 1,
+  corsProofGetRequests: 1,
+  corsProofAuthorizationMatches: 1,
+});
+assert.equal(corsFetchCalls, 2);
+assert.deepEqual(corsTimeouts, [10_000, 10_000]);
+assert.equal(corsContextCloses, 2);
+const corsRunFailure = new Error("SYNTHETIC_CORS_RUN_FAILURE");
+const corsCloseFailure = new Error("SYNTHETIC_CORS_CLOSE_FAILURE");
+await assert.rejects(
+  runBrowserCorsProof({
+    async newContext() {
+      return {
+        async newPage() {
+          return {
+            async goto() {
+              throw corsRunFailure;
+            },
+          };
+        },
+        async close() {
+          throw corsCloseFailure;
+        },
+      };
+    },
+  }),
+  (error) => {
+    assert(error instanceof AggregateError);
+    assert.equal(error.message, "BROWSER_CORS_PROOF_AND_TEARDOWN_FAILED");
+    assert.deepEqual(error.errors, [corsRunFailure, corsCloseFailure]);
+    return true;
+  },
 );
 let fallbackHandler;
 const fallback = await installContextRouteFallback(
@@ -465,5 +673,5 @@ for (const file of [
 }
 
 console.log(
-  "PASS: runtime digests attest, redirects fail closed, virtual origins stay task-local, readiness retries, and token disclosure fails",
+  "PASS: runtime digests attest, browser CORS proof is exact, redirects fail closed, virtual origins stay task-local, readiness retries, and token disclosure fails",
 );
