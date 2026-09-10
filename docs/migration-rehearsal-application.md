@@ -185,13 +185,22 @@ credential/data controller and `scripts/migration-rehearsal-browser-runner.mjs`
 inside pinned Chromium. The exact-release Vayada Admin frontend and API share a
 one-off task network. Browser requests keep the release's compiled
 `next-admin`/`next-api` origins, but request interception maps only those two
-origins to task-local HTTP; every other browser network request is blocked and
-legacy API hosts fail the run. The controller provisions the same five-row
-verified-subject boundary, starts the API with the database-enforced reader,
-waits for login-page, anonymous-denial and authenticated user-list UI checks,
-then stops the API and removes exactly those five rows. A browser failure or
-timeout still executes cleanup. This does not create positive public-profile or
-public-media coverage when the accepted target contains no eligible rows.
+origins to task-local HTTP. Redirect following is disabled and every 3xx fails
+closed before any second request; every other browser network request is
+blocked and legacy API hosts fail the run. A harness-local CORS bridge permits
+only the observed Vayada Admin `OPTIONS` and authenticated `GET` pair; the API
+still receives no provider secrets or full auth-session configuration. Both
+controller and browser read the task metadata endpoint and require the actual
+API, frontend, and browser image IDs to match the approved digests and task
+ARN. The controller provisions the same five-row verified-subject boundary,
+starts the API with the database-enforced reader, waits for login-page,
+anonymous-denial and authenticated user-list UI checks, then stops the API.
+Cleanup always uses a new admin connection and waits on the installer's lock
+before deciding whether rows are absent. It distinguishes the original dataset
+from the exact five-row installed hash, including after an ambiguous COMMIT,
+and deletes only those fixed rows. Original run and cleanup failures are both
+retained. This does not create positive public-profile or public-media coverage
+when the accepted target contains no eligible rows.
 
 ### Read-only public/profile and migrated-media probes
 
