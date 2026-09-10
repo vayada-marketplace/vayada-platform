@@ -15,6 +15,17 @@ const originalData = "d5c52a18f986911c1c33656eaad48e2ed0e154448c5874664599f62539
 const testEmail = "f.maliqi+codex-admin@vayada.com";
 const testSlug = "vay1361-27ba9106-temporary-admin";
 const hashIdentity = value => identityHash("sha256").update(value).digest("hex");
+export class TemporaryAdminCommitError extends Error {
+  constructor(preparedHash, cause) {
+    super("TEMPORARY_ADMIN_COMMIT_AMBIGUOUS", { cause });
+    this.name = "TemporaryAdminCommitError";
+    this.preparedHash = preparedHash;
+  }
+}
+export const preparedTemporaryAdminHash = error => error instanceof TemporaryAdminCommitError
+  && /^[a-f0-9]{64}$/.test(error.preparedHash) ? error.preparedHash : undefined;
+export const combineRunAndCleanupFailures = (failure, cleanupFailure) => failure && cleanupFailure
+  ? new AggregateError([failure, cleanupFailure], "REHEARSAL_RUN_AND_CLEANUP_FAILED") : cleanupFailure ?? failure;
 // Exact read-only constraint trigger and its transitive function from release 0105.
 export const identityTriggerSql = `SELECT
   (SELECT jsonb_agg(jsonb_build_object('table',tgrelid::regclass::text,'name',tgname,'enabled',tgenabled,
@@ -38,6 +49,13 @@ async function lockIdentity(client) {
   await client.query(`LOCK TABLE ${Object.keys(temporaryAdmin).map(name => 'identity.' + name).join(',')} IN SHARE ROW EXCLUSIVE MODE`);
 }
 
+// READ COMMITTED takes a fresh snapshot after waiting for an in-flight installer.
+async function lockIdentityForCleanup(client) {
+  await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+  await client.query("SELECT pg_advisory_xact_lock(1361,1361)");
+  await client.query(`LOCK TABLE ${Object.keys(temporaryAdmin).map(name => 'identity.' + name).join(',')} IN SHARE ROW EXCLUSIVE MODE`);
+}
+
 async function deleteTestRows(client) {
   for (const name of ["organization_resource_links", "organization_memberships", "external_identities", "organizations", "users"])
     requireTrue((await client.query(`DELETE FROM identity.${name} WHERE id=$1`, [temporaryAdmin[name]])).rowCount === 1, "TEST_CLEANUP_ROW_COUNT");
@@ -51,6 +69,7 @@ async function verifyIdentityTriggers(client) {
 
 export async function installTemporaryAdmin(client, session) {
   await lockIdentity(client);
+  let preparedHash;
   try {
     requireTrue((await captureRowsSnapshot(client)).sha256 === originalData, "MIGRATED_ROWS_CHANGED");
     await verifyIdentityTriggers(client);
@@ -84,22 +103,51 @@ export async function installTemporaryAdmin(client, session) {
     requireTrue((await captureRowsSnapshot(client)).sha256 === originalData, "TEST_INSERT_SIDE_EFFECT");
     await client.query("ROLLBACK TO SAVEPOINT cleanup_probe");
     console.log(JSON.stringify({ status: "TEMPORARY_ADMIN_PREPARED", runId: binding.runId, temporaryDataSha256: installed.sha256, committed: false }));
-    await client.query("COMMIT");
-    return installed.sha256;
-  } catch (error) { await client.query("ROLLBACK"); throw error; }
+    preparedHash = installed.sha256;
+    try { await client.query("COMMIT"); }
+    catch (error) { throw new TemporaryAdminCommitError(preparedHash, error); }
+    return preparedHash;
+  } catch (error) { await client.query("ROLLBACK").catch(() => {}); throw error; }
+}
+
+async function deleteInstalledTemporaryAdmin(client, expectedHash) {
+  requireTrue(/^[a-f0-9]{64}$/.test(expectedHash ?? "") && expectedHash !== originalData, "EXPECTED_TEST_HASH");
+  await verifyIdentityTriggers(client);
+  requireTrue((await captureRowsSnapshot(client)).sha256 === expectedHash, "TEST_OR_MIGRATED_DATA_DRIFT");
+  await deleteTestRows(client);
+  await client.query("SET CONSTRAINTS ALL IMMEDIATE");
+  requireTrue((await captureRowsSnapshot(client)).sha256 === originalData, "CLEANUP_DATA_MISMATCH");
 }
 
 export async function removeTemporaryAdmin(client, expectedHash) {
-  requireTrue(/^[a-f0-9]{64}$/.test(expectedHash ?? "") && expectedHash !== originalData, "EXPECTED_TEST_HASH");
-  await lockIdentity(client);
+  await lockIdentityForCleanup(client);
   try {
-    await verifyIdentityTriggers(client);
-    requireTrue((await captureRowsSnapshot(client)).sha256 === expectedHash, "TEST_OR_MIGRATED_DATA_DRIFT");
-    await deleteTestRows(client);
-    await client.query("SET CONSTRAINTS ALL IMMEDIATE");
-    requireTrue((await captureRowsSnapshot(client)).sha256 === originalData, "CLEANUP_DATA_MISMATCH");
+    await deleteInstalledTemporaryAdmin(client, expectedHash);
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
+}
+
+// Always reconnect: the installer connection may be dead after COMMIT or app failure.
+export async function ensureTemporaryAdminRemoved(Client, env, expectedHash) {
+  requireTrue(/^[a-f0-9]{64}$/.test(expectedHash ?? "") && expectedHash !== originalData, "EXPECTED_TEST_HASH");
+  const admin = new Client({ connectionString: guardedConnection(env.ADMIN_DATABASE_URL, "admin").toString(),
+    connectionTimeoutMillis: 5000, options: "-c statement_timeout=15000 -c lock_timeout=3000", application_name: "vay1361-admin-cleanup" });
+  try {
+    await admin.connect();
+    await admin.query("SET search_path=pg_catalog");
+    await lockIdentityForCleanup(admin);
+    const current = await captureRowsSnapshot(admin);
+    if (current.sha256 === originalData) {
+      await admin.query("ROLLBACK");
+      return { dataSha256: originalData, removedRows: 0, alreadyAbsent: true };
+    }
+    requireTrue(current.sha256 === expectedHash, "TEST_OR_MIGRATED_DATA_DRIFT");
+    await deleteInstalledTemporaryAdmin(admin, expectedHash);
+    await admin.query("COMMIT");
+    requireTrue((await captureRows(admin)).sha256 === originalData, "POST_COMMIT_CLEANUP_MISMATCH");
+    return { dataSha256: originalData, removedRows: 5, alreadyAbsent: false };
+  } catch (error) { await admin.query("ROLLBACK").catch(() => {}); throw error; }
+  finally { await admin.end().catch(() => {}); }
 }
 
 export async function checkAdminRoutes(get, reader, admin, token, session) {
@@ -445,7 +493,8 @@ export async function runTemporaryAdmin(Client, env) {
   try {
     await admin.connect();
     await admin.query("SET search_path=pg_catalog");
-    installed = await installTemporaryAdmin(admin, session);
+    try { installed = await installTemporaryAdmin(admin, session); }
+    catch (error) { installed = preparedTemporaryAdminHash(error); throw error; }
     console.log(JSON.stringify({ status: "TEMPORARY_ADMIN_INSTALLED", runId: binding.runId, temporaryDataSha256: installed, addedRows: 5 }));
     await runReadOnlyApplication(Client, env, async (get, reader) => {
       checks = await checkAdminRoutes(get, reader, admin, token, session);
@@ -454,16 +503,15 @@ export async function runTemporaryAdmin(Client, env) {
       domainCoverage = domains.coverage;
     });
   } catch (error) { failure = error; }
-  finally {
-    try {
-      if (installed) {
-        await removeTemporaryAdmin(admin, installed);
-        requireTrue((await captureRows(admin)).sha256 === originalData, "POST_COMMIT_CLEANUP_MISMATCH");
-        console.log(JSON.stringify({ status: "TEMPORARY_ADMIN_REMOVED", runId: binding.runId, dataSha256: originalData, removedRows: 5 }));
-      }
-    } finally { await admin.end().catch(() => {}); }
-  }
-  if (failure) throw failure;
+  await admin.end().catch(() => {});
+  let cleanupFailure;
+  if (installed) try {
+    const cleanup = await ensureTemporaryAdminRemoved(Client, env, installed);
+    console.log(JSON.stringify({ status: "TEMPORARY_ADMIN_REMOVED", runId: binding.runId,
+      dataSha256: cleanup.dataSha256, removedRows: cleanup.removedRows, alreadyAbsent: cleanup.alreadyAbsent }));
+  } catch (error) { cleanupFailure = error; }
+  const finalFailure = combineRunAndCleanupFailures(failure, cleanupFailure);
+  if (finalFailure) throw finalFailure;
   return { status: "PASS", scope: "temporary-admin-authenticated-domain-smoke", runId: binding.runId, release: binding.release,
     checks, domainCoverage, dataSha256: originalData, applicationStopped: true, temporaryAccessRemoved: true,
     authenticatedIdentityReadProven: true, otherDomainReadsProven: true, fullSmokeAccepted: false };
@@ -471,14 +519,8 @@ export async function runTemporaryAdmin(Client, env) {
 
 // Recovery only: never provision or launch an application, and refuse data drift.
 export async function runTemporaryAdminCleanup(Client, env) {
-  const admin = new Client({ connectionString: guardedConnection(env.ADMIN_DATABASE_URL, "admin").toString(),
-    connectionTimeoutMillis: 5000, options: "-c statement_timeout=15000 -c lock_timeout=3000", application_name: "vay1361-admin-cleanup" });
-  try {
-    await admin.connect();
-    await admin.query("SET search_path=pg_catalog");
-    await removeTemporaryAdmin(admin, env.REHEARSAL_CLEANUP_HASH);
-    requireTrue((await captureRows(admin)).sha256 === originalData, "POST_COMMIT_CLEANUP_MISMATCH");
-    return { status: "PASS", scope: "temporary-admin-cleanup-only", runId: binding.runId,
-      dataSha256: originalData, temporaryAccessRemoved: true, fullSmokeAccepted: false };
-  } finally { await admin.end().catch(() => {}); }
+  const cleanup = await ensureTemporaryAdminRemoved(Client, env, env.REHEARSAL_CLEANUP_HASH);
+  return { status: "PASS", scope: "temporary-admin-cleanup-only", runId: binding.runId,
+    dataSha256: cleanup.dataSha256, removedRows: cleanup.removedRows, alreadyAbsent: cleanup.alreadyAbsent,
+    temporaryAccessRemoved: true, fullSmokeAccepted: false };
 }
