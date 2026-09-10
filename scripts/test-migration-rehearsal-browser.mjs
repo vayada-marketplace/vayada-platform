@@ -8,10 +8,12 @@ import {
 import {
   apiPreflightResponse,
   fetchTaskLocalRoute,
+  installContextRouteFallback,
   installRoutes,
   isUserListGet,
   parseReadyJson,
   requireUserListResponse,
+  runRoutedContext,
   routeTarget,
 } from "./migration-rehearsal-browser-runner.mjs";
 import { binding } from "./migration-rehearsal-reader-contract.mjs";
@@ -281,6 +283,73 @@ assert.equal(
   fulfilled[1].headers["access-control-allow-origin"],
   "https://next-admin.vayada.com",
 );
+let fallbackHandler;
+await installContextRouteFallback(
+  {
+    async route(pattern, handler) {
+      assert.equal(pattern, "**/*");
+      fallbackHandler = handler;
+    },
+  },
+  network,
+);
+let fallbackAborts = 0;
+const teardownOrder = [];
+let finishRoute;
+const routeFinished = new Promise((resolve) => {
+  finishRoute = resolve;
+});
+let teardownFinished = false;
+const scenarioFailure = new Error("SYNTHETIC_SCENARIO_FAILURE");
+const teardown = runRoutedContext(
+  {
+    async unrouteAll(options) {
+      assert.deepEqual(options, { behavior: "wait" });
+      teardownOrder.push("routes-draining");
+      await routeFinished;
+      teardownOrder.push("routes-drained");
+    },
+    async close(options) {
+      assert.deepEqual(options, { runBeforeUnload: false });
+      teardownOrder.push("page-closed");
+    },
+  },
+  {
+    async unrouteAll(options) {
+      assert.deepEqual(options, { behavior: "wait" });
+      teardownOrder.push("fallback-drained");
+    },
+    async close() {
+      teardownOrder.push("context-closed");
+    },
+  },
+  async () => {
+    throw scenarioFailure;
+  },
+).then(() => {
+  teardownFinished = true;
+});
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(teardownFinished, false);
+assert.deepEqual(teardownOrder, ["routes-draining"]);
+await fallbackHandler({
+  request: () =>
+    request("GET", {}, "https://next-admin.vayada.com/late-chunk.js"),
+  async abort(reason) {
+    assert.equal(reason, "blockedbyclient");
+    fallbackAborts += 1;
+  },
+});
+assert.equal(fallbackAborts, 1);
+finishRoute();
+await assert.rejects(teardown, (error) => error === scenarioFailure);
+assert.deepEqual(teardownOrder, [
+  "routes-draining",
+  "routes-drained",
+  "page-closed",
+  "fallback-drained",
+  "context-closed",
+]);
 requireUserListResponse({ request: () => getRequest, status: () => 200 });
 assert.throws(
   () =>

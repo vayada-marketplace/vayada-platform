@@ -223,6 +223,55 @@ export async function installRoutes(page, token, network) {
   });
 }
 
+export async function installContextRouteFallback(context, network) {
+  await context.route("**/*", async (route) => {
+    network.blockedExternalRequests += 1;
+    if (routeTarget(route.request().url()).legacy) {
+      network.legacyRequests += 1;
+    }
+    await route.abort("blockedbyclient");
+  });
+}
+
+export async function runRoutedContext(page, context, run) {
+  let result;
+  let runFailure;
+  try {
+    result = await run();
+  } catch (error) {
+    runFailure = error;
+  }
+  const teardownFailures = [];
+  for (const teardown of [
+    () => page.unrouteAll({ behavior: "wait" }),
+    () => page.close({ runBeforeUnload: false }),
+    () => context.unrouteAll({ behavior: "wait" }),
+    () => context.close(),
+  ]) {
+    try {
+      await teardown();
+    } catch (error) {
+      teardownFailures.push(error);
+    }
+  }
+  const teardownFailure =
+    teardownFailures.length > 1
+      ? new AggregateError(
+          teardownFailures,
+          "BROWSER_ROUTE_AND_CONTEXT_TEARDOWN_FAILED",
+        )
+      : teardownFailures[0];
+  if (runFailure && teardownFailure) {
+    throw new AggregateError(
+      [runFailure, teardownFailure],
+      "BROWSER_SCENARIO_AND_TEARDOWN_FAILED",
+    );
+  }
+  if (runFailure) throw runFailure;
+  if (teardownFailure) throw teardownFailure;
+  return result;
+}
+
 function storageSession({ token, expiresAt, userId }) {
   localStorage.setItem("access_token", token);
   localStorage.setItem("token_expires_at", String(expiresAt * 1000));
@@ -296,69 +345,80 @@ export async function runBrowserProof(chromium, env) {
   });
   try {
     const loginContext = await browser.newContext({ serviceWorkers: "block" });
+    await installContextRouteFallback(loginContext, network);
     const loginPage = await loginContext.newPage();
-    loginPage.on("pageerror", () => {
-      pageErrors += 1;
+    await runRoutedContext(loginPage, loginContext, async () => {
+      loginPage.on("pageerror", () => {
+        pageErrors += 1;
+      });
+      await installRoutes(loginPage, token, network);
+      await loginPage.goto(`${virtualFrontend}/login`, {
+        waitUntil: "domcontentloaded",
+      });
+      await loginPage
+        .getByRole("heading", { name: /vayada admin/i, level: 1 })
+        .waitFor();
+      await loginPage.getByLabel(/email address/i).waitFor();
+      await loginPage.getByLabel(/^password$/i).waitFor();
+      await loginPage.getByRole("button", { name: /sign in/i }).waitFor();
     });
-    await installRoutes(loginPage, token, network);
-    await loginPage.goto(`${virtualFrontend}/login`, {
-      waitUntil: "domcontentloaded",
-    });
-    await loginPage
-      .getByRole("heading", { name: /vayada admin/i, level: 1 })
-      .waitFor();
-    await loginPage.getByLabel(/email address/i).waitFor();
-    await loginPage.getByLabel(/^password$/i).waitFor();
-    await loginPage.getByRole("button", { name: /sign in/i }).waitFor();
-    await loginContext.close();
 
     const deniedContext = await browser.newContext({ serviceWorkers: "block" });
+    await installContextRouteFallback(deniedContext, network);
     const deniedPage = await deniedContext.newPage();
-    deniedPage.on("pageerror", () => {
-      pageErrors += 1;
+    await runRoutedContext(deniedPage, deniedContext, async () => {
+      deniedPage.on("pageerror", () => {
+        pageErrors += 1;
+      });
+      await installRoutes(deniedPage, token, network);
+      await deniedPage.goto(`${virtualFrontend}/dashboard`, {
+        waitUntil: "domcontentloaded",
+      });
+      await deniedPage.waitForURL(/\/login\?expired=true$/, {
+        timeout: 15_000,
+      });
+      requireTrue(
+        (await deniedPage.locator("tbody tr").count()) === 0,
+        "BROWSER_DENIED_DATA",
+      );
     });
-    await installRoutes(deniedPage, token, network);
-    await deniedPage.goto(`${virtualFrontend}/dashboard`, {
-      waitUntil: "domcontentloaded",
-    });
-    await deniedPage.waitForURL(/\/login\?expired=true$/, { timeout: 15_000 });
-    requireTrue(
-      (await deniedPage.locator("tbody tr").count()) === 0,
-      "BROWSER_DENIED_DATA",
-    );
-    await deniedContext.close();
 
     const context = await browser.newContext({ serviceWorkers: "block" });
+    await installContextRouteFallback(context, network);
     await context.addInitScript(storageSession, {
       token,
       expiresAt: tokenPayload.exp,
       userId: ready.userId,
     });
     const page = await context.newPage();
-    page.on("pageerror", () => {
-      pageErrors += 1;
+    authenticatedRows = await runRoutedContext(page, context, async () => {
+      page.on("pageerror", () => {
+        pageErrors += 1;
+      });
+      await installRoutes(page, token, network);
+      const [userListResponse] = await Promise.all([
+        page.waitForResponse((response) => isUserListGet(response.request())),
+        page.goto(`${virtualFrontend}/dashboard`, {
+          waitUntil: "domcontentloaded",
+        }),
+      ]);
+      requireUserListResponse(userListResponse);
+      await page
+        .getByRole("heading", { name: "Users", level: 1 })
+        .waitFor({ timeout: 20_000 });
+      await page.locator("tbody tr").first().waitFor({ timeout: 20_000 });
+      const rows = await page.locator("tbody tr").count();
+      requireTrue(rows > 0, "BROWSER_NO_AUTHENTICATED_ROWS");
+      requireTrue(
+        (await page
+          .getByText(
+            /failed to load users|access denied|authentication failed/i,
+          )
+          .count()) === 0,
+        "BROWSER_UI_ERROR",
+      );
+      return rows;
     });
-    await installRoutes(page, token, network);
-    const [userListResponse] = await Promise.all([
-      page.waitForResponse((response) => isUserListGet(response.request())),
-      page.goto(`${virtualFrontend}/dashboard`, {
-        waitUntil: "domcontentloaded",
-      }),
-    ]);
-    requireUserListResponse(userListResponse);
-    await page
-      .getByRole("heading", { name: "Users", level: 1 })
-      .waitFor({ timeout: 20_000 });
-    await page.locator("tbody tr").first().waitFor({ timeout: 20_000 });
-    authenticatedRows = await page.locator("tbody tr").count();
-    requireTrue(authenticatedRows > 0, "BROWSER_NO_AUTHENTICATED_ROWS");
-    requireTrue(
-      (await page
-        .getByText(/failed to load users|access denied|authentication failed/i)
-        .count()) === 0,
-      "BROWSER_UI_ERROR",
-    );
-    await context.close();
   } finally {
     await browser.close().catch(() => {});
   }

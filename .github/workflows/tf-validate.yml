@@ -41,6 +41,10 @@ on:
       - "scripts/test-migration-rehearsal-public-media.mjs"
       - "scripts/check-migration-rehearsal-application.mjs"
       - "scripts/test-migration-rehearsal-application.mjs"
+      - "scripts/migration-rehearsal-task-images.mjs"
+      - "scripts/migration-rehearsal-browser.mjs"
+      - "scripts/migration-rehearsal-browser-runner.mjs"
+      - "scripts/test-migration-rehearsal-browser.mjs"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/tf-apply.yml"
       - ".github/workflows/tf-plan.yml"
@@ -77,6 +81,10 @@ jobs:
           node --check scripts/migration-rehearsal-public-media.mjs
           node scripts/test-migration-rehearsal-public-media.mjs
           node scripts/test-migration-rehearsal-application.mjs
+          node --check scripts/migration-rehearsal-task-images.mjs
+          node --check scripts/migration-rehearsal-browser.mjs
+          node --check scripts/migration-rehearsal-browser-runner.mjs
+          node scripts/test-migration-rehearsal-browser.mjs
           bash -n scripts/roll-forward-auth-gateways.sh
           bash -n scripts/validate-auth-gateway-contract.sh
           bash -n scripts/smoke-auth-gateway.sh
