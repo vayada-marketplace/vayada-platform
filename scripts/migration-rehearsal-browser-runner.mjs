@@ -224,16 +224,26 @@ export async function installRoutes(page, token, network) {
 }
 
 export async function installContextRouteFallback(context, network) {
+  const state = { abortFailure: undefined, pending: new Set() };
   await context.route("**/*", async (route) => {
     network.blockedExternalRequests += 1;
     if (routeTarget(route.request().url()).legacy) {
       network.legacyRequests += 1;
     }
-    await route.abort("blockedbyclient").catch(() => {});
+    const abort = route.abort("blockedbyclient").catch((error) => {
+      state.abortFailure ??= error;
+    });
+    state.pending.add(abort);
+    try {
+      await abort;
+    } finally {
+      state.pending.delete(abort);
+    }
   });
+  return state;
 }
 
-export async function runRoutedContext(page, context, run) {
+export async function runRoutedContext(page, context, fallback, run) {
   let result;
   let runFailure;
   try {
@@ -253,6 +263,10 @@ export async function runRoutedContext(page, context, run) {
       teardownFailures.push(error);
     }
   }
+  while (fallback.pending.size > 0) {
+    await Promise.allSettled([...fallback.pending]);
+  }
+  if (fallback.abortFailure) teardownFailures.push(fallback.abortFailure);
   const teardownFailure =
     teardownFailures.length > 1
       ? new AggregateError(
@@ -344,9 +358,12 @@ export async function runBrowserProof(chromium, env) {
   });
   try {
     const loginContext = await browser.newContext({ serviceWorkers: "block" });
-    await installContextRouteFallback(loginContext, network);
+    const loginFallback = await installContextRouteFallback(
+      loginContext,
+      network,
+    );
     const loginPage = await loginContext.newPage();
-    await runRoutedContext(loginPage, loginContext, async () => {
+    await runRoutedContext(loginPage, loginContext, loginFallback, async () => {
       loginPage.on("pageerror", () => {
         pageErrors += 1;
       });
@@ -363,61 +380,74 @@ export async function runBrowserProof(chromium, env) {
     });
 
     const deniedContext = await browser.newContext({ serviceWorkers: "block" });
-    await installContextRouteFallback(deniedContext, network);
+    const deniedFallback = await installContextRouteFallback(
+      deniedContext,
+      network,
+    );
     const deniedPage = await deniedContext.newPage();
-    await runRoutedContext(deniedPage, deniedContext, async () => {
-      deniedPage.on("pageerror", () => {
-        pageErrors += 1;
-      });
-      await installRoutes(deniedPage, token, network);
-      await deniedPage.goto(`${virtualFrontend}/dashboard`, {
-        waitUntil: "domcontentloaded",
-      });
-      await deniedPage.waitForURL(/\/login\?expired=true$/, {
-        timeout: 15_000,
-      });
-      requireTrue(
-        (await deniedPage.locator("tbody tr").count()) === 0,
-        "BROWSER_DENIED_DATA",
-      );
-    });
+    await runRoutedContext(
+      deniedPage,
+      deniedContext,
+      deniedFallback,
+      async () => {
+        deniedPage.on("pageerror", () => {
+          pageErrors += 1;
+        });
+        await installRoutes(deniedPage, token, network);
+        await deniedPage.goto(`${virtualFrontend}/dashboard`, {
+          waitUntil: "domcontentloaded",
+        });
+        await deniedPage.waitForURL(/\/login\?expired=true$/, {
+          timeout: 15_000,
+        });
+        requireTrue(
+          (await deniedPage.locator("tbody tr").count()) === 0,
+          "BROWSER_DENIED_DATA",
+        );
+      },
+    );
 
     const context = await browser.newContext({ serviceWorkers: "block" });
-    await installContextRouteFallback(context, network);
+    const fallback = await installContextRouteFallback(context, network);
     await context.addInitScript(storageSession, {
       token,
       expiresAt: tokenPayload.exp,
       userId: ready.userId,
     });
     const page = await context.newPage();
-    authenticatedRows = await runRoutedContext(page, context, async () => {
-      page.on("pageerror", () => {
-        pageErrors += 1;
-      });
-      await installRoutes(page, token, network);
-      const [userListResponse] = await Promise.all([
-        page.waitForResponse((response) => isUserListGet(response.request())),
-        page.goto(`${virtualFrontend}/dashboard`, {
-          waitUntil: "domcontentloaded",
-        }),
-      ]);
-      requireUserListResponse(userListResponse);
-      await page
-        .getByRole("heading", { name: "Users", level: 1 })
-        .waitFor({ timeout: 20_000 });
-      await page.locator("tbody tr").first().waitFor({ timeout: 20_000 });
-      const rows = await page.locator("tbody tr").count();
-      requireTrue(rows > 0, "BROWSER_NO_AUTHENTICATED_ROWS");
-      requireTrue(
-        (await page
-          .getByText(
-            /failed to load users|access denied|authentication failed/i,
-          )
-          .count()) === 0,
-        "BROWSER_UI_ERROR",
-      );
-      return rows;
-    });
+    authenticatedRows = await runRoutedContext(
+      page,
+      context,
+      fallback,
+      async () => {
+        page.on("pageerror", () => {
+          pageErrors += 1;
+        });
+        await installRoutes(page, token, network);
+        const [userListResponse] = await Promise.all([
+          page.waitForResponse((response) => isUserListGet(response.request())),
+          page.goto(`${virtualFrontend}/dashboard`, {
+            waitUntil: "domcontentloaded",
+          }),
+        ]);
+        requireUserListResponse(userListResponse);
+        await page
+          .getByRole("heading", { name: "Users", level: 1 })
+          .waitFor({ timeout: 20_000 });
+        await page.locator("tbody tr").first().waitFor({ timeout: 20_000 });
+        const rows = await page.locator("tbody tr").count();
+        requireTrue(rows > 0, "BROWSER_NO_AUTHENTICATED_ROWS");
+        requireTrue(
+          (await page
+            .getByText(
+              /failed to load users|access denied|authentication failed/i,
+            )
+            .count()) === 0,
+          "BROWSER_UI_ERROR",
+        );
+        return rows;
+      },
+    );
   } finally {
     await browser.close().catch(() => {});
   }
