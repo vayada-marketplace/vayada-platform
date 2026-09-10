@@ -1,6 +1,6 @@
 // VAY-1361 controller for one task-local browser proof with exact cleanup.
 import { createRequire } from "node:module";
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
@@ -10,25 +10,28 @@ import {
 } from "./migration-rehearsal-reader-contract.mjs";
 import {
   applicationEnvironment,
-  captureRows,
   runReadOnlyApplication,
 } from "./migration-rehearsal-app-readonly.mjs";
 import {
+  combineRunAndCleanupFailures,
+  ensureTemporaryAdminRemoved,
   installTemporaryAdmin,
-  removeTemporaryAdmin,
+  preparedTemporaryAdminHash,
   temporaryAdmin,
   verifyAdminSession,
 } from "./migration-rehearsal-temporary-admin.mjs";
+import {
+  attestTaskRuntime,
+  expectedTaskImages,
+} from "./migration-rehearsal-task-images.mjs";
 
 const originalData =
   "d5c52a18f986911c1c33656eaad48e2ed0e154448c5874664599f625395e357b";
 const exchangeDir = "/shared";
 const readyPath = `${exchangeDir}/browser-ready.json`;
+const readyTempPath = `${exchangeDir}/browser-ready.tmp`;
 const resultPath = `${exchangeDir}/browser-result.json`;
-const expectedFrontendDigest =
-  "sha256:471b755e8596adde20bc87951bb8eed682d2d3265280ba0a7a8a48cfa81ae59b";
-const expectedBrowserDigest =
-  "sha256:83192064c7510f7ee73dd63dc5f22a5e01a92c81a2e6a9c715d9e3fe55471fd9";
+const resultTempPath = `${exchangeDir}/browser-result.tmp`;
 const expectedChecks = [
   "login-page",
   "unauthenticated-dashboard-denial",
@@ -41,12 +44,11 @@ export const browserProof = Object.freeze({
   exchangeDir,
   readyPath,
   resultPath,
-  expectedFrontendDigest,
-  expectedBrowserDigest,
+  expectedTaskImages,
   expectedChecks,
 });
 
-export function validateBrowserResult(result, token) {
+export function validateBrowserResult(result, token, runtime) {
   requireTrue(result && typeof result === "object", "BROWSER_RESULT_FORMAT");
   requireTrue(
     result.status === "PASS" &&
@@ -54,8 +56,10 @@ export function validateBrowserResult(result, token) {
       result.runId === binding.runId &&
       result.release === binding.release &&
       result.virtualOrigin === "https://next-admin.vayada.com" &&
-      result.frontendDigest === expectedFrontendDigest &&
-      result.browserDigest === expectedBrowserDigest,
+      result.taskArn === runtime?.taskArn &&
+      JSON.stringify(result.runtimeImages) ===
+        JSON.stringify(expectedTaskImages) &&
+      JSON.stringify(result.runtimeImages) === JSON.stringify(runtime?.images),
     "BROWSER_RESULT_BINDING",
   );
   requireTrue(
@@ -69,6 +73,8 @@ export function validateBrowserResult(result, token) {
       network.frontendRequests > 0 &&
       Number.isSafeInteger(network.apiRequests) &&
       network.apiRequests > 0 &&
+      Number.isSafeInteger(network.apiPreflightRequests) &&
+      network.apiPreflightRequests > 0 &&
       Number.isSafeInteger(network.userListRequests) &&
       network.userListRequests > 0 &&
       network.userListAuthorizationMatches === network.userListRequests &&
@@ -80,7 +86,10 @@ export function validateBrowserResult(result, token) {
   requireTrue(
     Number.isSafeInteger(result.authenticatedRows) &&
       result.authenticatedRows > 0 &&
-      result.pageErrors === 0,
+      result.pageErrors === 0 &&
+      result.positivePublicProfileProven === false &&
+      result.positivePublicMediaProven === false &&
+      result.fullSmokeAccepted === false,
     "BROWSER_UI_PROOF",
   );
   requireTrue(
@@ -90,7 +99,12 @@ export function validateBrowserResult(result, token) {
   return result;
 }
 
-async function waitForBrowserResult(token, session, timeoutMs = 150_000) {
+async function waitForBrowserResult(
+  token,
+  session,
+  runtime,
+  timeoutMs = 150_000,
+) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     requireTrue(
@@ -108,7 +122,7 @@ async function waitForBrowserResult(token, session, timeoutMs = 150_000) {
             : "BROWSER_RUN_FAILED",
         );
       }
-      return validateBrowserResult(result, token);
+      return validateBrowserResult(result, token, runtime);
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
     }
@@ -123,6 +137,7 @@ export async function runBrowserController(Client, env) {
     "BROWSER_EXCHANGE_SCOPE",
   );
   applicationEnvironment(env);
+  const runtime = await attestTaskRuntime(fetch, env);
   const token = env.REHEARSAL_TEST_SESSION;
   requireTrue(
     typeof token === "string" && token.length < 16_000,
@@ -151,7 +166,12 @@ export async function runBrowserController(Client, env) {
   try {
     await admin.connect();
     await admin.query("SET search_path=pg_catalog");
-    installed = await installTemporaryAdmin(admin, session);
+    try {
+      installed = await installTemporaryAdmin(admin, session);
+    } catch (error) {
+      installed = preparedTemporaryAdminHash(error);
+      throw error;
+    }
     console.log(
       JSON.stringify({
         status: "TEMPORARY_ADMIN_INSTALLED",
@@ -162,47 +182,48 @@ export async function runBrowserController(Client, env) {
     );
     applicationResult = await runReadOnlyApplication(Client, env, async () => {
       await writeFile(
-        readyPath,
+        readyTempPath,
         JSON.stringify({
           runId: binding.runId,
           release: binding.release,
           userId: temporaryAdmin.users,
           expiresAt: session.expiresAt,
-          frontendDigest: expectedFrontendDigest,
-          browserDigest: expectedBrowserDigest,
+          taskArn: runtime.taskArn,
         }),
         { encoding: "utf8", mode: 0o600, flag: "wx" },
       );
-      browserResult = await waitForBrowserResult(token, session);
+      await rename(readyTempPath, readyPath);
+      browserResult = await waitForBrowserResult(token, session, runtime);
     });
   } catch (error) {
     failure = error;
-  } finally {
+  }
+  await admin.end().catch(() => {});
+  let cleanupFailure;
+  if (installed) {
     try {
-      if (installed) {
-        await removeTemporaryAdmin(admin, installed);
-        requireTrue(
-          (await captureRows(admin)).sha256 === originalData,
-          "POST_COMMIT_CLEANUP_MISMATCH",
-        );
-        console.log(
-          JSON.stringify({
-            status: "TEMPORARY_ADMIN_REMOVED",
-            runId: binding.runId,
-            dataSha256: originalData,
-            removedRows: 5,
-          }),
-        );
-      }
-    } finally {
-      await Promise.all([
-        unlink(readyPath).catch(() => {}),
-        unlink(resultPath).catch(() => {}),
-      ]);
-      await admin.end().catch(() => {});
+      const cleanup = await ensureTemporaryAdminRemoved(Client, env, installed);
+      console.log(
+        JSON.stringify({
+          status: "TEMPORARY_ADMIN_REMOVED",
+          runId: binding.runId,
+          dataSha256: cleanup.dataSha256,
+          removedRows: cleanup.removedRows,
+          alreadyAbsent: cleanup.alreadyAbsent,
+        }),
+      );
+    } catch (error) {
+      cleanupFailure = error;
     }
   }
-  if (failure) throw failure;
+  await Promise.all([
+    unlink(readyTempPath).catch(() => {}),
+    unlink(readyPath).catch(() => {}),
+    unlink(resultTempPath).catch(() => {}),
+    unlink(resultPath).catch(() => {}),
+  ]);
+  const finalFailure = combineRunAndCleanupFailures(failure, cleanupFailure);
+  if (finalFailure) throw finalFailure;
   requireTrue(browserResult && applicationResult, "BROWSER_RESULT_MISSING");
   return {
     status: "PASS",
@@ -213,6 +234,8 @@ export async function runBrowserController(Client, env) {
     network: browserResult.network,
     authenticatedRows: browserResult.authenticatedRows,
     pageErrors: browserResult.pageErrors,
+    taskArn: runtime.taskArn,
+    runtimeImages: runtime.images,
     dataSha256: originalData,
     applicationStopped: true,
     temporaryAccessRemoved: true,

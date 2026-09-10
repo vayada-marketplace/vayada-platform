@@ -6,6 +6,7 @@ import {
   binding,
   requireTrue,
 } from "./migration-rehearsal-reader-contract.mjs";
+import { attestTaskRuntime } from "./migration-rehearsal-task-images.mjs";
 
 const exchangeDir = "/shared";
 const readyPath = `${exchangeDir}/browser-ready.json`;
@@ -15,10 +16,6 @@ const virtualFrontend = "https://next-admin.vayada.com";
 const virtualApi = "https://next-api.vayada.com";
 const localFrontend = "http://127.0.0.1:3001";
 const localApi = "http://127.0.0.1:8003";
-const frontendDigest =
-  "sha256:471b755e8596adde20bc87951bb8eed682d2d3265280ba0a7a8a48cfa81ae59b";
-const browserDigest =
-  "sha256:83192064c7510f7ee73dd63dc5f22a5e01a92c81a2e6a9c715d9e3fe55471fd9";
 const checks = [
   "login-page",
   "unauthenticated-dashboard-denial",
@@ -27,18 +24,25 @@ const checks = [
   "no-legacy-network",
 ];
 
+function loopbackRequestUrl(source, localOrigin) {
+  const local = new URL(localOrigin);
+  local.pathname = source.pathname;
+  local.search = source.search;
+  return local.href;
+}
+
 export function routeTarget(rawUrl) {
   const url = new URL(rawUrl);
   if (url.origin === virtualFrontend) {
     return {
       kind: "frontend",
-      localUrl: new URL(url.pathname + url.search, localFrontend).href,
+      localUrl: loopbackRequestUrl(url, localFrontend),
     };
   }
   if (url.origin === virtualApi) {
     return {
       kind: "api",
-      localUrl: new URL(url.pathname + url.search, localApi).href,
+      localUrl: loopbackRequestUrl(url, localApi),
     };
   }
   return {
@@ -48,15 +52,29 @@ export function routeTarget(rawUrl) {
   };
 }
 
+export function parseReadyJson(raw) {
+  if (raw === "") return undefined;
+  requireTrue(raw.length < 16_384, "BROWSER_READY_SIZE");
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+}
+
 async function waitForJson(path, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    let raw;
     try {
-      const raw = await readFile(path, "utf8");
-      requireTrue(raw.length > 0 && raw.length < 16_384, "BROWSER_READY_SIZE");
-      return JSON.parse(raw);
+      raw = await readFile(path, "utf8");
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
+    }
+    if (raw !== undefined) {
+      const parsed = parseReadyJson(raw);
+      if (parsed !== undefined) return parsed;
     }
     await delay(500);
   }
@@ -78,7 +96,86 @@ async function waitForHttp(url, expected, timeoutMs = 60_000) {
   throw new Error("BROWSER_LOCAL_SERVER_TIMEOUT");
 }
 
-async function installRoutes(page, token, network) {
+export async function fetchTaskLocalRoute(route, target, headers) {
+  const expectedOrigin =
+    target.kind === "frontend"
+      ? localFrontend
+      : target.kind === "api"
+        ? localApi
+        : undefined;
+  const local = new URL(target.localUrl);
+  requireTrue(
+    expectedOrigin &&
+      local.origin === expectedOrigin &&
+      !local.username &&
+      !local.password,
+    "BROWSER_LOCAL_TARGET",
+  );
+  const response = await route.fetch({
+    url: local.href,
+    headers,
+    timeout: 10_000,
+    maxRedirects: 0,
+  });
+  const status = response.status();
+  requireTrue(status < 300 || status >= 400, "BROWSER_LOCAL_REDIRECT");
+  return response;
+}
+
+export function isUserListGet(request) {
+  const url = new URL(request.url());
+  return (
+    request.method() === "GET" &&
+    url.origin === virtualApi &&
+    url.pathname === "/api/identity/admin/users"
+  );
+}
+
+function apiCorsHeaders() {
+  return {
+    "access-control-allow-origin": virtualFrontend,
+    "access-control-allow-credentials": "true",
+    vary: "Origin",
+  };
+}
+
+export function apiPreflightResponse(request) {
+  const headers = request.headers();
+  const url = new URL(request.url());
+  const requestedHeaders = (headers["access-control-request-headers"] ?? "")
+    .split(",")
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean)
+    .sort();
+  requireTrue(
+    request.method() === "OPTIONS" &&
+      url.origin === virtualApi &&
+      url.pathname === "/api/identity/admin/users" &&
+      headers.origin === virtualFrontend &&
+      headers["access-control-request-method"] === "GET" &&
+      JSON.stringify(requestedHeaders) === JSON.stringify(["authorization"]),
+    "BROWSER_API_PREFLIGHT",
+  );
+  return {
+    status: 204,
+    headers: {
+      ...apiCorsHeaders(),
+      "access-control-allow-headers": "authorization",
+      "access-control-allow-methods": "GET",
+      "access-control-max-age": "0",
+    },
+    body: "",
+  };
+}
+
+export function requireUserListResponse(response) {
+  requireTrue(
+    isUserListGet(response.request()) && response.status() === 200,
+    "BROWSER_USER_LIST_STATUS",
+  );
+}
+
+export async function installRoutes(page, token, network) {
   await page.route("**/*", async (route) => {
     const request = route.request();
     const target = routeTarget(request.url());
@@ -88,26 +185,41 @@ async function installRoutes(page, token, network) {
       await route.abort("blockedbyclient");
       return;
     }
+    if (target.kind === "api" && request.method() === "OPTIONS") {
+      network.apiPreflightRequests += 1;
+      await route.fulfill(apiPreflightResponse(request));
+      return;
+    }
     const headers = { ...request.headers() };
     delete headers.host;
-    const response = await route.fetch({
-      url: target.localUrl,
-      headers,
-      timeout: 10_000,
-    });
+    if (target.kind === "api") {
+      requireTrue(
+        request.method() === "GET" && headers.origin === virtualFrontend,
+        "BROWSER_API_REQUEST",
+      );
+    }
+    let response;
+    try {
+      response = await fetchTaskLocalRoute(route, target, headers);
+    } catch (error) {
+      await route.abort("blockedbyclient").catch(() => {});
+      throw error;
+    }
     if (target.kind === "frontend") network.frontendRequests += 1;
     if (target.kind === "api") {
       network.apiRequests += 1;
-      const path = new URL(request.url()).pathname;
-      if (path === "/api/identity/admin/users") {
+      if (isUserListGet(request)) {
         network.userListRequests += 1;
         if (request.headers()["authorization"] === `Bearer ${token}`) {
           network.userListAuthorizationMatches += 1;
         }
-        requireTrue(response.status() === 200, "BROWSER_USER_LIST_STATUS");
       }
     }
-    await route.fulfill({ response });
+    await route.fulfill(
+      target.kind === "api"
+        ? { response, headers: { ...response.headers(), ...apiCorsHeaders() } }
+        : { response },
+    );
   });
 }
 
@@ -135,6 +247,7 @@ export async function runBrowserProof(chromium, env) {
     env.BROWSER_EXCHANGE_DIR === exchangeDir,
     "BROWSER_EXCHANGE_SCOPE",
   );
+  const runtime = await attestTaskRuntime(fetch, env);
   const token = env.REHEARSAL_TEST_SESSION;
   requireTrue(
     typeof token === "string" && token.length < 16_000,
@@ -154,8 +267,7 @@ export async function runBrowserProof(chromium, env) {
       ready.release === binding.release &&
       ready.userId === "21630265-3a7f-40f6-9569-cd06016bedac" &&
       ready.expiresAt === tokenPayload.exp &&
-      ready.frontendDigest === frontendDigest &&
-      ready.browserDigest === browserDigest,
+      ready.taskArn === runtime.taskArn,
     "BROWSER_READY_BINDING",
   );
   await waitForHttp(
@@ -170,6 +282,7 @@ export async function runBrowserProof(chromium, env) {
   const network = {
     frontendRequests: 0,
     apiRequests: 0,
+    apiPreflightRequests: 0,
     userListRequests: 0,
     userListAuthorizationMatches: 0,
     blockedExternalRequests: 0,
@@ -226,9 +339,13 @@ export async function runBrowserProof(chromium, env) {
       pageErrors += 1;
     });
     await installRoutes(page, token, network);
-    await page.goto(`${virtualFrontend}/dashboard`, {
-      waitUntil: "domcontentloaded",
-    });
+    const [userListResponse] = await Promise.all([
+      page.waitForResponse((response) => isUserListGet(response.request())),
+      page.goto(`${virtualFrontend}/dashboard`, {
+        waitUntil: "domcontentloaded",
+      }),
+    ]);
+    requireUserListResponse(userListResponse);
     await page
       .getByRole("heading", { name: "Users", level: 1 })
       .waitFor({ timeout: 20_000 });
@@ -258,8 +375,8 @@ export async function runBrowserProof(chromium, env) {
     runId: binding.runId,
     release: binding.release,
     virtualOrigin: virtualFrontend,
-    frontendDigest,
-    browserDigest,
+    taskArn: runtime.taskArn,
+    runtimeImages: runtime.images,
     checks,
     network,
     authenticatedRows,
