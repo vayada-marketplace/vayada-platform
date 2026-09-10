@@ -315,10 +315,6 @@ const teardown = runRoutedContext(
     },
   },
   {
-    async unrouteAll(options) {
-      assert.deepEqual(options, { behavior: "wait" });
-      teardownOrder.push("fallback-drained");
-    },
     async close() {
       teardownOrder.push("context-closed");
     },
@@ -347,7 +343,48 @@ assert.deepEqual(teardownOrder, [
   "routes-draining",
   "routes-drained",
   "page-closed",
-  "fallback-drained",
+  "context-closed",
+]);
+const runFailure = new Error("SYNTHETIC_RUN_FAILURE");
+const unrouteFailure = new Error("SYNTHETIC_UNROUTE_FAILURE");
+const contextCloseFailure = new Error("SYNTHETIC_CONTEXT_CLOSE_FAILURE");
+const failedTeardownOrder = [];
+await assert.rejects(
+  runRoutedContext(
+    {
+      async unrouteAll() {
+        failedTeardownOrder.push("routes-draining");
+        throw unrouteFailure;
+      },
+      async close() {
+        failedTeardownOrder.push("page-closed");
+      },
+    },
+    {
+      async close() {
+        failedTeardownOrder.push("context-closed");
+        throw contextCloseFailure;
+      },
+    },
+    async () => {
+      throw runFailure;
+    },
+  ),
+  (error) => {
+    assert(error instanceof AggregateError);
+    assert.equal(error.message, "BROWSER_SCENARIO_AND_TEARDOWN_FAILED");
+    assert.equal(error.errors[0], runFailure);
+    assert(error.errors[1] instanceof AggregateError);
+    assert.deepEqual(error.errors[1].errors, [
+      unrouteFailure,
+      contextCloseFailure,
+    ]);
+    return true;
+  },
+);
+assert.deepEqual(failedTeardownOrder, [
+  "routes-draining",
+  "page-closed",
   "context-closed",
 ]);
 requireUserListResponse({ request: () => getRequest, status: () => 200 });

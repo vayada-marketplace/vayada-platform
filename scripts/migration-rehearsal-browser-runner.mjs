@@ -229,7 +229,7 @@ export async function installContextRouteFallback(context, network) {
     if (routeTarget(route.request().url()).legacy) {
       network.legacyRequests += 1;
     }
-    await route.abort("blockedbyclient");
+    await route.abort("blockedbyclient").catch(() => {});
   });
 }
 
@@ -245,7 +245,6 @@ export async function runRoutedContext(page, context, run) {
   for (const teardown of [
     () => page.unrouteAll({ behavior: "wait" }),
     () => page.close({ runBeforeUnload: false }),
-    () => context.unrouteAll({ behavior: "wait" }),
     () => context.close(),
   ]) {
     try {
