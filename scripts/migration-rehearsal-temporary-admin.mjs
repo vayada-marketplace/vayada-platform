@@ -132,7 +132,7 @@ export async function checkAdminRoutes(get, reader, admin, token, session) {
   return ["admin-self", "migrated-identity-read", "missing-permission", "inactive-membership", "missing-platform-link", "restored-access"];
 }
 
-export const domainImpactSampleSql = `WITH candidates AS (
+export const domainImpactCandidatesSql = `WITH candidates AS (
   SELECT property.id::text AS "propertyId", property.lifecycle_status AS "lifecycleStatus",
     property.lifecycle_revision::int AS "lifecycleRevision",
     (SELECT count(DISTINCT link.organization_id)::int FROM identity.organization_resource_links link
@@ -178,7 +178,7 @@ export const domainImpactSampleSql = `WITH candidates AS (
   (("totalBookings">0)::int + (("roomTypes"+rooms)>0)::int
     + (("totalPayments"+"totalPayouts"+"billingEntitlements")>0)::int
     + ("marketplaceActive" OR "distributionStatus" IS NOT NULL OR "bookingRevisionActive")::int) DESC,
-  "propertyId" LIMIT 1`;
+  "propertyId"`;
 
 export const bookingOracleSql = `WITH booking_rows AS (
   SELECT booking.id::text AS id, booking.public_reference AS "bookingReference",
@@ -304,15 +304,56 @@ function expectedCollaboration(row) {
     createdAt: iso(row.createdAt), updatedAt: iso(row.updatedAt) };
 }
 
+function expectedImpact(sample) {
+  const blockers = [
+    sample.activeBookings > 0 && { code: "active_bookings", ownerDomain: "booking", count: sample.activeBookings,
+      message: "Resolve active bookings." },
+    sample.unresolvedPayments > 0 && { code: "unresolved_payments", ownerDomain: "finance", count: sample.unresolvedPayments,
+      message: "Resolve pending or disputed payments." },
+    sample.openPayouts > 0 && { code: "open_payouts", ownerDomain: "finance", count: sample.openPayouts,
+      message: "Resolve open payouts." },
+    sample.connectedChannels > 0 && { code: "connected_channels", ownerDomain: "pms", count: sample.connectedChannels,
+      message: "Disconnect active channel-manager connections." },
+  ].filter(Boolean);
+  return { contractVersion: "platform-property-lifecycle.v1", propertyId: sample.propertyId,
+    lifecycleStatus: sample.lifecycleStatus, lifecycleRevision: sample.lifecycleRevision,
+    organizations: { linked: sample.linkedOrganizations },
+    entitlements: { active: sample.activeEntitlements, suspended: sample.suspendedEntitlements },
+    bookings: { total: sample.totalBookings, active: sample.activeBookings },
+    inventory: { roomTypes: sample.roomTypes, rooms: sample.rooms },
+    finance: { totalPayments: sample.totalPayments, unresolvedPayments: sample.unresolvedPayments,
+      totalPayouts: sample.totalPayouts, openPayouts: sample.openPayouts,
+      billingEntitlements: sample.billingEntitlements }, media: { objects: sample.mediaObjects },
+    publicExposure: { marketplaceActive: sample.marketplaceActive, distributionStatus: sample.distributionStatus,
+      bookingRevisionActive: sample.bookingRevisionActive }, blockers,
+    canRetire: blockers.length === 0 && sample.lifecycleStatus !== "retired",
+    hardDeletion: { allowed: false, reason: "hard_delete_not_supported" } };
+}
+
 export async function checkAuthenticatedDomainRoutes(get, reader, admin, token, session) {
   const headers = { authorization: "Bearer " + token };
-  const sample = (await reader.query(domainImpactSampleSql)).rows[0];
-  requireTrue(sample && sample.totalBookings > 0 && sample.roomTypes + sample.rooms > 0
-    && sample.totalPayments + sample.totalPayouts + sample.billingEntitlements > 0
-    && (sample.marketplaceActive || sample.distributionStatus !== null || sample.bookingRevisionActive),
-  "CROSS_DOMAIN_COVERAGE_GAP");
-  const paths = [`/api/platform/admin/properties/${sample.propertyId}/retirement-impact`,
-    "/api/platform/admin/bookings?limit=2&offset=0", "/api/marketplace/admin/collaborations?page=1&pageSize=2"];
+  const candidates = (await reader.query(domainImpactCandidatesSql)).rows;
+  const select = (code, predicate) => {
+    const sample = candidates.find(predicate);
+    requireTrue(sample, code);
+    return sample;
+  };
+  const domainSamples = [
+    select("BOOKING_IMPACT_COVERAGE_GAP", sample => sample.totalBookings > 0),
+    select("PMS_IMPACT_COVERAGE_GAP", sample => sample.roomTypes + sample.rooms > 0),
+    select("FINANCE_IMPACT_COVERAGE_GAP",
+      sample => sample.totalPayments + sample.totalPayouts + sample.billingEntitlements > 0),
+    select("MEDIA_IMPACT_COVERAGE_GAP", sample => sample.mediaObjects > 0),
+    select("DISTRIBUTION_IMPACT_COVERAGE_GAP",
+      sample => sample.distributionStatus !== null || sample.bookingRevisionActive),
+  ];
+  const marketplaceImpactSample = candidates.find(sample => sample.marketplaceActive);
+  if (marketplaceImpactSample) domainSamples.push(marketplaceImpactSample);
+  const uniqueSamples = [...new Map(domainSamples.map(sample => [sample.propertyId, sample])).values()];
+  const impactPaths = uniqueSamples.map(sample => `/api/platform/admin/properties/${sample.propertyId}/retirement-impact`);
+  const bookingPath = "/api/platform/admin/bookings?limit=2&offset=0";
+  const collaborationPath = "/api/marketplace/admin/collaborations?page=1&pageSize=2";
+  const paths = [...impactPaths, bookingPath, collaborationPath];
   const denied = async (path, deniedHeaders, status, message) => {
     const response = await get(path, deniedHeaders);
     requireTrue(response.status === status, "DOMAIN_AUTH_DENIAL_" + status);
@@ -340,34 +381,13 @@ export async function checkAuthenticatedDomainRoutes(get, reader, admin, token, 
     requireTrue(body && typeof body === "object" && !body.error && !body.detail, "DOMAIN_ROUTE_BODY");
     return body;
   };
-  const blockers = [
-    sample.activeBookings > 0 && { code: "active_bookings", ownerDomain: "booking", count: sample.activeBookings,
-      message: "Resolve active bookings." },
-    sample.unresolvedPayments > 0 && { code: "unresolved_payments", ownerDomain: "finance", count: sample.unresolvedPayments,
-      message: "Resolve pending or disputed payments." },
-    sample.openPayouts > 0 && { code: "open_payouts", ownerDomain: "finance", count: sample.openPayouts,
-      message: "Resolve open payouts." },
-    sample.connectedChannels > 0 && { code: "connected_channels", ownerDomain: "pms", count: sample.connectedChannels,
-      message: "Disconnect active channel-manager connections." },
-  ].filter(Boolean);
-  const expectedImpact = { contractVersion: "platform-property-lifecycle.v1", propertyId: sample.propertyId,
-    lifecycleStatus: sample.lifecycleStatus, lifecycleRevision: sample.lifecycleRevision,
-    organizations: { linked: sample.linkedOrganizations },
-    entitlements: { active: sample.activeEntitlements, suspended: sample.suspendedEntitlements },
-    bookings: { total: sample.totalBookings, active: sample.activeBookings },
-    inventory: { roomTypes: sample.roomTypes, rooms: sample.rooms },
-    finance: { totalPayments: sample.totalPayments, unresolvedPayments: sample.unresolvedPayments,
-      totalPayouts: sample.totalPayouts, openPayouts: sample.openPayouts,
-      billingEntitlements: sample.billingEntitlements }, media: { objects: sample.mediaObjects },
-    publicExposure: { marketplaceActive: sample.marketplaceActive, distributionStatus: sample.distributionStatus,
-      bookingRevisionActive: sample.bookingRevisionActive }, blockers,
-    canRetire: blockers.length === 0 && sample.lifecycleStatus !== "retired",
-    hardDeletion: { allowed: false, reason: "hard_delete_not_supported" } };
-  requireTrue(sameJson(await request(paths[0]), expectedImpact), "CROSS_DOMAIN_RESPONSE_MISMATCH");
+  for (let index = 0; index < uniqueSamples.length; index++)
+    requireTrue(sameJson(await request(impactPaths[index]), expectedImpact(uniqueSamples[index])),
+      "CROSS_DOMAIN_RESPONSE_MISMATCH");
 
   const expectedBookings = (await reader.query(bookingOracleSql)).rows.map(expectedBooking);
   requireTrue(expectedBookings.length > 0 && expectedBookings.length <= 2, "NO_MIGRATED_BOOKING_SAMPLE");
-  requireTrue(sameJson(await request(paths[1]), { bookings: expectedBookings }), "BOOKING_ROUTE_TARGET_MISMATCH");
+  requireTrue(sameJson(await request(bookingPath), { bookings: expectedBookings }), "BOOKING_ROUTE_TARGET_MISMATCH");
 
   const expectedCollaborations = (await reader.query(collaborationOracleSql)).rows.map(expectedCollaboration);
   const collaborationTotal = (await reader.query(collaborationCountSql)).rows[0]?.total;
@@ -377,13 +397,14 @@ export async function checkAuthenticatedDomainRoutes(get, reader, admin, token, 
   const expectedCollaborationBody = { contractVersion: "marketplace-admin.v1",
     authorizationMode: "platform_organization_membership", collaborations: expectedCollaborations,
     pagination: { page: 1, pageSize: 2, total: collaborationTotal } };
-  requireTrue(sameJson(await request(paths[2]), expectedCollaborationBody), "MARKETPLACE_ROUTE_TARGET_MISMATCH");
+  requireTrue(sameJson(await request(collaborationPath), expectedCollaborationBody), "MARKETPLACE_ROUTE_TARGET_MISMATCH");
   return { checks: ["domain-auth-denials", "cross-domain-retirement-impact", "booking-admin-list", "marketplace-admin-list"],
-    coverage: { bookings: sample.totalBookings, roomTypes: sample.roomTypes, rooms: sample.rooms,
-      financeRecords: sample.totalPayments + sample.totalPayouts + sample.billingEntitlements,
-      marketplaceActive: sample.marketplaceActive,
-      distributionStatePresent: Boolean(sample.distributionStatus !== null || sample.bookingRevisionActive),
-      mediaObjects: sample.mediaObjects, connectedChannels: sample.connectedChannels,
+    coverage: { bookings: domainSamples[0].totalBookings, roomTypes: domainSamples[1].roomTypes,
+      rooms: domainSamples[1].rooms,
+      financeRecords: domainSamples[2].totalPayments + domainSamples[2].totalPayouts + domainSamples[2].billingEntitlements,
+      marketplaceImpactActiveSample: Boolean(marketplaceImpactSample), distributionStatePresent: true,
+      mediaObjects: domainSamples[3].mediaObjects, connectedChannels: domainSamples[1].connectedChannels,
+      retirementPropertiesCompared: uniqueSamples.length,
       bookingRowsCompared: expectedBookings.length, collaborationRowsCompared: expectedCollaborations.length,
       collaborationTotal } };
 }

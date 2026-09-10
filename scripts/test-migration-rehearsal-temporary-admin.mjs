@@ -35,7 +35,7 @@ const context = { binding, requireTrue, console: { log() {} },
 // Substitute only imported boundaries; execute the actual implementation body.
 const source = readFileSync(new URL("./migration-rehearsal-temporary-admin.mjs", import.meta.url), "utf8");
 vm.runInNewContext(source.replace(/^import .*;\n/gm, "").replaceAll("export ", "")
-  + "\nObject.assign(globalThis,{temporaryAdmin,verifyAdminSession,installTemporaryAdmin,removeTemporaryAdmin,checkAdminRoutes,checkAuthenticatedDomainRoutes,domainImpactSampleSql,bookingOracleSql,collaborationOracleSql,collaborationCountSql,expectedBooking,expectedCollaboration,runTemporaryAdmin,runTemporaryAdminCleanup});", context);
+  + "\nObject.assign(globalThis,{temporaryAdmin,verifyAdminSession,installTemporaryAdmin,removeTemporaryAdmin,checkAdminRoutes,checkAuthenticatedDomainRoutes,domainImpactCandidatesSql,bookingOracleSql,collaborationOracleSql,collaborationCountSql,expectedBooking,expectedCollaboration,runTemporaryAdmin,runTemporaryAdminCleanup});", context);
 const session = { workosUserId: "test_user", workosOrgId: "test_org", expiresAt: Math.floor(Date.now()/1000)+250 };
 context.verifyAdminSession(session);
 for (const changed of [{ workosUserId: "other" }, { workosOrgId: "other" }, { expiresAt: 1 }, { expiresAt: Math.floor(Date.now()/1000)+301 }])
@@ -61,11 +61,23 @@ await assert.rejects(context.checkAdminRoutes(async path => ({ ...(await get(pat
 assert.equal(settings.role_key, "platform_admin");
 const bookingId = "11111111-1111-4111-8111-111111111111";
 const collaborationId = "22222222-2222-4222-8222-222222222222";
-const domainSample = { propertyId: "33333333-3333-4333-8333-333333333333", lifecycleStatus: "active", lifecycleRevision: 7,
-  linkedOrganizations: 1, activeEntitlements: 2, suspendedEntitlements: 0, totalBookings: 4, activeBookings: 1,
-  roomTypes: 2, rooms: 3, totalPayments: 5, unresolvedPayments: 1, totalPayouts: 2, openPayouts: 1,
-  billingEntitlements: 1, mediaObjects: 6, marketplaceActive: true, distributionStatus: "public",
-  bookingRevisionActive: true, connectedChannels: 1 };
+const baseDomainSample = { lifecycleStatus: "active", lifecycleRevision: 7, linkedOrganizations: 1,
+  activeEntitlements: 2, suspendedEntitlements: 0, totalBookings: 0, activeBookings: 0, roomTypes: 0, rooms: 0,
+  totalPayments: 0, unresolvedPayments: 0, totalPayouts: 0, openPayouts: 0, billingEntitlements: 0,
+  mediaObjects: 0, marketplaceActive: false, distributionStatus: null, bookingRevisionActive: false,
+  connectedChannels: 0 };
+const domainCandidates = [
+  { ...baseDomainSample, propertyId: "33333333-3333-4333-8333-333333333333", totalBookings: 4, activeBookings: 1 },
+  { ...baseDomainSample, propertyId: "44444444-4444-4444-8444-444444444444", roomTypes: 2, rooms: 3, connectedChannels: 1 },
+  { ...baseDomainSample, propertyId: "55555555-5555-4555-8555-555555555555", totalPayments: 5, unresolvedPayments: 1,
+    totalPayouts: 2, openPayouts: 1, billingEntitlements: 1 },
+  { ...baseDomainSample, propertyId: "66666666-6666-4666-8666-666666666666", mediaObjects: 6,
+    distributionStatus: "public", bookingRevisionActive: true },
+  { ...baseDomainSample, propertyId: "77777777-7777-4777-8777-777777777777", marketplaceActive: true },
+];
+assert(domainCandidates.every(sample => !(sample.totalBookings > 0 && sample.roomTypes + sample.rooms > 0
+  && sample.totalPayments + sample.totalPayouts + sample.billingEntitlements > 0 && sample.mediaObjects > 0)));
+const domainSample = domainCandidates[0];
 const bookingRow = { id: bookingId, bookingReference: "BOOK-1", hotelId: domainSample.propertyId, hotelName: "Hotel",
   hotelSlug: "hotel", guestName: "Test Guest", guestEmail: "guest@example.test", checkIn: "2026-09-11",
   checkOut: "2026-09-12", nights: 1, totalAmount: "99.50", currency: "EUR", status: "accepted",
@@ -83,13 +95,24 @@ const collaborationRow = { collaborationId, offerId: "offer", creatorId: "creato
   creatorAgreedAt: "2026-09-01T04:00:00.000Z", completedAt: null, cancelledAt: null,
   createdAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-01T05:00:00.000Z" };
 const domainReader = { async query(sql, values = []) {
-  if (sql === context.domainImpactSampleSql) return { rows: [domainSample] };
+  if (sql === context.domainImpactCandidatesSql) return { rows: domainCandidates };
   if (sql === context.bookingOracleSql) return { rows: [bookingRow] };
   if (sql === context.collaborationOracleSql) return { rows: [collaborationRow] };
   if (sql === context.collaborationCountSql) return { rows: [{ total: 1 }] };
   return { rows: [] };
 } };
-const impactBody = sample => ({ propertyId: sample.propertyId, lifecycleStatus: sample.lifecycleStatus,
+const impactBody = sample => {
+  const blockers = [
+    sample.activeBookings > 0 && { code: "active_bookings", ownerDomain: "booking", count: sample.activeBookings,
+      message: "Resolve active bookings." },
+    sample.unresolvedPayments > 0 && { code: "unresolved_payments", ownerDomain: "finance", count: sample.unresolvedPayments,
+      message: "Resolve pending or disputed payments." },
+    sample.openPayouts > 0 && { code: "open_payouts", ownerDomain: "finance", count: sample.openPayouts,
+      message: "Resolve open payouts." },
+    sample.connectedChannels > 0 && { code: "connected_channels", ownerDomain: "pms", count: sample.connectedChannels,
+      message: "Disconnect active channel-manager connections." },
+  ].filter(Boolean);
+  return { propertyId: sample.propertyId, lifecycleStatus: sample.lifecycleStatus,
   contractVersion: "platform-property-lifecycle.v1", lifecycleRevision: sample.lifecycleRevision,
   organizations: { linked: sample.linkedOrganizations },
   entitlements: { active: sample.activeEntitlements, suspended: sample.suspendedEntitlements },
@@ -99,11 +122,9 @@ const impactBody = sample => ({ propertyId: sample.propertyId, lifecycleStatus: 
     totalPayouts: sample.totalPayouts, openPayouts: sample.openPayouts, billingEntitlements: sample.billingEntitlements },
   media: { objects: sample.mediaObjects }, publicExposure: { marketplaceActive: sample.marketplaceActive,
     distributionStatus: sample.distributionStatus, bookingRevisionActive: sample.bookingRevisionActive },
-  blockers: [{ code: "active_bookings", ownerDomain: "booking", count: 1, message: "Resolve active bookings." },
-    { code: "unresolved_payments", ownerDomain: "finance", count: 1, message: "Resolve pending or disputed payments." },
-    { code: "open_payouts", ownerDomain: "finance", count: 1, message: "Resolve open payouts." },
-    { code: "connected_channels", ownerDomain: "pms", count: 1, message: "Disconnect active channel-manager connections." }],
-  canRetire: false, hardDeletion: { allowed: false, reason: "hard_delete_not_supported" } });
+  blockers, canRetire: blockers.length === 0 && sample.lifecycleStatus !== "retired",
+  hardDeletion: { allowed: false, reason: "hard_delete_not_supported" } };
+};
 const bookingBody = { bookings: [context.expectedBooking(bookingRow)] };
 const collaborationBody = { contractVersion: "marketplace-admin.v1", authorizationMode: "platform_organization_membership",
   collaborations: [context.expectedCollaboration(collaborationRow)], pagination: { page: 1, pageSize: 2, total: 1 } };
@@ -116,15 +137,16 @@ const domainGet = async (path, headers = {}) => {
   return { status, json: async () => status !== 200 ? { statusCode: status,
     error: status === 401 ? "Unauthorized" : "Forbidden",
     message: status === 401 ? "A valid access token is required." : `Missing required permission: ${permission}` }
-    : path.includes("retirement-impact") ? impactBody(domainSample)
+    : path.includes("retirement-impact") ? impactBody(domainCandidates.find(sample => path.includes(sample.propertyId)))
     : path.includes("/bookings?") ? bookingBody : collaborationBody };
 };
 const domainResult = await context.checkAuthenticatedDomainRoutes(domainGet, domainReader, client, "synthetic", session);
 assert.equal(domainResult.checks.length, 4);
 assert.deepEqual(JSON.parse(JSON.stringify(domainResult.coverage)), { bookings: 4, roomTypes: 2, rooms: 3,
-  financeRecords: 8, marketplaceActive: true, distributionStatePresent: true, mediaObjects: 6, connectedChannels: 1,
+  financeRecords: 8, marketplaceImpactActiveSample: true, distributionStatePresent: true, mediaObjects: 6, connectedChannels: 1,
+  retirementPropertiesCompared: 5,
   bookingRowsCompared: 1, collaborationRowsCompared: 1, collaborationTotal: 1 });
-for (const path of ["retirement-impact", "/bookings?", "/collaborations?"]) assert.deepEqual(
+for (const path of [...domainCandidates.map(sample => sample.propertyId), "/bookings?", "/collaborations?"]) assert.deepEqual(
   domainCalls.filter(call => call.path.includes(path)).map(call => call.authorization),
   [undefined, "Bearer deliberately-invalid-rehearsal-token", "Bearer synthetic", "Bearer synthetic"]);
 await assert.rejects(context.checkAuthenticatedDomainRoutes(async (path, headers) => {
@@ -152,8 +174,9 @@ await assert.rejects(context.checkAuthenticatedDomainRoutes(async (path, headers
   return response;
 }, domainReader, client, "synthetic", session), /MARKETPLACE_ROUTE_TARGET_MISMATCH/);
 await assert.rejects(context.checkAuthenticatedDomainRoutes(domainGet, { ...domainReader,
-  query: async sql => sql === context.domainImpactSampleSql ? { rows: [{ ...domainSample, totalPayments: 0, totalPayouts: 0,
-    billingEntitlements: 0 }] } : domainReader.query(sql) }, client, "synthetic", session), /CROSS_DOMAIN_COVERAGE_GAP/);
+  query: async sql => sql === context.domainImpactCandidatesSql ? { rows: domainCandidates.map(sample => ({ ...sample,
+    totalPayments: 0, totalPayouts: 0, billingEntitlements: 0 })) } : domainReader.query(sql) },
+client, "synthetic", session), /FINANCE_IMPACT_COVERAGE_GAP/);
 assert.equal(settings.role_key, "platform_admin");
 fault = "hash";
 const deletes = mutations.filter(sql => sql.startsWith("DELETE")).length;
