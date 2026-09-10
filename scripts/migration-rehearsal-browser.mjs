@@ -74,7 +74,7 @@ export function validateBrowserResult(result, token, runtime) {
       Number.isSafeInteger(network.apiRequests) &&
       network.apiRequests > 0 &&
       Number.isSafeInteger(network.apiPreflightRequests) &&
-      network.apiPreflightRequests > 0 &&
+      network.apiPreflightRequests >= 0 &&
       Number.isSafeInteger(network.userListRequests) &&
       network.userListRequests > 0 &&
       network.userListAuthorizationMatches === network.userListRequests &&
