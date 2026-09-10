@@ -1,5 +1,6 @@
 // VAY-1361 Chromium proof. Both virtual next origins are fulfilled from task-local HTTP.
 import { readFile, rename, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
@@ -16,10 +17,17 @@ const virtualFrontend = "https://next-admin.vayada.com";
 const virtualApi = "https://next-api.vayada.com";
 const localFrontend = "http://127.0.0.1:3001";
 const localApi = "http://127.0.0.1:8003";
+export const browserProcessEnv = Object.freeze({
+  HOME: "/home/pwuser",
+  LANG: "C.UTF-8",
+  PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+  TMPDIR: "/tmp",
+});
 const checks = [
   "login-page",
   "unauthenticated-dashboard-denial",
   "authenticated-user-list",
+  "browser-cors-preflight",
   "task-local-api-routing",
   "no-legacy-network",
 ];
@@ -223,6 +231,238 @@ export async function installRoutes(page, token, network) {
   });
 }
 
+const listenLoopback = (server, onRuntimeError) =>
+  new Promise((resolve, reject) => {
+    const onListenError = (error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onListenError);
+      server.on("error", onRuntimeError);
+      resolve();
+    };
+    server.once("error", onListenError);
+    server.once("listening", onListening);
+    server.listen(0, "127.0.0.1");
+  });
+
+const closeLoopback = (server) =>
+  new Promise((resolve, reject) => {
+    if (!server?.listening) {
+      resolve();
+      return;
+    }
+    server.close((error) => (error ? reject(error) : resolve()));
+    server.closeAllConnections?.();
+  });
+
+export function corsProofRequestKind(request, sourceOrigin) {
+  const url = new URL(request.url ?? "", "http://127.0.0.1");
+  requireTrue(
+    url.pathname === "/cors-proof" && !url.search,
+    "BROWSER_CORS_PROOF_PATH",
+  );
+  requireTrue(
+    request.headers.origin === sourceOrigin,
+    "BROWSER_CORS_PROOF_ORIGIN",
+  );
+  if (request.method === "OPTIONS") {
+    const requestedHeaders = (
+      request.headers["access-control-request-headers"] ?? ""
+    )
+      .split(",")
+      .map((name) => name.trim().toLowerCase())
+      .filter(Boolean)
+      .sort();
+    requireTrue(
+      request.headers["access-control-request-method"] === "GET" &&
+        JSON.stringify(requestedHeaders) === JSON.stringify(["authorization"]) &&
+        request.headers.authorization === undefined,
+      "BROWSER_CORS_PROOF_PREFLIGHT",
+    );
+    return "preflight";
+  }
+  requireTrue(
+    request.method === "GET" &&
+      request.headers.authorization === "Bearer browser-cors-proof",
+    "BROWSER_CORS_PROOF_GET",
+  );
+  return "get";
+}
+
+export async function runBrowserCorsProof(browser) {
+  const state = {
+    corsProofPreflightRequests: 0,
+    corsProofGetRequests: 0,
+    corsProofAuthorizationMatches: 0,
+    failure: undefined,
+  };
+  let targetOrigin;
+  const source = createServer((request, response) => {
+    if (request.method !== "GET" || request.url !== "/source") {
+      state.failure ??= "BROWSER_CORS_PROOF_SOURCE_REQUEST";
+      response.writeHead(404, { connection: "close" });
+      response.end();
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "content-security-policy":
+        `default-src 'none'; img-src data:; connect-src ${targetOrigin}`,
+      "x-content-type-options": "nosniff",
+    });
+    response.end(
+      '<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>CORS proof</title>',
+    );
+  });
+  source.on("clientError", (_error, socket) => {
+    state.failure ??= "BROWSER_CORS_PROOF_SOURCE_CLIENT";
+    socket.destroy();
+  });
+  let target;
+  let context;
+  let proof;
+  let result;
+  let runFailure;
+  try {
+    await listenLoopback(source, () => {
+      state.failure ??= "BROWSER_CORS_PROOF_SOURCE_SERVER";
+    });
+    const sourceAddress = source.address();
+    requireTrue(
+      sourceAddress &&
+        typeof sourceAddress === "object" &&
+        sourceAddress.address === "127.0.0.1",
+      "BROWSER_CORS_PROOF_SOURCE_BINDING",
+    );
+    const sourceOrigin = `http://127.0.0.1:${sourceAddress.port}`;
+    target = createServer((request, response) => {
+      let kind;
+      try {
+        kind = corsProofRequestKind(request, sourceOrigin);
+      } catch (error) {
+        state.failure ??= /^[A-Z0-9_]+$/.test(error?.message ?? "")
+          ? error.message
+          : "BROWSER_CORS_PROOF_REQUEST";
+        response.writeHead(400, { connection: "close" });
+        response.end();
+        return;
+      }
+      const corsHeaders = {
+        "access-control-allow-origin": sourceOrigin,
+        vary: "Origin",
+      };
+      if (kind === "preflight") {
+        state.corsProofPreflightRequests += 1;
+        response.writeHead(204, {
+          ...corsHeaders,
+          "access-control-allow-headers": "authorization",
+          "access-control-allow-methods": "GET",
+          "access-control-max-age": "0",
+        });
+        response.end();
+        return;
+      }
+      state.corsProofGetRequests += 1;
+      state.corsProofAuthorizationMatches += 1;
+      response.writeHead(200, {
+        ...corsHeaders,
+        "content-type": "application/json",
+        "x-content-type-options": "nosniff",
+      });
+      response.end('{"status":"ok"}');
+    });
+    target.on("clientError", (_error, socket) => {
+      state.failure ??= "BROWSER_CORS_PROOF_TARGET_CLIENT";
+      socket.destroy();
+    });
+    await listenLoopback(target, () => {
+      state.failure ??= "BROWSER_CORS_PROOF_TARGET_SERVER";
+    });
+    const targetAddress = target.address();
+    requireTrue(
+      targetAddress &&
+        typeof targetAddress === "object" &&
+        targetAddress.address === "127.0.0.1",
+      "BROWSER_CORS_PROOF_TARGET_BINDING",
+    );
+    targetOrigin = `http://127.0.0.1:${targetAddress.port}`;
+    context = await browser.newContext({ serviceWorkers: "block" });
+    const page = await context.newPage();
+    await page.goto(`${sourceOrigin}/source`, {
+      waitUntil: "domcontentloaded",
+    });
+    requireTrue(
+      page.url() === `${sourceOrigin}/source`,
+      "BROWSER_CORS_PROOF_SOURCE_URL",
+    );
+    proof = await page.evaluate(async (targetUrl) => {
+      const response = await fetch(targetUrl, {
+        method: "GET",
+        credentials: "omit",
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+        headers: { authorization: "Bearer browser-cors-proof" },
+      });
+      return { status: response.status, body: await response.json() };
+    }, `${targetOrigin}/cors-proof`);
+  } catch (error) {
+    runFailure = error;
+  }
+  const teardownFailures = [];
+  for (const teardown of [
+    () => context?.close(),
+    () => closeLoopback(target),
+    () => closeLoopback(source),
+  ]) {
+    try {
+      await teardown();
+    } catch (error) {
+      teardownFailures.push(error);
+    }
+  }
+  let validationFailure;
+  if (!runFailure) {
+    try {
+      requireTrue(
+        proof?.status === 200 &&
+          proof.body?.status === "ok" &&
+          !state.failure,
+        "BROWSER_CORS_PROOF_RESPONSE",
+      );
+      requireTrue(
+        state.corsProofPreflightRequests === 1 &&
+          state.corsProofGetRequests === 1 &&
+          state.corsProofAuthorizationMatches === 1,
+        "BROWSER_CORS_PROOF_COUNTS",
+      );
+      result = {
+        corsProofPreflightRequests: state.corsProofPreflightRequests,
+        corsProofGetRequests: state.corsProofGetRequests,
+        corsProofAuthorizationMatches: state.corsProofAuthorizationMatches,
+      };
+    } catch (error) {
+      validationFailure = error;
+    }
+  }
+  const failures = [
+    runFailure,
+    validationFailure,
+    ...teardownFailures,
+  ].filter(Boolean);
+  if (failures.length > 1) {
+    throw new AggregateError(
+      failures,
+      runFailure || validationFailure
+        ? "BROWSER_CORS_PROOF_AND_TEARDOWN_FAILED"
+        : "BROWSER_CORS_PROOF_TEARDOWN_FAILED",
+    );
+  }
+  if (failures.length === 1) throw failures[0];
+  return result;
+}
+
 export async function installContextRouteFallback(context, network) {
   const state = { abortFailure: undefined, pending: new Set() };
   await context.route("**/*", async (route) => {
@@ -345,6 +585,9 @@ export async function runBrowserProof(chromium, env) {
     frontendRequests: 0,
     apiRequests: 0,
     apiPreflightRequests: 0,
+    corsProofPreflightRequests: 0,
+    corsProofGetRequests: 0,
+    corsProofAuthorizationMatches: 0,
     userListRequests: 0,
     userListAuthorizationMatches: 0,
     blockedExternalRequests: 0,
@@ -355,8 +598,10 @@ export async function runBrowserProof(chromium, env) {
   const browser = await chromium.launch({
     headless: true,
     args: ["--disable-dev-shm-usage"],
+    env: browserProcessEnv,
   });
   try {
+    Object.assign(network, await runBrowserCorsProof(browser));
     const loginContext = await browser.newContext({ serviceWorkers: "block" });
     const loginFallback = await installContextRouteFallback(
       loginContext,
@@ -455,6 +700,12 @@ export async function runBrowserProof(chromium, env) {
   requireTrue(
     network.userListAuthorizationMatches === network.userListRequests,
     "BROWSER_AUTHORIZATION_HEADER",
+  );
+  requireTrue(
+    network.corsProofPreflightRequests === 1 &&
+      network.corsProofGetRequests === 1 &&
+      network.corsProofAuthorizationMatches === 1,
+    "BROWSER_CORS_PROOF",
   );
   requireTrue(network.legacyRequests === 0, "BROWSER_LEGACY_NETWORK");
   requireTrue(pageErrors === 0, "BROWSER_PAGE_ERROR");

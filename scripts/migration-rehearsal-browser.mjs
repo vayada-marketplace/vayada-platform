@@ -36,6 +36,7 @@ const expectedChecks = [
   "login-page",
   "unauthenticated-dashboard-denial",
   "authenticated-user-list",
+  "browser-cors-preflight",
   "task-local-api-routing",
   "no-legacy-network",
 ];
@@ -75,6 +76,9 @@ export function validateBrowserResult(result, token, runtime) {
       network.apiRequests > 0 &&
       Number.isSafeInteger(network.apiPreflightRequests) &&
       network.apiPreflightRequests >= 0 &&
+      network.corsProofPreflightRequests === 1 &&
+      network.corsProofGetRequests === 1 &&
+      network.corsProofAuthorizationMatches === 1 &&
       Number.isSafeInteger(network.userListRequests) &&
       network.userListRequests > 0 &&
       network.userListAuthorizationMatches === network.userListRequests &&

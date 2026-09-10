@@ -189,7 +189,13 @@ origins to task-local HTTP. Redirect following is disabled and every 3xx fails
 closed before any second request; every other browser network request is
 blocked and legacy API hosts fail the run. A harness-local CORS bridge permits
 only the observed Vayada Admin `OPTIONS` and authenticated `GET` pair; the API
-still receives no provider secrets or full auth-session configuration. Both
+still receives no provider secrets or full auth-session configuration. A
+separate browser-generated request crosses two HTTP servers bound only to
+task-local loopback, so Chromium must emit one real CORS preflight before the
+gate can pass without sending the admin token to the probe. Chromium launches
+with a fixed minimal process environment that excludes the session and provider
+secrets; only the later authenticated application page receives the session by
+initialization script. Both
 controller and browser read the task metadata endpoint and require the actual
 API, frontend, and browser image IDs to match the approved digests and task
 ARN. The controller provisions the same five-row verified-subject boundary,
