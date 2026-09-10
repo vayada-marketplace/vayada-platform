@@ -97,3 +97,22 @@ After deployment, run the checker with `--inbox-release` and complete the live
 public/private storage smoke before atomically reserving a new owner. Bind a new
 run ID, database, role, versioned secret, exact image digest, and storage tuple;
 do not reuse the failed target or any previous owner.
+
+The target-only application smoke uses the additive
+`migration_rehearsal_inbox_application` resources. They create a new exact-release
+task role and two new retained synthetic Finance keys; they do not repoint or
+broaden any previous rehearsal role or key. The task role can read only this
+release's `public/media/*` and `private/media/*` objects, cannot mutate S3, and
+cannot use any other AWS service or KMS key. It is not granted to the platform
+deploy role through `iam:PassRole`; only an authorized operator may launch the
+bounded one-off smoke task.
+
+Pause platform applies and use the administrator saved-plan workflow. Target
+only the application role, inline policy, two KMS keys, exact read-only CI
+managed policy, and its attachment. Require exactly six creates, zero changes,
+zero deletes, no replacements or imports, with every prior rehearsal and
+production resource unchanged. The CI policy permits refresh of only those
+exact resources; it grants no IAM writes, task-role passing, object access, or
+cryptographic use. Merge the same reviewed source before resuming normal
+platform applies. Retain every application resource until the rehearsal evidence
+is accepted.

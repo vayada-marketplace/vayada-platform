@@ -4,7 +4,11 @@ import { checkApplication } from "./check-migration-rehearsal-application.mjs";
 const recipient =
   "arn:aws:kms:eu-west-1:269416271598:key/00000000-0000-4000-8000-000000000001";
 const fingerprint = recipient.slice(0, -1) + "2";
-function fixture(fault) {
+function fixture(fault, boundary = "original") {
+  const role =
+    boundary === "inbox"
+      ? "arn:aws:iam::269416271598:role/vayada-rehearsal-7200a43a-application"
+      : "arn:aws:iam::269416271598:role/vayada-migration-rehearsal-application-task-role";
   return (args) => {
     const value = (name) => args[args.indexOf(name) + 1];
     if (args[0] === "sts")
@@ -73,7 +77,7 @@ function fixture(fault) {
                     Sid: "BypassContext",
                     Effect: "Allow",
                     Principal: {
-                      AWS: "arn:aws:iam::269416271598:role/vayada-migration-rehearsal-application-task-role",
+                      AWS: role,
                     },
                     Action: "kms:*",
                     Resource: "*",
@@ -81,7 +85,10 @@ function fixture(fault) {
                 ]
               : []),
             {
-              Sid: "DenyCryptographicUseOutsideRehearsalApplication",
+              Sid:
+                boundary === "inbox"
+                  ? "DenyCryptographicUseOutsideExactRehearsalApplication"
+                  : "DenyCryptographicUseOutsideRehearsalApplication",
               Effect: "Deny",
               Principal: "*",
               Resource: "*",
@@ -98,7 +105,7 @@ function fixture(fault) {
                   "aws:PrincipalArn":
                     fault === "role"
                       ? "wrong"
-                      : "arn:aws:iam::269416271598:role/vayada-migration-rehearsal-application-task-role",
+                      : role,
                 },
               },
             },
@@ -126,7 +133,8 @@ function fixture(fault) {
           : actions.map((action) => {
               let result = "explicitDeny";
               if (
-                resource.includes("rehearsal-media-") &&
+                (resource.includes("rehearsal-media-") ||
+                  resource.includes("rehearsal-7200a43a-")) &&
                 /\/(public|private)\/media\//.test(resource) &&
                 action === "s3:GetObject"
               )
@@ -150,8 +158,7 @@ function fixture(fault) {
     };
   };
 }
-assert.equal(checkApplication(fixture(), recipient, fingerprint).passed, true);
-for (const fault of [
+const faults = [
   "account",
   "disabled",
   "role",
@@ -165,11 +172,29 @@ for (const fault of [
   "trust-account",
   "missing-root",
   "extra-allow",
-])
-  assert.throws(
-    () => checkApplication(fixture(fault), recipient, fingerprint),
-    fault,
+];
+for (const boundary of ["original", "inbox"]) {
+  assert.equal(
+    checkApplication(
+      fixture(undefined, boundary),
+      recipient,
+      fingerprint,
+      boundary,
+    ).passed,
+    true,
   );
+  for (const fault of faults)
+    assert.throws(
+      () =>
+        checkApplication(
+          fixture(fault, boundary),
+          recipient,
+          fingerprint,
+          boundary,
+        ),
+      `${boundary}:${fault}`,
+    );
+}
 assert.throws(() => checkApplication(fixture(), recipient, recipient));
 assert.throws(() =>
   checkApplication(
@@ -179,5 +204,5 @@ assert.throws(() =>
   ),
 );
 console.log(
-  "Isolated application checks: valid fixture and 15 unsafe/missing-evidence cases passed.",
+  "Both isolated application boundaries: valid fixtures and 28 unsafe/missing-evidence cases passed.",
 );

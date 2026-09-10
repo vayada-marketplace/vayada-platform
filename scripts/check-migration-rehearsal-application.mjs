@@ -3,8 +3,19 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const account = "269416271598";
-const role = `arn:aws:iam::${account}:role/vayada-migration-rehearsal-application-task-role`;
-const bucket = `arn:aws:s3:::vayada-migration-rehearsal-media-${account}`;
+const boundaries = {
+  original: {
+    role: `arn:aws:iam::${account}:role/vayada-migration-rehearsal-application-task-role`,
+    bucket: `arn:aws:s3:::vayada-migration-rehearsal-media-${account}`,
+    outsiderDenySid: "DenyCryptographicUseOutsideRehearsalApplication",
+  },
+  inbox: {
+    role: `arn:aws:iam::${account}:role/vayada-rehearsal-7200a43a-application`,
+    bucket: `arn:aws:s3:::vayada-rehearsal-7200a43a-${account}`,
+    outsiderDenySid:
+      "DenyCryptographicUseOutsideExactRehearsalApplication",
+  },
+};
 const keyPattern =
   /^arn:aws:kms:eu-west-1:269416271598:key\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 function canonical(value) {
@@ -22,7 +33,15 @@ function canonical(value) {
 }
 
 // Read-only control-plane verification, not a substitute for live crypto/API smoke.
-export function checkApplication(aws, recipient, fingerprint) {
+export function checkApplication(
+  aws,
+  recipient,
+  fingerprint,
+  boundary = "original",
+) {
+  const selected = boundaries[boundary];
+  assert.ok(selected, `unknown rehearsal application boundary: ${boundary}`);
+  const { role, bucket, outsiderDenySid } = selected;
   assert.match(recipient ?? "", keyPattern);
   assert.match(fingerprint ?? "", keyPattern);
   assert.notEqual(recipient, fingerprint);
@@ -78,7 +97,7 @@ export function checkApplication(aws, recipient, fingerprint) {
             Resource: "*",
           },
           {
-            Sid: "DenyCryptographicUseOutsideRehearsalApplication",
+            Sid: outsiderDenySid,
             Effect: "Deny",
             Principal: "*",
             Resource: "*",
@@ -233,9 +252,11 @@ if (
           },
         ),
       );
-    console.log(
-      JSON.stringify(checkApplication(aws, ...process.argv.slice(2))),
-    );
+    const args = process.argv.slice(2);
+    const boundary = args[0] === "--inbox-release" ? "inbox" : "original";
+    if (boundary === "inbox") args.shift();
+    assert.equal(args.length, 2);
+    console.log(JSON.stringify(checkApplication(aws, ...args, boundary)));
   } catch {
     console.error(
       "Isolated application IAM/key control check failed; no mutations performed.",
