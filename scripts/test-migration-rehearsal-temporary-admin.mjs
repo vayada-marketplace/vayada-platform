@@ -7,11 +7,13 @@ const original = "d5c52a18f986911c1c33656eaad48e2ed0e154448c5874664599f625395e35
 let rows, snapshot, savepoint, fault, mutations, settings;
 const reset = () => { rows = new Set(); fault = undefined; mutations = []; settings = { role_key: "platform_admin", member: "active", link: "active" }; };
 const client = { async query(sql, values = []) {
+  if (fault === "disconnected") throw new Error("CONNECTION_LOST");
   if (sql.startsWith("BEGIN")) snapshot = new Set(rows);
   if (sql === "ROLLBACK") rows = new Set(snapshot);
   if (sql === "SAVEPOINT cleanup_probe") savepoint = new Set(rows);
   if (sql === "ROLLBACK TO SAVEPOINT cleanup_probe") rows = new Set(savepoint);
   if (sql === "COMMIT" && fault === "commit") throw new Error("COMMIT_FAILED");
+  if (sql === "COMMIT" && fault === "commit-after-apply") { fault = "disconnected"; throw new Error("CONNECTION_LOST_AFTER_COMMIT"); }
   if (sql.includes("FROM pg_trigger")) return { rows: [{ approved: fault !== "trigger" }] };
   if (sql.includes("WHERE id=$1") && sql.startsWith("SELECT")) return { rows: [{ count: fault === "id" ? 1 : 0 }] };
   if (sql.includes("AS found")) return { rows: [{ found: fault === "collision" }] };
@@ -31,18 +33,25 @@ const context = { binding, requireTrue, console: { log() {} },
     : value === "test_org" ? "0222289cdc132448e75e88f11cdaf10e74206e4f45b47a0ec46ca120f206fa62"
     : value === '{"approved":true}' ? "0c4a4faa097a7c43cdcd22fc1929befd4944e6976fc48367762265bb5e75666c" : createHash("sha256").update(value).digest("hex") }; } }),
   captureRowsSnapshot: async () => ({ sha256: fault === "hash" ? "b".repeat(64) : rows.size ? installed : original, tables: 210, rows: 449379 + rows.size }),
+  captureRows: async () => ({ sha256: rows.size ? installed : original, tables: 210, rows: 449379 + rows.size }),
+  guardedConnection: () => new URL("postgresql://fixture.test/fixture"),
 };
 // Substitute only imported boundaries; execute the actual implementation body.
 const source = readFileSync(new URL("./migration-rehearsal-temporary-admin.mjs", import.meta.url), "utf8");
 vm.runInNewContext(source.replace(/^import .*;\n/gm, "").replaceAll("export ", "")
-  + "\nObject.assign(globalThis,{temporaryAdmin,verifyAdminSession,installTemporaryAdmin,removeTemporaryAdmin,checkAdminRoutes,checkAuthenticatedDomainRoutes,domainImpactCandidatesSql,bookingOracleSql,collaborationOracleSql,collaborationCountSql,distributionInventorySql,expectedBooking,expectedCollaboration,runTemporaryAdmin,runTemporaryAdminCleanup});", context);
+  + "\nObject.assign(globalThis,{TemporaryAdminCommitError,preparedTemporaryAdminHash,combineRunAndCleanupFailures,temporaryAdmin,verifyAdminSession,installTemporaryAdmin,removeTemporaryAdmin,ensureTemporaryAdminRemoved,checkAdminRoutes,checkAuthenticatedDomainRoutes,domainImpactCandidatesSql,bookingOracleSql,collaborationOracleSql,collaborationCountSql,distributionInventorySql,expectedBooking,expectedCollaboration,runTemporaryAdmin,runTemporaryAdminCleanup});", context);
 const session = { workosUserId: "test_user", workosOrgId: "test_org", expiresAt: Math.floor(Date.now()/1000)+250 };
 context.verifyAdminSession(session);
 for (const changed of [{ workosUserId: "other" }, { workosOrgId: "other" }, { expiresAt: 1 }, { expiresAt: Math.floor(Date.now()/1000)+301 }])
   assert.throws(() => context.verifyAdminSession({ ...session, ...changed }));
 for (const fail of ["trigger", "id", "collision", "permission", "hash", "commit"]) {
   reset(); fault = fail;
-  await assert.rejects(context.installTemporaryAdmin(client, session));
+  let failure;
+  await assert.rejects(context.installTemporaryAdmin(client, session), error => { failure = error; return true; });
+  if (fail === "commit") {
+    assert.equal(failure.name, "TemporaryAdminCommitError");
+    assert.equal(context.preparedTemporaryAdminHash(failure), installed);
+  }
   assert.equal(rows.size, 0);
   if (fail !== "commit") assert(!mutations.some(sql => sql.startsWith("INSERT")));
 }
@@ -212,8 +221,52 @@ fault = undefined;
 await context.removeTemporaryAdmin(client, installed);
 assert.equal(rows.size, 0);
 assert(!mutations.some(sql => /ON CONFLICT|CASCADE|TRUNCATE|GRANT/.test(sql)));
+// A server-side COMMIT followed by connection loss retains the prepared hash and is recovered through a new connection.
+reset(); fault = "commit-after-apply";
+let ambiguousCommit;
+await assert.rejects(context.installTemporaryAdmin(client, session), error => { ambiguousCommit = error; return true; });
+assert.equal(context.preparedTemporaryAdminHash(ambiguousCommit), installed);
+assert.equal(rows.size, 5);
+fault = undefined;
+let recoveryConnections = 0;
+class RecoveryClient { constructor() { recoveryConnections += 1; } async connect() {} async end() {} query(...args) { return client.query(...args); } }
+assert.deepEqual(JSON.parse(JSON.stringify(await context.ensureTemporaryAdminRemoved(RecoveryClient,
+  { ADMIN_DATABASE_URL: "postgresql://fixture.test/fixture" }, installed))),
+{ dataSha256: original, removedRows: 5, alreadyAbsent: false });
+assert.equal(recoveryConnections, 1);
+assert.equal(rows.size, 0);
+assert.equal((await context.ensureTemporaryAdminRemoved(RecoveryClient,
+  { ADMIN_DATABASE_URL: "postgresql://fixture.test/fixture" }, installed)).alreadyAbsent, true);
+reset();
+let releaseInstaller, cleanupReachedLock, cleanupSettled = false;
+const installerCommitted = new Promise(resolve => { releaseInstaller = resolve; });
+const cleanupWaiting = new Promise(resolve => { cleanupReachedLock = resolve; });
+class InterleavingClient extends RecoveryClient {
+  async query(sql, values) {
+    if (sql === "SELECT pg_advisory_xact_lock(1361,1361)") {
+      cleanupReachedLock();
+      await installerCommitted;
+    }
+    return client.query(sql, values);
+  }
+}
+const interleavedCleanup = context.ensureTemporaryAdminRemoved(InterleavingClient,
+  { ADMIN_DATABASE_URL: "postgresql://fixture.test/fixture" }, installed).finally(() => { cleanupSettled = true; });
+await cleanupWaiting;
+await Promise.resolve();
+assert.equal(cleanupSettled, false);
+rows = new Set(Object.keys(context.temporaryAdmin).map(name => "identity." + name));
+releaseInstaller();
+assert.equal((await interleavedCleanup).removedRows, 5);
+assert.equal(rows.size, 0);
 // Driver failures must still execute exact cleanup after installation.
-class FakeClient { async connect() {} async end() {} query(...args) { return client.query(...args); } }
+let fakeClientCount = 0;
+class FakeClient {
+  constructor() { fakeClientCount += 1; this.dead = false; }
+  async connect() {}
+  async end() { this.dead = true; }
+  query(...args) { if (this.dead) throw new Error("DEAD_CLIENT_REUSED"); return client.query(...args); }
+}
 Object.assign(context, { process: { cwd: () => "/fixture" }, applicationEnvironment() {},
   guardedConnection: () => new URL("postgresql://fixture.test/fixture"),
   createRequire: () => () => ({ createWorkOSVerifier: () => async () => session }),
@@ -221,7 +274,12 @@ Object.assign(context, { process: { cwd: () => "/fixture" }, applicationEnvironm
 reset();
 await assert.rejects(context.runTemporaryAdmin(FakeClient, { REHEARSAL_TEST_SESSION: "synthetic" }), /SYNTHETIC_APP_FAILURE/);
 assert.equal(rows.size, 0);
+assert.equal(fakeClientCount, 2);
 await context.installTemporaryAdmin(client, session);
 assert.equal((await context.runTemporaryAdminCleanup(FakeClient, { REHEARSAL_CLEANUP_HASH: installed })).temporaryAccessRemoved, true);
 assert.equal(rows.size, 0);
+const runFailure = new Error("RUN_FAILED"), cleanupFailure = new Error("CLEANUP_FAILED");
+const combined = context.combineRunAndCleanupFailures(runFailure, cleanupFailure);
+assert.equal(combined.name, "AggregateError");
+assert.deepEqual(Array.from(combined.errors), [runFailure, cleanupFailure]);
 console.log("PASS: verified-subject/window, five-row transaction, collision/trigger/grant guards, Identity denials, cross-domain target reads and drift-refusing cleanup");
