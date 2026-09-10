@@ -284,7 +284,7 @@ assert.equal(
   "https://next-admin.vayada.com",
 );
 let fallbackHandler;
-await installContextRouteFallback(
+const fallback = await installContextRouteFallback(
   {
     async route(pattern, handler) {
       assert.equal(pattern, "**/*");
@@ -319,6 +319,7 @@ const teardown = runRoutedContext(
       teardownOrder.push("context-closed");
     },
   },
+  fallback,
   async () => {
     throw scenarioFailure;
   },
@@ -345,9 +346,48 @@ assert.deepEqual(teardownOrder, [
   "page-closed",
   "context-closed",
 ]);
+let pendingFallbackHandler;
+const pendingFallback = await installContextRouteFallback(
+  {
+    async route(_pattern, handler) {
+      pendingFallbackHandler = handler;
+    },
+  },
+  network,
+);
+const deferredAbortFailure = new Error("SYNTHETIC_DEFERRED_ABORT_FAILURE");
+let rejectDeferredAbort;
+const deferredAbort = new Promise((_resolve, reject) => {
+  rejectDeferredAbort = reject;
+});
+const pendingFallbackRun = pendingFallbackHandler({
+  request: () => request("GET", {}, "https://next-admin.vayada.com/late-poll"),
+  abort: () => deferredAbort,
+});
+let pendingTeardownFinished = false;
+const pendingTeardown = runRoutedContext(
+  {
+    async unrouteAll() {},
+    async close() {},
+  },
+  { async close() {} },
+  pendingFallback,
+  async () => "PASS",
+).then(() => {
+  pendingTeardownFinished = true;
+});
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pendingTeardownFinished, false);
+rejectDeferredAbort(deferredAbortFailure);
+await pendingFallbackRun;
+await assert.rejects(
+  pendingTeardown,
+  (error) => error === deferredAbortFailure,
+);
 const runFailure = new Error("SYNTHETIC_RUN_FAILURE");
 const unrouteFailure = new Error("SYNTHETIC_UNROUTE_FAILURE");
 const contextCloseFailure = new Error("SYNTHETIC_CONTEXT_CLOSE_FAILURE");
+const fallbackAbortFailure = new Error("SYNTHETIC_FALLBACK_ABORT_FAILURE");
 const failedTeardownOrder = [];
 await assert.rejects(
   runRoutedContext(
@@ -366,6 +406,7 @@ await assert.rejects(
         throw contextCloseFailure;
       },
     },
+    { abortFailure: fallbackAbortFailure, pending: new Set() },
     async () => {
       throw runFailure;
     },
@@ -378,6 +419,7 @@ await assert.rejects(
     assert.deepEqual(error.errors[1].errors, [
       unrouteFailure,
       contextCloseFailure,
+      fallbackAbortFailure,
     ]);
     return true;
   },
