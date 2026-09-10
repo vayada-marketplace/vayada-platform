@@ -35,7 +35,7 @@ const context = { binding, requireTrue, console: { log() {} },
 // Substitute only imported boundaries; execute the actual implementation body.
 const source = readFileSync(new URL("./migration-rehearsal-temporary-admin.mjs", import.meta.url), "utf8");
 vm.runInNewContext(source.replace(/^import .*;\n/gm, "").replaceAll("export ", "")
-  + "\nObject.assign(globalThis,{temporaryAdmin,verifyAdminSession,installTemporaryAdmin,removeTemporaryAdmin,checkAdminRoutes,runTemporaryAdmin,runTemporaryAdminCleanup});", context);
+  + "\nObject.assign(globalThis,{temporaryAdmin,verifyAdminSession,installTemporaryAdmin,removeTemporaryAdmin,checkAdminRoutes,checkAuthenticatedDomainRoutes,domainImpactSampleSql,bookingOracleSql,collaborationOracleSql,collaborationCountSql,expectedBooking,expectedCollaboration,runTemporaryAdmin,runTemporaryAdminCleanup});", context);
 const session = { workosUserId: "test_user", workosOrgId: "test_org", expiresAt: Math.floor(Date.now()/1000)+250 };
 context.verifyAdminSession(session);
 for (const changed of [{ workosUserId: "other" }, { workosOrgId: "other" }, { expiresAt: 1 }, { expiresAt: Math.floor(Date.now()/1000)+301 }])
@@ -58,6 +58,102 @@ const get = async path => {
 assert.equal((await context.checkAdminRoutes(get, client, client, "synthetic", session)).length, 6);
 assert.deepEqual(settings, { role_key: "platform_admin", member: "active", link: "active" });
 await assert.rejects(context.checkAdminRoutes(async path => ({ ...(await get(path)), status: 200 }), client, client, "synthetic", session), /ADMIN_ROUTE_STATUS_403/);
+assert.equal(settings.role_key, "platform_admin");
+const bookingId = "11111111-1111-4111-8111-111111111111";
+const collaborationId = "22222222-2222-4222-8222-222222222222";
+const domainSample = { propertyId: "33333333-3333-4333-8333-333333333333", lifecycleStatus: "active", lifecycleRevision: 7,
+  linkedOrganizations: 1, activeEntitlements: 2, suspendedEntitlements: 0, totalBookings: 4, activeBookings: 1,
+  roomTypes: 2, rooms: 3, totalPayments: 5, unresolvedPayments: 1, totalPayouts: 2, openPayouts: 1,
+  billingEntitlements: 1, mediaObjects: 6, marketplaceActive: true, distributionStatus: "public",
+  bookingRevisionActive: true, connectedChannels: 1 };
+const bookingRow = { id: bookingId, bookingReference: "BOOK-1", hotelId: domainSample.propertyId, hotelName: "Hotel",
+  hotelSlug: "hotel", guestName: "Test Guest", guestEmail: "guest@example.test", checkIn: "2026-09-11",
+  checkOut: "2026-09-12", nights: 1, totalAmount: "99.50", currency: "EUR", status: "accepted",
+  rawStatus: "confirmed", channel: "direct", requestedAt: "2026-09-01T00:00:00.000Z",
+  respondedAt: "2026-09-01T00:01:00.000Z" };
+const collaborationRow = { collaborationId, offerId: "offer", creatorId: "creator", hotelProfileId: domainSample.propertyId,
+  creatorProfileId: "creator", creatorOrganizationId: "creator-org", hotelOrganizationId: "hotel-org",
+  initiatorSide: "creator", status: "accepted", compensationType: "paid", offerTitle: "Offer", hotelLocation: "Pristina, XK",
+  creatorName: "Creator", creatorAvatarUrl: null, hotelName: "Hotel", freeStayMinNights: null, freeStayMaxNights: null,
+  paidAmount: "125.00", currency: "EUR", discountPercentage: null, affiliateEnabled: true,
+  affiliateCommissionPercentage: "5.00", travelDateFrom: "2026-10-01", travelDateTo: "2026-10-03",
+  preferredDateFrom: null, preferredDateTo: null, preferredMonths: ["october"], deliverables: [{ deliverableId: "deliverable",
+    platform: "instagram", type: "reel", quantity: 2, status: "completed", completedAt: "2026-09-01T02:00:00+00:00" }],
+  lastMessageAt: "2026-09-01T03:00:00.000Z", applicationMessage: "Message", hotelAgreedAt: null,
+  creatorAgreedAt: "2026-09-01T04:00:00.000Z", completedAt: null, cancelledAt: null,
+  createdAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-01T05:00:00.000Z" };
+const domainReader = { async query(sql, values = []) {
+  if (sql === context.domainImpactSampleSql) return { rows: [domainSample] };
+  if (sql === context.bookingOracleSql) return { rows: [bookingRow] };
+  if (sql === context.collaborationOracleSql) return { rows: [collaborationRow] };
+  if (sql === context.collaborationCountSql) return { rows: [{ total: 1 }] };
+  return { rows: [] };
+} };
+const impactBody = sample => ({ propertyId: sample.propertyId, lifecycleStatus: sample.lifecycleStatus,
+  contractVersion: "platform-property-lifecycle.v1", lifecycleRevision: sample.lifecycleRevision,
+  organizations: { linked: sample.linkedOrganizations },
+  entitlements: { active: sample.activeEntitlements, suspended: sample.suspendedEntitlements },
+  bookings: { total: sample.totalBookings, active: sample.activeBookings },
+  inventory: { roomTypes: sample.roomTypes, rooms: sample.rooms },
+  finance: { totalPayments: sample.totalPayments, unresolvedPayments: sample.unresolvedPayments,
+    totalPayouts: sample.totalPayouts, openPayouts: sample.openPayouts, billingEntitlements: sample.billingEntitlements },
+  media: { objects: sample.mediaObjects }, publicExposure: { marketplaceActive: sample.marketplaceActive,
+    distributionStatus: sample.distributionStatus, bookingRevisionActive: sample.bookingRevisionActive },
+  blockers: [{ code: "active_bookings", ownerDomain: "booking", count: 1, message: "Resolve active bookings." },
+    { code: "unresolved_payments", ownerDomain: "finance", count: 1, message: "Resolve pending or disputed payments." },
+    { code: "open_payouts", ownerDomain: "finance", count: 1, message: "Resolve open payouts." },
+    { code: "connected_channels", ownerDomain: "pms", count: 1, message: "Disconnect active channel-manager connections." }],
+  canRetire: false, hardDeletion: { allowed: false, reason: "hard_delete_not_supported" } });
+const bookingBody = { bookings: [context.expectedBooking(bookingRow)] };
+const collaborationBody = { contractVersion: "marketplace-admin.v1", authorizationMode: "platform_organization_membership",
+  collaborations: [context.expectedCollaboration(collaborationRow)], pagination: { page: 1, pageSize: 2, total: 1 } };
+const domainCalls = [];
+const domainGet = async (path, headers = {}) => {
+  domainCalls.push({ path, authorization: headers.authorization });
+  const status = !headers.authorization || headers.authorization.includes("deliberately-invalid") ? 401
+    : settings.role_key !== "platform_admin" ? 403 : 200;
+  const permission = path.includes("/marketplace/") ? "platform.user.suspend" : "platform.admin.read";
+  return { status, json: async () => status !== 200 ? { statusCode: status,
+    error: status === 401 ? "Unauthorized" : "Forbidden",
+    message: status === 401 ? "A valid access token is required." : `Missing required permission: ${permission}` }
+    : path.includes("retirement-impact") ? impactBody(domainSample)
+    : path.includes("/bookings?") ? bookingBody : collaborationBody };
+};
+const domainResult = await context.checkAuthenticatedDomainRoutes(domainGet, domainReader, client, "synthetic", session);
+assert.equal(domainResult.checks.length, 4);
+assert.deepEqual(JSON.parse(JSON.stringify(domainResult.coverage)), { bookings: 4, roomTypes: 2, rooms: 3,
+  financeRecords: 8, marketplaceActive: true, distributionStatePresent: true, mediaObjects: 6, connectedChannels: 1,
+  bookingRowsCompared: 1, collaborationRowsCompared: 1, collaborationTotal: 1 });
+for (const path of ["retirement-impact", "/bookings?", "/collaborations?"]) assert.deepEqual(
+  domainCalls.filter(call => call.path.includes(path)).map(call => call.authorization),
+  [undefined, "Bearer deliberately-invalid-rehearsal-token", "Bearer synthetic", "Bearer synthetic"]);
+await assert.rejects(context.checkAuthenticatedDomainRoutes(async (path, headers) => {
+  const response = await domainGet(path, headers);
+  if (!headers.authorization) return { status: 401, json: async () => ({ statusCode: 401, error: "Unauthorized",
+    message: "A valid access token is required.", guestEmail: "disclosed@example.test" }) };
+  return response;
+}, domainReader, client, "synthetic", session), /DOMAIN_AUTH_DISCLOSURE/);
+await assert.rejects(context.checkAuthenticatedDomainRoutes(async (path, headers) => {
+  const response = await domainGet(path, headers);
+  if (response.status === 200 && path.includes("retirement-impact")) return { status: 200,
+    json: async () => ({ ...impactBody(domainSample), canRetire: true }) };
+  return response;
+}, domainReader, client, "synthetic", session), /CROSS_DOMAIN_RESPONSE_MISMATCH/);
+await assert.rejects(context.checkAuthenticatedDomainRoutes(async (path, headers) => {
+  const response = await domainGet(path, headers);
+  if (response.status === 200 && path.includes("\/bookings?")) return { status: 200,
+    json: async () => ({ bookings: [{ ...bookingBody.bookings[0], rawStatus: "stale" }] }) };
+  return response;
+}, domainReader, client, "synthetic", session), /BOOKING_ROUTE_TARGET_MISMATCH/);
+await assert.rejects(context.checkAuthenticatedDomainRoutes(async (path, headers) => {
+  const response = await domainGet(path, headers);
+  if (response.status === 200 && path.includes("/collaborations?")) return { status: 200,
+    json: async () => ({ ...collaborationBody, pagination: { ...collaborationBody.pagination, total: 2 } }) };
+  return response;
+}, domainReader, client, "synthetic", session), /MARKETPLACE_ROUTE_TARGET_MISMATCH/);
+await assert.rejects(context.checkAuthenticatedDomainRoutes(domainGet, { ...domainReader,
+  query: async sql => sql === context.domainImpactSampleSql ? { rows: [{ ...domainSample, totalPayments: 0, totalPayouts: 0,
+    billingEntitlements: 0 }] } : domainReader.query(sql) }, client, "synthetic", session), /CROSS_DOMAIN_COVERAGE_GAP/);
 assert.equal(settings.role_key, "platform_admin");
 fault = "hash";
 const deletes = mutations.filter(sql => sql.startsWith("DELETE")).length;
@@ -82,4 +178,4 @@ assert.equal(rows.size, 0);
 await context.installTemporaryAdmin(client, session);
 assert.equal((await context.runTemporaryAdminCleanup(FakeClient, { REHEARSAL_CLEANUP_HASH: installed })).temporaryAccessRemoved, true);
 assert.equal(rows.size, 0);
-console.log("PASS: verified-subject/window, five-row transaction, collision/trigger/grant guards, HTTP allow/denial restoration and drift-refusing cleanup");
+console.log("PASS: verified-subject/window, five-row transaction, collision/trigger/grant guards, Identity denials, cross-domain target reads and drift-refusing cleanup");
