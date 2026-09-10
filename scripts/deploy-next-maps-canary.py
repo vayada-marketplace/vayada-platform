@@ -112,7 +112,7 @@ def aws(aws_service, operation, **values):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
-def verify_inventory_image(digest, no_show=False):
+def verify_inventory_image(digest, closure=False, no_show=False):
     """Probe compiled config without AWS/DB credentials or container networking."""
     image = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     password = subprocess.run(["aws", "ecr", "get-login-password", "--region", REGION],
@@ -128,6 +128,11 @@ API_BACKGROUND_WORKERS_ENABLED:'false', PMS_CHANNEX_ARI_SYNC_MODE:'mutating',
 PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID:'%s', PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true'});
 if(c.channexManagement.stagingInventoryEnabled !== true) throw new Error('Inventory-capable image required');
 """ % PROPERTY
+    if closure:
+        probe += """
+if(loadConfig({}).pmsRoomClosureEnabled !== false) throw new Error('Closure must default off');
+if(loadConfig({PMS_ROOM_CLOSURE_ENABLED:'true'}).pmsRoomClosureEnabled !== true) throw new Error('Closure-capable image required');
+"""
     if no_show:
         probe = probe.replace("PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true'", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true', PMS_CHANNEX_STAGING_NO_SHOW_ENABLED:'true'")
         probe += "\nif(c.channexManagement.stagingNoShowEnabled !== true) throw new Error('No-show-capable image required');"
@@ -136,7 +141,9 @@ if(c.channexManagement.stagingInventoryEnabled !== true) throw new Error('Invent
                    check=True, capture_output=True, text=True)
 
 
-def configure_channex_staging(container, meals=False, worker_enabled="true", inventory=False, no_show=False):
+def configure_channex_staging(container, meals=False, worker_enabled="true", inventory=False, closure=False, no_show=False):
+    if closure and worker_enabled != "false":
+        raise ValueError("Room closure requires a paused staging worker")
     settings = {
         "CHANNEX_API_BASE_URL": "https://staging.channex.io",
         "PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID": PROPERTY,
@@ -146,15 +153,17 @@ def configure_channex_staging(container, meals=False, worker_enabled="true", inv
         **{f"PMS_CHANNEX_{mode}_MODE": "observe_only" for mode in
            ("CONNECTION", "PROVISIONING", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME")},
     }
+    if closure:
+        settings["PMS_ROOM_CLOSURE_ENABLED"] = "true"
     if no_show:
         settings["PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"] = "true"
     if inventory:
         settings["PMS_CHANNEX_STAGING_INVENTORY_ENABLED"] = "true"
     if meals:
         settings["PMS_CHANNEX_PROVISIONING_MODE"] = "mutating"
-    container["environment"] = [e for e in container["environment"] if e["name"] not in settings and e["name"] not in {"CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"}]
+    container["environment"] = [e for e in container["environment"] if e["name"] not in settings and e["name"] not in {"CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_ROOM_CLOSURE_ENABLED", "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"}]
     container["environment"] += [{"name": k, "value": v} for k, v in settings.items()]
-    container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in {*settings, "CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"}]
+    container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in {*settings, "CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_ROOM_CLOSURE_ENABLED", "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"}]
     container["secrets"].append({"name": "CHANNEX_API_KEY", "valueFrom": CHANNEX_SECRET})
 
 
@@ -168,6 +177,19 @@ def staging_worker_value(definition):
     if len(values) != 1 or values[0] not in ("true", "false"):
         raise ValueError("Existing staging worker state is missing or ambiguous")
     return values[0]
+
+
+def require_paused_closure_service(existing, definition):
+    if len(existing) != 1 or not definition:
+        raise ValueError("Room closure requires an existing paused service")
+    service = existing[0]
+    deployments = service.get("deployments", [])
+    if (len(deployments) != 1 or deployments[0].get("rolloutState") != "COMPLETED"
+            or deployments[0].get("taskDefinition") != service.get("taskDefinition")
+            or service.get("pendingCount") != 0 or service.get("runningCount", 0) < 1
+            or service.get("runningCount") != service.get("desiredCount")
+            or staging_worker_value(definition) != "false"):
+        raise ValueError("Room closure requires a completed paused-service rollout")
 
 
 def change_staging_worker(existing, definition, image_sha, state, meals, plan=False, inventory=False, no_show=False):
@@ -191,6 +213,8 @@ def change_staging_worker(existing, definition, image_sha, state, meals, plan=Fa
     digest = aws("ecr", "describe-images", repositoryName="vayada-next-api", imageIds=[{"imageTag": image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
     assert container["image"] == f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}", "Pause/resume must retain the deployed image"
+    if state == "running" and env.get("PMS_ROOM_CLOSURE_ENABLED") == "true":
+        raise ValueError("Disable room closure before resuming the staging worker")
     value = "false" if state == "paused" else "true"
     summary = {"workerState": state, "previousTaskDefinition": service["taskDefinition"], "imageDigest": digest, "routesUnchanged": True}
     if plan or staging_worker_value(definition) == value:
@@ -226,9 +250,12 @@ def main():
     parser.add_argument("--channex-staging", action="store_true")
     parser.add_argument("--channex-staging-meals", action="store_true")
     parser.add_argument("--channex-staging-inventory", action="store_true")
+    parser.add_argument("--room-closure", action="store_true")
     parser.add_argument("--channex-staging-no-show", action="store_true")
     parser.add_argument("--channex-worker-state", choices=("preserve", "paused", "running"), default="preserve")
     args = parser.parse_args()
+    if args.room_closure and (not args.channex_staging or not args.channex_staging_inventory or args.channex_worker_state != "preserve"):
+        raise ValueError("Room closure requires scoped inventory staging with worker state preserve")
     if args.channex_worker_state != "preserve" and not args.channex_staging:
         raise ValueError("Worker state changes require --channex-staging")
     if args.channex_staging_no_show and not args.channex_staging:
@@ -264,6 +291,10 @@ def main():
     conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/inventory-materialization"]}}])
     conditions.append([conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [PROBE_PATH]}}])
     channex_condition = [conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/channex", f"/api/pms/properties/{PROPERTY}/channex/*"]}}]
+    closure_path = f"/api/pms/properties/{PROPERTY}/room-types/09bb6503-2e79-4ac4-8124-75fa8619da1d"
+    closure_condition = [conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [closure_path, closure_path + "/*"]}}]
+    if args.room_closure or any(matching_conditions(rule["Conditions"], closure_condition) for rule in owned_rules):
+        conditions.append(closure_condition)
     has_channex = any(matching_conditions(rule["Conditions"], channex_condition) for rule in owned_rules)
     if args.channex_staging or has_channex:
         conditions.append(channex_condition)
@@ -303,6 +334,8 @@ def main():
         has_inventory = any(e["name"] == "PMS_CHANNEX_STAGING_INVENTORY_ENABLED" and e["value"] == "true" for e in container.get("environment", []))
         if has_inventory and not args.channex_staging_inventory:
             raise ValueError("Existing staging inventory requires --channex-staging-inventory to preserve configuration")
+    if args.room_closure:
+        require_paused_closure_service(existing, staging_definition)
     if args.channex_worker_state != "preserve":
         if not staging_definition:
             raise ValueError("Pause/resume requires an existing configured staging service")
@@ -326,7 +359,7 @@ def main():
                  imageIds=[{"imageTag": args.image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
     if args.channex_staging_inventory or args.channex_staging_no_show:
-        verify_inventory_image(digest, no_show=args.channex_staging_no_show)
+        verify_inventory_image(digest, closure=args.room_closure, no_show=args.channex_staging_no_show)
     if args.activate_guest:
         activate_guest(existing, group, owned_rules, conditions, digest)
         return
@@ -337,7 +370,7 @@ def main():
         parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_SECRET.split(":parameter")[1]]}])["Parameters"]
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
         configure_channex_staging(source, meals=args.channex_staging_meals, inventory=args.channex_staging_inventory, no_show=args.channex_staging_no_show,
-                                  worker_enabled=staging_worker_value(staging_definition) if staging_definition else "true")
+                                  worker_enabled=staging_worker_value(staging_definition) if staging_definition else "true", closure=args.room_closure)
     source["image"] = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     source["environment"] = [e for e in source["environment"] if e["name"] not in {"PUBLIC_HOTEL_PROFILE_SOURCE", "GOOGLE_NEARBY_ENABLED", "API_BACKGROUND_WORKERS_ENABLED"}]
     source["environment"] += [{"name": "PUBLIC_HOTEL_PROFILE_SOURCE", "value": "active_publication"}, {"name": "GOOGLE_NEARBY_ENABLED", "value": "true"}, {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]
