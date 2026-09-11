@@ -39,6 +39,10 @@ on:
       - "scripts/test-migration-rehearsal-temporary-admin.mjs"
       - "scripts/migration-rehearsal-public-media.mjs"
       - "scripts/test-migration-rehearsal-public-media.mjs"
+      - "scripts/migration-rehearsal-positive-public-media-object.mjs"
+      - "scripts/test-migration-rehearsal-positive-public-media-object.mjs"
+      - "scripts/migration-rehearsal-positive-public.mjs"
+      - "scripts/test-migration-rehearsal-positive-public.mjs"
       - "scripts/check-migration-rehearsal-application.mjs"
       - "scripts/test-migration-rehearsal-application.mjs"
       - "scripts/migration-rehearsal-task-images.mjs"
@@ -80,6 +84,10 @@ jobs:
           node scripts/test-migration-rehearsal-temporary-admin.mjs
           node --check scripts/migration-rehearsal-public-media.mjs
           node scripts/test-migration-rehearsal-public-media.mjs
+          node --check scripts/migration-rehearsal-positive-public-media-object.mjs
+          node scripts/test-migration-rehearsal-positive-public-media-object.mjs
+          node --check scripts/migration-rehearsal-positive-public.mjs
+          node scripts/test-migration-rehearsal-positive-public.mjs
           node scripts/test-migration-rehearsal-application.mjs
           node --check scripts/migration-rehearsal-task-images.mjs
           node --check scripts/migration-rehearsal-browser.mjs
