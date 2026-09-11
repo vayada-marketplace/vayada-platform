@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
 
 import {
   PositivePublicCommitError,
@@ -200,8 +201,9 @@ const reader = {
   },
 };
 const s3 = {
-  async send(command) {
+  async send(command, options) {
     assert(command instanceof GetObjectCommand);
+    assert.equal(options.abortSignal.aborted, false);
     assert.deepEqual(command.input, {
       Bucket: media.bucket,
       Key: media.key,
@@ -239,6 +241,34 @@ await assert.rejects(
   ),
   /POSITIVE_PUBLIC_MEDIA_REGISTRY/,
 );
+{
+  const stalled = new PassThrough();
+  stalled.on("error", () => {});
+  let aborted = false;
+  await assert.rejects(
+    checkPositivePublicMedia(
+      reader,
+      {
+        async send(_command, options) {
+          options.abortSignal.addEventListener("abort", () => {
+            aborted = true;
+          });
+          return {
+            ContentLength: media.body.length,
+            ContentType: "image/png",
+            Body: stalled,
+          };
+        },
+      },
+      GetObjectCommand,
+      http,
+      10,
+    ),
+    /POSITIVE_PUBLIC_S3_TIMEOUT/,
+  );
+  assert.equal(aborted, true);
+  assert.equal(stalled.destroyed, true);
+}
 
 const source = readFileSync(
   new URL("./migration-rehearsal-positive-public.mjs", import.meta.url),
@@ -249,6 +279,8 @@ assert(!/source_url|original_url|legacy_database/i.test(source));
 assert(!/UPDATE |TRUNCATE|ON CONFLICT|CASCADE/.test(source));
 assert(source.includes("fullSmokeAccepted: false"));
 assert(source.includes('endpoint: "https://s3.eu-west-1.amazonaws.com"'));
+assert(source.includes("$4::uuid,'hotel_catalog'"));
+assert(source.includes("'property',$4::text"));
 
 console.log(
   "PASS: seven fresh rows, no legacy/ledger claim, exact cleanup, public CDN bytes, raw-S3 denial, and drift refusal",
