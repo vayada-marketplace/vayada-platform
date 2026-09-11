@@ -84,7 +84,9 @@ export async function checkPublicProfiles(get, reader, assertPublicSafe) {
       requireTrue(body.contractVersion==='public-bookability.v1' && body.publicVisibility==='public_safe'
         && body.hotel?.name===sample.name && body.hotel?.propertyId===sample.id, "PUBLIC_PROFILE_CONTRACT");
       if (body.freshness?.status!=='fresh') requireTrue(body.hotel.trust?.bookabilityStatus!=='bookable',"STALE_PROFILE_BOOKABLE");
-      requireTrue(response.headers.get('cache-control')==='public, max-age=60, stale-while-revalidate=300',"PUBLIC_PROFILE_CACHE");
+      const rateLimitPolicy=prefix.startsWith('/api/booking-web/')?'public-booking-web-profile-read':'public-ai-profile-read';
+      requireTrue(response.headers.get('cache-control')==='no-store',"PUBLIC_PROFILE_CACHE");
+      requireTrue(response.headers.get('x-vayada-ratelimit-policy')===rateLimitPolicy,"PUBLIC_PROFILE_RATE_LIMIT_POLICY");
       const urls=[...(body.hotel.images??[]).map(image=>image.url),body.hotel.branding?.logoUrl,body.hotel.branding?.heroImage].filter(Boolean);
       for (const url of urls) {
         requireTrue(typeof url==='string' && url.startsWith(publicCdn+'media/'),"PUBLIC_PROFILE_MEDIA_ORIGIN");
