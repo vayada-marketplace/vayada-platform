@@ -159,11 +159,11 @@ export async function installPositivePublicRows(
     );
     await client.query(
       `INSERT INTO platform.media_objects
-        (id,bucket,storage_key,visibility,purpose,property_id,resource_product,
+       (id,bucket,storage_key,visibility,purpose,property_id,resource_product,
          resource_type,resource_id,lifecycle_status,content_type,size_bytes,
          checksum_sha256,source_system,public_approved,source_metadata)
-       VALUES ($1,$2,$3,'public','property.gallery_image',$4,'hotel_catalog',
-         'property',$4,'active','image/png',$5,$6,'platform',TRUE,
+       VALUES ($1,$2,$3,'public','property.gallery_image',$4::uuid,'hotel_catalog',
+         'property',$4::text,'active','image/png',$5,$6,'platform',TRUE,
          '{"temporary":true,"scope":"vay1361-positive-public-smoke"}'::jsonb)`,
       [
         positivePublicMediaObject.mediaObjectId,
@@ -367,6 +367,7 @@ export async function checkPositivePublicMedia(
   s3,
   GetObjectCommand,
   http,
+  s3TimeoutMs = 15000,
 ) {
   const result = await reader.query(
     `SELECT m.id::text,m.bucket,m.storage_key AS key,m.content_type AS mime,
@@ -394,18 +395,38 @@ export async function checkPositivePublicMedia(
       row.lifecycle === "active",
     "POSITIVE_PUBLIC_MEDIA_REGISTRY",
   );
-  const object = await s3.send(
-    new GetObjectCommand({
-      Bucket: row.bucket,
-      Key: row.key,
-      ChecksumMode: "ENABLED",
-    }),
-  );
-  requireTrue(
-    object.ContentLength === row.bytes && object.ContentType === row.mime,
-    "POSITIVE_PUBLIC_MEDIA_METADATA",
-  );
-  await checkMediaBytes(object.Body, row);
+  const controller = new AbortController();
+  const timeoutError = new Error("POSITIVE_PUBLIC_S3_TIMEOUT");
+  let object;
+  let timeoutHandle;
+  const timeout = new Promise((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      controller.abort(timeoutError);
+      object?.Body?.destroy?.(timeoutError);
+      Promise.resolve(object?.Body?.cancel?.(timeoutError)).catch(() => {});
+      reject(timeoutError);
+    }, s3TimeoutMs);
+  });
+  try {
+    object = await Promise.race([
+      s3.send(
+        new GetObjectCommand({
+          Bucket: row.bucket,
+          Key: row.key,
+          ChecksumMode: "ENABLED",
+        }),
+        { abortSignal: controller.signal },
+      ),
+      timeout,
+    ]);
+    requireTrue(
+      object.ContentLength === row.bytes && object.ContentType === row.mime,
+      "POSITIVE_PUBLIC_MEDIA_METADATA",
+    );
+    await Promise.race([checkMediaBytes(object.Body, row), timeout]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
   const response = await http(row.url, {
     redirect: "error",
     signal: AbortSignal.timeout(5000),
