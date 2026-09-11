@@ -3,8 +3,8 @@ import { binding, guardedConnection, verifyTarget, requireTrue,
   pgSettingsSql, verifyPgSettings, unsafePrivilegesSql } from "./migration-rehearsal-reader-contract.mjs";
 import { captureRows } from "./migration-rehearsal-app-readonly.mjs";
 
-export const previousExpiry = "2026-09-10T09:50:47.773Z";
-export const renewedExpiry = "2026-09-10T17:51:00.000Z";
+export const previousExpiry = "2026-09-10T17:51:00.000Z";
+export const renewedExpiry = "2026-09-11T08:00:00.000Z";
 const renewalEvidence = "e6f0126a27e293044e510cda9e45131a1f6857952bb8ff967e7088215d7c8337";
 const renewalData = "d5c52a18f986911c1c33656eaad48e2ed0e154448c5874664599f625395e357b";
 

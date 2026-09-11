@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { assertRenewalWindow, previousExpiry, renewedExpiry } from "./migration-rehearsal-reader-renewal.mjs";
-const now = Date.parse("2026-09-10T09:51:00Z");
+const now = Date.parse("2026-09-11T00:45:00Z");
 const role = { rolcanlogin: true, rolconnlimit: 16, rolvaliduntil: previousExpiry,
   rolconfig: ["statement_timeout=15s", "default_transaction_read_only=on", "idle_in_transaction_session_timeout=30s"] };
 assertRenewalWindow(role, now);
