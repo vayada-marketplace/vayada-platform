@@ -229,6 +229,40 @@ to republish old state or a claim that positive delivery passed. Counts and
 sample-level checks do not replace browser, authenticated-domain, job, or full
 cutover acceptance. Whole-target row preservation remains mandatory.
 
-Only complete `production-cutover-smoke.v1` after all required checks actually
-pass, then resume the same immutable orchestration with that report. Named owner
-approvals, production provider cutover and legacy retirement remain separate.
+### Reviewed synthetic positive profile and media gate
+
+The exact Inbox-release target has no eligible retained public profile or
+completed-migration public media sample. A synthetic proof may close only that
+coverage gap after this plan is independently reviewed. It must not copy a
+legacy profile or image, publish an existing incomplete profile, or add a false
+`production_media_migration_items` record.
+
+The storage task creates one fixed 1x1 PNG under the exact isolated rehearsal
+bucket's `public/media/` prefix. It uses `If-None-Match: *`, a pinned SHA-256,
+AES256, immutable cache metadata, the exact release image digest, and the exact
+media task role. An existing object is accepted only when every byte and
+metadata field matches. The object remains versioned in the isolated bucket as
+evidence; it is never written to a production media bucket.
+
+The application task then inserts exactly seven new fixed-ID rows: one property,
+canonical slug, platform media object, public variant, property media link,
+catalog public-profile read model, and Distribution public-bookability profile.
+All rows are explicitly synthetic and target-only. No source link, owner,
+provider state, booking inventory, finance state, or migration-ledger evidence
+is created. The transaction refuses a target/run/release/baseline mismatch or
+any ID, slug, or public-ID collision, locks the seven tables, checks all deferred
+constraints, and proves exact deletion under a savepoint before commit.
+
+The exact application image runs locally in the task with the existing
+read-only application role. Both public profile routes must return the synthetic
+public-safe contract and its isolated-CDN URL. S3 and CDN bytes must match the
+pinned digest, while anonymous direct S3 access remains denied. This evidence
+does not claim that the object came from legacy migration.
+
+Cleanup deletes exactly those seven database rows and must restore the original
+210-table, 449,379-row checksum. An ambiguous install commit retains the
+prepared checksum for a cleanup-only recovery task; cleanup refuses any other
+target drift. Do not create a passed `production-cutover-smoke.v1` artifact or
+resume the orchestration until this positive proof, the earlier migrated-private
+media proof, all other smoke slices, and the aggregate evidence have been
+reviewed together.
