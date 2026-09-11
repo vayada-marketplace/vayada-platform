@@ -133,11 +133,12 @@ export async function attestPositivePublicMediaRuntime(
   };
 }
 
-function isMissing(error) {
+function isAlreadyPresent(error) {
   return (
-    error?.name === "NotFound" ||
-    error?.name === "NoSuchKey" ||
-    error?.$metadata?.httpStatusCode === 404
+    error?.name === "PreconditionFailed" ||
+    error?.name === "ConditionalRequestConflict" ||
+    error?.$metadata?.httpStatusCode === 412 ||
+    error?.$metadata?.httpStatusCode === 409
   );
 }
 
@@ -178,9 +179,6 @@ export async function ensurePositivePublicMediaObject({
   let created = false;
   let createdVersionId;
   try {
-    await verifyObject(s3, commands);
-  } catch (error) {
-    if (!isMissing(error)) throw error;
     const put = await s3.send(
       new commands.PutObjectCommand({
         Bucket: bucket,
@@ -203,6 +201,8 @@ export async function ensurePositivePublicMediaObject({
     );
     createdVersionId = put.VersionId;
     created = true;
+  } catch (error) {
+    if (!isAlreadyPresent(error)) throw error;
   }
   const versionId = await verifyObject(s3, commands);
   if (created)
