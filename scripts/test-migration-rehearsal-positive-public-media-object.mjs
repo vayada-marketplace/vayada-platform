@@ -84,6 +84,8 @@ const makeS3 = (options = {}) => {
     drift = false,
     putVersion = "version-1",
     headVersion = "version-1",
+    existingStatus = 412,
+    putFailure,
   } = options;
   let exists = present;
   const calls = [];
@@ -94,6 +96,16 @@ const makeS3 = (options = {}) => {
       if (command instanceof PutObjectCommand) {
         assert.equal(command.input.IfNoneMatch, "*");
         assert.equal(command.input.ChecksumSHA256, expected.checksumBase64);
+        if (putFailure) throw putFailure;
+        if (exists) {
+          const error = new Error("already present");
+          error.name =
+            existingStatus === 409
+              ? "ConditionalRequestConflict"
+              : "PreconditionFailed";
+          error.$metadata = { httpStatusCode: existingStatus };
+          throw error;
+        }
         exists = true;
         return { VersionId: putVersion };
       }
@@ -145,8 +157,30 @@ const existing = await ensurePositivePublicMediaObject({
 });
 assert.equal(existing.created, false);
 assert.equal(
-  existingS3.calls.some((call) => call instanceof PutObjectCommand),
-  false,
+  existingS3.calls.filter((call) => call instanceof PutObjectCommand).length,
+  1,
+);
+
+const concurrentS3 = makeS3({ present: true, existingStatus: 409 });
+const concurrent = await ensurePositivePublicMediaObject({
+  s3: concurrentS3,
+  commands,
+  http,
+  env,
+});
+assert.equal(concurrent.created, false);
+
+const accessDenied = new Error("denied");
+accessDenied.name = "AccessDenied";
+accessDenied.$metadata = { httpStatusCode: 403 };
+await assert.rejects(
+  ensurePositivePublicMediaObject({
+    s3: makeS3({ putFailure: accessDenied }),
+    commands,
+    http,
+    env,
+  }),
+  /denied/,
 );
 
 await assert.rejects(
