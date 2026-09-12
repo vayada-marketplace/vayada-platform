@@ -542,6 +542,11 @@ resource "aws_ecs_task_definition" "services" {
     create_before_destroy = true
 
     precondition {
+      condition     = each.key != "next-target-backend" || trimspace(var.channex_webhook_secret) != ""
+      error_message = "Next review intake requires a non-empty CHANNEX_WEBHOOK_SECRET."
+    }
+
+    precondition {
       condition = (
         each.key != "next-target-backend" ||
         (
