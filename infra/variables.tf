@@ -273,6 +273,13 @@ variable "cloudflare_api_token" {
   default     = ""
 }
 
+variable "channex_webhook_secret" {
+  description = "Shared token for production Channex review callbacks to Next API"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "channex_api_key" {
   description = "Channex channel manager production API key"
   type        = string

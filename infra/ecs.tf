@@ -292,6 +292,7 @@ locals {
         { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "mutating" },
         { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
+        { name = "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", value = "mutating" },
         { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "target" },
@@ -337,6 +338,7 @@ locals {
       secrets = concat([
         { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
         { name = "CHANNEX_API_KEY", valueFrom = "/vayada/prod/channex-api-key" },
+        { name = "CHANNEX_WEBHOOK_SECRET", valueFrom = "/vayada/prod/next-channex-webhook-token" },
         { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
         { name = "STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/stripe-secret-key" },
         { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/stripe-webhook-secret" },

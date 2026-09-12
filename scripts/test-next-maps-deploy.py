@@ -18,6 +18,7 @@ class DeploymentGuards(unittest.TestCase):
         source = {"environment": [
             {"name": "CHANNEX_WEBHOOK_SECRET", "value": "stale"},
             {"name": "CHANNEX_WEBHOOK_INTAKE_MODE", "value": "mutating"},
+            {"name": "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", "value": "mutating"},
             {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}],
             "secrets": [{"name": "CHANNEX_API_KEY", "valueFrom": api["CHANNEX_SECRET"]},
                         {"name": "CHANNEX_WEBHOOK_SECRET", "valueFrom": "production"}]}
@@ -26,10 +27,57 @@ class DeploymentGuards(unittest.TestCase):
         api["configure_channex_alerts"](source)
         self.assertEqual(source, first)
         self.assertEqual({e["name"]: e["value"] for e in source["environment"]},
-                         {"API_BACKGROUND_WORKERS_ENABLED": "false", "CHANNEX_WEBHOOK_INTAKE_MODE": "observe_only"})
+                         {"API_BACKGROUND_WORKERS_ENABLED": "false", "CHANNEX_WEBHOOK_INTAKE_MODE": "observe_only", "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE": "observe_only"})
         self.assertEqual(source["secrets"], [
             {"name": "CHANNEX_API_KEY", "valueFrom": api["CHANNEX_SECRET"]},
             {"name": "CHANNEX_WEBHOOK_SECRET", "valueFrom": api["CHANNEX_WEBHOOK_SECRET"]}])
+
+    def test_all_canary_deployments_drop_production_webhook_credentials(self):
+        main = api["main"]
+        for extra in ([], ["--channex-staging"], ["--channex-staging", "--channex-staging-alerts"]):
+            source = {
+                "name": "vayada-next-api",
+                "environment": [
+                    {"name": "PUBLIC_HOTEL_PROFILE_SOURCE", "value": "target"},
+                    {"name": "CHANNEX_WEBHOOK_SECRET", "value": "production-inline"},
+                    {"name": "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", "value": "mutating"},
+                ],
+                "secrets": [
+                    {"name": "CHANNEX_WEBHOOK_SECRET", "valueFrom": "production-token"},
+                    {"name": "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", "valueFrom": "production-mode"},
+                ],
+            }
+            captured = []
+            def aws(service, op, **kwargs):
+                if op == "get-caller-identity":
+                    return {"Account": api["ACCOUNT"]}
+                if op == "describe-services":
+                    return {"services": [{"taskDefinition": "baseline"}] if kwargs["services"] == ["vayada-next-api-service"] else []}
+                if op == "describe-task-definition":
+                    return {"taskDefinition": {"containerDefinitions": [source]}}
+                if op == "describe-target-groups":
+                    return {"TargetGroups": []}
+                if op == "describe-rules":
+                    return {"Rules": [{"Priority": "100", "Conditions": [{"Field": "host-header", "HostHeaderConfig": {"Values": ["next-api.vayada.com"]}}]}]}
+                if op == "describe-images":
+                    return {"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]}
+                if op == "describe-parameters":
+                    return {"Parameters": [{"Type": "SecureString"}]}
+                if op == "register-task-definition":
+                    captured.append(kwargs["containerDefinitions"][0])
+                    raise RuntimeError("stop before deployment")
+                raise AssertionError(op)
+            with self.subTest(options=extra), patch.dict(main.__globals__, {"aws": aws}), patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, *extra]), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "stop before deployment"):
+                    main()
+            self.assertEqual(len(captured), 1)
+            container = captured[0]
+            self.assertEqual([e for e in container["environment"] if e["name"] == "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE"],
+                             [{"name": "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", "value": "observe_only"}])
+            self.assertFalse(any(e["name"] == "CHANNEX_WEBHOOK_SECRET" for e in container["environment"]))
+            self.assertFalse(any(e["name"] == "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE" for e in container["secrets"]))
+            self.assertEqual([e for e in container["secrets"] if e["name"] == "CHANNEX_WEBHOOK_SECRET"],
+                             [{"name": "CHANNEX_WEBHOOK_SECRET", "valueFrom": api["CHANNEX_WEBHOOK_SECRET"]}] if "--channex-staging-alerts" in extra else [])
 
     def test_alert_setup_rejects_nonstaging_and_worker_changes_before_aws(self):
         main = api["main"]
@@ -423,21 +471,22 @@ class WorkerStateChanges(unittest.TestCase):
 
     def test_old_canary_review_default_is_allowed_but_mutating_is_rejected(self):
         fn = api["change_staging_worker"]
-        for mode in (None, "mutating"):
-            existing, definition = self.fixture()
-            container = definition["containerDefinitions"][0]
-            container["environment"] = [e for e in container["environment"] if e["name"] != "PMS_CHANNEX_REVIEWS_MODE"]
-            if mode:
-                container["environment"].append({"name": "PMS_CHANNEX_REVIEWS_MODE", "value": mode})
-            calls = MagicMock(return_value={"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]})
-            with self.subTest(mode=mode), patch.dict(fn.__globals__, {"aws": calls}):
+        for field in ("PMS_CHANNEX_REVIEWS_MODE", "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE"):
+            for mode in (None, "mutating"):
+                existing, definition = self.fixture()
+                container = definition["containerDefinitions"][0]
+                container["environment"] = [e for e in container["environment"] if e["name"] != field]
                 if mode:
-                    with self.assertRaises(AssertionError):
+                    container["environment"].append({"name": field, "value": mode})
+                calls = MagicMock(return_value={"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]})
+                with self.subTest(field=field, mode=mode), patch.dict(fn.__globals__, {"aws": calls}):
+                    if mode:
+                        with self.assertRaises(AssertionError):
+                            fn(existing, definition, "next-" + "a" * 40, "paused", True, plan=True)
+                        calls.assert_not_called()
+                    else:
                         fn(existing, definition, "next-" + "a" * 40, "paused", True, plan=True)
-                    calls.assert_not_called()
-                else:
-                    fn(existing, definition, "next-" + "a" * 40, "paused", True, plan=True)
-                    self.assertEqual([c.args[1] for c in calls.call_args_list], ["describe-images"])
+                        self.assertEqual([c.args[1] for c in calls.call_args_list], ["describe-images"])
 
     def test_plan_and_same_state_are_read_only(self):
         fn = api["change_staging_worker"]
