@@ -84,6 +84,16 @@ currently exported dashboard URLs, such as
 `https://pms-api.vayada.com/webhooks/stripe`, or the existing legacy
 `/webhooks/*` route for providers that are not currently active.
 
+### Channex review sending on Next PMS
+
+Next PMS uses the production Channex API for staff-triggered public review replies
+and Airbnb guest reviews. The next-api task sets `PMS_CHANNEX_REVIEWS_MODE=mutating`
+and references the existing `/vayada/prod/channex-api-key` secret. Other Channex
+capabilities retain their observe-only defaults; this does not move provider
+webhooks or production hostnames. Deploy an API image containing VAY-1532/VAY-1533
+before activation. To disable sending, change only the reviews mode to
+`observe_only` and apply through CI; saved review receipts remain readable.
+
 ### Platform media delivery
 
 The TypeScript platform media service uses the private, encrypted, versioned
