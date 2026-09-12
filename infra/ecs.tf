@@ -302,6 +302,8 @@ locals {
         { name = "MARKETPLACE_DISCOVERY_SOURCE", value = "target" },
         { name = "MARKETPLACE_ADMIN_SOURCE", value = "target" },
         { name = "PMS_OPERATIONS_SOURCE", value = "target" },
+        { name = "CHANNEX_API_BASE_URL", value = "https://app.channex.io" },
+        { name = "PMS_CHANNEX_REVIEWS_MODE", value = "mutating" },
         { name = "FINANCE_SOURCE", value = "target" },
         { name = "AFFILIATE_PUBLIC_SOURCE", value = "target" },
         { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
@@ -334,6 +336,7 @@ locals {
       ]
       secrets = concat([
         { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
+        { name = "CHANNEX_API_KEY", valueFrom = "/vayada/prod/channex-api-key" },
         { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
         { name = "STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/stripe-secret-key" },
         { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/stripe-webhook-secret" },

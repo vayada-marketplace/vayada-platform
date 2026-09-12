@@ -117,6 +117,7 @@ class DeploymentGuards(unittest.TestCase):
     def test_channex_secret_reference_and_disabled_capabilities(self):
         source = {"image": "pinned", "environment": [
             {"name": "PMS_CHANNEX_CONNECTION_MODE", "value": "mutating"},
+            {"name": "PMS_CHANNEX_REVIEWS_MODE", "value": "mutating"},
             {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"},
             {"name": "CHANNEX_API_KEY", "value": "must-remove"}],
             "secrets": [{"name": "CHANNEX_API_KEY", "valueFrom": "production"},
@@ -127,7 +128,7 @@ class DeploymentGuards(unittest.TestCase):
         self.assertEqual(env["CHANNEX_API_BASE_URL"], "https://staging.channex.io")
         self.assertEqual(env["PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID"], api["PROPERTY"])
         self.assertNotIn("CHANNEX_API_KEY", env)
-        for mode in ("CONNECTION", "PROVISIONING", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME"):
+        for mode in ("CONNECTION", "PROVISIONING", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "REVIEWS", "IFRAME"):
             self.assertEqual(env[f"PMS_CHANNEX_{mode}_MODE"], "observe_only")
         self.assertEqual(source["image"], "pinned")
         self.assertEqual(source["secrets"], [{"name": "OTHER", "valueFrom": "preserve"},
@@ -142,7 +143,7 @@ class DeploymentGuards(unittest.TestCase):
             self.assertEqual(env["PMS_CHANNEX_STAGING_MEALS_ENABLED"], "true")
             self.assertEqual(env["PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID"], api["PROPERTY"])
             self.assertEqual(env["API_BACKGROUND_WORKERS_ENABLED"], "false")
-            for mode in ("CONNECTION", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME"):
+            for mode in ("CONNECTION", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "REVIEWS", "IFRAME"):
                 self.assertEqual(env[f"PMS_CHANNEX_{mode}_MODE"], "observe_only")
 
     def test_inventory_image_probe_is_pinned_and_isolated_and_fails_closed(self):
@@ -206,7 +207,7 @@ class DeploymentGuards(unittest.TestCase):
         self.assertEqual(env["PMS_CHANNEX_STAGING_MEALS_ENABLED"], "true")
         self.assertEqual(env["PMS_CHANNEX_PROVISIONING_MODE"], "mutating")
         self.assertEqual(env["PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID"], api["PROPERTY"])
-        for mode in ("CONNECTION", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME"):
+        for mode in ("CONNECTION", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "REVIEWS", "IFRAME"):
             self.assertEqual(env[f"PMS_CHANNEX_{mode}_MODE"], "observe_only")
         main = api["main"]
         def aws(service, op, **kwargs):
@@ -419,6 +420,24 @@ class WorkerStateChanges(unittest.TestCase):
             next(e for e in expected["containerDefinitions"][0]["environment"] if e["name"] == "PMS_CHANNEX_WORKER_ENABLED")["value"] = value
             self.assertEqual(payload, expected)
             self.assertTrue(all(c.args[0] in ("ecs", "ecr") for c in calls.call_args_list))
+
+    def test_old_canary_review_default_is_allowed_but_mutating_is_rejected(self):
+        fn = api["change_staging_worker"]
+        for mode in (None, "mutating"):
+            existing, definition = self.fixture()
+            container = definition["containerDefinitions"][0]
+            container["environment"] = [e for e in container["environment"] if e["name"] != "PMS_CHANNEX_REVIEWS_MODE"]
+            if mode:
+                container["environment"].append({"name": "PMS_CHANNEX_REVIEWS_MODE", "value": mode})
+            calls = MagicMock(return_value={"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]})
+            with self.subTest(mode=mode), patch.dict(fn.__globals__, {"aws": calls}):
+                if mode:
+                    with self.assertRaises(AssertionError):
+                        fn(existing, definition, "next-" + "a" * 40, "paused", True, plan=True)
+                    calls.assert_not_called()
+                else:
+                    fn(existing, definition, "next-" + "a" * 40, "paused", True, plan=True)
+                    self.assertEqual([c.args[1] for c in calls.call_args_list], ["describe-images"])
 
     def test_plan_and_same_state_are_read_only(self):
         fn = api["change_staging_worker"]
