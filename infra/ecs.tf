@@ -304,6 +304,9 @@ locals {
         { name = "MARKETPLACE_ADMIN_SOURCE", value = "target" },
         { name = "PMS_OPERATIONS_SOURCE", value = "target" },
         { name = "CHANNEX_API_BASE_URL", value = "https://app.channex.io" },
+        { name = "AIRBNB_IMPORT_ENABLED", value = "true" },
+        { name = "AIRBNB_IMPORT_CALLBACK_ORIGIN", value = "https://next-marketplace.vayada.com" },
+        { name = "PMS_CHANNEX_CONNECTION_MODE", value = "mutating" },
         { name = "PMS_CHANNEX_REVIEWS_MODE", value = "mutating" },
         { name = "FINANCE_SOURCE", value = "target" },
         { name = "AFFILIATE_PUBLIC_SOURCE", value = "target" },
@@ -440,6 +443,7 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-marketplace-frontend"
       environment = [
+        { name = "AIRBNB_IMPORT_CALLBACK_ENABLED", value = "true" },
         { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-pms.vayada.com" },
