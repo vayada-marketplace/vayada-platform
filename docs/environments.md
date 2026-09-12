@@ -629,3 +629,19 @@ Not yet defined. Preview environment artifact handling will be specified in a fo
 ## Monitoring
 
 CloudWatch log groups are created per service under `/ecs/<service-name>`. There is no centralised alerting configured yet — this is a follow-up item.
+
+### Incoming Channex reviews on Next PMS
+
+VAY-1532 review-only activation uses CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE=mutating
+while general Channex intake remains observe_only. The existing review worker
+processes durable jobs; other capability modes and legacy callbacks stay unchanged.
+TF_VAR_CHANNEX_WEBHOOK_SECRET supplies the dedicated token stored in encrypted
+SSM /vayada/prod/next-channex-webhook-token and injected as CHANNEX_WEBHOOK_SECRET.
+Deploy the review-override-capable API before applying this configuration.
+
+Register only review and updated_review at the production Channex account, with
+callback https://next-api.vayada.com/webhooks/channex, send_data=true, and the
+X-Vayada-Webhook-Token header. Preserve unrelated subscriptions. Rollback disables
+these subscriptions and sets the review override to observe_only. Staging canary
+configuration always resets this override to observe_only. App contract and smoke
+requirements: engineering/channex-webhook-cutover-plan.md in the application repo.

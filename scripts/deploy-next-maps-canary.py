@@ -147,6 +147,7 @@ def configure_channex_staging(container, meals=False, worker_enabled="true", inv
         raise ValueError("Room closure requires a paused staging worker")
     settings = {
         "CHANNEX_API_BASE_URL": "https://staging.channex.io",
+        "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE": "observe_only",
         "PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID": PROPERTY,
         "PMS_CHANNEX_WORKER_ENABLED": worker_enabled,
         "PMS_CHANNEX_ARI_SYNC_MODE": "mutating",
@@ -170,7 +171,7 @@ def configure_channex_staging(container, meals=False, worker_enabled="true", inv
 
 def configure_channex_alerts(container):
     # Only the isolated receiver gets this token; all webhook families stay receipt-only.
-    settings = {"CHANNEX_WEBHOOK_INTAKE_MODE": "observe_only"}
+    settings = {"CHANNEX_WEBHOOK_INTAKE_MODE": "observe_only", "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE": "observe_only"}
     container["environment"] = [e for e in container["environment"]
                                 if e["name"] not in {*settings, "CHANNEX_WEBHOOK_SECRET"}]
     container["environment"] += [{"name": k, "value": v} for k, v in settings.items()]
@@ -226,7 +227,7 @@ def change_staging_worker(existing, definition, image_sha, state, meals, plan=Fa
     expected = {"environment": [], "secrets": []}
     configure_channex_staging(expected, meals=meals, worker_enabled=staging_worker_value(definition), inventory=inventory, no_show=no_show)
     for e in expected["environment"]:
-        if e["name"] == "PMS_CHANNEX_REVIEWS_MODE" and e["name"] not in env:
+        if e["name"] in {"PMS_CHANNEX_REVIEWS_MODE", "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE"} and e["name"] not in env:
             continue  # Older canaries default reviews to observe-only.
         assert [x for x in container["environment"] if x["name"] == e["name"]] == [e]
     assert [e for e in container["environment"] if e["name"] == "API_BACKGROUND_WORKERS_ENABLED"] == [{"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]
@@ -399,6 +400,12 @@ def main():
     # Inspect metadata only. ECS injects the existing server credential; CI never retrieves its value.
     parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [SECRET.split(":parameter")[1]]}])["Parameters"]
     assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
+    # Every canary drops the production callback credential and review intake.
+    # The alert receiver below explicitly installs its separate staging token.
+    webhook_settings = {"CHANNEX_WEBHOOK_SECRET", "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE"}
+    source["environment"] = [e for e in source["environment"] if e["name"] not in webhook_settings]
+    source["environment"].append({"name": "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", "value": "observe_only"})
+    source["secrets"] = [e for e in source.get("secrets", []) if e["name"] not in webhook_settings]
     if args.channex_staging:
         parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_SECRET.split(":parameter")[1]]}])["Parameters"]
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"

@@ -19,6 +19,7 @@ locals {
     "stripe-connect-webhook-secret" = var.stripe_connect_webhook_secret
     "cloudflare-api-token"          = var.cloudflare_api_token
     "channex-api-key"               = var.channex_api_key
+    "next-channex-webhook-token"    = var.channex_webhook_secret
     "anthropic-api-key"             = var.anthropic_api_key
     "firecrawl-api-key"             = var.firecrawl_api_key
   }
