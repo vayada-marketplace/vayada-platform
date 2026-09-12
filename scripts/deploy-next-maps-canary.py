@@ -226,6 +226,8 @@ def change_staging_worker(existing, definition, image_sha, state, meals, plan=Fa
     expected = {"environment": [], "secrets": []}
     configure_channex_staging(expected, meals=meals, worker_enabled=staging_worker_value(definition), inventory=inventory, no_show=no_show)
     for e in expected["environment"]:
+        if e["name"] == "PMS_CHANNEX_REVIEWS_MODE" and e["name"] not in env:
+            continue  # Older canaries default reviews to observe-only.
         assert [x for x in container["environment"] if x["name"] == e["name"]] == [e]
     assert [e for e in container["environment"] if e["name"] == "API_BACKGROUND_WORKERS_ENABLED"] == [{"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]
     assert "CHANNEX_API_KEY" not in env

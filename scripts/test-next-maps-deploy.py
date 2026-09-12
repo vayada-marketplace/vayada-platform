@@ -421,6 +421,24 @@ class WorkerStateChanges(unittest.TestCase):
             self.assertEqual(payload, expected)
             self.assertTrue(all(c.args[0] in ("ecs", "ecr") for c in calls.call_args_list))
 
+    def test_old_canary_review_default_is_allowed_but_mutating_is_rejected(self):
+        fn = api["change_staging_worker"]
+        for mode in (None, "mutating"):
+            existing, definition = self.fixture()
+            container = definition["containerDefinitions"][0]
+            container["environment"] = [e for e in container["environment"] if e["name"] != "PMS_CHANNEX_REVIEWS_MODE"]
+            if mode:
+                container["environment"].append({"name": "PMS_CHANNEX_REVIEWS_MODE", "value": mode})
+            calls = MagicMock(return_value={"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]})
+            with self.subTest(mode=mode), patch.dict(fn.__globals__, {"aws": calls}):
+                if mode:
+                    with self.assertRaises(AssertionError):
+                        fn(existing, definition, "next-" + "a" * 40, "paused", True, plan=True)
+                    calls.assert_not_called()
+                else:
+                    fn(existing, definition, "next-" + "a" * 40, "paused", True, plan=True)
+                    self.assertEqual([c.args[1] for c in calls.call_args_list], ["describe-images"])
+
     def test_plan_and_same_state_are_read_only(self):
         fn = api["change_staging_worker"]
         for enabled, plan in (("true", True), ("false", False)):
