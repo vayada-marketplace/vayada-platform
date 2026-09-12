@@ -90,7 +90,8 @@ Next PMS uses the production Channex API for staff-triggered public review repli
 and Airbnb guest reviews. The next-api task sets `PMS_CHANNEX_REVIEWS_MODE=mutating`
 and references the existing `/vayada/prod/channex-api-key` secret. Other Channex
 capabilities retain their observe-only defaults; this does not move provider
-webhooks or production hostnames. Deploy an API image containing VAY-1532/VAY-1533
+webhooks or production hostnames. The staging canary explicitly resets the reviews
+mode to observe-only when deriving its configuration. Deploy an API image containing VAY-1532/VAY-1533
 before activation. To disable sending, change only the reviews mode to
 `observe_only` and apply through CI; saved review receipts remain readable.
 

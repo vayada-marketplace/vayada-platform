@@ -152,7 +152,7 @@ def configure_channex_staging(container, meals=False, worker_enabled="true", inv
         "PMS_CHANNEX_ARI_SYNC_MODE": "mutating",
         "PMS_CHANNEX_STAGING_MEALS_ENABLED": "true" if meals else "false",
         **{f"PMS_CHANNEX_{mode}_MODE": "observe_only" for mode in
-           ("CONNECTION", "PROVISIONING", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME")},
+           ("CONNECTION", "PROVISIONING", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "REVIEWS", "IFRAME")},
     }
     if closure:
         settings["PMS_ROOM_CLOSURE_ENABLED"] = "true"

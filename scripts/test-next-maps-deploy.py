@@ -117,6 +117,7 @@ class DeploymentGuards(unittest.TestCase):
     def test_channex_secret_reference_and_disabled_capabilities(self):
         source = {"image": "pinned", "environment": [
             {"name": "PMS_CHANNEX_CONNECTION_MODE", "value": "mutating"},
+            {"name": "PMS_CHANNEX_REVIEWS_MODE", "value": "mutating"},
             {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"},
             {"name": "CHANNEX_API_KEY", "value": "must-remove"}],
             "secrets": [{"name": "CHANNEX_API_KEY", "valueFrom": "production"},
@@ -127,7 +128,7 @@ class DeploymentGuards(unittest.TestCase):
         self.assertEqual(env["CHANNEX_API_BASE_URL"], "https://staging.channex.io")
         self.assertEqual(env["PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID"], api["PROPERTY"])
         self.assertNotIn("CHANNEX_API_KEY", env)
-        for mode in ("CONNECTION", "PROVISIONING", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME"):
+        for mode in ("CONNECTION", "PROVISIONING", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "REVIEWS", "IFRAME"):
             self.assertEqual(env[f"PMS_CHANNEX_{mode}_MODE"], "observe_only")
         self.assertEqual(source["image"], "pinned")
         self.assertEqual(source["secrets"], [{"name": "OTHER", "valueFrom": "preserve"},
@@ -142,7 +143,7 @@ class DeploymentGuards(unittest.TestCase):
             self.assertEqual(env["PMS_CHANNEX_STAGING_MEALS_ENABLED"], "true")
             self.assertEqual(env["PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID"], api["PROPERTY"])
             self.assertEqual(env["API_BACKGROUND_WORKERS_ENABLED"], "false")
-            for mode in ("CONNECTION", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME"):
+            for mode in ("CONNECTION", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "REVIEWS", "IFRAME"):
                 self.assertEqual(env[f"PMS_CHANNEX_{mode}_MODE"], "observe_only")
 
     def test_inventory_image_probe_is_pinned_and_isolated_and_fails_closed(self):
@@ -206,7 +207,7 @@ class DeploymentGuards(unittest.TestCase):
         self.assertEqual(env["PMS_CHANNEX_STAGING_MEALS_ENABLED"], "true")
         self.assertEqual(env["PMS_CHANNEX_PROVISIONING_MODE"], "mutating")
         self.assertEqual(env["PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID"], api["PROPERTY"])
-        for mode in ("CONNECTION", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "IFRAME"):
+        for mode in ("CONNECTION", "BOOKING_SYNC", "MARKUPS", "MESSAGING", "REVIEWS", "IFRAME"):
             self.assertEqual(env[f"PMS_CHANNEX_{mode}_MODE"], "observe_only")
         main = api["main"]
         def aws(service, op, **kwargs):
