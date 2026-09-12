@@ -49,15 +49,22 @@ class DeploymentGuards(unittest.TestCase):
         ]
         for enabled, existing in ((False, False), (True, False), (False, True)):
             def aws(service, op, **kwargs):
-                if op == "get-caller-identity": return {"Account": api["ACCOUNT"]}
-                if op == "describe-services": return {"services": [{"taskDefinition": "baseline"}] if kwargs["services"] == ["vayada-next-api-service"] else []}
-                if op == "describe-task-definition": return {"taskDefinition": {"containerDefinitions": [{"name": "vayada-next-api"}]}}
-                if op == "describe-target-groups": return {"TargetGroups": [{"TargetGroupName": api["GROUP"], "TargetGroupArn": "test"}] if existing else []}
-                if op == "describe-tags": return {"TagDescriptions": [{"Tags": [{"Key": "Task", "Value": "VAY-1480"}]}]}
-                if op == "describe-rules": return {"Rules": [{"Conditions": expected, "Actions": [{"TargetGroupArn": "test"}]}] if existing else []}
+                if op == "get-caller-identity":
+                    return {"Account": api["ACCOUNT"]}
+                if op == "describe-services":
+                    return {"services": [{"taskDefinition": "baseline"}] if kwargs["services"] == ["vayada-next-api-service"] else []}
+                if op == "describe-task-definition":
+                    return {"taskDefinition": {"containerDefinitions": [{"name": "vayada-next-api"}]}}
+                if op == "describe-target-groups":
+                    return {"TargetGroups": [{"TargetGroupName": api["GROUP"], "TargetGroupArn": "test"}] if existing else []}
+                if op == "describe-tags":
+                    return {"TagDescriptions": [{"Tags": [{"Key": "Task", "Value": "VAY-1480"}]}]}
+                if op == "describe-rules":
+                    return {"Rules": [{"Conditions": expected, "Actions": [{"TargetGroupArn": "test"}]}] if existing else []}
                 raise AssertionError(op)
             args = ["deploy", "--image-sha", "next-" + "a" * 40, "--plan", "--channex-staging"]
-            if enabled: args.append("--channex-staging-alerts")
+            if enabled:
+                args.append("--channex-staging-alerts")
             out = io.StringIO()
             with patch("sys.argv", args), patch.dict(main.__globals__, {"aws": aws}), contextlib.redirect_stdout(out):
                 main()
@@ -72,12 +79,18 @@ class DeploymentGuards(unittest.TestCase):
             {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{api['PROPERTY']}/channex", f"/api/pms/properties/{api['PROPERTY']}/channex/*"]}},
         ]
         def aws(service, op, **kwargs):
-            if op == "get-caller-identity": return {"Account": api["ACCOUNT"]}
-            if op == "describe-services": return {"services": [{"taskDefinition": "baseline", "status": "ACTIVE", "tags": [{"key": "Task", "value": "VAY-1480"}]}]}
-            if op == "describe-task-definition": return {"taskDefinition": {"containerDefinitions": [{"name": "vayada-next-api", "environment": [{"name": "PMS_ROOM_CLOSURE_ENABLED", "value": "true"}]}]}}
-            if op == "describe-target-groups": return {"TargetGroups": [{"TargetGroupName": api["GROUP"], "TargetGroupArn": "test"}]}
-            if op == "describe-tags": return {"TagDescriptions": [{"Tags": [{"Key": "Task", "Value": "VAY-1480"}]}]}
-            if op == "describe-rules": return {"Rules": [{"Conditions": condition, "Actions": [{"TargetGroupArn": "test"}]}]}
+            if op == "get-caller-identity":
+                return {"Account": api["ACCOUNT"]}
+            if op == "describe-services":
+                return {"services": [{"taskDefinition": "baseline", "status": "ACTIVE", "tags": [{"key": "Task", "value": "VAY-1480"}]}]}
+            if op == "describe-task-definition":
+                return {"taskDefinition": {"containerDefinitions": [{"name": "vayada-next-api", "environment": [{"name": "PMS_ROOM_CLOSURE_ENABLED", "value": "true"}]}]}}
+            if op == "describe-target-groups":
+                return {"TargetGroups": [{"TargetGroupName": api["GROUP"], "TargetGroupArn": "test"}]}
+            if op == "describe-tags":
+                return {"TagDescriptions": [{"Tags": [{"Key": "Task", "Value": "VAY-1480"}]}]}
+            if op == "describe-rules":
+                return {"Rules": [{"Conditions": condition, "Actions": [{"TargetGroupArn": "test"}]}]}
             raise AssertionError(op)
         with patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, "--channex-staging", "--channex-staging-alerts"]), patch.dict(main.__globals__, {"aws": aws}), contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(ValueError, "room closure requires"):
