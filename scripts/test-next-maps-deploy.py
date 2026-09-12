@@ -14,6 +14,88 @@ api = runpy.run_path(str(pathlib.Path(__file__).with_name("deploy-next-maps-cana
 
 
 class DeploymentGuards(unittest.TestCase):
+    def test_alert_receiver_uses_separate_secret_and_receipt_only_mode(self):
+        source = {"environment": [
+            {"name": "CHANNEX_WEBHOOK_SECRET", "value": "stale"},
+            {"name": "CHANNEX_WEBHOOK_INTAKE_MODE", "value": "mutating"},
+            {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}],
+            "secrets": [{"name": "CHANNEX_API_KEY", "valueFrom": api["CHANNEX_SECRET"]},
+                        {"name": "CHANNEX_WEBHOOK_SECRET", "valueFrom": "production"}]}
+        api["configure_channex_alerts"](source)
+        first = json.loads(json.dumps(source))
+        api["configure_channex_alerts"](source)
+        self.assertEqual(source, first)
+        self.assertEqual({e["name"]: e["value"] for e in source["environment"]},
+                         {"API_BACKGROUND_WORKERS_ENABLED": "false", "CHANNEX_WEBHOOK_INTAKE_MODE": "observe_only"})
+        self.assertEqual(source["secrets"], [
+            {"name": "CHANNEX_API_KEY", "valueFrom": api["CHANNEX_SECRET"]},
+            {"name": "CHANNEX_WEBHOOK_SECRET", "valueFrom": api["CHANNEX_WEBHOOK_SECRET"]}])
+
+    def test_alert_setup_rejects_nonstaging_and_worker_changes_before_aws(self):
+        main = api["main"]
+        for extra in ([], ["--channex-staging", "--channex-worker-state", "paused"]):
+            aws = MagicMock()
+            with patch.dict(main.__globals__, {"aws": aws}), patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, "--channex-staging-alerts", *extra]):
+                with self.assertRaisesRegex(ValueError, "Alert receiver setup requires"):
+                    main()
+            aws.assert_not_called()
+
+    def test_alert_route_is_opt_in_and_preserved_with_exact_host_path_header(self):
+        main = api["main"]
+        expected = [
+            {"Field": "host-header", "HostHeaderConfig": {"Values": ["next-api.vayada.com"]}},
+            {"Field": "path-pattern", "PathPatternConfig": {"Values": ["/webhooks/channex"]}},
+            {"Field": "http-header", "HttpHeaderConfig": {"HttpHeaderName": "X-Vayada-Staging", "Values": ["operational-alerts"]}},
+        ]
+        for enabled, existing in ((False, False), (True, False), (False, True)):
+            def aws(service, op, **kwargs):
+                if op == "get-caller-identity":
+                    return {"Account": api["ACCOUNT"]}
+                if op == "describe-services":
+                    return {"services": [{"taskDefinition": "baseline"}] if kwargs["services"] == ["vayada-next-api-service"] else []}
+                if op == "describe-task-definition":
+                    return {"taskDefinition": {"containerDefinitions": [{"name": "vayada-next-api"}]}}
+                if op == "describe-target-groups":
+                    return {"TargetGroups": [{"TargetGroupName": api["GROUP"], "TargetGroupArn": "test"}] if existing else []}
+                if op == "describe-tags":
+                    return {"TagDescriptions": [{"Tags": [{"Key": "Task", "Value": "VAY-1480"}]}]}
+                if op == "describe-rules":
+                    return {"Rules": [{"Conditions": expected, "Actions": [{"TargetGroupArn": "test"}]}] if existing else []}
+                raise AssertionError(op)
+            args = ["deploy", "--image-sha", "next-" + "a" * 40, "--plan", "--channex-staging"]
+            if enabled:
+                args.append("--channex-staging-alerts")
+            out = io.StringIO()
+            with patch("sys.argv", args), patch.dict(main.__globals__, {"aws": aws}), contextlib.redirect_stdout(out):
+                main()
+            conditions = json.loads(out.getvalue())["conditions"]
+            alerts = [c for c in conditions if any(part.get("Field") == "http-header" for part in c)]
+            self.assertEqual(alerts, [expected] if enabled or existing else [])
+
+    def test_alert_setup_does_not_silently_disable_active_room_closure(self):
+        main = api["main"]
+        condition = [
+            {"Field": "host-header", "HostHeaderConfig": {"Values": ["next-api.vayada.com"]}},
+            {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{api['PROPERTY']}/channex", f"/api/pms/properties/{api['PROPERTY']}/channex/*"]}},
+        ]
+        def aws(service, op, **kwargs):
+            if op == "get-caller-identity":
+                return {"Account": api["ACCOUNT"]}
+            if op == "describe-services":
+                return {"services": [{"taskDefinition": "baseline", "status": "ACTIVE", "tags": [{"key": "Task", "value": "VAY-1480"}]}]}
+            if op == "describe-task-definition":
+                return {"taskDefinition": {"containerDefinitions": [{"name": "vayada-next-api", "environment": [{"name": "PMS_ROOM_CLOSURE_ENABLED", "value": "true"}]}]}}
+            if op == "describe-target-groups":
+                return {"TargetGroups": [{"TargetGroupName": api["GROUP"], "TargetGroupArn": "test"}]}
+            if op == "describe-tags":
+                return {"TagDescriptions": [{"Tags": [{"Key": "Task", "Value": "VAY-1480"}]}]}
+            if op == "describe-rules":
+                return {"Rules": [{"Conditions": condition, "Actions": [{"TargetGroupArn": "test"}]}]}
+            raise AssertionError(op)
+        with patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, "--channex-staging", "--channex-staging-alerts"]), patch.dict(main.__globals__, {"aws": aws}), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, "room closure requires"):
+                main()
+
     def test_room_closure_requires_pause_and_clears_stale_flag(self):
         source = {"environment": [], "secrets": []}
         with self.assertRaisesRegex(ValueError, "paused"):

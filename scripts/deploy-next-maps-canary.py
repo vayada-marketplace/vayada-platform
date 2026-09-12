@@ -18,6 +18,7 @@ PROPERTY = "65f6b2fc-c783-4963-9d6b-a85f82319769"
 SLUG = "codex-test-hotel-not-bookable"
 SECRET = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/vayada/prod/next-google-places-server-test"
 CHANNEX_SECRET = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/vayada/staging/next-channex-test-api-key"
+CHANNEX_WEBHOOK_SECRET = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/vayada/staging/next-channex-webhook-token"
 TAGS = [{"key": "Task", "value": "VAY-1480"}]
 
 
@@ -167,6 +168,26 @@ def configure_channex_staging(container, meals=False, worker_enabled="true", inv
     container["secrets"].append({"name": "CHANNEX_API_KEY", "valueFrom": CHANNEX_SECRET})
 
 
+def configure_channex_alerts(container):
+    # Only the isolated receiver gets this token; all webhook families stay receipt-only.
+    settings = {"CHANNEX_WEBHOOK_INTAKE_MODE": "observe_only"}
+    container["environment"] = [e for e in container["environment"]
+                                if e["name"] not in {*settings, "CHANNEX_WEBHOOK_SECRET"}]
+    container["environment"] += [{"name": k, "value": v} for k, v in settings.items()]
+    container["secrets"] = [e for e in container.get("secrets", [])
+                            if e["name"] not in {*settings, "CHANNEX_WEBHOOK_SECRET"}]
+    container["secrets"].append({"name": "CHANNEX_WEBHOOK_SECRET", "valueFrom": CHANNEX_WEBHOOK_SECRET})
+
+
+def channex_alert_conditions():
+    return [
+        {"Field": "host-header", "HostHeaderConfig": {"Values": ["next-api.vayada.com"]}},
+        {"Field": "path-pattern", "PathPatternConfig": {"Values": ["/webhooks/channex"]}},
+        {"Field": "http-header", "HttpHeaderConfig": {
+            "HttpHeaderName": "X-Vayada-Staging", "Values": ["operational-alerts"]}},
+    ]
+
+
 
 TASK_FIELDS = {"taskRoleArn", "executionRoleArn", "networkMode", "containerDefinitions", "volumes", "placementConstraints", "requiresCompatibilities", "cpu", "memory", "runtimePlatform", "ephemeralStorage", "pidMode", "ipcMode", "proxyConfiguration", "inferenceAccelerators", "enableFaultInjection", "family", "tags"}
 
@@ -251,6 +272,7 @@ def main():
     parser.add_argument("--channex-staging-meals", action="store_true")
     parser.add_argument("--channex-staging-inventory", action="store_true")
     parser.add_argument("--room-closure", action="store_true")
+    parser.add_argument("--channex-staging-alerts", action="store_true")
     parser.add_argument("--channex-staging-no-show", action="store_true")
     parser.add_argument("--channex-worker-state", choices=("preserve", "paused", "running"), default="preserve")
     args = parser.parse_args()
@@ -258,6 +280,8 @@ def main():
         raise ValueError("Room closure requires scoped inventory staging with worker state preserve")
     if args.channex_worker_state != "preserve" and not args.channex_staging:
         raise ValueError("Worker state changes require --channex-staging")
+    if args.channex_staging_alerts and (not args.channex_staging or args.channex_worker_state != "preserve"):
+        raise ValueError("Alert receiver setup requires staging and worker state preserve")
     if args.channex_staging_no_show and not args.channex_staging:
         raise ValueError("Staging no-show requires --channex-staging")
     if args.channex_staging_inventory and not args.channex_staging:
@@ -298,6 +322,10 @@ def main():
     has_channex = any(matching_conditions(rule["Conditions"], channex_condition) for rule in owned_rules)
     if args.channex_staging or has_channex:
         conditions.append(channex_condition)
+    alerts_condition = channex_alert_conditions()
+    has_alerts = any(matching_conditions(rule["Conditions"], alerts_condition) for rule in owned_rules)
+    if args.channex_staging_alerts or has_alerts:
+        conditions.append(alerts_condition)
     no_show_condition = [conditions[0][0], {"Field": "path-pattern", "PathPatternConfig": {"Values": [f"/api/pms/properties/{PROPERTY}/reservations/*/no-show-report"]}}]
     has_no_show = any(matching_conditions(rule["Conditions"], no_show_condition) for rule in owned_rules)
     if args.channex_staging_no_show or has_no_show:
@@ -328,6 +356,9 @@ def main():
         staging_definition = {**described["taskDefinition"], "tags": described.get("tags", [])}
     if staging_definition:
         container = next(c for c in staging_definition["containerDefinitions"] if c["name"] == "vayada-next-api")
+        has_closure_config = any(e["name"] == "PMS_ROOM_CLOSURE_ENABLED" and e["value"] == "true" for e in container.get("environment", []))
+        if args.channex_staging_alerts and has_closure_config and not args.room_closure:
+            raise ValueError("Existing staging room closure requires --room-closure to preserve configuration")
         has_no_show_config = any(e["name"] == "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED" and e["value"] == "true" for e in container.get("environment", []))
         if has_no_show_config and not args.channex_staging_no_show:
             raise ValueError("Existing staging no-show requires --channex-staging-no-show to preserve configuration")
@@ -371,6 +402,10 @@ def main():
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
         configure_channex_staging(source, meals=args.channex_staging_meals, inventory=args.channex_staging_inventory, no_show=args.channex_staging_no_show,
                                   worker_enabled=staging_worker_value(staging_definition) if staging_definition else "true", closure=args.room_closure)
+    if args.channex_staging_alerts or has_alerts:
+        parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_WEBHOOK_SECRET.split(":parameter")[1]]}])["Parameters"]
+        assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
+        configure_channex_alerts(source)
     source["image"] = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     source["environment"] = [e for e in source["environment"] if e["name"] not in {"PUBLIC_HOTEL_PROFILE_SOURCE", "GOOGLE_NEARBY_ENABLED", "API_BACKGROUND_WORKERS_ENABLED"}]
     source["environment"] += [{"name": "PUBLIC_HOTEL_PROFILE_SOURCE", "value": "active_publication"}, {"name": "GOOGLE_NEARBY_ENABLED", "value": "true"}, {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]
