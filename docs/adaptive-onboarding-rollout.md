@@ -11,8 +11,9 @@ also change application code. Verify its source includes app commit
 
 The workflow changes only `HOTEL_SETUP_ADAPTIVE_SHELL_ENABLED` on the rendered
 next Marketplace deployment task. Automated image deployments default to
-`preserve` and inherit the running flag. Terraform is not applied by this action;
-a future Terraform task-definition rollout must deliberately preserve this flag.
+`preserve` and inherit the running flag. Terraform is not applied by this action. The next Marketplace task definition
+in `infra/ecs.tf` now records the enabled flag so later Terraform rollouts preserve
+the authorized activation. For a persistent rollback, also set that value to false.
 The rollback task retains the pre-deployment environment and current image.
 
 After ECS stabilizes, verify the running task flag and image, then visit ordinary
