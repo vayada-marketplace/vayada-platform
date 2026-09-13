@@ -443,6 +443,7 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-marketplace-frontend"
       environment = [
+        { name = "HOTEL_SETUP_ADAPTIVE_SHELL_ENABLED", value = "true" },
         { name = "AIRBNB_IMPORT_CALLBACK_ENABLED", value = "true" },
         { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
