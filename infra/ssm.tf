@@ -25,11 +25,12 @@ locals {
   }
 
   prod_next_api_required_ssm_secrets = {
-    "target-database-url"   = var.target_database_url
-    "workos-api-key"        = var.workos_api_key
-    "workos-webhook-secret" = var.workos_webhook_secret
-    "auth-cookie-secret"    = var.auth_cookie_secret
-    "resend-api-key"        = var.resend_api_key
+    "target-database-url"                                = var.target_database_url
+    "workos-api-key"                                     = var.workos_api_key
+    "workos-webhook-secret"                              = var.workos_webhook_secret
+    "auth-cookie-secret"                                 = var.auth_cookie_secret
+    "resend-api-key"                                     = var.resend_api_key
+    "marketplace-communication-unsubscribe-signing-keys" = jsonencode(var.marketplace_communication_unsubscribe_keys)
   }
 
   resend_receipts_enabled = nonsensitive(var.resend_webhook_secret != "")
@@ -84,6 +85,16 @@ resource "aws_ssm_parameter" "secrets" {
     Project     = "vayada"
     Environment = "production"
     ManagedBy   = "terraform"
+  }
+
+  lifecycle {
+    precondition {
+      condition = each.key != "marketplace-communication-unsubscribe-signing-keys" || nonsensitive(contains(
+        keys(var.marketplace_communication_unsubscribe_keys),
+        var.marketplace_communication_unsubscribe_current_key_version,
+      ))
+      error_message = "The current Marketplace communication unsubscribe signing-key version must exist in the configured key set."
+    }
   }
 }
 

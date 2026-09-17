@@ -6,6 +6,9 @@ db_booking_password = "your-booking-db-password"
 db_pms_password     = "your-pms-db-password"
 db_auth_password    = "your-auth-db-password"
 jwt_secret_key      = "your-jwt-secret-key"
+marketplace_communication_unsubscribe_keys = {
+  "key-2026-09" = "your-base64url-secret-of-at-least-32-bytes"
+}
 
 # Optional frozen legacy PMS runtime for the C1 scheduler-freeze proof.
 enable_staging_pms_runtime          = false

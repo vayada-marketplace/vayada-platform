@@ -15,6 +15,7 @@ on:
       - "scripts/bootstrap-finance-folio-kms.sh"
       - "scripts/test-bootstrap-finance-folio-kms.sh"
       - "scripts/assert-terraform-protected-resources.sh"
+      - "scripts/test-marketplace-communication-unsubscribe-keys.mjs"
       - "scripts/test-finance-folio-kms-plan-guard.sh"
       - "scripts/guard-finance-folio-kms-plan.sh"
       - "scripts/test-finance-folio-kms-phase-guard.sh"
@@ -109,6 +110,7 @@ jobs:
           bash scripts/test-finance-folio-kms-plan-guard.sh
           bash -n scripts/guard-finance-folio-kms-plan.sh
           bash scripts/test-finance-folio-kms-phase-guard.sh
+          node scripts/test-marketplace-communication-unsubscribe-keys.mjs
 
       - name: Validate auth gateway contract
         run: bash scripts/validate-auth-gateway-contract.sh

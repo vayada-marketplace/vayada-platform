@@ -248,6 +248,7 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/workos-client-id`       | `next-api`                         |
 | `/vayada/prod/workos-webhook-secret`  | `next-api`                         |
 | `/vayada/prod/auth-cookie-secret`     | `next-api`                         |
+| `/vayada/prod/marketplace-communication-unsubscribe-signing-keys` | `next-api` |
 
 The `next-api` task maps those SSM parameters to the backend's runtime
 environment as:
@@ -260,13 +261,21 @@ environment as:
 | `WORKOS_WEBHOOK_SECRET` | `/vayada/prod/workos-webhook-secret` |
 | `AUTH_COOKIE_SECRET` | `/vayada/prod/auth-cookie-secret` |
 | `STRIPE_WEBHOOK_SECRET` | `/vayada/prod/stripe-webhook-secret` |
+| `MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_CURRENT_KEY_VERSION` | Terraform variable committed as the active version identifier |
+| `MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_KEYS_JSON` | `/vayada/prod/marketplace-communication-unsubscribe-signing-keys` |
 | `WORKOS_AUDIENCE`, `WORKOS_ISSUER`, `WORKOS_JWKS_URL` | Terraform variables from matching GitHub Actions secrets |
 
 Set the required GitHub Actions repository secrets before merging or applying a
 live `next-api` task definition: `TF_VAR_TARGET_DATABASE_URL`,
 `TF_VAR_WORKOS_API_KEY`, `TF_VAR_WORKOS_WEBHOOK_SECRET`,
 `TF_VAR_WORKOS_AUDIENCE`, `TF_VAR_WORKOS_ISSUER`, `TF_VAR_WORKOS_JWKS_URL`,
-`TF_VAR_AUTH_COOKIE_SECRET`.
+`TF_VAR_AUTH_COOKIE_SECRET`,
+`TF_VAR_MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_KEYS`.
+
+The unsubscribe key-set secret is a JSON object from key version to canonical
+base64url secret. Keep older versions in the object until every token they
+signed has expired; rotate by adding a new key first, then changing the current
+version identifier in a reviewed Terraform change.
 
 ### Transactional email delivery
 
