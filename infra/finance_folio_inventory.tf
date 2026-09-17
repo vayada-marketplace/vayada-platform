@@ -17,7 +17,7 @@ resource "aws_ecs_task_definition" "finance_folio_recipient_inventory" {
       secrets = [
         {
           name      = "TARGET_DATABASE_URL"
-          valueFrom = "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/prod/target-database-url"
+          valueFrom = "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/prod/target-database-runtime-url"
         },
       ]
       logConfiguration = {

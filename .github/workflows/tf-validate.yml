@@ -14,6 +14,16 @@ on:
       - "scripts/assert-finance-folio-kms-contract.sh"
       - "scripts/bootstrap-finance-folio-kms.sh"
       - "scripts/test-bootstrap-finance-folio-kms.sh"
+      - "scripts/test-target-database-credential-split.py"
+      - "scripts/assert-target-database-split-deployment-ready.py"
+      - "scripts/test-target-database-split-deployment-ready.py"
+      - "scripts/run-target-database-runtime-preflight.sh"
+      - "scripts/target-database-runtime-preflight.mjs"
+      - "scripts/test-target-database-runtime-preflight.py"
+      - "scripts/test-target-database-runtime-preflight-integration.sh"
+      - "scripts/next-api-split-compatible-images.txt"
+      - "scripts/assert-next-api-split-compatible-image.py"
+      - "scripts/test-next-api-split-compatible-image.py"
       - "scripts/assert-terraform-protected-resources.sh"
       - "scripts/test-marketplace-communication-unsubscribe-keys.mjs"
       - "scripts/test-finance-folio-kms-plan-guard.sh"
@@ -59,6 +69,18 @@ permissions:
   contents: read
 
 jobs:
+  target-database-runtime-preflight:
+    name: Runtime database preflight (PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        postgres: ["16", "17"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Exercise database role and ACL guard
+        run: bash scripts/test-target-database-runtime-preflight-integration.sh "${{ matrix.postgres }}"
+
   validate:
     name: Validate
     runs-on: ubuntu-latest
@@ -107,6 +129,12 @@ jobs:
           bash scripts/assert-finance-folio-kms-contract.sh
           bash -n scripts/bootstrap-finance-folio-kms.sh
           bash scripts/test-bootstrap-finance-folio-kms.sh
+          python3 scripts/test-target-database-credential-split.py
+          python3 scripts/test-target-database-split-deployment-ready.py
+          bash -n scripts/run-target-database-runtime-preflight.sh
+          node --check scripts/target-database-runtime-preflight.mjs
+          python3 scripts/test-target-database-runtime-preflight.py
+          python3 scripts/test-next-api-split-compatible-image.py
           bash scripts/test-finance-folio-kms-plan-guard.sh
           bash -n scripts/guard-finance-folio-kms-plan.sh
           bash scripts/test-finance-folio-kms-phase-guard.sh
