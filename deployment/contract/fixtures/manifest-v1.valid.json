@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "manifestId": "vayada-release/v1/1111111111111111111111111111111111111111/41001/2",
+  "repository": "vayada-marketplace/vayada",
+  "source": {
+    "sha": "1111111111111111111111111111111111111111",
+    "branch": "main"
+  },
+  "build": {
+    "workflowName": "Build coordinated next release",
+    "workflowPath": ".github/workflows/build-coordinated-release.yml",
+    "runId": 41001,
+    "runAttempt": 2,
+    "event": "push"
+  },
+  "previousManifestId": "vayada-release/v1/0000000000000000000000000000000000000000/40900/1",
+  "previousSourceSha": "0000000000000000000000000000000000000000",
+  "compatibility": {
+    "mode": "ordinary",
+    "apiBackwardCompatible": true,
+    "frontendBackwardCompatible": true
+  },
+  "barriers": [
+    {
+      "id": "booking-ledger-backfill",
+      "kind": "backfill",
+      "introducedAt": "1111111111111111111111111111111111111111",
+      "requiredCheckpointManifestId": null,
+      "evidenceRequirement": "Operator acknowledgment with the completed backfill run URL"
+    }
+  ],
+  "services": {
+    "next-target-backend": {
+      "ecrRepository": "vayada-next-api",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "imageSourceSha": "1111111111111111111111111111111111111111"
+    },
+    "next-pms-frontend": {
+      "ecrRepository": "vayada-next-pms-frontend",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "imageSourceSha": "1111111111111111111111111111111111111111"
+    },
+    "next-booking-frontend": {
+      "ecrRepository": "vayada-next-booking-frontend",
+      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "imageSourceSha": "0000000000000000000000000000000000000000"
+    },
+    "next-booking-admin": {
+      "ecrRepository": "vayada-next-booking-admin-frontend",
+      "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "imageSourceSha": "0000000000000000000000000000000000000000"
+    },
+    "next-marketplace-frontend": {
+      "ecrRepository": "vayada-next-marketplace-frontend",
+      "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "imageSourceSha": "0000000000000000000000000000000000000000"
+    },
+    "next-marketplace-admin": {
+      "ecrRepository": "vayada-next-admin-frontend",
+      "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "imageSourceSha": "0000000000000000000000000000000000000000"
+    }
+  }
+}

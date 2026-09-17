@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "manifestId": "vayada-release/v1/1111111111111111111111111111111111111111/41001/2",
+  "manifestSha256": "6360c61c601c1c043ce032e2dd2fa22c709204fc45debd026417d09d0be84382",
+  "candidateArtifactId": 90210,
+  "candidateArtifactName": "next-release-candidate-v1-41001-2",
+  "producer": {
+    "repository": "vayada-marketplace/vayada",
+    "workflowName": "Build coordinated next release",
+    "workflowPath": ".github/workflows/build-coordinated-release.yml",
+    "runId": 41001,
+    "runAttempt": 2
+  },
+  "publisher": {
+    "repository": "vayada-marketplace/vayada",
+    "workflowName": "Publish coordinated next release",
+    "workflowPath": ".github/workflows/publish-coordinated-release.yml",
+    "runId": 42001,
+    "runAttempt": 1
+  },
+  "publishedArtifactName": "next-release-published-v1-1111111111111111111111111111111111111111-41001-2",
+  "publishedAt": "2026-09-17T06:00:00.000Z",
+  "expiresAt": "2026-12-16T06:00:00.000Z",
+  "retentionDays": 90,
+  "idempotencyKey": "vayada-release/v1/1111111111111111111111111111111111111111/41001/2"
+}

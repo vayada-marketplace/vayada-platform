@@ -72,6 +72,9 @@ on:
         type: choice
         options: [preserve, enabled, disabled]
         default: preserve
+      operation_reason:
+        description: "Required reason when manually mutating a coordinated next service"
+        required: false
 
 permissions:
   id-token: write
@@ -119,6 +122,18 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Guard coordinated ownership and establish manual holds
+        env:
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+          EVENT_NAME: ${{ github.event_name }}
+          OPERATION_REASON: ${{ inputs.operation_reason }}
+        run: |
+          python3 scripts/coordinated_release.py guard-legacy \
+            --service "$SERVICE" \
+            --event-name "$EVENT_NAME" \
+            --operation-id "legacy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --reason "${OPERATION_REASON:-explicit manual managed-service mutation}"
 
       - name: Resolve ECS service and task family
         id: resolve
@@ -192,6 +207,7 @@ jobs:
           esac
 
       - name: Download current task definition
+        id: current-task
         run: |
           set -euo pipefail
           current_task_definition="$(
@@ -211,15 +227,37 @@ jobs:
             --task-definition "$current_task_definition" \
             --region "${{ env.AWS_REGION }}" \
             --query taskDefinition > task-definition.json
+          current_image="$(
+            jq -r --arg name "${{ steps.resolve.outputs.task_family }}" \
+              '.containerDefinitions[] | select(.name == $name) | .image // empty' \
+              task-definition.json
+          )"
+          test -n "$current_image"
+          echo "task_definition=${current_task_definition}" >> "$GITHUB_OUTPUT"
+          echo "image=${current_image}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve and verify image digest in ECR
         id: resolve-image
         env:
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
           ECR_REPOSITORY: ${{ github.event.client_payload.ecr_repo || inputs.ecr_repo }}
           IMAGE_TAG: ${{ github.event.client_payload.image_sha || inputs.image_sha }}
           IMAGE_DIGEST: ${{ github.event.client_payload.image_digest || inputs.image_digest }}
         run: |
           set -euo pipefail
+          expected_repository=""
+          case "$SERVICE" in
+            next-target-backend) expected_repository="vayada-next-api" ;;
+            next-pms-frontend) expected_repository="vayada-next-pms-frontend" ;;
+            next-booking-frontend) expected_repository="vayada-next-booking-frontend" ;;
+            next-booking-admin) expected_repository="vayada-next-booking-admin-frontend" ;;
+            next-marketplace-frontend) expected_repository="vayada-next-marketplace-frontend" ;;
+            next-marketplace-admin) expected_repository="vayada-next-admin-frontend" ;;
+          esac
+          if [ -n "$expected_repository" ] && [ "$ECR_REPOSITORY" != "$expected_repository" ]; then
+            echo "::error::Repository '$ECR_REPOSITORY' is not valid for managed service '$SERVICE'."
+            exit 1
+          fi
           if [ "${#IMAGE_TAG}" -gt 128 ] || [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]]; then
             echo "::error::Image tag is invalid."
             exit 1
@@ -409,8 +447,21 @@ jobs:
           NEXT_BOOKING_CANARY_NAME: ${{ vars.NEXT_BOOKING_CANARY_NAME }}
         run: bash scripts/smoke-next-booking-public.sh "$SERVICE"
 
-      - name: Roll back failed ECS cutover
+      - name: Establish durable hold before automatic rollback
+        id: rollback-hold
         if: failure() && steps.resolve-rollback.outputs.available == 'true' && (steps.deploy.outcome == 'failure' || steps.auth-gateway-smoke.outcome == 'failure' || steps.booking-public-smoke.outcome == 'failure')
+        env:
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+        run: |
+          python3 scripts/coordinated_release.py hold-before-rollback \
+            --service "$SERVICE" \
+            --operation-id "legacy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --rollback-task-definition '${{ steps.current-task.outputs.task_definition }}' \
+            --rollback-image '${{ steps.current-task.outputs.image }}' \
+            --reason "automatic rollback after failed per-service ECS cutover"
+
+      - name: Roll back failed ECS cutover
+        if: failure() && steps.rollback-hold.outcome == 'success'
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-rollback-task-def.outputs.task-definition }}
