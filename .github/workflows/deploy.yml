@@ -78,7 +78,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ (inputs.service == 'next-maps-canary' || inputs.service == 'next-maps-canary-remove' || inputs.service == 'next-maps-guest' || inputs.service == 'next-maps-frontends' || inputs.service == 'next-maps-frontends-remove') && 'vay1480-staging-canary' || 'production-ecs-mutations' }}
+  group: ${{ (inputs.service == 'next-maps-canary' || inputs.service == 'next-maps-canary-remove' || inputs.service == 'next-maps-guest' || inputs.service == 'next-maps-guest-remove' || inputs.service == 'next-maps-frontends' || inputs.service == 'next-maps-frontends-remove') && 'vay1480-staging-canary' || 'production-ecs-mutations' }}
   queue: max
 
 env:
@@ -88,7 +88,7 @@ env:
 
 jobs:
   deploy:
-    if: (github.event.client_payload.service || inputs.service) != 'next-maps-canary' && (github.event.client_payload.service || inputs.service) != 'next-maps-canary-remove' && (github.event.client_payload.service || inputs.service) != 'next-maps-guest' && (github.event.client_payload.service || inputs.service) != 'next-maps-frontends' && (github.event.client_payload.service || inputs.service) != 'next-maps-frontends-remove'
+    if: (github.event.client_payload.service || inputs.service) != 'next-maps-canary' && (github.event.client_payload.service || inputs.service) != 'next-maps-canary-remove' && (github.event.client_payload.service || inputs.service) != 'next-maps-guest' && (github.event.client_payload.service || inputs.service) != 'next-maps-guest-remove' && (github.event.client_payload.service || inputs.service) != 'next-maps-frontends' && (github.event.client_payload.service || inputs.service) != 'next-maps-frontends-remove'
     name: Deploy ${{ github.event.client_payload.service || inputs.service }}
     runs-on: ubuntu-latest
 
@@ -391,7 +391,7 @@ jobs:
 
   maps-canary:
     environment: next
-    if: github.event_name == 'workflow_dispatch' && (inputs.service == 'next-maps-canary' || inputs.service == 'next-maps-canary-remove' || inputs.service == 'next-maps-guest' || inputs.service == 'next-maps-frontends' || inputs.service == 'next-maps-frontends-remove')
+    if: github.event_name == 'workflow_dispatch' && (inputs.service == 'next-maps-canary' || inputs.service == 'next-maps-canary-remove' || inputs.service == 'next-maps-guest' || inputs.service == 'next-maps-guest-remove' || inputs.service == 'next-maps-frontends' || inputs.service == 'next-maps-frontends-remove')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -428,6 +428,7 @@ jobs:
           test "$ENVIRONMENT" = next
           if [ "${CHANNEX_WORKER_STATE:-preserve}" != preserve ]; then test "$SERVICE" = next-maps-canary; fi
           if [ "$SERVICE" = next-maps-guest ]; then python3 scripts/deploy-next-maps-frontends.py --guest-image-sha "$IMAGE_SHA" --guest-image-digest "$IMAGE_DIGEST"; exit 0; fi
+          if [ "$SERVICE" = next-maps-guest-remove ]; then python3 scripts/deploy-next-maps-frontends.py --remove-guest; exit 0; fi
           if [ "$SERVICE" = next-maps-frontends ]; then python3 scripts/deploy-next-maps-frontends.py; exit 0; fi
           if [ "$SERVICE" = next-maps-frontends-remove ]; then python3 scripts/deploy-next-maps-frontends.py --remove; exit 0; fi
           args=(--image-sha "$IMAGE_SHA" --channex-worker-state "${CHANNEX_WORKER_STATE:-preserve}")
