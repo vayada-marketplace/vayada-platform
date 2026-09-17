@@ -256,6 +256,7 @@ jobs:
           registry="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
           image_uri="${registry}/${ECR_REPOSITORY}@${IMAGE_DIGEST}"
           echo "image_uri=${image_uri}" >> "$GITHUB_OUTPUT"
+          echo "image_digest=${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
           printf '%s\n' "- Deploy image: ${image_uri}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Resolve and verify rollback image
@@ -327,7 +328,35 @@ jobs:
 
           echo "available=true" >> "$GITHUB_OUTPUT"
           echo "image_uri=${repository_uri}@${rollback_digest}" >> "$GITHUB_OUTPUT"
+          echo "image_digest=${rollback_digest}" >> "$GITHUB_OUTPUT"
           printf '%s\n' "- Rollback image: ${repository_uri}@${rollback_digest}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate next-api split launcher compatibility
+        env:
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+          ECR_REPOSITORY: ${{ github.event.client_payload.ecr_repo || inputs.ecr_repo }}
+          DEPLOY_DIGEST: ${{ steps.resolve-image.outputs.image_digest }}
+          ROLLBACK_AVAILABLE: ${{ steps.resolve-rollback.outputs.available }}
+          ROLLBACK_DIGEST: ${{ steps.resolve-rollback.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          if [ "${SERVICE}" != "next-target-backend" ]; then
+            exit 0
+          fi
+          aws ecr describe-images \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-ids "imageDigest=${DEPLOY_DIGEST}" \
+            --region "${AWS_REGION}" > deploy-next-api-image.json
+          python3 scripts/assert-next-api-split-compatible-image.py \
+            "${SERVICE}" "${ECR_REPOSITORY}" "${DEPLOY_DIGEST}" deploy-next-api-image.json
+          if [ "${ROLLBACK_AVAILABLE}" = "true" ]; then
+            aws ecr describe-images \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-ids "imageDigest=${ROLLBACK_DIGEST}" \
+              --region "${AWS_REGION}" > rollback-next-api-image.json
+            python3 scripts/assert-next-api-split-compatible-image.py \
+              "${SERVICE}" "${ECR_REPOSITORY}" "${ROLLBACK_DIGEST}" rollback-next-api-image.json
+          fi
 
       - name: Render task definition with SHA-pinned image
         id: render-task-def
