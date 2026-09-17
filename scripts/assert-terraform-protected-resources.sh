@@ -169,7 +169,7 @@ case "${mode}" in
   finance-steady)
     reviewed_inventory_runtime_split='[{"type":"aws_ecs_task_definition","name":"finance_folio_recipient_inventory","index":null,"actions":["delete","create"]}]'
     [[ ( "${finance_changes}" == "[]" || "${finance_changes}" == "${reviewed_inventory_runtime_split}" ) && "${finance_task_drift}" == false ]] || fail "Steady Finance KMS resources must be no-op except for the reviewed inventory runtime-credential split."
-    jq -e '
+    if ! jq -e '
       def as_set: (if type=="array" then . else [.] end)|sort;
       def norm_policy: .Statement |= (map(.Action|=as_set | .Resource|=as_set | if ((.Principal?|type)=="object" and .Principal.AWS?) then .Principal.AWS|=as_set else . end | if has("Condition") then .Condition|=with_entries(.value|=with_entries(.value|=as_set)) else . end)|sort_by(.Sid));
       def norm_inventory_modes: .ipc_mode=(if .ipc_mode=="" then null else .ipc_mode end) | .pid_mode=(if .pid_mode=="" then null else .pid_mode end);
@@ -229,7 +229,16 @@ case "${mode}" in
       ($inventory.change.before|(has("ipc_mode") and has("pid_mode"))) and ($inventory.change.after|(has("ipc_mode") and has("pid_mode"))) and (($inventory.change.after_unknown//{})|del(.arn,.arn_without_revision,.id,.revision,.tags_all)|[..|select(.==true)]|length)==0 and ($inventory.change.after|stable_inventory)==$expected_inventory and
       (($inventory.change.actions==["no-op"] and ($inventory.change.after.container_definitions|fromjson)==[{command:["node","-e","console.log(JSON.stringify({status:\u0027INERT\u0027,message:\u0027use scripts/run-finance-folio-recipient-inventory.sh\u0027}))"],environment:[],essential:true,image:"269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api:next-latest",logConfiguration:{logDriver:"awslogs",options:{"awslogs-group":"/ecs/vayada-next-api","awslogs-region":"eu-west-1","awslogs-stream-prefix":"folio-recipient-inventory"}},mountPoints:[],name:"vayada-next-api-finance-folio-recipient-inventory",portMappings:[],secrets:[{name:"TARGET_DATABASE_URL",valueFrom:"arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-runtime-url"}],systemControls:[],volumesFrom:[]}]) or
        ($inventory.change.actions==["delete","create"] and ($inventory.change.after.container_definitions|fromjson)==[{command:["node","-e","console.log(JSON.stringify({status:\u0027INERT\u0027,message:\u0027use scripts/run-finance-folio-recipient-inventory.sh\u0027}))"],essential:true,image:"269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api:next-latest",logConfiguration:{logDriver:"awslogs",options:{"awslogs-group":"/ecs/vayada-next-api","awslogs-region":"eu-west-1","awslogs-stream-prefix":"folio-recipient-inventory"}},name:"vayada-next-api-finance-folio-recipient-inventory",secrets:[{name:"TARGET_DATABASE_URL",valueFrom:"arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-runtime-url"}]}]))
-    ' <<<"${plan_json}" >/dev/null || fail "Steady Finance KMS key, alias, policy, task, environment, or inventory contract mismatch."
+    ' <<<"${plan_json}" >/dev/null; then
+      jq -c '
+        def norm_inventory_modes: .ipc_mode=(if .ipc_mode=="" then null else .ipc_mode end) | .pid_mode=(if .pid_mode=="" then null else .pid_mode end);
+        def stable_inventory: del(.arn,.arn_without_revision,.id,.revision) | norm_inventory_modes;
+        .resource_changes[]? |
+        select(.type=="aws_ecs_task_definition" and .name=="finance_folio_recipient_inventory") |
+        {actions:.change.actions,after_unknown:.change.after_unknown,non_container_equal:((.change.before|stable_inventory|del(.container_definitions))==(.change.after|stable_inventory|del(.container_definitions))),before_containers:(.change.before.container_definitions|fromjson),after_containers:(.change.after.container_definitions|fromjson)}
+      ' <<<"${plan_json}" >&2
+      fail "Steady Finance KMS key, alias, policy, task, environment, or inventory contract mismatch."
+    fi
     ;;
   apply)
     [[ "${finance_changes}" == "[]" && "${finance_task_drift}" == false ]] || fail "Finance KMS apply requires the reviewed post-import lane or a Finance no-op."
