@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "manifestId": "vayada-release/v1/1111111111111111111111111111111111111111/41001/2",
+  "repository": "untrusted/fork",
+  "source": {
+    "sha": "1111111111111111111111111111111111111111",
+    "branch": "main"
+  },
+  "build": {
+    "workflowName": "Build coordinated next release",
+    "workflowPath": ".github/workflows/build-coordinated-release.yml",
+    "runId": 41001,
+    "runAttempt": 2,
+    "event": "push"
+  },
+  "previousManifestId": null,
+  "previousSourceSha": null,
+  "compatibility": {
+    "mode": "ordinary",
+    "apiBackwardCompatible": true,
+    "frontendBackwardCompatible": true
+  },
+  "barriers": [],
+  "services": {}
+}

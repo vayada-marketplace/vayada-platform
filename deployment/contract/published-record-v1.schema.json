@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vayada.com/schemas/coordinated-release-published-record-v1.json",
+  "title": "Vayada coordinated release published record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "manifestId",
+    "manifestSha256",
+    "candidateArtifactId",
+    "candidateArtifactName",
+    "producer",
+    "publisher",
+    "publishedArtifactName",
+    "publishedAt",
+    "expiresAt",
+    "retentionDays",
+    "idempotencyKey"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "manifestId": { "type": "string", "minLength": 1 },
+    "manifestSha256": { "$ref": "#/$defs/sha256" },
+    "candidateArtifactId": { "type": "integer", "minimum": 1 },
+    "candidateArtifactName": {
+      "type": "string",
+      "pattern": "^next-release-candidate-v1-[1-9][0-9]*-[1-9][0-9]*$"
+    },
+    "producer": { "$ref": "#/$defs/workflow" },
+    "publisher": { "$ref": "#/$defs/workflow" },
+    "publishedArtifactName": {
+      "type": "string",
+      "pattern": "^next-release-published-v1-[0-9a-f]{40}-[1-9][0-9]*-[1-9][0-9]*$"
+    },
+    "publishedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "retentionDays": { "const": 90 },
+    "idempotencyKey": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "workflowName", "workflowPath", "runId", "runAttempt"],
+      "properties": {
+        "repository": { "const": "vayada-marketplace/vayada" },
+        "workflowName": { "type": "string", "minLength": 1 },
+        "workflowPath": {
+          "type": "string",
+          "pattern": "^\\.github/workflows/[a-z0-9-]+\\.yml$"
+        },
+        "runId": { "type": "integer", "minimum": 1 },
+        "runAttempt": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

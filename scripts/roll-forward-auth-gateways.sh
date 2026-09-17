@@ -119,6 +119,12 @@ while IFS= read -r service_key; do
 
   if [ "$roll_forward_failed" = true ]; then
     echo "::error::Auth gateway roll-forward failed for ${service_key}; restoring ${current_task_definition}."
+    python3 scripts/coordinated_release.py hold-before-rollback \
+      --service "$service_key" \
+      --operation-id "terraform-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}" \
+      --rollback-task-definition "$current_task_definition" \
+      --rollback-image "$current_image" \
+      --reason "automatic rollback after failed Terraform auth-gateway roll-forward"
     observed_task_definition="$(service_task_definition)"
     if [ "$observed_task_definition" = "$deployed_task_definition" ]; then
       aws ecs update-service \

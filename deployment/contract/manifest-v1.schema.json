@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vayada.com/schemas/coordinated-release-manifest-v1.json",
+  "title": "Vayada coordinated release manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "manifestId",
+    "repository",
+    "source",
+    "build",
+    "previousManifestId",
+    "previousSourceSha",
+    "compatibility",
+    "barriers",
+    "services"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "manifestId": {
+      "type": "string",
+      "pattern": "^vayada-release/v1/[0-9a-f]{40}/[1-9][0-9]*/[1-9][0-9]*$"
+    },
+    "repository": { "const": "vayada-marketplace/vayada" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha", "branch"],
+      "properties": {
+        "sha": { "$ref": "#/$defs/sha" },
+        "branch": { "const": "main" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflowName", "workflowPath", "runId", "runAttempt", "event"],
+      "properties": {
+        "workflowName": { "const": "Build coordinated next release" },
+        "workflowPath": {
+          "const": ".github/workflows/build-coordinated-release.yml"
+        },
+        "runId": { "$ref": "#/$defs/positiveInteger" },
+        "runAttempt": { "$ref": "#/$defs/positiveInteger" },
+        "event": { "enum": ["push", "workflow_dispatch"] }
+      }
+    },
+    "previousManifestId": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/manifestId" }]
+    },
+    "previousSourceSha": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha" }]
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "apiBackwardCompatible", "frontendBackwardCompatible"],
+      "properties": {
+        "mode": { "const": "ordinary" },
+        "apiBackwardCompatible": { "const": true },
+        "frontendBackwardCompatible": { "const": true }
+      }
+    },
+    "barriers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/barrier" }
+    },
+    "services": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "next-target-backend",
+        "next-pms-frontend",
+        "next-booking-frontend",
+        "next-booking-admin",
+        "next-marketplace-frontend",
+        "next-marketplace-admin"
+      ],
+      "properties": {
+        "next-target-backend": {
+          "$ref": "#/$defs/service",
+          "properties": {
+            "ecrRepository": { "const": "vayada-next-api" }
+          }
+        },
+        "next-pms-frontend": {
+          "$ref": "#/$defs/service",
+          "properties": {
+            "ecrRepository": { "const": "vayada-next-pms-frontend" }
+          }
+        },
+        "next-booking-frontend": {
+          "$ref": "#/$defs/service",
+          "properties": {
+            "ecrRepository": { "const": "vayada-next-booking-frontend" }
+          }
+        },
+        "next-booking-admin": {
+          "$ref": "#/$defs/service",
+          "properties": {
+            "ecrRepository": {
+              "const": "vayada-next-booking-admin-frontend"
+            }
+          }
+        },
+        "next-marketplace-frontend": {
+          "$ref": "#/$defs/service",
+          "properties": {
+            "ecrRepository": {
+              "const": "vayada-next-marketplace-frontend"
+            }
+          }
+        },
+        "next-marketplace-admin": {
+          "$ref": "#/$defs/service",
+          "properties": {
+            "ecrRepository": { "const": "vayada-next-admin-frontend" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "positiveInteger": { "type": "integer", "minimum": 1 },
+    "manifestId": {
+      "type": "string",
+      "pattern": "^vayada-release/v1/[0-9a-f]{40}/[1-9][0-9]*/[1-9][0-9]*$"
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ecrRepository", "digest", "imageSourceSha"],
+      "properties": {
+        "ecrRepository": { "type": "string" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "imageSourceSha": { "$ref": "#/$defs/sha" }
+      }
+    },
+    "barrier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "introducedAt",
+        "requiredCheckpointManifestId",
+        "evidenceRequirement"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$" },
+        "kind": { "enum": ["migration", "backfill", "application"] },
+        "introducedAt": { "$ref": "#/$defs/sha" },
+        "requiredCheckpointManifestId": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/manifestId" }]
+        },
+        "evidenceRequirement": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

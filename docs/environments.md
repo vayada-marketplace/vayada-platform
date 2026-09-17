@@ -191,6 +191,15 @@ only `v1`; creating or importing a future HMAC key never authorizes promotion.
 
    A failed Booking public smoke redeploys the pre-cutover task image automatically.
 
+The complete six-service receiver is installed separately in
+`.github/workflows/deploy-coordinated-release.yml` and remains in `legacy`
+ownership mode until VAY-2029 activates it with an exact published manifest.
+It then rejects delayed automatic per-image events for managed next services,
+deploys the API before a parallel five-frontend stage, and persists holds,
+checkpoints, desired state, and per-service provenance. See
+[Coordinated next releases](coordinated-releases.md) for the trust contract,
+activation boundary, manual resume, and crash-recovery behavior.
+
 The Booking canary uses the repository variables `NEXT_BOOKING_CANARY_URL` and
 `NEXT_BOOKING_CANARY_NAME`. The URL must be a dedicated, permanently published
 tenant origin on `*.next-booking.vayada.com`; changing or retiring that tenant

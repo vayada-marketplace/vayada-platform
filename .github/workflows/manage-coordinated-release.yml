@@ -1,0 +1,109 @@
+name: Manage coordinated release controls
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Explicit control-state operation
+        required: true
+        type: choice
+        options: [hold, acknowledge, set-legacy-mode]
+      service:
+        description: Physical service for a hold
+        required: false
+        type: choice
+        options:
+          - ""
+          - next-target-backend
+          - next-pms-frontend
+          - next-booking-frontend
+          - next-booking-admin
+          - next-marketplace-frontend
+          - next-marketplace-admin
+        default: ""
+      reason:
+        description: Required reason for a service hold
+        required: false
+        type: string
+      barrier_id:
+        description: Barrier ID for an acknowledgment
+        required: false
+        type: string
+      barrier_kind:
+        description: Barrier kind for an acknowledgment
+        required: false
+        type: choice
+        options: ["", migration, backfill, application]
+        default: ""
+      introduced_at:
+        description: Source SHA that introduced the barrier
+        required: false
+        type: string
+      checkpoint_manifest_id:
+        description: Required checkpoint manifest ID, if any
+        required: false
+        type: string
+      evidence_requirement:
+        description: Exact evidence requirement from the manifest
+        required: false
+        type: string
+      evidence:
+        description: Concrete immutable evidence or run URL
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-ecs-mutations
+  cancel-in-progress: false
+
+jobs:
+  control:
+    environment: next
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-coordinated-deploy
+          aws-region: eu-west-1
+      - name: Apply explicit durable control
+        env:
+          ACTION: ${{ inputs.action }}
+          SERVICE: ${{ inputs.service }}
+          REASON: ${{ inputs.reason }}
+          BARRIER_ID: ${{ inputs.barrier_id }}
+          BARRIER_KIND: ${{ inputs.barrier_kind }}
+          INTRODUCED_AT: ${{ inputs.introduced_at }}
+          CHECKPOINT_MANIFEST_ID: ${{ inputs.checkpoint_manifest_id }}
+          EVIDENCE_REQUIREMENT: ${{ inputs.evidence_requirement }}
+          EVIDENCE: ${{ inputs.evidence }}
+        run: |
+          set -euo pipefail
+          arguments=(--operation-id "control-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")
+          case "$ACTION" in
+            set-legacy-mode)
+              arguments+=(--action set-mode --mode legacy)
+              ;;
+            hold)
+              test -n "$SERVICE" && test -n "$REASON"
+              arguments+=(--action hold --service "$SERVICE" --reason "$REASON")
+              ;;
+            acknowledge)
+              test -n "$BARRIER_ID" && test -n "$BARRIER_KIND" && test -n "$INTRODUCED_AT"
+              test -n "$EVIDENCE_REQUIREMENT" && test -n "$EVIDENCE"
+              arguments+=(
+                --action acknowledge
+                --barrier-id "$BARRIER_ID"
+                --kind "$BARRIER_KIND"
+                --introduced-at "$INTRODUCED_AT"
+                --checkpoint-manifest-id "$CHECKPOINT_MANIFEST_ID"
+                --evidence-requirement "$EVIDENCE_REQUIREMENT"
+                --evidence "$EVIDENCE"
+              )
+              ;;
+          esac
+          python3 scripts/coordinated_release.py control "${arguments[@]}"

@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "producer": {
+    "repository": "vayada-marketplace/vayada",
+    "branch": "main",
+    "buildWorkflowName": "Build coordinated next release",
+    "buildWorkflowPath": ".github/workflows/build-coordinated-release.yml",
+    "publisherWorkflowName": "Publish coordinated next release",
+    "publisherWorkflowPath": ".github/workflows/publish-coordinated-release.yml",
+    "artifactNamePrefix": "next-release-published-v1-",
+    "minimumRetentionDays": 90
+  },
+  "deployment": {
+    "accountId": "269416271598",
+    "region": "eu-west-1",
+    "cluster": "vayada-backend-cluster",
+    "statePrefix": "/vayada/prod/coordinated-deployments/v1"
+  },
+  "services": {
+    "next-target-backend": {
+      "phase": "api",
+      "ecrRepository": "vayada-next-api",
+      "ecsService": "vayada-next-api-service",
+      "taskFamily": "vayada-next-api",
+      "containerName": "vayada-next-api",
+      "smoke": "api"
+    },
+    "next-pms-frontend": {
+      "phase": "frontend",
+      "ecrRepository": "vayada-next-pms-frontend",
+      "ecsService": "vayada-next-pms-frontend-service",
+      "taskFamily": "vayada-next-pms-frontend",
+      "containerName": "vayada-next-pms-frontend",
+      "smoke": "auth"
+    },
+    "next-booking-frontend": {
+      "phase": "frontend",
+      "ecrRepository": "vayada-next-booking-frontend",
+      "ecsService": "vayada-next-booking-frontend-service",
+      "taskFamily": "vayada-next-booking-frontend",
+      "containerName": "vayada-next-booking-frontend",
+      "smoke": "booking-public"
+    },
+    "next-booking-admin": {
+      "phase": "frontend",
+      "ecrRepository": "vayada-next-booking-admin-frontend",
+      "ecsService": "vayada-next-booking-admin-service",
+      "taskFamily": "vayada-next-booking-admin",
+      "containerName": "vayada-next-booking-admin",
+      "smoke": "auth"
+    },
+    "next-marketplace-frontend": {
+      "phase": "frontend",
+      "ecrRepository": "vayada-next-marketplace-frontend",
+      "ecsService": "vayada-next-marketplace-frontend-service",
+      "taskFamily": "vayada-next-marketplace-frontend",
+      "containerName": "vayada-next-marketplace-frontend",
+      "smoke": "auth"
+    },
+    "next-marketplace-admin": {
+      "phase": "frontend",
+      "ecrRepository": "vayada-next-admin-frontend",
+      "ecsService": "vayada-next-marketplace-admin-service",
+      "taskFamily": "vayada-next-marketplace-admin",
+      "containerName": "vayada-next-marketplace-admin",
+      "smoke": "auth"
+    }
+  }
+}

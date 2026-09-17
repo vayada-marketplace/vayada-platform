@@ -1,0 +1,195 @@
+name: Deploy coordinated next release
+
+on:
+  repository_dispatch:
+    types: [coordinated-release-published]
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Reconcile all services or resume one held physical service
+        required: true
+        type: choice
+        options: [ordinary, resume, activate]
+        default: ordinary
+      published_artifact_id:
+        description: Exact non-expired published artifact ID from vayada
+        required: true
+        type: string
+      manifest_sha256:
+        description: SHA-256 of the exact manifest.json bytes
+        required: true
+        type: string
+      published_record_sha256:
+        description: SHA-256 of the exact published-record.json bytes
+        required: true
+        type: string
+      service:
+        description: Physical service to resume (required only for resume; activate selects all)
+        required: false
+        type: choice
+        options:
+          - ""
+          - next-target-backend
+          - next-pms-frontend
+          - next-booking-frontend
+          - next-booking-admin
+          - next-marketplace-frontend
+          - next-marketplace-admin
+        default: ""
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+# This run-level lock remains owned while the API and all frontend matrix jobs
+# execute, so Terraform and every other production ECS writer stay excluded.
+concurrency:
+  group: production-ecs-mutations
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  RELEASE_BUNDLE_ARTIFACT: coordinated-release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  prepare:
+    name: Validate and plan full release
+    environment: next
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-coordinated-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
+
+      - name: Capture dispatch envelope
+        if: github.event_name == 'repository_dispatch'
+        env:
+          DISPATCH_JSON: ${{ toJSON(github.event.client_payload) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          with open("dispatch.json", "w", encoding="utf-8") as handle:
+              json.dump(json.loads(os.environ["DISPATCH_JSON"]), handle, separators=(",", ":"))
+          PY
+
+      - name: Validate publication, ancestry, state, barriers and live targets
+        env:
+          COORDINATED_RELEASE_READ_TOKEN: ${{ secrets.COORDINATED_RELEASE_READ_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ARTIFACT_ID: ${{ github.event.client_payload.publishedArtifactId }}
+          INPUT_ARTIFACT_ID: ${{ inputs.published_artifact_id }}
+          INPUT_MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+          INPUT_RECORD_SHA256: ${{ inputs.published_record_sha256 }}
+          INPUT_OPERATION: ${{ inputs.operation }}
+          INPUT_SERVICE: ${{ inputs.service }}
+        run: |
+          set -euo pipefail
+          artifact_id="${EVENT_ARTIFACT_ID:-${INPUT_ARTIFACT_ID:-}}"
+          [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
+          operation="${INPUT_OPERATION:-ordinary}"
+          arguments=(
+            --artifact-id "$artifact_id"
+            --operation "$operation"
+            --operation-id "release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            --output-dir release-bundle
+          )
+          if [ "$EVENT_NAME" = repository_dispatch ]; then
+            arguments+=(--dispatch-json dispatch.json)
+          else
+            arguments+=(
+              --manifest-sha256 "$INPUT_MANIFEST_SHA256"
+              --published-record-sha256 "$INPUT_RECORD_SHA256"
+            )
+          fi
+          if [ "$operation" = resume ]; then
+            test -n "$INPUT_SERVICE"
+            arguments+=(--service "$INPUT_SERVICE")
+          fi
+          python3 scripts/coordinated_release.py prepare "${arguments[@]}"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.RELEASE_BUNDLE_ARTIFACT }}
+          path: release-bundle/
+          if-no-files-found: error
+          retention-days: 1
+
+  api:
+    name: Reconcile API and verify readiness
+    needs: prepare
+    environment: next
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.RELEASE_BUNDLE_ARTIFACT }}
+          path: release-bundle
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-coordinated-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
+      - run: >-
+          python3 scripts/coordinated_release.py reconcile-service
+          --manifest release-bundle/manifest.json
+          --plan release-bundle/plan.json
+          --service next-target-backend
+
+  frontends:
+    name: Reconcile ${{ matrix.service }}
+    needs: [prepare, api]
+    if: needs.api.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - next-pms-frontend
+          - next-booking-frontend
+          - next-booking-admin
+          - next-marketplace-frontend
+          - next-marketplace-admin
+    environment: next
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.RELEASE_BUNDLE_ARTIFACT }}
+          path: release-bundle
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-coordinated-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
+      - run: >-
+          python3 scripts/coordinated_release.py reconcile-service
+          --manifest release-bundle/manifest.json
+          --plan release-bundle/plan.json
+          --service '${{ matrix.service }}'
+
+  finalize:
+    name: Report per-service durable result
+    needs: [prepare, api, frontends]
+    if: always() && needs.prepare.result == 'success'
+    environment: next
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.RELEASE_BUNDLE_ARTIFACT }}
+          path: release-bundle
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-coordinated-deploy
+          aws-region: ${{ env.AWS_REGION }}
+      - run: >-
+          python3 scripts/coordinated_release.py finalize
+          --manifest release-bundle/manifest.json
+          --plan release-bundle/plan.json
