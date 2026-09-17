@@ -137,7 +137,7 @@ variable "stripe_connect_webhook_secret" {
 }
 
 variable "target_database_url" {
-  description = "Production-owned target database URL used by next-api.vayada.com"
+  description = "Production-owned target database migration URL used only during next-api startup"
   type        = string
   sensitive   = true
   default     = ""
