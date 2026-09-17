@@ -235,7 +235,7 @@ case "${mode}" in
         def stable_inventory: del(.arn,.arn_without_revision,.id,.revision) | norm_inventory_modes;
         .resource_changes[]? |
         select(.type=="aws_ecs_task_definition" and .name=="finance_folio_recipient_inventory") |
-        {actions:.change.actions,after_unknown:.change.after_unknown,non_container_equal:((.change.before|stable_inventory|del(.container_definitions))==(.change.after|stable_inventory|del(.container_definitions))),before_containers:(.change.before.container_definitions|fromjson),after_containers:(.change.after.container_definitions|fromjson)}
+        {actions:.change.actions,after_unknown:.change.after_unknown,before_non_container:(.change.before|stable_inventory|del(.container_definitions)),after_non_container:(.change.after|stable_inventory|del(.container_definitions)),before_containers:(.change.before.container_definitions|fromjson),after_containers:(.change.after.container_definitions|fromjson)}
       ' <<<"${plan_json}" >&2
       fail "Steady Finance KMS key, alias, policy, task, environment, or inventory contract mismatch."
     fi
