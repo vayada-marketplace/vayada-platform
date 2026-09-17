@@ -603,6 +603,14 @@ class GuestFrontendSelection(unittest.TestCase):
             main([])
             self.assertEqual([call.args[0] for call in deploy.call_args_list], self.frontend["SPECS"])
 
+    def test_guest_only_removal_preserves_admin_preview(self):
+        main = self.frontend["main"]
+        deploy = MagicMock()
+        aws = MagicMock(return_value={"Account": self.frontend["ACCOUNT"]})
+        with patch.dict(main.__globals__, {"deploy": deploy, "aws": aws}):
+            main(["--remove-guest"])
+        deploy.assert_called_once_with(self.frontend["SPECS"][0], True, None)
+
     def test_invalid_selection_rejected_before_aws(self):
         main = self.frontend["main"]
         aws, deploy = MagicMock(), MagicMock()
@@ -611,7 +619,8 @@ class GuestFrontendSelection(unittest.TestCase):
                      ["--guest-image-sha", "next-latest"],
                      ["--guest-image-sha", "next-" + "a" * 40],
                      ["--guest-image-digest", "sha256:" + "b" * 64],
-                     ["--remove", "--guest-image-sha", "next-" + "a" * 40]):
+                     ["--remove", "--guest-image-sha", "next-" + "a" * 40],
+                     ["--remove-guest", "--guest-image-sha", "next-" + "a" * 40]):
             with self.subTest(argv=argv), patch.dict(main.__globals__, {"aws": aws, "deploy": deploy}):
                 with self.assertRaises(SystemExit):
                     main(argv)
@@ -635,6 +644,40 @@ class GuestFrontendSelection(unittest.TestCase):
         with patch.dict(deploy.__globals__, {"aws": aws}):
             with self.assertRaisesRegex(ValueError, "digest does not match"):
                 deploy(self.frontend["SPECS"][0], expected_digest="sha256:" + "b" * 64)
+
+    def test_guest_removal_rejects_rule_drift_before_mutation(self):
+        deploy = self.frontend["deploy"]
+        expected = [{"Field": "host-header", "HostHeaderConfig": {
+            "Values": ["codex-test-hotel-not-bookable.next-booking.vayada.com"]}}]
+        cases = (
+            ([{"RuleArn": "wrong", "Conditions": [{"Field": "host-header", "HostHeaderConfig": {
+                "Values": ["other.next-booking.vayada.com"]}}], "Actions": [{"TargetGroupArn": "guest"}]}],
+             "unexpected conditions"),
+            ([{"RuleArn": str(index), "Conditions": expected, "Actions": [{"TargetGroupArn": "guest"}]}
+              for index in range(2)], "multiple listener rules"),
+        )
+        for rules, error in cases:
+            def aws(service, op, **kwargs):
+                if op == "describe-services":
+                    if kwargs["services"] == ["vayada-next-maps-guest-service"]:
+                        return {"services": [{"status": "ACTIVE", "tags": [{"key": "Task", "value": "VAY-1480"}]}]}
+                    return {"services": [{"loadBalancers": [{"targetGroupArn": "baseline"}]}]}
+                if op == "describe-target-groups":
+                    return {"TargetGroups": [
+                        {"TargetGroupName": "vayada-next-maps-guest", "TargetGroupArn": "guest"},
+                        {"TargetGroupName": "baseline", "TargetGroupArn": "baseline"},
+                    ]}
+                if op == "describe-tags":
+                    return {"TagDescriptions": [{"Tags": [{"Key": "Task", "Value": "VAY-1480"}]}]}
+                if op == "describe-rules":
+                    return {"Rules": rules}
+                raise AssertionError("Unexpected mutation: " + op)
+            calls = MagicMock(side_effect=aws)
+            with self.subTest(error=error), patch.dict(deploy.__globals__, {"aws": calls}):
+                with self.assertRaisesRegex(ValueError, error):
+                    deploy(self.frontend["SPECS"][0], remove=True)
+            self.assertFalse(any(call.args[1] in {"delete-rule", "update-service", "delete-service"}
+                                 for call in calls.call_args_list))
 
 
 if __name__ == "__main__":
