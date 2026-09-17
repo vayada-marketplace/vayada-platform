@@ -31,11 +31,18 @@ def deploy(spec, remove=False, expected_digest=None):
         assert {'Key': 'Task', 'Value': 'VAY-1480'} in tags
     rules = aws('elbv2', 'describe-rules', ListenerArn=LISTENER)['Rules']
     prior_rules = [r for r in rules if group and owned(r, group['TargetGroupArn'])]
+    conditions = [{'Field': 'host-header', 'HostHeaderConfig': {'Values': [host]}}]
+    if kind == 'admin':
+        conditions.append({'Field': 'http-header', 'HttpHeaderConfig': {'HttpHeaderName': 'Cookie', 'Values': ['*vay1480_preview=1*']}})
     existing = aws('ecs', 'describe-services', cluster=CLUSTER, services=[service_name], include=['TAGS'])['services']
     existing = [s for s in existing if s['status'] != 'INACTIVE']
     if existing:
         assert {'key': 'Task', 'value': 'VAY-1480'} in existing[0].get('tags', [])
     if remove:
+        if len(prior_rules) > 1:
+            raise ValueError('Frontend target group has multiple listener rules')
+        if prior_rules and not api['matching_conditions'](prior_rules[0]['Conditions'], conditions):
+            raise ValueError('Existing frontend rule has unexpected conditions')
         for rule in prior_rules:
             aws('elbv2', 'delete-rule', RuleArn=rule['RuleArn'])
         if existing:
@@ -46,9 +53,6 @@ def deploy(spec, remove=False, expected_digest=None):
     baseline_group = next(g for g in groups if g['TargetGroupArn'] == current['loadBalancers'][0]['targetGroupArn'])
     baseline_rules = [r for r in rules if r not in prior_rules and owned(r, baseline_group['TargetGroupArn'])]
     before = min(int(r['Priority']) for r in baseline_rules if r['Priority'].isdigit())
-    conditions = [{'Field': 'host-header', 'HostHeaderConfig': {'Values': [host]}}]
-    if kind == 'admin':
-        conditions.append({'Field': 'http-header', 'HttpHeaderConfig': {'HttpHeaderName': 'Cookie', 'Values': ['*vay1480_preview=1*']}})
     if prior_rules:
         assert int(prior_rules[0]['Priority']) < before
         if not api['matching_conditions'](prior_rules[0]['Conditions'], conditions):
@@ -111,10 +115,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument('--remove', action='store_true')
+    selection.add_argument('--remove-guest', action='store_true')
     selection.add_argument('--guest-image-sha')
     parser.add_argument('--guest-image-digest')
     args = parser.parse_args(argv)
-    specs = SPECS
+    specs = SPECS[:1] if args.remove_guest else SPECS
     if args.guest_image_sha is not None:
         if not re.fullmatch(r'next-[0-9a-f]{40}', args.guest_image_sha):
             parser.error('Guest image must be an immutable next-<40-character SHA> tag')
@@ -126,7 +131,7 @@ def main(argv=None):
         parser.error('Guest digest requires --guest-image-sha')
     assert aws('sts', 'get-caller-identity')['Account'] == ACCOUNT
     for spec in specs:
-        deploy(spec, args.remove, args.guest_image_digest)
+        deploy(spec, args.remove or args.remove_guest, args.guest_image_digest)
 
 
 if __name__ == '__main__':

@@ -91,6 +91,27 @@ variable "resend_api_key" {
   default     = ""
 }
 
+variable "marketplace_communication_unsubscribe_current_key_version" {
+  description = "Current signing-key version for Marketplace communication unsubscribe tokens"
+  type        = string
+  default     = "key-2026-09"
+}
+
+variable "marketplace_communication_unsubscribe_keys" {
+  description = "Versioned base64url signing keys for Marketplace communication unsubscribe tokens"
+  type        = map(string)
+  sensitive   = true
+
+  validation {
+    condition = length(var.marketplace_communication_unsubscribe_keys) > 0 && alltrue([
+      for version, secret in var.marketplace_communication_unsubscribe_keys :
+      can(regex("^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", version)) &&
+      can(regex("^(([A-Za-z0-9_-]{4}){11,}|([A-Za-z0-9_-]{4}){11,}[A-Za-z0-9_-][AQgw]|([A-Za-z0-9_-]{4}){10,}[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])$", secret))
+    ])
+    error_message = "Unsubscribe signing keys must use non-empty version names and canonical base64url secrets of at least 32 bytes."
+  }
+}
+
 variable "resend_webhook_secret" {
   description = "Optional Resend delivery webhook signing secret for next-api; empty leaves receipts unconfigured"
   type        = string
