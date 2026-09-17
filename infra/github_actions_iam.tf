@@ -47,15 +47,63 @@ data "aws_iam_policy_document" "github_actions_platform_deploy" {
   statement {
     effect = "Allow"
     actions = [
+      "ecs:CreateCluster",
+      "ecs:DeleteCluster",
+      "ecs:PutClusterCapacityProviders",
+      "ecs:UpdateCluster",
+      "ecs:UpdateClusterSettings",
+    ]
+    resources = [
+      "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:cluster/vayada-target-database-runtime-preflight",
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
       "ecs:DescribeServices",
       "ecs:DescribeTaskDefinition",
       "ecs:RegisterTaskDefinition",
+      "ecs:ListTasks",
       "ecs:UpdateService",
       "ecs:DescribeTaskSets",
       "ecs:DescribeClusters",
+      "ecs:DescribeTasks",
       "ecs:TagResource",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    effect  = "Allow"
+    actions = ["ecs:RunTask"]
+    resources = [
+      "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/vayada-next-api-db-runtime-preflight:*",
+    ]
+
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values = [
+        "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:cluster/vayada-target-database-runtime-preflight",
+      ]
+    }
+  }
+
+  statement {
+    effect  = "Allow"
+    actions = ["ecs:DeregisterTaskDefinition"]
+    resources = [
+      "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/vayada-next-api-db-runtime-preflight:*",
+    ]
+  }
+
+  statement {
+    effect  = "Allow"
+    actions = ["ecs:StopTask"]
+    resources = [
+      "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task/vayada-target-database-runtime-preflight/*",
+    ]
   }
 
   statement {
@@ -176,6 +224,14 @@ data "aws_iam_policy_document" "github_actions_platform_deploy" {
       "logs:ListTagsForResource",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    effect  = "Allow"
+    actions = ["logs:GetLogEvents"]
+    resources = [
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/ecs/vayada-next-api:log-stream:*",
+    ]
   }
 
   statement {
