@@ -518,6 +518,22 @@ class PhysicalIdentityTests(unittest.TestCase):
         self.assertEqual(runner.registered["networkMode"], "awsvpc")
         self.assertTrue(runner.registered["containerDefinitions"][0]["image"].endswith("@sha256:" + "b" * 64))
 
+    def test_api_split_guard_uses_real_attestations(self):
+        attested = next(line.split()[1] for line in
+                        (ROOT / "scripts/next-api-split-compatible-images.txt").read_text().splitlines()
+                        if line.strip() and not line.startswith("#"))
+        aws = release.Aws(release.CommandRunner(), self.config)
+        for digest, allowed in ((attested, True), ("sha256:" + "a" * 64, False)):
+            with mock.patch.object(aws, "json", return_value={"imageDetails": [{"imageDigest": digest}]}):
+                if allowed:
+                    aws.verify_api_split_image("next-target-backend", digest)
+                else:
+                    with self.assertRaisesRegex(release.ReleaseError, "no reviewed immutable"):
+                        aws.verify_api_split_image("next-target-backend", digest)
+        with mock.patch.object(aws, "json") as ecr:
+            aws.verify_api_split_image("next-booking-admin", "not-an-api-digest")
+            ecr.assert_not_called()
+
 
 class ActivationTests(unittest.TestCase):
     def setUp(self):
@@ -550,17 +566,21 @@ class ActivationTests(unittest.TestCase):
 
     def test_bootstrap_rejects_unknown_mutable_manual_or_newer_source(self):
         self.snapshot["digest"] = None
-        with self.assertRaises(release.ReleaseError): self.bootstrap()
+        with self.assertRaises(release.ReleaseError):
+            self.bootstrap()
         self.snapshot["digest"] = "sha256:" + "a" * 64
         for event in ("workflow_dispatch", "pull_request"):
             self.run["event"] = event
-            with self.assertRaisesRegex(release.ReleaseError, "trusted automatic"): self.bootstrap()
+            with self.assertRaisesRegex(release.ReleaseError, "trusted automatic"):
+                self.bootstrap()
         self.run["event"] = "push"
         for order in ("behind", "diverged"):
             self.github.compare.return_value = order
-            with self.assertRaisesRegex(release.ReleaseError, "regress or diverge"): self.bootstrap()
+            with self.assertRaisesRegex(release.ReleaseError, "regress or diverge"):
+                self.bootstrap()
         self.aws.json.return_value["imageDetails"][0]["imageTags"] = ["next-latest"]
-        with self.assertRaisesRegex(release.ReleaseError, "unknown or ambiguous"): self.bootstrap()
+        with self.assertRaisesRegex(release.ReleaseError, "unknown or ambiguous"):
+            self.bootstrap()
 
     def test_frontend_resume_checks_exact_api_and_requests_fresh_smoke(self):
         api = {"action": "skip", "observedDigest": "old", "desiredDigest": "new"}
@@ -596,6 +616,39 @@ class ActivationTests(unittest.TestCase):
                     smoke.assert_called_once()
                     clear.assert_not_called()
                     self.aws.update_service.assert_not_called()
+
+    def test_api_guard_rejection_prevents_all_mutation_including_resume_and_recovery(self):
+        key = "next-target-backend"
+        fixture = ROOT / "deployment/contract/fixtures/manifest-v1.valid.json"
+        desired = self.manifest["services"][key]["digest"]
+        previous = "sha256:" + "9" * 64
+        plan = {"schemaVersion": 1, "manifestId": self.manifest["manifestId"],
+                "manifestSha256": release.sha256_file(fixture), "operation": "resume",
+                "resumeService": key, "operationId": "resume-42",
+                "services": {key: {"action": "deploy"}}}
+        for recovering, reject_desired in ((False, True), (False, False), (True, False)):
+            with self.subTest(recovering=recovering, reject_desired=reject_desired):
+                aws = mock.Mock()
+                aws.service_snapshot.return_value = {
+                    "digest": desired if recovering else previous,
+                    "taskDefinitionArn": "live-task", "image": "repository@" + previous}
+                pending = {"rollbackTaskDefinitionArn": "previous-task", "rollbackImage": "repository@" + previous} if recovering else None
+                aws.verify_api_split_image.side_effect = release.ReleaseError("unattested") if reject_desired else [None, release.ReleaseError("unattested rollback")]
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "plan.json"
+                    path.write_text(json.dumps(plan))
+                    args = argparse.Namespace(config=release.DEFAULT_CONFIG, manifest=fixture, plan=path, service=key)
+                    with mock.patch.object(release, "Aws", return_value=aws), \
+                         mock.patch.object(release, "recoverable_pending_operation", return_value=pending), \
+                         mock.patch.object(release, "clear_hold") as clear:
+                        with self.assertRaisesRegex(release.ReleaseError, "unattested"):
+                            release.reconcile_service(args)
+                        aws.verify_api_split_image.assert_has_calls(
+                            [mock.call(key, desired)] if reject_desired else [mock.call(key, desired), mock.call(key, previous)])
+                        aws.put_parameter.assert_not_called()
+                        aws.register_rendered_task.assert_not_called()
+                        aws.update_service.assert_not_called()
+                        clear.assert_not_called()
 
     def test_legacy_stale_events_remain_fenced_after_system_rollback(self):
         args = argparse.Namespace(config=release.DEFAULT_CONFIG, service=self.key, event_name="repository_dispatch")

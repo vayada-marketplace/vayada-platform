@@ -879,6 +879,19 @@ class Aws:
             fail(f"Registered task definition identity mismatch for {key}")
         return arn
 
+    def verify_api_split_image(self, key: str, digest: str) -> None:
+        if key != "next-target-backend":
+            return
+        repository = self.config["services"][key]["ecrRepository"]
+        require_digest(digest, "API split image")
+        details = self.json("ecr", "describe-images", "--repository-name", repository,
+                            "--image-ids", f"imageDigest={digest}")
+        with tempfile.TemporaryDirectory() as directory:
+            document = Path(directory) / "image.json"
+            document.write_text(json.dumps(details))
+            self.runner.run(sys.executable, str(ROOT / "scripts/assert-next-api-split-compatible-image.py"),
+                            key, repository, digest, str(document))
+
     def update_service(self, key: str, task_definition: str) -> None:
         physical = self.config["services"][key]
         cluster = self.config["deployment"]["cluster"]
@@ -1559,6 +1572,7 @@ def reconcile_service(args: argparse.Namespace) -> None:
     aws = Aws(runner, config)
     image = manifest["services"][key]
     aws.verify_image(key, image)
+    aws.verify_api_split_image(key, image["digest"])
     before = aws.service_snapshot(key)
     if action == "verify" and before["digest"] != image["digest"]:
         fail(f"{key} changed after preparation; verify-only cannot mutate it")
@@ -1573,6 +1587,9 @@ def reconcile_service(args: argparse.Namespace) -> None:
         rollback_task_definition = pending["rollbackTaskDefinitionArn"]
         rollback_image = pending["rollbackImage"]
         recovering_mutation = rollback_task_definition != before["taskDefinitionArn"]
+    if before["digest"] != image["digest"] or recovering_mutation:
+        # Check the retained pre-mutation image as well, including interrupted retries.
+        aws.verify_api_split_image(key, rollback_image.rsplit("@", 1)[-1])
     operation = {
         "schemaVersion": 1,
         "operationId": operation_id,

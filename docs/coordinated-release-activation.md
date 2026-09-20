@@ -221,14 +221,23 @@ The private plans remain outside Git. They are targeted recovery plans using
 placeholders for unrelated excluded secret variables, not full-stack drift
 plans. Never execute an untargeted apply from that scratch directory. Both saved plans are consumed and must not be reused. CI plan run `35496945536`, attempt 2, passes after bootstrap and reports
 "No changes. Your infrastructure matches the configuration." Receiver OIDC and
-cross-repository artifact access still require separate proof. Merging the
-approved IAM configuration retains it on main; monitor the triggered Terraform
-workflow and stop on unexpected changes. Coordinated activation remains gated.
+cross-repository artifact access still require separate proof. IAM PR #157 merged
+as `6774408471831dff7816f3c2b4a9fcff9c4b9b60`; post-merge Terraform Apply
+[35497724257](https://github.com/vayada-marketplace/vayada-platform/actions/runs/35497724257)
+passed with no configuration changes (0 added, 0 changed, 0 destroyed).
+Coordinated activation remains gated.
 
 Additional coordinated blocker reported by VAY-1543: normal API is still task
 `:1116`; [run 35496636149](https://github.com/vayada-marketplace/vayada-platform/actions/runs/35496636149)
 rejected digest `sha256:afd694c997eb910e7019a7e9f6cf521f030f49e167bab2b2b32fc50f541da242`
 because it has no reviewed immutable split-launcher attestation. Preserve that
 guard and the API hold; do not dispatch a duplicate or use coordinated resume
-to bypass this compatibility gate. The coordinated path must enforce the same
-compatibility check before activation is eligible.
+to bypass this compatibility gate. The coordinated reconciler now invokes the
+same immutable attestation guard for the desired API image and the rollback
+image before writing operation state or mutating ECS, including recovery from
+an interrupted operation. The selected desired digest must pass even during
+verify-only API checks for frontend resume. A tagged rollback image is rejected.
+This change must reach main before activation is eligible. API attestation
+[PR #158](https://github.com/vayada-marketplace/vayada-platform/pull/158) is
+review-only and has not been merged by this task. Local guard tests exercise the
+real attestation file; reconciliation tests mock AWS and are not deployed proof.
