@@ -40,6 +40,15 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn("aws ecs deregister-task-definition", RUNNER)
         self.assertIn("Runtime preflight task exceeded five minutes", RUNNER)
 
+    def test_identity_modes_use_only_owner_and_dedicated_identity_secrets(self) -> None:
+        self.assertIn('--provision-identity-role|--grant-identity-runtime)', RUNNER)
+        self.assertIn('code_file="provision-target-database-identity-runtime.mjs"', RUNNER)
+        self.assertIn('code_file="grant-target-database-identity-runtime.mjs"', RUNNER)
+        self.assertIn('extra_secret_name="IDENTITY_DATABASE_URL"', RUNNER)
+        self.assertIn('extra_secret_parameter="/vayada/prod/target-database-identity-runtime-url"', RUNNER)
+        self.assertIn('.secrets += [{name:$extra_secret_name,valueFrom:$extra_secret_parameter}]', RUNNER)
+        self.assertNotIn('secret_name="AUTH_DATABASE_URL"', RUNNER)
+
     def test_cleanup_is_scoped_to_dedicated_cluster_and_log_group(self) -> None:
         self.assertIn('cluster="vayada-target-database-runtime-preflight"', RUNNER)
         self.assertIn(

@@ -300,6 +300,20 @@ to `AUTH_DATABASE_URL` until the role,
 grants, restricted-role integration tests, and deployed-role canary pass; the
 current ECS mapping above remains unchanged by this grant contract.
 
+After the #2530 migration is confirmed on an exact deployed next-api image,
+use `python3 scripts/create-target-database-identity-secret.py --check` to
+verify access and absence of the dedicated SSM parameter. `--create` generates
+one random password in process memory and writes only a `SecureString` identity
+URL to `/vayada/prod/target-database-identity-runtime-url`; it never prints the
+URL or passes it as a command argument. Run
+`bash scripts/run-target-database-runtime-preflight.sh --provision-identity-role`
+once, then `--grant-identity-runtime`. Both use a bounded, no-task-role ECS task
+with only the migration-owner URL (plus the new identity URL for provisioning).
+The role-creation step refuses an existing role and does not rotate passwords.
+A failed step leaves the SSM parameter unmapped and requires inspection rather
+than a blind retry. Restricted-role canary and a separate reviewed Terraform
+mapping change are still required before live `AUTH_DATABASE_URL` cutover.
+
 The API records authentication and other product events in
 `platform.product_audit_events`. The migration owner must grant the runtime
 role only the missing privilege needed for this append-only sink. Runtime

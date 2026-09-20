@@ -9,6 +9,9 @@ region="eu-west-1"
 mode="${1:-preflight}"
 ca_bundle=""
 grant_scope=""
+ca_required=false
+extra_secret_name=""
+extra_secret_parameter=""
 case "${mode}" in
   preflight)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -18,6 +21,7 @@ case "${mode}" in
     family="vayada-next-api-db-runtime-preflight"
     ;;
   --grant-product-audit-insert|--grant-affiliate-read|--grant-domain-events-append)
+    ca_required=true
     if [[ "${mode}" == "--grant-affiliate-read" ]]; then
       grant_scope="affiliate_read"
     elif [[ "${mode}" == "--grant-domain-events-append" ]]; then
@@ -26,22 +30,38 @@ case "${mode}" in
       grant_scope="audit_insert"
     fi
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
-    for command_name in curl shasum; do
-      command -v "${command_name}" >/dev/null || { echo "Required command not found: ${command_name}" >&2; exit 1; }
-    done
-    ca_bundle="$(curl -fsSL --connect-timeout 5 --max-time 15 \
-      https://truststore.pki.rds.amazonaws.com/eu-west-1/eu-west-1-bundle.pem)"
-    ca_hash="$(printf '%s' "${ca_bundle}" | shasum -a 256 | cut -d ' ' -f 1)"
-    [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
-      echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
-    }
     code_file="grant-target-database-product-audit-insert.mjs"
     secret_name="TARGET_DATABASE_MIGRATION_URL"
     secret_parameter="/vayada/prod/target-database-url"
     family="vayada-next-api-db-runtime-preflight"
     ;;
+  --provision-identity-role|--grant-identity-runtime)
+    [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
+    ca_required=true
+    secret_name="TARGET_DATABASE_MIGRATION_URL"
+    secret_parameter="/vayada/prod/target-database-url"
+    family="vayada-next-api-db-runtime-preflight"
+    if [[ "${mode}" == "--provision-identity-role" ]]; then
+      code_file="provision-target-database-identity-runtime.mjs"
+      extra_secret_name="IDENTITY_DATABASE_URL"
+      extra_secret_parameter="/vayada/prod/target-database-identity-runtime-url"
+    else
+      code_file="grant-target-database-identity-runtime.mjs"
+    fi
+    ;;
   *) echo "Unknown mode: ${mode}" >&2; exit 2 ;;
 esac
+if [[ "${ca_required}" == true ]]; then
+  for command_name in curl shasum; do
+    command -v "${command_name}" >/dev/null || { echo "Required command not found: ${command_name}" >&2; exit 1; }
+  done
+  ca_bundle="$(curl -fsSL --connect-timeout 5 --max-time 15 \
+    https://truststore.pki.rds.amazonaws.com/eu-west-1/eu-west-1-bundle.pem)"
+  ca_hash="$(printf '%s' "${ca_bundle}" | shasum -a 256 | cut -d ' ' -f 1)"
+  [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
+    echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
+  }
+fi
 cluster="vayada-target-database-runtime-preflight"
 service_cluster="vayada-backend-cluster"
 service="vayada-next-api-service"
@@ -62,12 +82,14 @@ current_task="$(aws ecs describe-services --cluster "${service_cluster}" --servi
 source_definition="$(aws ecs describe-task-definition --task-definition "${current_task}" --region "${region}" \
   --query taskDefinition --output json)"
 temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" \
-  --arg secret_name "${secret_name}" --arg secret_parameter "${secret_parameter}" '
+  --arg secret_name "${secret_name}" --arg secret_parameter "${secret_parameter}" \
+  --arg extra_secret_name "${extra_secret_name}" --arg extra_secret_parameter "${extra_secret_parameter}" '
   del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
   | del(.taskRoleArn)
   | .family=$family
   | .containerDefinitions=[.containerDefinitions[]|select(.name==$container)
       | .secrets=[{name:$secret_name,valueFrom:$secret_parameter}]
+      | if $extra_secret_name == "" then . else .secrets += [{name:$extra_secret_name,valueFrom:$extra_secret_parameter}] end
       | .environment=[]
       | .portMappings=[]]
 ' <<<"${source_definition}")"
