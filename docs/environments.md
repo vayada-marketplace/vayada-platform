@@ -284,6 +284,23 @@ principal and receipt-table privileges can be proved before this mapping is
 applied. It must identify the exact restricted `vayada_next_api_runtime` role,
 not merely contain a URL string different from the migration credential.
 
+The API records authentication and other product events in
+`platform.product_audit_events`. The migration owner must grant the runtime
+role only the missing privilege needed for this append-only sink. Runtime
+`SELECT` on application tables is already required by the preflight:
+
+```sql
+GRANT INSERT ON platform.product_audit_events TO vayada_next_api_runtime;
+```
+
+Use `scripts/run-target-database-runtime-preflight.sh --grant-product-audit-insert`
+to apply this one grant from a temporary task inside the database network.
+The task receives only the migration-owner URL and no application secrets;
+it checks table ownership and refuses to run if the runtime role has audit
+`UPDATE` or `DELETE`. Then run `scripts/run-target-database-runtime-preflight.sh`
+before relying on runtime login. Its allowlist requires audit
+`INSERT` while continuing to reject audit `UPDATE` and `DELETE`.
+
 Roll out in two phases. First deploy application release
 `8c2cdef397522740c9fe7803efc2ed36d637bac5` (or retain an already-split task),
 then provision and prove the runtime role/SSM parameter before applying this

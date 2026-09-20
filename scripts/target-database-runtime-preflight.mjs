@@ -7,6 +7,7 @@ const requiredRelationPrivileges = {
   "finance.payments": ["SELECT", "INSERT", "UPDATE"],
   "platform.external_webhook_events": ["SELECT", "INSERT", "UPDATE"],
   "platform.idempotency_keys": ["SELECT", "INSERT", "UPDATE", "DELETE"],
+  "platform.product_audit_events": ["SELECT", "INSERT"],
   "pms.channel_connections": ["SELECT", "INSERT", "UPDATE"],
 };
 const protectedRelations = [

@@ -27,6 +27,7 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertIn("SELECT owner_user_ids", CHECK)
 
     def test_each_required_application_privilege_is_checked(self) -> None:
+        self.assertIn('"platform.product_audit_events": ["SELECT", "INSERT"]', CHECK)
         for code in (
             "runtime_schema_usage_missing",
             "runtime_relation_read_missing",

@@ -6,13 +6,30 @@ for command_name in aws base64 gzip jq; do
 done
 
 region="eu-west-1"
+mode="${1:-preflight}"
+case "${mode}" in
+  preflight)
+    [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
+    code_file="target-database-runtime-preflight.mjs"
+    secret_name="TARGET_DATABASE_URL"
+    secret_parameter="/vayada/prod/target-database-runtime-url"
+    family="vayada-next-api-db-runtime-preflight"
+    ;;
+  --grant-product-audit-insert)
+    [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
+    code_file="grant-target-database-product-audit-insert.mjs"
+    secret_name="TARGET_DATABASE_MIGRATION_URL"
+    secret_parameter="/vayada/prod/target-database-url"
+    family="vayada-next-api-db-runtime-preflight"
+    ;;
+  *) echo "Unknown mode: ${mode}" >&2; exit 2 ;;
+esac
 cluster="vayada-target-database-runtime-preflight"
 service_cluster="vayada-backend-cluster"
 service="vayada-next-api-service"
 container="vayada-next-api"
-family="vayada-next-api-db-runtime-preflight"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-payload="$(gzip -9 -c "${script_dir}/target-database-runtime-preflight.mjs" | base64 | tr -d '\n')"
+payload="$(gzip -9 -c "${script_dir}/${code_file}" | base64 | tr -d '\n')"
 bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';fs.writeFileSync(p,z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));import(p).catch(()=>{console.error(JSON.stringify({status:'FAIL',code:'runtime_preflight_bootstrap_failed'}));process.exit(1)})"
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],environment:[{name:"VAYADA_DB_RUNTIME_PREFLIGHT_CODE",value:$code}]}]}')"
@@ -22,12 +39,13 @@ current_task="$(aws ecs describe-services --cluster "${service_cluster}" --servi
   --query 'services[0].taskDefinition' --output text)"
 source_definition="$(aws ecs describe-task-definition --task-definition "${current_task}" --region "${region}" \
   --query taskDefinition --output json)"
-temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" '
+temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" \
+  --arg secret_name "${secret_name}" --arg secret_parameter "${secret_parameter}" '
   del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
   | del(.taskRoleArn)
   | .family=$family
   | .containerDefinitions=[.containerDefinitions[]|select(.name==$container)
-      | .secrets=[{name:"TARGET_DATABASE_URL",valueFrom:"/vayada/prod/target-database-runtime-url"}]
+      | .secrets=[{name:$secret_name,valueFrom:$secret_parameter}]
       | .environment=[]
       | .portMappings=[]]
 ' <<<"${source_definition}")"

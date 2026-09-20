@@ -10,13 +10,18 @@ IAM = (ROOT / "infra/target_database_preflight_iam.tf").read_text()
 
 class RuntimePreflightRunnerTest(unittest.TestCase):
     def test_temporary_task_receives_only_the_runtime_database_secret(self) -> None:
-        self.assertIn(
-            '.secrets=[{name:"TARGET_DATABASE_URL",valueFrom:"/vayada/prod/target-database-runtime-url"}]',
-            RUNNER,
-        )
+        self.assertIn('secret_name="TARGET_DATABASE_URL"', RUNNER)
+        self.assertIn('secret_parameter="/vayada/prod/target-database-runtime-url"', RUNNER)
+        self.assertIn('.secrets=[{name:$secret_name,valueFrom:$secret_parameter}]', RUNNER)
         for secret in ("CHANNEX_API_KEY", "STRIPE_SECRET_KEY", "WORKOS_API_KEY"):
             self.assertNotIn(secret, RUNNER)
         self.assertIn("del(.taskRoleArn)", RUNNER)
+
+    def test_audit_grant_uses_only_the_owner_secret_in_explicit_mode(self) -> None:
+        self.assertIn('--grant-product-audit-insert)', RUNNER)
+        self.assertIn('secret_name="TARGET_DATABASE_MIGRATION_URL"', RUNNER)
+        self.assertIn('secret_parameter="/vayada/prod/target-database-url"', RUNNER)
+        self.assertIn('code_file="grant-target-database-product-audit-insert.mjs"', RUNNER)
 
     def test_task_is_bounded_and_cleaned_up(self) -> None:
         self.assertIn("trap cleanup EXIT", RUNNER)

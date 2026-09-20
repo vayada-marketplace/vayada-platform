@@ -66,6 +66,7 @@ CREATE TABLE booking.guest_bookings (id uuid PRIMARY KEY);
 CREATE TABLE finance.payments (id uuid PRIMARY KEY);
 CREATE TABLE platform.external_webhook_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.idempotency_keys (id uuid PRIMARY KEY);
+CREATE TABLE platform.product_audit_events (id uuid PRIMARY KEY);
 CREATE TABLE pms.channel_connections (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_records (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_revocations (id uuid PRIMARY KEY);
@@ -89,6 +90,8 @@ GRANT SELECT, INSERT, UPDATE ON finance.payments,
   TO vayada_next_api_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON platform.idempotency_keys
   TO vayada_next_api_runtime;
+GRANT SELECT ON platform.product_audit_events
+  TO vayada_next_api_runtime;
 GRANT SELECT ON platform.legacy_owner_approval_records,
   platform.legacy_owner_approval_revocations TO vayada_next_api_runtime;
 GRANT EXECUTE ON FUNCTION app.hotel_count() TO vayada_next_api_runtime;
@@ -101,6 +104,19 @@ docker run --rm \
   --workdir /work node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/target-database-runtime-preflight.mjs" "${work}/preflight.mjs"
+cp "${root}/scripts/grant-target-database-product-audit-insert.mjs" "${work}/grant.mjs"
+
+run_grant() {
+  local database_role="$1"
+  local database_password="$2"
+  docker run --rm \
+    --network "${network}" \
+    --volume "${node_modules_container}:/work" \
+    --volume "${work}/grant.mjs:/work/grant.mjs:ro" \
+    --workdir /work \
+    --env "TARGET_DATABASE_MIGRATION_URL=postgresql://${database_role}:${database_password}@${database_container}:5432/postgres" \
+    node:22-bookworm node grant.mjs
+}
 
 run_preflight() {
   docker run --rm \
@@ -122,10 +138,39 @@ expect_failure() {
   grep -F "${expected}" <<<"${output}" >/dev/null
 }
 
+if non_owner_output="$(run_grant vayada_next_api_runtime runtime 2>&1)"; then
+  echo "non-owner audit grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"audit_table_owner_required"' <<<"${non_owner_output}" >/dev/null
+run_grant legacy_owner owner | grep -F '"status":"PASS"' >/dev/null
 run_preflight | grep -F '"status":"PASS"' >/dev/null
 
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO platform.product_audit_events(id) VALUES ('00000000-0000-0000-0000-000000000001')" \
+  >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE INSERT ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+expect_failure runtime_relation_access_missing
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT INSERT ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_unapproved_relation_write_forbidden
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT DELETE ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_unapproved_relation_write_forbidden
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE DELETE ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+
 if docker exec -e PGPASSWORD=runtime "${database_container}" \
-  psql -U vayada_next_api_runtime -v ON_ERROR_STOP=1 \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
   -c "INSERT INTO platform.legacy_owner_bootstrap_receipts(owner_user_ids) VALUES ('{}')" \
   >/dev/null 2>&1; then
   echo "runtime role unexpectedly wrote a receipt" >&2
@@ -138,7 +183,7 @@ expect_failure receipt_columns_writable
 docker exec "${database_container}" psql -U postgres -c \
   "REVOKE INSERT (owner_user_ids) ON platform.legacy_owner_bootstrap_receipts FROM vayada_next_api_runtime" >/dev/null
 if docker exec -e PGPASSWORD=runtime "${database_container}" \
-  psql -U vayada_next_api_runtime -v ON_ERROR_STOP=1 \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
   -c "SELECT authority_payload FROM platform.legacy_owner_bootstrap_receipts" \
   >/dev/null 2>&1; then
   echo "runtime role unexpectedly read receipt authority data" >&2
