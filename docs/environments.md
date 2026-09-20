@@ -303,6 +303,14 @@ and refuses to run if the runtime role has audit
 before relying on runtime login. Its allowlist requires audit
 `INSERT` while continuing to reject audit `UPDATE` and `DELETE`.
 
+After the affiliate migrations create `marketplace.affiliate_links` and
+`marketplace.affiliate_agreement_lifecycle_events`, run
+`scripts/run-target-database-runtime-preflight.sh --grant-affiliate-read`.
+It grants the runtime role `SELECT` on exactly those two tables using the same
+owner-only, verified-RDS-certificate task. It refuses pre-existing write
+privileges; affiliate write permissions require a separate review. Then rerun
+the runtime preflight before platform apply.
+
 Roll out in two phases. First deploy application release
 `8c2cdef397522740c9fe7803efc2ed36d637bac5` (or retain an already-split task),
 then provision and prove the runtime role/SSM parameter before applying this
