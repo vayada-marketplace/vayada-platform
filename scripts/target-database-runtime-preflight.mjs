@@ -10,6 +10,8 @@ const requiredRelationPrivileges = {
   "platform.product_audit_events": ["SELECT", "INSERT"],
   "pms.channel_connections": ["SELECT", "INSERT", "UPDATE"],
 };
+// Permit the reviewed append-only grant before the later release requires it.
+const stagedRelationPrivileges = { "platform.domain_events": ["INSERT"] };
 const protectedRelations = [
   "platform.channex_adoption_approval_records",
   "platform.channex_adoption_approval_revocations",
@@ -262,7 +264,7 @@ try {
            WHERE allowed.relation = format('%I.%I', namespace.nspname, relation.relname)
              AND allowed.name = privilege.name
         )`,
-    [JSON.stringify(requiredRelationPrivileges), receipt],
+    [JSON.stringify({ ...requiredRelationPrivileges, ...stagedRelationPrivileges }), receipt],
     "runtime_unapproved_relation_write_forbidden",
   );
   await requireNoMissing(
@@ -289,7 +291,7 @@ try {
            WHERE allowed.relation = format('%I.%I', namespace.nspname, relation.relname)
              AND allowed.name = privilege.name
         )`,
-    [JSON.stringify(requiredRelationPrivileges), receipt],
+    [JSON.stringify({ ...requiredRelationPrivileges, ...stagedRelationPrivileges }), receipt],
     "runtime_unapproved_relation_column_write_forbidden",
   );
   await requireNoMissing(

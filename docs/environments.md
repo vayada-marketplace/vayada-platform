@@ -311,6 +311,17 @@ owner-only, verified-RDS-certificate task. It refuses pre-existing write
 privileges; affiliate write permissions require a separate review. Then rerun
 the runtime preflight before platform apply.
 
+Before routing booking-web attribution through `TARGET_DATABASE_URL` for the
+VAY-2038 identity credential split, run
+`scripts/run-target-database-runtime-preflight.sh --grant-domain-events-append`.
+The owner-checked grant allows only `SELECT` and `INSERT` on
+`platform.domain_events`; it refuses existing `UPDATE`, `DELETE`, or other
+destructive privileges. Verify the grant as the general runtime role and
+exercise the real booking-web event insertion before the later
+preflight-tightening PR. This release permits but does not yet require event
+`INSERT`, so platform apply remains safe before the grant. Do not change
+`AUTH_DATABASE_URL` or enable the separate identity role as part of this grant.
+
 Roll out in two phases. First deploy application release
 `8c2cdef397522740c9fe7803efc2ed36d637bac5` (or retain an already-split task),
 then provision and prove the runtime role/SSM parameter before applying this

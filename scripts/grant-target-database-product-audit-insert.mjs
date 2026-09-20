@@ -29,6 +29,47 @@ const affiliateReadTables = [
   "marketplace.affiliate_agreement_lifecycle_events",
 ];
 
+async function grantDomainEventAppend(client, supportsMaintain) {
+  const table = "platform.domain_events";
+  const ownership = await client.query(`
+    SELECT current_user = pg_catalog.pg_get_userbyid(relation.relowner) AS is_table_owner
+      FROM pg_catalog.pg_class AS relation
+     WHERE relation.oid = pg_catalog.to_regclass($1)
+       AND relation.relkind IN ('r', 'p')
+  `, [table]);
+  if (ownership.rowCount !== 1 || !ownership.rows[0].is_table_owner)
+    throw new Error("domain_events_table_owner_required");
+  const prohibited = [
+    "UPDATE", "DELETE", "TRUNCATE", "TRIGGER", "REFERENCES",
+    ...(supportsMaintain ? ["MAINTAIN"] : []),
+  ];
+  const violations = await client.query(`
+    SELECT privilege.name
+      FROM unnest($2::text[]) AS privilege(name)
+     WHERE pg_catalog.has_table_privilege('vayada_next_api_runtime', $1, privilege.name)
+    UNION ALL
+    SELECT attribute.attname || ':' || privilege.name
+      FROM pg_catalog.pg_attribute AS attribute
+      CROSS JOIN (VALUES ('UPDATE'), ('REFERENCES')) AS privilege(name)
+     WHERE attribute.attrelid = pg_catalog.to_regclass($1)
+       AND attribute.attnum > 0 AND NOT attribute.attisdropped
+       AND pg_catalog.has_column_privilege(
+         'vayada_next_api_runtime', attribute.attrelid, attribute.attname, privilege.name
+       )
+  `, [table, prohibited]);
+  if (violations.rowCount !== 0) throw new Error("domain_events_runtime_write_scope_too_broad");
+  await client.query("BEGIN");
+  await client.query("GRANT SELECT, INSERT ON platform.domain_events TO vayada_next_api_runtime");
+  const granted = await client.query(`
+    SELECT pg_catalog.has_table_privilege('vayada_next_api_runtime', $1, 'SELECT') AS can_select,
+           pg_catalog.has_table_privilege('vayada_next_api_runtime', $1, 'INSERT') AS can_insert
+  `, [table]);
+  if (!granted.rows[0].can_select || !granted.rows[0].can_insert)
+    throw new Error("domain_events_runtime_grant_missing");
+  await client.query("COMMIT");
+  console.log(JSON.stringify({ status: "PASS", grant: "platform.domain_events:SELECT,INSERT" }));
+}
+
 async function grantAffiliateRead(client, supportsMaintain) {
   for (const table of affiliateReadTables) {
     const ownership = await client.query(`
@@ -107,7 +148,7 @@ try {
   );
   const supportsMaintain = version.rows[0].value >= 170000;
   const scope = process.env.VAYADA_DB_GRANT_SCOPE ?? "audit_insert";
-  if (!["audit_insert", "affiliate_read"].includes(scope))
+  if (!["audit_insert", "affiliate_read", "domain_events_append"].includes(scope))
     throw new Error("unknown_grant_scope");
   const role = await client.query(
     "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vayada_next_api_runtime'",
@@ -115,6 +156,8 @@ try {
   if (role.rowCount !== 1) throw new Error("runtime_role_missing");
   if (scope === "affiliate_read") {
     await grantAffiliateRead(client, supportsMaintain);
+  } else if (scope === "domain_events_append") {
+    await grantDomainEventAppend(client, supportsMaintain);
   } else {
     const check = await client.query(`
       SELECT current_user = pg_catalog.pg_get_userbyid(table_info.relowner) AS is_table_owner
@@ -150,6 +193,9 @@ try {
     "affiliate_table_owner_required",
     "affiliate_runtime_write_scope_too_broad",
     "affiliate_runtime_select_missing",
+    "domain_events_table_owner_required",
+    "domain_events_runtime_write_scope_too_broad",
+    "domain_events_runtime_grant_missing",
     "unknown_grant_scope",
   ]);
   const code = expected.has(error.message) ? error.message : error.code ?? "runtime_grant_failed";

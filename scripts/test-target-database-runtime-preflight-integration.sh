@@ -67,6 +67,7 @@ CREATE TABLE app.hotel (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name
 CREATE TABLE booking.guest_bookings (id uuid PRIMARY KEY);
 CREATE TABLE finance.payments (id uuid PRIMARY KEY);
 CREATE TABLE platform.external_webhook_events (id uuid PRIMARY KEY);
+CREATE TABLE platform.domain_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.idempotency_keys (id uuid PRIMARY KEY);
 CREATE TABLE platform.product_audit_events (id uuid PRIMARY KEY);
 CREATE TABLE pms.channel_connections (id uuid PRIMARY KEY);
@@ -225,6 +226,33 @@ if docker exec -e PGPASSWORD=runtime "${database_container}" \
   exit 1
 fi
 
+if domain_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 domain_events_append 2>&1)"; then
+  echo "non-owner domain event grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"domain_events_table_owner_required"' <<<"${domain_non_owner_output}" >/dev/null
+run_grant legacy_owner owner 1 domain_events_append | grep -F '"grant":"platform.domain_events:SELECT,INSERT"' >/dev/null
+
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO platform.domain_events(id) VALUES ('00000000-0000-0000-0000-000000000002')" >/dev/null
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "UPDATE platform.domain_events SET id=id WHERE false" >/dev/null 2>&1; then
+  echo "runtime role unexpectedly updated domain events" >&2
+  exit 1
+fi
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (id) ON platform.domain_events TO vayada_next_api_runtime" >/dev/null
+if domain_broad_output="$(run_grant legacy_owner owner 1 domain_events_append 2>&1)"; then
+  echo "domain event grant unexpectedly passed with column write privilege" >&2
+  exit 1
+fi
+grep -F '"code":"domain_events_runtime_write_scope_too_broad"' <<<"${domain_broad_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (id) ON platform.domain_events FROM vayada_next_api_runtime" >/dev/null
+
 expect_grant_scope_failure() {
   local output
   if output="$(run_grant legacy_owner owner 2>&1)"; then
@@ -255,6 +283,18 @@ if [[ "${postgres_version}" == "17" ]]; then
 fi
 
 run_preflight | grep -F '"status":"PASS"' >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE INSERT ON platform.domain_events FROM vayada_next_api_runtime" >/dev/null
+run_preflight | grep -F '"status":"PASS"' >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT INSERT ON platform.domain_events TO vayada_next_api_runtime" >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT DELETE ON platform.domain_events TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_unapproved_relation_write_forbidden
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE DELETE ON platform.domain_events FROM vayada_next_api_runtime" >/dev/null
 
 docker exec -e PGPASSWORD=runtime "${database_container}" \
   psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \

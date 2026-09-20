@@ -19,9 +19,10 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn("del(.taskRoleArn)", RUNNER)
 
     def test_audit_grant_uses_only_the_owner_secret_in_explicit_mode(self) -> None:
-        self.assertIn('--grant-product-audit-insert|--grant-affiliate-read)', RUNNER)
+        self.assertIn('--grant-product-audit-insert|--grant-affiliate-read|--grant-domain-events-append)', RUNNER)
         self.assertIn('grant_scope="audit_insert"', RUNNER)
         self.assertIn('grant_scope="affiliate_read"', RUNNER)
+        self.assertIn('grant_scope="domain_events_append"', RUNNER)
         self.assertIn('secret_name="TARGET_DATABASE_MIGRATION_URL"', RUNNER)
         self.assertIn('secret_parameter="/vayada/prod/target-database-url"', RUNNER)
         self.assertIn('code_file="grant-target-database-product-audit-insert.mjs"', RUNNER)
