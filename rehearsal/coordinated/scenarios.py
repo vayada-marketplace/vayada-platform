@@ -63,6 +63,11 @@ def inventory():
         fixture.require(service["runningCount"] == service["desiredCount"] == 1 and service["pendingCount"] == 0, "Fixture not steady")
         fixture.require(len(service["deployments"]) == 1 and service["deployments"][0]["rolloutState"] == "COMPLETED", "Fixture rollout incomplete")
         task = fixture.aws("ecs", "describe-task-definition", "--task-definition", service["taskDefinition"])["taskDefinition"]
+        # AWS CLI renders these instants in the caller's timezone. Bind the same
+        # instant on developer machines and hosted runners without dropping it.
+        for field in ("registeredAt", "deregisteredAt"):
+            if field in task:
+                task[field] = release.parse_time(task[field], f"fixture.{field}").isoformat()
         fixture.require(task["family"] == f"vayada-recovery-{key}" and task.get("executionRoleArn") == fixture.EXECUTION, "Wrong task family/execution role")
         fixture.require(not task.get("taskRoleArn") and not task.get("volumes"), "Unexpected fixture authority/storage")
         containers = task["containerDefinitions"]
@@ -244,10 +249,11 @@ def reconcile(aws, variant, key, operation, *, resume=False):
 
 def bootstrap(aws, expected):
     before = inventory()
+    with (aws.output / "before.json").open("x") as evidence:
+        evidence.write(json.dumps(before, indent=2))
     fixture.require(digest(before) == expected, "Fixture baseline changed since approval")
     path = release.state_path(aws.config, "suite")
     fixture.require(aws.get_parameter(path) is None, "This run already started; recovery requires its retained evidence")
-    (aws.output / "before.json").write_text(json.dumps(before, indent=2))
     aws.put_parameter(path, {"scope": "isolated-recovery-scenarios-v1", "status": "running", "publicationSha256": digest(aws.published)})
     for key in SERVICES:
         image = manifest(aws.published, "baseline")["services"][key]

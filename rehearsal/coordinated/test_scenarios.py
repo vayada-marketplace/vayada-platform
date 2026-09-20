@@ -96,6 +96,46 @@ class ScenarioTests(unittest.TestCase):
         return ["scenarios.py", "--phase", phase, "--publication", str(self.path),
                 "--expected-baseline-sha256", "b" * 64, "--output-dir", str(self.directory)]
 
+    def test_inventory_binds_instants_independent_of_cli_timezone_and_retains_drift(self):
+        timestamp = "2026-09-20T19:29:23.256000+08:00"
+        image = "fixture-image"
+        prefix = f"arn:aws:ecs:{scenarios.fixture.REGION}:{scenarios.fixture.ACCOUNT}"
+        services = [{
+            "serviceName": f"vayada-recovery-{key}",
+            "serviceArn": f"{prefix}:service/{scenarios.fixture.CLUSTER}/vayada-recovery-{key}",
+            "taskDefinition": f"{prefix}:task-definition/vayada-recovery-{key}:1",
+            "networkConfiguration": {"awsvpcConfiguration": {
+                "subnets": [scenarios.fixture.SUBNET], "securityGroups": [scenarios.fixture.GROUP], "assignPublicIp": "ENABLED"}},
+            "runningCount": 1, "desiredCount": 1, "pendingCount": 0,
+            "deployments": [{"rolloutState": "COMPLETED"}],
+        } for key in scenarios.SERVICES]
+
+        def read(service, operation, *args):
+            if service == "sts":
+                return {"Account": scenarios.fixture.ACCOUNT}
+            if operation == "describe-services":
+                return {"services": copy.deepcopy(services)}
+            self.assertEqual(operation, "describe-task-definition")
+            family = args[1].split("/")[-1].split(":")[0]
+            return {"taskDefinition": {
+                "family": family, "registeredAt": timestamp,
+                "executionRoleArn": scenarios.fixture.EXECUTION,
+                "containerDefinitions": [{"name": family, "image": image}],
+            }}
+
+        self.cloud.side_effect = read
+        expected = scenarios.digest(scenarios.inventory())
+        for timestamp in ("2026-09-20T11:29:23.256+00:00", "2026-09-20T11:29:23.256Z"):
+            self.assertEqual(scenarios.digest(scenarios.inventory()), expected)
+        timestamp = "2026-09-20T11:29:24.256Z"
+        self.assertNotEqual(scenarios.digest(scenarios.inventory()), expected)
+        timestamp = "2026-09-20T11:29:23.256Z"
+        image = "changed-image"
+        self.assertNotEqual(scenarios.digest(scenarios.inventory()), expected)
+        timestamp = "2026-09-20T11:29:23"
+        with self.assertRaisesRegex(release.ReleaseError, "timezone"):
+            scenarios.inventory()
+
     def test_publication_is_bound_to_main_manual_run_and_exact_variant_images(self):
         self.assertEqual(scenarios.publication(self.path), self.published)
         mutations = [
@@ -137,9 +177,16 @@ class ScenarioTests(unittest.TestCase):
 
     def test_changed_baseline_stops_before_state_write_or_update(self):
         aws = mock.Mock()
+        aws.output = self.directory
         with mock.patch.object(scenarios, "inventory", return_value={"changed": True}):
             with self.assertRaisesRegex(ValueError, "baseline changed"):
                 scenarios.bootstrap(aws, "0" * 64)
+        self.assertEqual(aws.mock_calls, [])
+        self.assertEqual(json.loads((self.directory / "before.json").read_text()), {"changed": True})
+        with mock.patch.object(scenarios, "inventory", return_value={"changed": "again"}):
+            with self.assertRaises(FileExistsError):
+                scenarios.bootstrap(aws, "0" * 64)
+        self.assertEqual(json.loads((self.directory / "before.json").read_text()), {"changed": True})
         self.assertEqual(aws.mock_calls, [])
         self.cloud.assert_not_called()
 
