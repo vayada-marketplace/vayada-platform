@@ -1,0 +1,68 @@
+[
+  {
+    "service": "next-target-backend",
+    "images": [
+      {
+        "digest": "sha256:3da7374232c46f29ee34ac1a8036f7b7abb1c0d4b6d10a1405552f12484b11a5",
+        "tags": [
+          "next-cb9a05c89e458ced6c7fd81bb9b98f2efae32a44"
+        ]
+      }
+    ]
+  },
+  {
+    "service": "next-pms-frontend",
+    "images": [
+      {
+        "digest": "sha256:3d8a0316d344d9f0c579b19c486c625c98762153ee4862f67dcc612a63442dc0",
+        "tags": [
+          "next-99142518ab0ffafef4b76987bb3c7aadf6eea081"
+        ]
+      }
+    ]
+  },
+  {
+    "service": "next-booking-frontend",
+    "images": [
+      {
+        "digest": "sha256:79cc23d4687ae834a73c483f5ed1061a08e0547bdf454e5533906c17785e371a",
+        "tags": [
+          "next-99142518ab0ffafef4b76987bb3c7aadf6eea081"
+        ]
+      }
+    ]
+  },
+  {
+    "service": "next-booking-admin",
+    "images": [
+      {
+        "digest": "sha256:9fc7dcfe58d670f7d98095110e700ca79decd7e7cd56d7a9704cfd8dafeff365",
+        "tags": [
+          "next-05caa7ade23c554856a8b44a6d48c6cd5d89a621"
+        ]
+      }
+    ]
+  },
+  {
+    "service": "next-marketplace-frontend",
+    "images": [
+      {
+        "digest": "sha256:ecee0befd178d51d883c8984e1856949021e220b56e2927cab0001de46325cac",
+        "tags": [
+          "next-05caa7ade23c554856a8b44a6d48c6cd5d89a621"
+        ]
+      }
+    ]
+  },
+  {
+    "service": "next-marketplace-admin",
+    "images": [
+      {
+        "digest": "sha256:4e7378881f7da14a926215cf20798bd1d5ec9f94ea7ea7102bd086f285c7e6a1",
+        "tags": [
+          "next-05caa7ade23c554856a8b44a6d48c6cd5d89a621"
+        ]
+      }
+    ]
+  }
+]

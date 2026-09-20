@@ -138,6 +138,14 @@ deployed evidence. This PR
 does not set repository variables, apply Terraform, switch ownership, or claim
 that mocked tests are deployed proof.
 
+## Activation checklist
+
+Use the [VAY-2029 activation record and runbook](coordinated-release-activation.md)
+for exact revisions, live inventory, readiness blockers, pause/drain, and system
+rollback. The implementation alone is not authorization to enable ownership.
+After returning to legacy mode, a retained desired record keeps automatic image
+events fenced; explicit held manual recovery remains available.
+
 ## Recovery
 
 - Lost dispatch: redispatch the same published artifact; do not rebuild it.

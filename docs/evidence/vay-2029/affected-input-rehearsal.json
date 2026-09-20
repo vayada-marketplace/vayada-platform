@@ -1,0 +1,52 @@
+{
+  "kind": "synthetic changes against real workspace dependency graph; no builds or deployments",
+  "results": [
+    {
+      "path": "apps/api/src/index.ts",
+      "affectedServices": [
+        "next-target-backend"
+      ],
+      "reasons": {
+        "next-target-backend": [
+          "M:apps/api/src/index.ts"
+        ],
+        "next-pms-frontend": [],
+        "next-booking-frontend": [],
+        "next-booking-admin": [],
+        "next-marketplace-frontend": [],
+        "next-marketplace-admin": []
+      }
+    },
+    {
+      "path": "packages/domain-hotels/src/index.ts",
+      "affectedServices": [
+        "next-target-backend",
+        "next-pms-frontend",
+        "next-booking-frontend",
+        "next-booking-admin",
+        "next-marketplace-frontend",
+        "next-marketplace-admin"
+      ],
+      "reasons": {
+        "next-target-backend": [
+          "M:packages/domain-hotels/src/index.ts"
+        ],
+        "next-pms-frontend": [
+          "M:packages/domain-hotels/src/index.ts"
+        ],
+        "next-booking-frontend": [
+          "M:packages/domain-hotels/src/index.ts"
+        ],
+        "next-booking-admin": [
+          "M:packages/domain-hotels/src/index.ts"
+        ],
+        "next-marketplace-frontend": [
+          "M:packages/domain-hotels/src/index.ts"
+        ],
+        "next-marketplace-admin": [
+          "M:packages/domain-hotels/src/index.ts"
+        ]
+      }
+    }
+  ]
+}

@@ -705,6 +705,12 @@ def apply_api_hold_gate(
             plan_services[key]["reason"] = "API hold does not prove compatibility with dependent frontends"
 
 
+def require_resume_api_readiness(api: dict[str, Any], blocked: bool) -> None:
+    if blocked or api["observedDigest"] != api["desiredDigest"]:
+        fail("Frontend resume requires the selected manifest API digest and no incompatible API hold")
+    api.update(action="verify", reason="verify API readiness before frontend resume")
+
+
 def final_service_status(
     *, operation: str, order: str, planned: str, live_matches: bool, proven: bool, held: bool
 ) -> str:
@@ -1125,6 +1131,56 @@ def write_hold(
     return hold
 
 
+def bootstrap_evidence(aws: Aws, github: GitHub, config: dict[str, Any], key: str,
+                       snapshot: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
+    """Prove the live source before first ownership; unknown/manual images require holds."""
+    digest = require_digest(snapshot["digest"], f"bootstrap.{key}.liveDigest")
+    provenance = validate_provenance(
+        aws.get_parameter(state_path(config, f"services/{key}/provenance")), config, key
+    )
+    if provenance:
+        if (provenance["digest"] != digest or
+                provenance["taskDefinitionArn"] != snapshot["taskDefinitionArn"]):
+            fail(f"Bootstrap provenance differs from live service {key}; establish an explicit hold")
+        source = provenance["sourceSha"]
+        evidence = {"provenance": provenance}
+    else:
+        workflow = {
+            "next-target-backend": "deploy-next-api.yml",
+            "next-pms-frontend": "deploy-next-pms-web.yml",
+            "next-booking-frontend": "deploy-next-booking-web.yml",
+            "next-booking-admin": "deploy-next-booking-admin.yml",
+            "next-marketplace-frontend": "deploy-next-marketplace-web.yml",
+            "next-marketplace-admin": "deploy-next-vayada-admin.yml",
+        }[key]
+        details = aws.json("ecr", "describe-images", "--repository-name",
+                           config["services"][key]["ecrRepository"], "--image-ids", f"imageDigest={digest}")
+        images = details.get("imageDetails") or []
+        if len(images) != 1 or images[0].get("imageDigest") != digest:
+            fail(f"Bootstrap live digest is missing from ECR for {key}")
+        sources = [tag[5:] for tag in images[0].get("imageTags", [])
+                   if tag.startswith("next-") and SHA_RE.fullmatch(tag[5:])]
+        if len(sources) != 1:
+            fail(f"Bootstrap live source is unknown or ambiguous for {key}; establish an explicit hold")
+        source = sources[0]
+        runs = github.json(f"/actions/workflows/{workflow}/runs?head_sha={source}&branch=main&event=push&status=success&per_page=100")
+        trusted = [run for run in runs.get("workflow_runs", [])
+                   if run.get("head_sha") == source and run.get("head_branch") == "main"
+                   and run.get("path") == f".github/workflows/{workflow}"
+                   and run.get("event") == "push" and run.get("status") == "completed"
+                   and run.get("conclusion") == "success"
+                   and (run.get("repository") or {}).get("full_name") == config["producer"]["repository"]
+                   and (run.get("head_repository") or {}).get("full_name") == config["producer"]["repository"]]
+        if not trusted:
+            fail(f"Bootstrap has no successful trusted automatic image build for {key}; establish an explicit hold")
+        evidence = {"buildRunId": trusted[0]["id"], "buildRunAttempt": trusted[0]["run_attempt"],
+                    "workflowPath": trusted[0]["path"]}
+    if github.compare(source, manifest["source"]["sha"]) not in {"ahead", "identical"}:
+        fail(f"Bootstrap target would regress or diverge from live {key}")
+    return {"digest": digest, "sourceSha": source, "taskDefinitionArn": snapshot["taskDefinitionArn"],
+            "evidence": evidence}
+
+
 def prepare_release(args: argparse.Namespace) -> None:
     prepare_started_at = iso_now()
     config = load_config(args.config)
@@ -1228,12 +1284,15 @@ def prepare_release(args: argparse.Namespace) -> None:
     plan_services: dict[str, dict[str, Any]] = {}
     api_key = next(key for key, value in config["services"].items() if value["phase"] == "api")
     api_blocked = False
+    bootstrap = {}
     for key in config["services"]:
         image = manifest["services"][key]
         aws.verify_image(key, image)
         snapshot = aws.service_snapshot(key)
         snapshots[key] = snapshot
         hold = active_hold(aws, config, key)
+        if args.operation == "activate":
+            bootstrap[key] = {"hold": hold} if hold else bootstrap_evidence(aws, github, config, key, snapshot, manifest)
         selected = args.operation in {"ordinary", "activate"} or key == args.service
         action, reason = planned_action(
             operation=args.operation,
@@ -1257,11 +1316,14 @@ def prepare_release(args: argparse.Namespace) -> None:
             "observedTaskDefinitionArn": snapshot["taskDefinitionArn"],
             "desiredDigest": image["digest"],
         }
+    if args.operation == "resume" and args.service != api_key:
+        require_resume_api_readiness(plan_services[api_key], api_blocked)
     apply_api_hold_gate(plan_services, config, api_blocked)
     operation_id = require_id(args.operation_id, "operationId")
     plan = {
         "schemaVersion": 1,
         "operation": args.operation,
+        "resumeService": args.service if args.operation == "resume" else None,
         "operationId": operation_id,
         "manifestId": manifest["manifestId"],
         "manifestSha256": sha256_file(output / "manifest.json"),
@@ -1273,6 +1335,7 @@ def prepare_release(args: argparse.Namespace) -> None:
         "order": "explicit-resume" if args.operation == "resume" else order,
         "preparedAt": iso_now(),
         "services": plan_services,
+        "bootstrap": bootstrap,
     }
     if args.operation in {"ordinary", "activate"} and order != "stale":
         aws.put_parameter(
@@ -1298,6 +1361,9 @@ def prepare_release(args: argparse.Namespace) -> None:
         }
         aws.put_parameter(state_path(config, "desired-release"), desired_record)
         if args.operation == "activate":
+            for key, evidence in bootstrap.items():
+                aws.put_parameter(state_path(config, f"services/{key}/bootstrap"),
+                                  {"schemaVersion": 1, "operationId": operation_id, "verifiedAt": iso_now(), **evidence})
             aws.put_parameter(
                 state_path(config, "ownership-mode"),
                 {"schemaVersion": 1, "mode": "batch", "changedAt": iso_now(), "operationId": operation_id},
@@ -1494,6 +1560,8 @@ def reconcile_service(args: argparse.Namespace) -> None:
     image = manifest["services"][key]
     aws.verify_image(key, image)
     before = aws.service_snapshot(key)
+    if action == "verify" and before["digest"] != image["digest"]:
+        fail(f"{key} changed after preparation; verify-only cannot mutate it")
     operation_id = require_id(plan["operationId"], "plan.operationId")
     operation_path = state_path(config, f"operations/{operation_id}/{key}")
     pending_path = state_path(config, f"services/{key}/pending-operation")
@@ -1547,7 +1615,7 @@ def reconcile_service(args: argparse.Namespace) -> None:
         )
         aws.put_parameter(operation_path, operation)
         aws.put_parameter(pending_path, operation)
-        if plan.get("operation") == "resume":
+        if plan.get("operation") == "resume" and plan.get("resumeService") == key:
             clear_hold(aws, config, key, manifest["manifestId"], operation_id)
         print(f"{key}: succeeded at {image['digest']}")
     except Exception as error:
@@ -1681,6 +1749,8 @@ def guard_legacy(args: argparse.Namespace) -> None:
     if args.event_name == "repository_dispatch":
         if ownership_mode(aws, config) == "batch":
             fail(f"Stale legacy automatic event rejected for batch-managed service {args.service}")
+        if aws.get_parameter(state_path(config, "desired-release")) is not None:
+            fail("Legacy automatic delivery remains fenced after coordinated ownership; use explicit held recovery")
         return
     if args.event_name != "workflow_dispatch":
         fail("Managed service mutation has an unsupported event source")

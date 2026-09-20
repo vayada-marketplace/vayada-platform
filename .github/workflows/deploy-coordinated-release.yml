@@ -28,14 +28,14 @@ on:
         required: false
         type: choice
         options:
-          - ""
+          - "none"
           - next-target-backend
           - next-pms-frontend
           - next-booking-frontend
           - next-booking-admin
           - next-marketplace-frontend
           - next-marketplace-admin
-        default: ""
+        default: "none"
 
 permissions:
   actions: read
@@ -46,7 +46,7 @@ permissions:
 # execute, so Terraform and every other production ECS writer stay excluded.
 concurrency:
   group: production-ecs-mutations
-  cancel-in-progress: false
+  queue: max
 
 env:
   AWS_REGION: eu-west-1
@@ -142,6 +142,9 @@ jobs:
           --service next-target-backend
 
   frontends:
+    env:
+      NEXT_BOOKING_CANARY_URL: ${{ vars.NEXT_BOOKING_CANARY_URL }}
+      NEXT_BOOKING_CANARY_NAME: ${{ vars.NEXT_BOOKING_CANARY_NAME }}
     name: Reconcile ${{ matrix.service }}
     needs: [prepare, api]
     if: needs.api.result == 'success'
