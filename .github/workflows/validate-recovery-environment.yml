@@ -6,6 +6,7 @@ on:
       - "rehearsal/coordinated/**"
       - ".github/workflows/validate-recovery-environment.yml"
       - ".github/workflows/probe-recovery-environment.yml"
+      - ".github/workflows/rehearse-coordinated-recovery.yml"
 
 permissions:
   contents: read
