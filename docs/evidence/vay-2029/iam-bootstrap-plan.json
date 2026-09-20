@@ -49,6 +49,7 @@
   "limitations": [
     "Unrelated required variables are placeholders in isolated plan directory and must never be used for an untargeted apply.",
     "Saved plan contains state: keep private, do not commit/upload.",
-    "No plan applied."
-  ]
+    "Historical consumed plan; do not reapply. See iam-managed-policy-plan.json for remaining bootstrap."
+  ],
+  "executionResult": "Partially applied with user approval: receiver role and inline policy created; platform inline update rejected by AWS aggregate 10240-byte policy quota."
 }

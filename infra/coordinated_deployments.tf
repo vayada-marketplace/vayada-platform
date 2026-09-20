@@ -137,3 +137,60 @@ resource "aws_iam_role_policy" "github_actions_coordinated_deploy" {
     prevent_destroy = true
   }
 }
+
+# The platform role is at its aggregate inline-policy quota. Keep receiver
+# management in a separate managed policy; bootstrap requires an operator.
+data "aws_iam_policy_document" "coordinated_receiver_management" {
+  statement {
+    sid    = "ManageCoordinatedReceiverRole"
+    effect = "Allow"
+    actions = [
+      "iam:CreateRole",
+      "iam:GetRole",
+      "iam:UpdateRole",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies",
+      "iam:GetRolePolicy",
+      "iam:PutRolePolicy",
+      "iam:TagRole",
+      "iam:UntagRole",
+    ]
+    resources = [
+      "arn:aws:iam::${var.aws_account_id}:role/vayada-github-actions-coordinated-deploy",
+    ]
+  }
+
+  # Terraform must be able to refresh this policy after operator bootstrap.
+  statement {
+    sid    = "ReadOwnManagedPolicy"
+    effect = "Allow"
+    actions = [
+      "iam:GetPolicy",
+      "iam:GetPolicyVersion",
+      "iam:ListPolicyVersions",
+    ]
+    resources = [
+      "arn:aws:iam::${var.aws_account_id}:policy/vayada-coordinated-receiver-management",
+    ]
+  }
+}
+
+resource "aws_iam_policy" "coordinated_receiver_management" {
+  name        = "vayada-coordinated-receiver-management"
+  description = "Scoped platform CI management of the coordinated receiver role"
+  policy      = data.aws_iam_policy_document.coordinated_receiver_management.json
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "coordinated_receiver_management" {
+  role       = aws_iam_role.github_actions_platform_deploy.name
+  policy_arn = aws_iam_policy.coordinated_receiver_management.arn
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}

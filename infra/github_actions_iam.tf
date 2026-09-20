@@ -44,28 +44,6 @@ resource "aws_iam_role" "github_actions_platform_deploy" {
 }
 
 data "aws_iam_policy_document" "github_actions_platform_deploy" {
-  # VAY-2029: Terraform must manage the receiver it installs. Bootstrap this
-  # scoped grant with an authorized operator; CI cannot grant it to itself.
-  statement {
-    sid    = "ManageCoordinatedReceiverRole"
-    effect = "Allow"
-    actions = [
-      "iam:CreateRole",
-      "iam:GetRole",
-      "iam:UpdateRole",
-      "iam:UpdateAssumeRolePolicy",
-      "iam:ListRolePolicies",
-      "iam:ListAttachedRolePolicies",
-      "iam:GetRolePolicy",
-      "iam:PutRolePolicy",
-      "iam:TagRole",
-      "iam:UntagRole",
-    ]
-    resources = [
-      "arn:aws:iam::${var.aws_account_id}:role/vayada-github-actions-coordinated-deploy",
-    ]
-  }
-
   statement {
     effect = "Allow"
     actions = [
