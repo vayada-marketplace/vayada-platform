@@ -284,6 +284,22 @@ principal and receipt-table privileges can be proved before this mapping is
 applied. It must identify the exact restricted `vayada_next_api_runtime` role,
 not merely contain a URL string different from the migration credential.
 
+VAY-2038 prepares a separate `vayada_next_identity_runtime` principal for
+`AUTH_DATABASE_URL`. `scripts/grant-target-database-identity-runtime.mjs` is an
+explicit grant contract, not an automatic deployment step. It requires a
+separately provisioned LOGIN role with `NOINHERIT NOBYPASSRLS`, no privileged
+membership, object ownership, schema/database creation, or temporary-table
+privilege. A database administrator must provision its password through a
+dedicated protected parameter without printing or committing the value. The
+shared-table RLS migration from app PR #2530 must be deployed first. The
+grant runner refuses missing RLS or unrelated effective privileges and must
+run only from a reviewed private-network migration-owner task with verified
+RDS TLS. The identity credential may enqueue a PMS inbox reconciliation job
+but may not read or update that PMS worker's rows. Do not map the new parameter
+to `AUTH_DATABASE_URL` until the role,
+grants, restricted-role integration tests, and deployed-role canary pass; the
+current ECS mapping above remains unchanged by this grant contract.
+
 The API records authentication and other product events in
 `platform.product_audit_events`. The migration owner must grant the runtime
 role only the missing privilege needed for this append-only sink. Runtime
