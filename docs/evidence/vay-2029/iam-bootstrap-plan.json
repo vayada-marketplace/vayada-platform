@@ -1,0 +1,54 @@
+{
+  "terraformVersion": "1.5.7",
+  "scope": "targeted IAM bootstrap only; not a full-stack plan",
+  "planSha256": "62575cda07348c5309cb3f317c29243c9ffee4bea6186056e8a13af4b8f95aec",
+  "actions": {
+    "aws_iam_role.github_actions_coordinated_deploy": [
+      "create"
+    ],
+    "aws_iam_role_policy.github_actions_coordinated_deploy": [
+      "create"
+    ],
+    "aws_iam_role_policy.github_actions_platform_deploy": [
+      "update"
+    ]
+  },
+  "addedPlatformStatement": {
+    "Action": [
+      "iam:UpdateRole",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:UntagRole",
+      "iam:TagRole",
+      "iam:PutRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies",
+      "iam:GetRolePolicy",
+      "iam:GetRole",
+      "iam:CreateRole"
+    ],
+    "Effect": "Allow",
+    "Resource": "arn:aws:iam::269416271598:role/vayada-github-actions-coordinated-deploy",
+    "Sid": "ManageCoordinatedReceiverRole"
+  },
+  "receiverResources": {
+    "aws_iam_role.github_actions_coordinated_deploy": {
+      "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRoleWithWebIdentity\",\"Condition\":{\"StringEquals\":{\"token.actions.githubusercontent.com:aud\":\"sts.amazonaws.com\",\"token.actions.githubusercontent.com:sub\":\"repo:vayada-marketplace/vayada-platform:environment:next\"}},\"Effect\":\"Allow\",\"Principal\":{\"Federated\":\"arn:aws:iam::269416271598:oidc-provider/token.actions.githubusercontent.com\"}}],\"Version\":\"2012-10-17\"}",
+      "description": "Reconcile signed six-service release manifests and scoped SSM deployment state",
+      "force_detach_policies": false,
+      "max_session_duration": 7200,
+      "name": "vayada-github-actions-coordinated-deploy",
+      "path": "/",
+      "permissions_boundary": null,
+      "tags": null
+    },
+    "aws_iam_role_policy.github_actions_coordinated_deploy": {
+      "name": "vayada-coordinated-deploy-policy",
+      "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"ecs:DescribeTaskSets\",\"ecs:DescribeTaskDefinition\",\"ecs:DescribeServices\",\"ecs:DescribeClusters\"],\"Effect\":\"Allow\",\"Resource\":\"*\",\"Sid\":\"ReadEcsDeploymentState\"},{\"Action\":\"ecs:RegisterTaskDefinition\",\"Effect\":\"Allow\",\"Resource\":\"*\",\"Sid\":\"RegisterTaskDefinitionRevisions\"},{\"Action\":\"ecs:UpdateService\",\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:ecs:eu-west-1:269416271598:service/vayada-backend-cluster/vayada-next-pms-frontend-service\",\"arn:aws:ecs:eu-west-1:269416271598:service/vayada-backend-cluster/vayada-next-marketplace-frontend-service\",\"arn:aws:ecs:eu-west-1:269416271598:service/vayada-backend-cluster/vayada-next-marketplace-admin-service\",\"arn:aws:ecs:eu-west-1:269416271598:service/vayada-backend-cluster/vayada-next-booking-frontend-service\",\"arn:aws:ecs:eu-west-1:269416271598:service/vayada-backend-cluster/vayada-next-booking-admin-service\",\"arn:aws:ecs:eu-west-1:269416271598:service/vayada-backend-cluster/vayada-next-api-service\"],\"Sid\":\"UpdateOnlyManagedPhysicalServices\"},{\"Action\":[\"ecr:DescribeImages\",\"ecr:BatchGetImage\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:ecr:eu-west-1:269416271598:repository/vayada-next-pms-frontend\",\"arn:aws:ecr:eu-west-1:269416271598:repository/vayada-next-marketplace-frontend\",\"arn:aws:ecr:eu-west-1:269416271598:repository/vayada-next-booking-frontend\",\"arn:aws:ecr:eu-west-1:269416271598:repository/vayada-next-booking-admin-frontend\",\"arn:aws:ecr:eu-west-1:269416271598:repository/vayada-next-api\",\"arn:aws:ecr:eu-west-1:269416271598:repository/vayada-next-admin-frontend\"],\"Sid\":\"ReadOnlyApprovedImages\"},{\"Action\":\"iam:PassRole\",\"Condition\":{\"StringEquals\":{\"iam:PassedToService\":\"ecs-tasks.amazonaws.com\"}},\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:iam::269416271598:role/vayada-next-api-media-task-role\",\"arn:aws:iam::269416271598:role/ecsTaskRole\",\"arn:aws:iam::269416271598:role/ecsTaskExecutionRole\"],\"Sid\":\"PassExistingTaskRolesOnly\"},{\"Action\":[\"ssm:PutParameter\",\"ssm:GetParameter\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/coordinated-deployments/v1/*\",\"Sid\":\"ReadAndWriteDeploymentControlRecords\"}]}"
+    }
+  },
+  "limitations": [
+    "Unrelated required variables are placeholders in isolated plan directory and must never be used for an untargeted apply.",
+    "Saved plan contains state: keep private, do not commit/upload.",
+    "No plan applied."
+  ]
+}

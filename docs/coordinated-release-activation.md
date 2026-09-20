@@ -44,7 +44,11 @@ inventory, not authenticated product smoke.
 1. AWS `GetRole` reports `NoSuchEntity` for
    `vayada-github-actions-coordinated-deploy`. [Apply 35212756725](https://github.com/vayada-marketplace/vayada-platform/actions/runs/35212756725)
    failed because `vayada-github-actions-platform-deploy` lacks `iam:CreateRole`
-   on that exact role. An authorized infrastructure operator must prepare and
+   on that exact role. Live policy simulation also denies GetRole, GetRolePolicy,
+   ListRolePolicies, ListAttachedRolePolicies and PutRolePolicy on it. The scoped
+   `ManageCoordinatedReceiverRole` grant in `infra/github_actions_iam.tf` must be
+   bootstrapped by the operator as well; creating the receiver alone leaves CI
+   unable to manage it. An authorized infrastructure operator must prepare and
    approve scoped IAM bootstrap and a clean Terraform plan. Do not retry the
    failed apply unchanged or grant wildcard IAM administration.
 2. `COORDINATED_RELEASE_READ_TOKEN` is absent from the platform repository and
@@ -192,3 +196,22 @@ Keep VAY-2029 In Progress until deployed evidence and explicit human acceptance.
   findings in these changes. Complexity pass found no additional abstraction
   to remove. No product code changed; product builds/smoke are not claimed here.
 - These checks do not complete the ticket's integrated or deployed acceptance.
+
+## Scoped IAM bootstrap preparation
+
+The [sanitized scoped plan](evidence/vay-2029/iam-bootstrap-plan.json) adds the
+receiver role and its inline policy and updates the platform CI policy with only
+`ManageCoordinatedReceiverRole`. No existing statement is removed or modified;
+no ECS/database/SSM-value change is planned. This is a targeted recovery plan,
+not a full-stack drift plan. It has **not** been applied.
+
+The private saved plan is kept outside Git. It was generated from the complete
+Terraform configuration using the three resource targets named in the evidence.
+Unrelated required secret variables use placeholders because those resources
+are excluded; never execute an untargeted plan/apply from that scratch directory.
+Validate the saved-plan hash and state freshness, then obtain explicit approval
+before applying exactly that plan with the authorized operator identity. If
+state is stale, regenerate/review the same targets and confirm the identical
+three-action scope before proceeding. Do not run the existing broad apply as
+bootstrap. Afterward, simulate CI access again and prove a fresh CI plan can
+read/maintain the receiver; separately prove receiver OIDC/artifact access.
