@@ -34,35 +34,78 @@ behavior, private smoke, parallel job overlap, global lock exclusion, or product
 acceptance. Initial API-before-frontends scheduling is a workflow contract check,
 not executed by this synchronous test harness. No latency claims follow from it.
 
-## Required before hosted failure injection
+## Hosted implementation (not yet applied or run)
 
-1. Add a fixture-only entrypoint with exact account, cluster, six service/ECR/task
-   families, subnet, security group, execution role and state-prefix allowlists.
-   Require a dedicated assumed role before mutation. Keep production entrypoints
-   and publication validators intact; do not add a skip-validation switch.
-2. Extract shared execution functions from the existing preparation,
-   reconciliation and finalization bodies. Pass explicit fixture AWS/smoke
-   dependencies; retain ordering, checkpoint, pending-operation, provenance,
-   hold, retry and rollback behavior instead of copying a second scheduler.
-3. Define separately trusted synthetic publication: platform main-only workflow,
-   exact run/attempt/source, artifact hashes and all six fixture ECR digests.
-   Never manufacture application-publisher or API migration attestations.
-4. Publish the reviewed baseline to fixture ECR. Current Docker Hub bootstrap
-   images cannot pass the reconciler's ECR identity validation. Replace inline
-   bootstrap commands and fixed-revision health checks so fixture behavior comes
-   from the selected image, with revision-independent liveness and independent
-   private smoke validating the expected service/revision.
-5. Review a clean Terraform plan for a separate scenario role. The current probe
-   role explicitly denies service and SSM mutation. Bound new permissions to
-   fixture resources and `/vayada/rehearsal/coordinated-deployments/v1/*`, preserve
-   production denies, and verify negative authorization before injecting faults.
-6. Run through the global workflow lock with bounded timeouts and retained
-   before/after evidence. Test SSM denial and interruption against fixture state,
-   then retry without deleting durable records. A full state outage can prevent
-   recording a hold and therefore prevent automatic rollback; report unresolved
-   state honestly and retain the pre-mutation target for recovery.
+`rehearse-coordinated-recovery.yml` is manual, platform-main-only and holds the
+existing `production-ecs-mutations` lock for the entire run. It builds three
+synthetic image variants and publishes immutable `recovery-RUN-ATTEMPT-VARIANT`
+tags to the six fixture ECR repositories. The same trusted workflow creates
+`publication.json`, binding repository, real platform source, run/attempt and
+all 18 digests. Each phase validates that binding and the retained publication
+hash. These are synthetic `recovery/v1/...` manifests, never application release
+publications or migration attestations.
 
-These prerequisites require implementation, independent review and exact
-merge/apply/run approval under VAY-2029 AC4. This document grants no authority to
-alter IAM, bootstrap service definitions, enable production delivery, clear holds,
-delete state or perform failure injection.
+Before any service or SSM write, the runner compares the six live service/task
+and network definitions against the reviewed baseline SHA256 input. It then
+replaces only the fixture bootstrap image/command/environment/liveness check so
+behavior comes from the selected image. Existing services, capacity, networking,
+execution role and absence of task roles/secrets remain fixed. Images expose
+revision-independent `/live` and revision-bound `/health`. An unhealthy fixture
+returns a specific 503 body; its private probe returns exit42 only for that exact
+response. Auth, task launch, pull and unrelated probe failures do not count as
+successful negative-path evidence.
+
+The suite exercises:
+
+1. Six baseline transitions, then API-first healthy rollout and concurrent
+   independent frontend reconciliations. Per-update timestamps are retained.
+2. Duplicate verification with no additional updates.
+3. A frontend readiness failure, original-task rollback, persistent hold,
+   ordinary retry that leaves the hold intact, and explicit recovery.
+4. An API readiness failure and actual hold, frontend blocking through the
+   shared planner gate, and explicit API recovery.
+5. A child worker process that exits immediately after a real ECS update;
+   another invocation recovers using the retained pending operation.
+6. A separate role that denies only booking-admin provenance writes in fixture
+   run namespaces. The suite requires the exact AccessDenied failure after an
+   update, rollback and retained hold, then resumes with the normal fixture role.
+7. Fresh private smoke/provenance checks for all six services and the shared
+   finalizer. No active fixture hold may remain before marking the suite complete.
+
+The shared production reconciliation/finalization bodies accept explicit
+fixture dependencies. Production wrappers still use their original manifest
+validator, image guards and product smoke. The fixture entrypoint has no config
+argument and constructs only the hardcoded fixture resource map. Both OIDC roles
+are separate from the existing preflight and production roles. The denial role
+cannot push images; only the normal fixture role has scoped ECR publication rights.
+
+Read-only preparation commands (repository root):
+
+```sh
+python3 rehearsal/coordinated/scenarios.py --phase inspect
+cd rehearsal/coordinated
+terraform plan -input=false -lock-timeout=30s -out=scenarios.tfplan
+```
+
+Review the exact commit, clean saved plan/hash, policy decisions and baseline
+fingerprint before approving merge, apply and one manual workflow run. The IAM
+plan must create only the two fixture scenario roles and their inline policies.
+The workflow run will mutate only the six synthetic services and fixture state;
+it will retain images, task definitions, holds and evidence rather than delete
+state. Artifacts are retained for 90 days. Fixture capacity remains six tasks;
+rollouts and private probes add temporary Fargate capacity. On unexpected failure,
+stop and inspect retained evidence instead of blindly rerunning or clearing holds.
+
+## Remaining evidence limits
+
+Hosted results are absent until the reviewed workflow actually succeeds. This
+increment reuses service reconciliation/finalization and selected planning guards;
+it does not execute production GitHub publication acquisition, source ancestry,
+checkpoint planning, dispatch retry or GitHub matrix scheduling against AWS.
+The private probe and shared lock are used, but a separate no-op lock contender
+and measured production workflow overlap remain required. The SSM denial is a
+specific post-update provenance failure, not a complete AWS outage. Existing
+offline tests cover wider state-write loss. Product smoke, pricing repair, live
+hold/queued-writer disposition and coordinated activation remain separate gates.
+No production failure injection, application attestations, state deletion or
+production activation is authorized by this document.

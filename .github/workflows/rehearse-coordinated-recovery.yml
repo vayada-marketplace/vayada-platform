@@ -1,0 +1,106 @@
+name: Rehearse isolated coordinated recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_baseline_sha256:
+        description: SHA256 of the reviewed live fixture baseline snapshot
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+
+jobs:
+  rehearse:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      EXPECTED_BASELINE_SHA256: ${{ inputs.expected_baseline_sha256 }}
+      AWS_REGION: eu-west-1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-recovery-scenarios
+          aws-region: eu-west-1
+          role-session-name: recovery-${{ github.run_id }}
+      - name: Publish immutable synthetic fixture images
+        run: |
+          aws ecr get-login-password | docker login --username AWS --password-stdin 269416271598.dkr.ecr.eu-west-1.amazonaws.com
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          def run(*args):
+              return subprocess.check_output(args, text=True)
+
+          if not re.fullmatch(r"[0-9a-f]{64}", os.environ["EXPECTED_BASELINE_SHA256"]):
+              raise ValueError("Reviewed baseline SHA256 must be 64 lowercase hexadecimal characters")
+          publication = {
+              "scope": "isolated-recovery-scenarios-v1",
+              "runId": int(os.environ["GITHUB_RUN_ID"]),
+              "runAttempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "sourceSha": os.environ["GITHUB_SHA"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "variants": {},
+          }
+          services = ("api", "pms", "booking-web", "booking-admin", "marketplace-web", "marketplace-admin")
+          registry = "269416271598.dkr.ecr.eu-west-1.amazonaws.com"
+          for variant in ("baseline", "good", "bad"):
+              tag = f"recovery-{publication['runId']}-{publication['runAttempt']}-{variant}"
+              subprocess.run([
+                  "docker", "build", "--platform", "linux/amd64",
+                  "--build-arg", f"FIXTURE_VARIANT={variant}", "-t", tag,
+                  "-f", "rehearsal/coordinated/scenario.Dockerfile", "rehearsal/coordinated",
+              ], check=True)
+              publication["variants"][variant] = {}
+              for service in services:
+                  repository = f"vayada-recovery-{service}"
+                  image = f"{registry}/{repository}:{tag}"
+                  subprocess.run(["docker", "tag", tag, image], check=True)
+                  subprocess.run(["docker", "push", image], check=True)
+                  result = json.loads(run(
+                      "aws", "ecr", "describe-images", "--repository-name", repository,
+                      "--image-ids", f"imageTag={tag}", "--output", "json",
+                  ))
+                  digest = result["imageDetails"][0]["imageDigest"]
+                  if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                      raise ValueError("Invalid published digest")
+                  publication["variants"][variant][service] = digest
+          Path("publication.json").write_text(json.dumps(publication, indent=2) + "\n")
+          PY
+      - name: Exercise fixture deployment and rollback
+        run: python3 rehearsal/coordinated/scenarios.py --phase exercise --publication publication.json --expected-baseline-sha256 "$EXPECTED_BASELINE_SHA256" --output-dir evidence
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-recovery-state-denial
+          aws-region: eu-west-1
+          role-session-name: recovery-denial-${{ github.run_id }}
+      - name: Verify expected state write denial
+        run: python3 rehearsal/coordinated/scenarios.py --phase deny --publication publication.json --expected-baseline-sha256 "$EXPECTED_BASELINE_SHA256" --output-dir evidence
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-recovery-scenarios
+          aws-region: eu-west-1
+          role-session-name: recovery-resume-${{ github.run_id }}
+      - name: Recover and attest final fixture state
+        run: python3 rehearsal/coordinated/scenarios.py --phase recover --publication publication.json --expected-baseline-sha256 "$EXPECTED_BASELINE_SHA256" --output-dir evidence
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: recovery-scenarios-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            publication.json
+            evidence/
+          if-no-files-found: error
+          retention-days: 90

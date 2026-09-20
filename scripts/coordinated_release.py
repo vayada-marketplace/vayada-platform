@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1565,7 +1565,24 @@ def reconcile_service(args: argparse.Namespace) -> None:
     config = load_config(args.config)
     manifest = read_json(args.manifest)
     plan = read_json(args.plan)
-    validate_manifest(manifest, config)
+    runner = CommandRunner()
+    aws = Aws(runner, config)
+    reconcile_service_with_dependencies(
+        args, config, manifest, plan, aws, runner, smoke_service, validate_manifest
+    )
+
+
+def reconcile_service_with_dependencies(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    manifest: dict[str, Any],
+    plan: dict[str, Any],
+    aws: Aws,
+    runner: CommandRunner,
+    smoke: Callable[[CommandRunner, dict[str, Any], str, str], None],
+    validate: Callable[[dict[str, Any], dict[str, Any]], None],
+) -> None:
+    validate(manifest, config)
     key = args.service
     if key not in config["services"]:
         fail("Unknown physical service")
@@ -1584,8 +1601,6 @@ def reconcile_service(args: argparse.Namespace) -> None:
         fail(f"{key} is blocked: {service_plan.get('reason')}")
     if action not in {"verify", "deploy"}:
         fail(f"Unknown plan action for {key}")
-    runner = CommandRunner()
-    aws = Aws(runner, config)
     image = manifest["services"][key]
     aws.verify_image(key, image)
     aws.verify_api_split_image(key, image["digest"])
@@ -1637,7 +1652,7 @@ def reconcile_service(args: argparse.Namespace) -> None:
         observed = aws.service_snapshot(key)
         if observed["digest"] != image["digest"]:
             fail(f"{key} did not converge to the desired immutable digest")
-        smoke_service(runner, config, key, image["imageSourceSha"])
+        smoke(runner, config, key, image["imageSourceSha"])
         write_provenance(aws, config, key, manifest, observed, operation_id)
         operation.update(
             {
@@ -1687,8 +1702,19 @@ def finalize_release(args: argparse.Namespace) -> None:
     config = load_config(args.config)
     manifest = read_json(args.manifest)
     plan = read_json(args.plan)
-    validate_manifest(manifest, config)
     aws = Aws(CommandRunner(), config)
+    finalize_release_with_dependencies(args, config, manifest, plan, aws, validate_manifest)
+
+
+def finalize_release_with_dependencies(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    manifest: dict[str, Any],
+    plan: dict[str, Any],
+    aws: Aws,
+    validate: Callable[[dict[str, Any], dict[str, Any]], None],
+) -> None:
+    validate(manifest, config)
     rows = []
     failures = []
     actual_rollouts = 0
