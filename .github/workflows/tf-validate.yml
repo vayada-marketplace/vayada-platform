@@ -23,7 +23,9 @@ on:
       - "scripts/test-target-database-split-deployment-ready.py"
       - "scripts/run-target-database-runtime-preflight.sh"
       - "scripts/target-database-runtime-preflight.mjs"
+      - "scripts/grant-target-database-product-audit-insert.mjs"
       - "scripts/test-target-database-runtime-preflight.py"
+      - "scripts/test-target-database-runtime-runner.py"
       - "scripts/test-target-database-runtime-preflight-integration.sh"
       - "scripts/next-api-split-compatible-images.txt"
       - "scripts/assert-next-api-split-compatible-image.py"
@@ -141,7 +143,9 @@ jobs:
           python3 scripts/test-target-database-split-deployment-ready.py
           bash -n scripts/run-target-database-runtime-preflight.sh
           node --check scripts/target-database-runtime-preflight.mjs
+          node --check scripts/grant-target-database-product-audit-insert.mjs
           python3 scripts/test-target-database-runtime-preflight.py
+          python3 scripts/test-target-database-runtime-runner.py
           python3 scripts/test-next-api-split-compatible-image.py
           bash scripts/test-finance-folio-kms-plan-guard.sh
           bash -n scripts/guard-finance-folio-kms-plan.sh

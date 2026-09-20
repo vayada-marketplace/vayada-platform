@@ -7,6 +7,7 @@ const requiredRelationPrivileges = {
   "finance.payments": ["SELECT", "INSERT", "UPDATE"],
   "platform.external_webhook_events": ["SELECT", "INSERT", "UPDATE"],
   "platform.idempotency_keys": ["SELECT", "INSERT", "UPDATE", "DELETE"],
+  "platform.product_audit_events": ["SELECT", "INSERT"],
   "pms.channel_connections": ["SELECT", "INSERT", "UPDATE"],
 };
 const protectedRelations = [
@@ -45,6 +46,10 @@ function check(condition, code) {
 
 async function requireNoMissing(client, sql, parameters, code) {
   const result = await client.query(sql, parameters);
+  if (code === "runtime_relation_read_missing" && result.rowCount > 0) {
+    const relations = result.rows.map(({ nspname, relname }) => `${nspname}.${relname}`);
+    throw new Error(`${code}:${result.rowCount}:${relations.join(",")}`);
+  }
   check(result.rowCount === 0, `${code}:${result.rowCount}`);
 }
 

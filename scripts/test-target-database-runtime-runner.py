@@ -5,18 +5,33 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = (ROOT / "scripts/run-target-database-runtime-preflight.sh").read_text()
+GRANT = (ROOT / "scripts/grant-target-database-product-audit-insert.mjs").read_text()
 IAM = (ROOT / "infra/target_database_preflight_iam.tf").read_text()
 
 
 class RuntimePreflightRunnerTest(unittest.TestCase):
     def test_temporary_task_receives_only_the_runtime_database_secret(self) -> None:
-        self.assertIn(
-            '.secrets=[{name:"TARGET_DATABASE_URL",valueFrom:"/vayada/prod/target-database-runtime-url"}]',
-            RUNNER,
-        )
+        self.assertIn('secret_name="TARGET_DATABASE_URL"', RUNNER)
+        self.assertIn('secret_parameter="/vayada/prod/target-database-runtime-url"', RUNNER)
+        self.assertIn('.secrets=[{name:$secret_name,valueFrom:$secret_parameter}]', RUNNER)
         for secret in ("CHANNEX_API_KEY", "STRIPE_SECRET_KEY", "WORKOS_API_KEY"):
             self.assertNotIn(secret, RUNNER)
         self.assertIn("del(.taskRoleArn)", RUNNER)
+
+    def test_audit_grant_uses_only_the_owner_secret_in_explicit_mode(self) -> None:
+        self.assertIn('--grant-product-audit-insert|--grant-affiliate-read)', RUNNER)
+        self.assertIn('grant_scope="audit_insert"', RUNNER)
+        self.assertIn('grant_scope="affiliate_read"', RUNNER)
+        self.assertIn('secret_name="TARGET_DATABASE_MIGRATION_URL"', RUNNER)
+        self.assertIn('secret_parameter="/vayada/prod/target-database-url"', RUNNER)
+        self.assertIn('code_file="grant-target-database-product-audit-insert.mjs"', RUNNER)
+        self.assertIn('ssl = { ca, rejectUnauthorized: true, servername: connectionUrl.hostname }', GRANT)
+        self.assertIn('VAYADA_AUDIT_GRANT_LOCAL_FIXTURE', GRANT)
+        self.assertIn('unexpected_database_host', GRANT)
+        self.assertEqual(GRANT.count('await assertAuditWriteScope(client, supportsMaintain)'), 2)
+        self.assertIn('SET search_path TO pg_catalog', GRANT)
+        self.assertIn('VAYADA_DB_RDS_CA_BUNDLE', RUNNER)
+        self.assertIn('0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812', RUNNER)
 
     def test_task_is_bounded_and_cleaned_up(self) -> None:
         self.assertIn("trap cleanup EXIT", RUNNER)

@@ -27,6 +27,7 @@ docker volume create "${node_modules_container}" >/dev/null
 docker run --detach --rm \
   --name "${database_container}" \
   --network "${network}" \
+  --network-alias vayada-db-preflight \
   --env POSTGRES_PASSWORD=postgres \
   "postgres:${postgres_version}" >/dev/null
 
@@ -51,9 +52,10 @@ CREATE SCHEMA app AUTHORIZATION legacy_owner;
 CREATE SCHEMA booking AUTHORIZATION legacy_owner;
 CREATE SCHEMA finance AUTHORIZATION legacy_owner;
 CREATE SCHEMA pms AUTHORIZATION legacy_owner;
+CREATE SCHEMA marketplace AUTHORIZATION legacy_owner;
 CREATE SCHEMA vayada_migration_evidence AUTHORIZATION legacy_owner;
-REVOKE ALL ON SCHEMA platform, app, booking, finance, pms, vayada_migration_evidence FROM PUBLIC;
-GRANT USAGE ON SCHEMA platform, app, booking, finance, pms, vayada_migration_evidence
+REVOKE ALL ON SCHEMA platform, app, booking, finance, pms, marketplace, vayada_migration_evidence FROM PUBLIC;
+GRANT USAGE ON SCHEMA platform, app, booking, finance, pms, marketplace, vayada_migration_evidence
   TO vayada_next_api_runtime;
 
 SET ROLE legacy_owner;
@@ -66,7 +68,10 @@ CREATE TABLE booking.guest_bookings (id uuid PRIMARY KEY);
 CREATE TABLE finance.payments (id uuid PRIMARY KEY);
 CREATE TABLE platform.external_webhook_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.idempotency_keys (id uuid PRIMARY KEY);
+CREATE TABLE platform.product_audit_events (id uuid PRIMARY KEY);
 CREATE TABLE pms.channel_connections (id uuid PRIMARY KEY);
+CREATE TABLE marketplace.affiliate_links (id uuid PRIMARY KEY);
+CREATE TABLE marketplace.affiliate_agreement_lifecycle_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_records (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_revocations (id uuid PRIMARY KEY);
 CREATE TABLE pms.inventory_coverage_validation_queue (id uuid PRIMARY KEY);
@@ -89,6 +94,8 @@ GRANT SELECT, INSERT, UPDATE ON finance.payments,
   TO vayada_next_api_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON platform.idempotency_keys
   TO vayada_next_api_runtime;
+GRANT SELECT ON platform.product_audit_events
+  TO vayada_next_api_runtime;
 GRANT SELECT ON platform.legacy_owner_approval_records,
   platform.legacy_owner_approval_revocations TO vayada_next_api_runtime;
 GRANT EXECUTE ON FUNCTION app.hotel_count() TO vayada_next_api_runtime;
@@ -101,6 +108,23 @@ docker run --rm \
   --workdir /work node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/target-database-runtime-preflight.mjs" "${work}/preflight.mjs"
+cp "${root}/scripts/grant-target-database-product-audit-insert.mjs" "${work}/grant.mjs"
+
+run_grant() {
+  local database_role="$1"
+  local database_password="$2"
+  local fixture_flag="${3:-1}"
+  local grant_scope="${4:-audit_insert}"
+  docker run --rm \
+    --network "${network}" \
+    --volume "${node_modules_container}:/work" \
+    --volume "${work}/grant.mjs:/work/grant.mjs:ro" \
+    --workdir /work \
+    --env "TARGET_DATABASE_MIGRATION_URL=postgresql://${database_role}:${database_password}@vayada-db-preflight:5432/postgres" \
+    --env "VAYADA_AUDIT_GRANT_LOCAL_FIXTURE=${fixture_flag}" \
+    --env "VAYADA_DB_GRANT_SCOPE=${grant_scope}" \
+    node:22-bookworm node grant.mjs
+}
 
 run_preflight() {
   docker run --rm \
@@ -122,10 +146,141 @@ expect_failure() {
   grep -F "${expected}" <<<"${output}" >/dev/null
 }
 
+if untrusted_host_output="$(run_grant legacy_owner owner 0 2>&1)"; then
+  echo "non-RDS grant without explicit test fixture unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"unexpected_database_host"' <<<"${untrusted_host_output}" >/dev/null
+
+if ambiguous_tls_output="$(docker run --rm \
+  --volume "${node_modules_container}:/work" \
+  --volume "${work}/grant.mjs:/work/grant.mjs:ro" \
+  --workdir /work \
+  --env 'TARGET_DATABASE_MIGRATION_URL=postgresql://legacy_owner:owner@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require&ssl=0' \
+  --env VAYADA_DB_RDS_CA_BUNDLE=test-ca \
+  node:22-bookworm node grant.mjs 2>&1)"; then
+  echo "conflicting TLS parameter unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"unsupported_connection_parameters"' <<<"${ambiguous_tls_output}" >/dev/null
+
+if override_host_output="$(docker run --rm \
+  --volume "${node_modules_container}:/work" \
+  --volume "${work}/grant.mjs:/work/grant.mjs:ro" \
+  --workdir /work \
+  --env 'TARGET_DATABASE_MIGRATION_URL=postgresql://legacy_owner:owner@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require&host=elsewhere.example.test' \
+  --env VAYADA_DB_RDS_CA_BUNDLE=test-ca \
+  node:22-bookworm node grant.mjs 2>&1)"; then
+  echo "overridden database host unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"unsupported_connection_parameters"' <<<"${override_host_output}" >/dev/null
+
+if non_owner_output="$(run_grant vayada_next_api_runtime runtime 2>&1)"; then
+  echo "non-owner audit grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"audit_table_owner_required"' <<<"${non_owner_output}" >/dev/null
+run_grant legacy_owner owner | grep -F '"status":"PASS"' >/dev/null
+
+expect_failure runtime_relation_read_missing
+if affiliate_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 affiliate_read 2>&1)"; then
+  echo "non-owner affiliate read grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"affiliate_table_owner_required"' <<<"${affiliate_non_owner_output}" >/dev/null
+run_grant legacy_owner owner 1 affiliate_read | grep -F '"grant":"affiliate_tables:SELECT"' >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT INSERT ON marketplace.affiliate_links TO vayada_next_api_runtime" >/dev/null
+if affiliate_broad_output="$(run_grant legacy_owner owner 1 affiliate_read 2>&1)"; then
+  echo "affiliate read grant unexpectedly passed with write privilege" >&2
+  exit 1
+fi
+grep -F '"code":"affiliate_runtime_write_scope_too_broad"' <<<"${affiliate_broad_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE INSERT ON marketplace.affiliate_links FROM vayada_next_api_runtime" >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (id) ON marketplace.affiliate_agreement_lifecycle_events TO vayada_next_api_runtime" >/dev/null
+if affiliate_column_output="$(run_grant legacy_owner owner 1 affiliate_read 2>&1)"; then
+  echo "affiliate read grant unexpectedly passed with column write privilege" >&2
+  exit 1
+fi
+grep -F '"code":"affiliate_runtime_write_scope_too_broad"' <<<"${affiliate_column_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (id) ON marketplace.affiliate_agreement_lifecycle_events FROM vayada_next_api_runtime" >/dev/null
+
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "SELECT count(*) FROM marketplace.affiliate_links" >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "SELECT count(*) FROM marketplace.affiliate_agreement_lifecycle_events" >/dev/null
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO marketplace.affiliate_links(id) VALUES ('00000000-0000-0000-0000-000000000001')" \
+  >/dev/null 2>&1; then
+  echo "runtime role unexpectedly wrote an affiliate link" >&2
+  exit 1
+fi
+
+expect_grant_scope_failure() {
+  local output
+  if output="$(run_grant legacy_owner owner 2>&1)"; then
+    echo "audit grant unexpectedly passed with forbidden privilege" >&2
+    exit 1
+  fi
+  grep -F '"code":"audit_runtime_write_scope_too_broad"' <<<"${output}" >/dev/null
+}
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT TRUNCATE ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+expect_grant_scope_failure
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE TRUNCATE ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (id) ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+expect_grant_scope_failure
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (id) ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+
+if [[ "${postgres_version}" == "17" ]]; then
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT MAINTAIN ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+  expect_grant_scope_failure
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE MAINTAIN ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+fi
+
 run_preflight | grep -F '"status":"PASS"' >/dev/null
 
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO platform.product_audit_events(id) VALUES ('00000000-0000-0000-0000-000000000001')" \
+  >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE INSERT ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+expect_failure runtime_relation_access_missing
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT INSERT ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_unapproved_relation_write_forbidden
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT DELETE ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_unapproved_relation_write_forbidden
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE DELETE ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+
 if docker exec -e PGPASSWORD=runtime "${database_container}" \
-  psql -U vayada_next_api_runtime -v ON_ERROR_STOP=1 \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
   -c "INSERT INTO platform.legacy_owner_bootstrap_receipts(owner_user_ids) VALUES ('{}')" \
   >/dev/null 2>&1; then
   echo "runtime role unexpectedly wrote a receipt" >&2
@@ -138,7 +293,7 @@ expect_failure receipt_columns_writable
 docker exec "${database_container}" psql -U postgres -c \
   "REVOKE INSERT (owner_user_ids) ON platform.legacy_owner_bootstrap_receipts FROM vayada_next_api_runtime" >/dev/null
 if docker exec -e PGPASSWORD=runtime "${database_container}" \
-  psql -U vayada_next_api_runtime -v ON_ERROR_STOP=1 \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
   -c "SELECT authority_payload FROM platform.legacy_owner_bootstrap_receipts" \
   >/dev/null 2>&1; then
   echo "runtime role unexpectedly read receipt authority data" >&2
