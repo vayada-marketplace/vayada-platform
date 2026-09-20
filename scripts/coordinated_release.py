@@ -937,11 +937,12 @@ class GitHub:
             f"https://api.github.com/repos/{self.repository}{path}",
             headers={
                 "Accept": accept,
-                "Authorization": f"Bearer {self.token}",
                 "X-GitHub-Api-Version": "2022-11-28",
                 "User-Agent": "vayada-coordinated-release-v1",
             },
         )
+        # Signed artifact URLs authenticate themselves; never forward the GitHub token.
+        request.add_unredirected_header("Authorization", f"Bearer {self.token}")
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 data = response.read(2_000_001)
