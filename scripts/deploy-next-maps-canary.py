@@ -113,7 +113,7 @@ def aws(aws_service, operation, **values):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
-def verify_inventory_image(digest, closure=False, no_show=False):
+def verify_inventory_image(digest, closure=False, no_show=False, published_offers=False):
     """Probe compiled config without AWS/DB credentials or container networking."""
     image = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     password = subprocess.run(["aws", "ecr", "get-login-password", "--region", REGION],
@@ -137,12 +137,15 @@ if(loadConfig({PMS_ROOM_CLOSURE_ENABLED:'true'}).pmsRoomClosureEnabled !== true)
     if no_show:
         probe = probe.replace("PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true'", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true', PMS_CHANNEX_STAGING_NO_SHOW_ENABLED:'true'")
         probe += "\nif(c.channexManagement.stagingNoShowEnabled !== true) throw new Error('No-show-capable image required');"
+    if published_offers:
+        probe = probe.replace("PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true'", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true', PMS_CHANNEX_PROVISIONING_MODE:'mutating', PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED:'true'")
+        probe += "\nif(c.channexManagement.stagingPublishedOffersEnabled !== true) throw new Error('Published-offer-capable image required');"
     subprocess.run(["docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
                     "--entrypoint", "node", image, "--input-type=module", "-e", probe],
                    check=True, capture_output=True, text=True)
 
 
-def configure_channex_staging(container, meals=False, worker_enabled="true", inventory=False, closure=False, no_show=False):
+def configure_channex_staging(container, meals=False, worker_enabled="true", inventory=False, closure=False, no_show=False, published_offers=False):
     if closure and worker_enabled != "false":
         raise ValueError("Room closure requires a paused staging worker")
     settings = {
@@ -161,11 +164,13 @@ def configure_channex_staging(container, meals=False, worker_enabled="true", inv
         settings["PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"] = "true"
     if inventory:
         settings["PMS_CHANNEX_STAGING_INVENTORY_ENABLED"] = "true"
-    if meals:
+    if published_offers:
+        settings["PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED"] = "true"
+    if meals or published_offers:
         settings["PMS_CHANNEX_PROVISIONING_MODE"] = "mutating"
-    container["environment"] = [e for e in container["environment"] if e["name"] not in settings and e["name"] not in {"CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_ROOM_CLOSURE_ENABLED", "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"}]
+    container["environment"] = [e for e in container["environment"] if e["name"] not in settings and e["name"] not in {"CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED", "PMS_ROOM_CLOSURE_ENABLED", "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"}]
     container["environment"] += [{"name": k, "value": v} for k, v in settings.items()]
-    container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in {*settings, "CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_ROOM_CLOSURE_ENABLED", "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"}]
+    container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in {*settings, "CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED", "PMS_ROOM_CLOSURE_ENABLED", "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"}]
     container["secrets"].append({"name": "CHANNEX_API_KEY", "valueFrom": CHANNEX_SECRET})
 
 
@@ -201,9 +206,9 @@ def staging_worker_value(definition):
     return values[0]
 
 
-def require_paused_closure_service(existing, definition):
+def require_paused_closure_service(existing, definition, feature="Room closure"):
     if len(existing) != 1 or not definition:
-        raise ValueError("Room closure requires an existing paused service")
+        raise ValueError(f"{feature} requires an existing paused service")
     service = existing[0]
     deployments = service.get("deployments", [])
     if (len(deployments) != 1 or deployments[0].get("rolloutState") != "COMPLETED"
@@ -211,7 +216,7 @@ def require_paused_closure_service(existing, definition):
             or service.get("pendingCount") != 0 or service.get("runningCount", 0) < 1
             or service.get("runningCount") != service.get("desiredCount")
             or staging_worker_value(definition) != "false"):
-        raise ValueError("Room closure requires a completed paused-service rollout")
+        raise ValueError(f"{feature} requires a completed paused-service rollout")
 
 
 def change_staging_worker(existing, definition, image_sha, state, meals, plan=False, inventory=False, no_show=False):
@@ -239,6 +244,8 @@ def change_staging_worker(existing, definition, image_sha, state, meals, plan=Fa
     assert container["image"] == f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}", "Pause/resume must retain the deployed image"
     if state == "running" and env.get("PMS_ROOM_CLOSURE_ENABLED") == "true":
         raise ValueError("Disable room closure before resuming the staging worker")
+    if state == "running" and env.get("PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED") == "true":
+        raise ValueError("Disable scoped published offers before resuming the staging worker")
     value = "false" if state == "paused" else "true"
     summary = {"workerState": state, "previousTaskDefinition": service["taskDefinition"], "imageDigest": digest, "routesUnchanged": True}
     if plan or staging_worker_value(definition) == value:
@@ -274,6 +281,8 @@ def main():
     parser.add_argument("--channex-staging", action="store_true")
     parser.add_argument("--channex-staging-meals", action="store_true")
     parser.add_argument("--channex-staging-inventory", action="store_true")
+    parser.add_argument("--channex-staging-published-offers", action="store_true")
+    parser.add_argument("--disable-channex-staging-published-offers", action="store_true")
     parser.add_argument("--room-closure", action="store_true")
     parser.add_argument("--channex-staging-alerts", action="store_true")
     parser.add_argument("--channex-staging-no-show", action="store_true")
@@ -289,6 +298,10 @@ def main():
         raise ValueError("Staging no-show requires --channex-staging")
     if args.channex_staging_inventory and not args.channex_staging:
         raise ValueError("Staging inventory requires --channex-staging")
+    if args.channex_staging_published_offers and args.disable_channex_staging_published_offers:
+        raise ValueError("Published offers enable and disable are mutually exclusive")
+    if (args.channex_staging_published_offers or args.disable_channex_staging_published_offers) and (not args.channex_staging or not args.channex_staging_inventory or args.channex_worker_state != "preserve"):
+        raise ValueError("Published offers require scoped staging inventory and worker state preserve")
     if args.channex_staging_meals and not args.channex_staging:
         raise ValueError("Staging meals require --channex-staging")
     if args.channex_staging and (args.activate_guest or args.remove):
@@ -357,6 +370,7 @@ def main():
             raise ValueError("Existing staging routes require an existing service")
         described = aws("ecs", "describe-task-definition", taskDefinition=existing[0]["taskDefinition"], include=["TAGS"])
         staging_definition = {**described["taskDefinition"], "tags": described.get("tags", [])}
+    has_published_offers = False
     if staging_definition:
         container = next(c for c in staging_definition["containerDefinitions"] if c["name"] == "vayada-next-api")
         has_closure_config = any(e["name"] == "PMS_ROOM_CLOSURE_ENABLED" and e["value"] == "true" for e in container.get("environment", []))
@@ -368,8 +382,14 @@ def main():
         has_inventory = any(e["name"] == "PMS_CHANNEX_STAGING_INVENTORY_ENABLED" and e["value"] == "true" for e in container.get("environment", []))
         if has_inventory and not args.channex_staging_inventory:
             raise ValueError("Existing staging inventory requires --channex-staging-inventory to preserve configuration")
+        has_published_offers = any(e["name"] == "PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED" and e["value"] == "true" for e in container.get("environment", []))
+    published_offers = args.channex_staging_published_offers or (has_published_offers and not args.disable_channex_staging_published_offers)
+    if published_offers and (not args.channex_staging or not args.channex_staging_inventory or args.channex_worker_state != "preserve"):
+        raise ValueError("Preserving published offers requires scoped staging inventory and worker state preserve")
     if args.room_closure:
         require_paused_closure_service(existing, staging_definition)
+    if published_offers or args.disable_channex_staging_published_offers:
+        require_paused_closure_service(existing, staging_definition, "Published offers")
     if args.channex_worker_state != "preserve":
         if not staging_definition:
             raise ValueError("Pause/resume requires an existing configured staging service")
@@ -392,8 +412,8 @@ def main():
     digest = aws("ecr", "describe-images", repositoryName="vayada-next-api",
                  imageIds=[{"imageTag": args.image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
-    if args.channex_staging_inventory or args.channex_staging_no_show:
-        verify_inventory_image(digest, closure=args.room_closure, no_show=args.channex_staging_no_show)
+    if args.channex_staging_inventory or args.channex_staging_no_show or published_offers:
+        verify_inventory_image(digest, closure=args.room_closure, no_show=args.channex_staging_no_show, published_offers=published_offers)
     if args.activate_guest:
         activate_guest(existing, group, owned_rules, conditions, digest)
         return
@@ -409,7 +429,7 @@ def main():
     if args.channex_staging:
         parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_SECRET.split(":parameter")[1]]}])["Parameters"]
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
-        configure_channex_staging(source, meals=args.channex_staging_meals, inventory=args.channex_staging_inventory, no_show=args.channex_staging_no_show,
+        configure_channex_staging(source, meals=args.channex_staging_meals, inventory=args.channex_staging_inventory, no_show=args.channex_staging_no_show, published_offers=published_offers,
                                   worker_enabled=staging_worker_value(staging_definition) if staging_definition else "true", closure=args.room_closure)
     if args.channex_staging_alerts or has_alerts:
         parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_WEBHOOK_SECRET.split(":parameter")[1]]}])["Parameters"]
