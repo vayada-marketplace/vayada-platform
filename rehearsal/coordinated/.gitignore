@@ -2,4 +2,6 @@
 *.tfstate*
 *.tfplan
 plan.json
+*-plan.json
+preflight.json
 __pycache__/

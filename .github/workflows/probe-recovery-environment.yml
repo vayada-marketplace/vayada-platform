@@ -1,0 +1,33 @@
+name: Probe isolated recovery environment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+
+jobs:
+  probe:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-recovery-runner
+          aws-region: eu-west-1
+          role-session-name: recovery-${{ github.run_id }}
+      - name: Validate exact fixture and probe private endpoints
+        run: python3 rehearsal/coordinated/runner.py --run --output preflight.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: recovery-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: preflight.json
+          if-no-files-found: error
+          retention-days: 90
