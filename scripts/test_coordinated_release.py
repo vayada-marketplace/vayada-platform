@@ -8,6 +8,7 @@ import io
 import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -20,6 +21,38 @@ SPEC.loader.exec_module(release)
 
 
 class GitHubDownloadTests(unittest.TestCase):
+    def test_bundle_checksum_formats_and_tampering(self):
+        fixtures = ROOT / "deployment" / "contract" / "fixtures"
+        payloads = {stem: (fixtures / f"{stem}-v1.valid.json").read_bytes()
+                    for stem in ("manifest", "published-record")}
+        for stem in payloads:
+            digest = release.sha256_bytes(payloads[stem])
+            cases = [
+                (digest, True),
+                (f"{digest}  {stem}.json", True),
+                (f"{'0' * 64}  {stem}.json", False),
+                (f"{digest}  other.json", False),
+                (f"{digest}  ../{stem}.json", False),
+                (f"{digest}  {stem}.json\n{digest}", False),
+            ]
+            for checksum, valid in cases:
+                with self.subTest(stem=stem, checksum=checksum), tempfile.TemporaryDirectory() as directory:
+                    archive = io.BytesIO()
+                    with zipfile.ZipFile(archive, "w") as zipped:
+                        for name, content in payloads.items():
+                            zipped.writestr(f"{name}.json", content)
+                            value = checksum if name == stem else release.sha256_bytes(content)
+                            zipped.writestr(f"{name}.sha256", value + "\n")
+                    github = release.GitHub("owner/repo", "test-token")
+                    with mock.patch.object(github, "json", return_value={"id": 1}), \
+                         mock.patch.object(github, "request", return_value=archive.getvalue()):
+                        if valid:
+                            self.assertEqual(github.download_bundle(1, Path(directory)), {"id": 1})
+                            self.assertEqual((Path(directory) / f"{stem}.json").read_bytes(), payloads[stem])
+                        else:
+                            with self.assertRaisesRegex(release.ReleaseError, "does not bind"):
+                                github.download_bundle(1, Path(directory))
+
     def test_api_authentication_is_not_forwarded_to_signed_downloads(self):
         def open_request(request, *, timeout):
             self.assertEqual(timeout, 30)
