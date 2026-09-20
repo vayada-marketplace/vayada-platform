@@ -981,12 +981,12 @@ class GitHub:
             if len(data) > 512_000:
                 fail(f"Published artifact member {name} is too large")
             (output / name).write_bytes(data)
-        checksum = (output / "manifest.sha256").read_text().strip().split()
-        if len(checksum) != 1 or checksum[0] != sha256_file(output / "manifest.json"):
-            fail("manifest.sha256 does not bind manifest.json")
-        record_checksum = (output / "published-record.sha256").read_text().strip().split()
-        if len(record_checksum) != 1 or record_checksum[0] != sha256_file(output / "published-record.json"):
-            fail("published-record.sha256 does not bind published-record.json")
+        for stem in ("manifest", "published-record"):
+            checksum = (output / f"{stem}.sha256").read_text().strip()
+            digest = sha256_file(output / f"{stem}.json")
+            # The producer's sha256sum output includes the exact JSON basename.
+            if checksum not in (digest, f"{digest}  {stem}.json"):
+                fail(f"{stem}.sha256 does not bind {stem}.json")
         return artifact
 
     def compare(self, base: str, head: str) -> str:
