@@ -26,6 +26,8 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('ssl = { ca, rejectUnauthorized: true, servername: connectionUrl.hostname }', GRANT)
         self.assertIn('VAYADA_AUDIT_GRANT_LOCAL_FIXTURE', GRANT)
         self.assertIn('unexpected_database_host', GRANT)
+        self.assertEqual(GRANT.count('await assertAuditWriteScope(client, supportsMaintain)'), 2)
+        self.assertIn('SET search_path TO pg_catalog', GRANT)
         self.assertIn('VAYADA_DB_RDS_CA_BUNDLE', RUNNER)
         self.assertIn('0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812', RUNNER)
 

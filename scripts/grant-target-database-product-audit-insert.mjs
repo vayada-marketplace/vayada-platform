@@ -1,5 +1,29 @@
 import pg from "pg";
 
+async function assertAuditWriteScope(client, supportsMaintain) {
+  const prohibitedTablePrivileges = [
+    "UPDATE", "DELETE", "TRUNCATE", "TRIGGER", "REFERENCES",
+    ...(supportsMaintain ? ["MAINTAIN"] : []),
+  ];
+  const violations = await client.query(`
+    SELECT privilege.name
+      FROM unnest($1::text[]) AS privilege(name)
+     WHERE pg_catalog.has_table_privilege(
+       'vayada_next_api_runtime', 'platform.product_audit_events', privilege.name
+     )
+    UNION ALL
+    SELECT attribute.attname || ':' || privilege.name
+      FROM pg_catalog.pg_attribute AS attribute
+      CROSS JOIN (VALUES ('UPDATE'), ('REFERENCES')) AS privilege(name)
+     WHERE attribute.attrelid = 'platform.product_audit_events'::regclass
+       AND attribute.attnum > 0 AND NOT attribute.attisdropped
+       AND pg_catalog.has_column_privilege(
+         'vayada_next_api_runtime', attribute.attrelid, attribute.attname, privilege.name
+       )
+  `, [prohibitedTablePrivileges]);
+  if (violations.rowCount !== 0) throw new Error("audit_runtime_write_scope_too_broad");
+}
+
 let client;
 try {
   const connectionString = process.env.TARGET_DATABASE_MIGRATION_URL;
@@ -32,29 +56,30 @@ try {
   });
 
   await client.connect();
+  await client.query("SET search_path TO pg_catalog");
+  const version = await client.query(
+    "SELECT pg_catalog.current_setting('server_version_num')::integer AS value",
+  );
+  const supportsMaintain = version.rows[0].value >= 170000;
   const role = await client.query(
-    "SELECT 1 FROM pg_roles WHERE rolname = 'vayada_next_api_runtime'",
+    "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vayada_next_api_runtime'",
   );
   if (role.rowCount !== 1) throw new Error("runtime_role_missing");
   const check = await client.query(`
-    SELECT current_user = pg_get_userbyid(table_info.relowner) AS is_table_owner,
-           has_table_privilege('vayada_next_api_runtime',
-             'platform.product_audit_events', 'UPDATE') AS can_update,
-           has_table_privilege('vayada_next_api_runtime',
-             'platform.product_audit_events', 'DELETE') AS can_delete
-      FROM pg_class AS table_info
-     WHERE table_info.oid = to_regclass('platform.product_audit_events')
+    SELECT current_user = pg_catalog.pg_get_userbyid(table_info.relowner) AS is_table_owner
+      FROM pg_catalog.pg_class AS table_info
+     WHERE table_info.oid = pg_catalog.to_regclass('platform.product_audit_events')
   `);
   if (check.rowCount !== 1 || !check.rows[0].is_table_owner)
     throw new Error("audit_table_owner_required");
-  if (check.rows[0].can_update || check.rows[0].can_delete)
-    throw new Error("audit_runtime_write_scope_too_broad");
+  await assertAuditWriteScope(client, supportsMaintain);
 
   await client.query(
     "GRANT INSERT ON platform.product_audit_events TO vayada_next_api_runtime",
   );
+  await assertAuditWriteScope(client, supportsMaintain);
   const granted = await client.query(`
-    SELECT has_table_privilege('vayada_next_api_runtime',
+    SELECT pg_catalog.has_table_privilege('vayada_next_api_runtime',
       'platform.product_audit_events', 'INSERT') AS can_insert
   `);
   if (!granted.rows[0].can_insert) throw new Error("audit_runtime_insert_missing");

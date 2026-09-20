@@ -46,6 +46,10 @@ function check(condition, code) {
 
 async function requireNoMissing(client, sql, parameters, code) {
   const result = await client.query(sql, parameters);
+  if (code === "runtime_relation_read_missing" && result.rowCount > 0) {
+    const relations = result.rows.map(({ nspname, relname }) => `${nspname}.${relname}`);
+    throw new Error(`${code}:${result.rowCount}:${relations.join(",")}`);
+  }
   check(result.rowCount === 0, `${code}:${result.rowCount}`);
 }
 

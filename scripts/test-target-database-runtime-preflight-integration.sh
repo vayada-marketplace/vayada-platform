@@ -177,6 +177,36 @@ if non_owner_output="$(run_grant vayada_next_api_runtime runtime 2>&1)"; then
 fi
 grep -F '"code":"audit_table_owner_required"' <<<"${non_owner_output}" >/dev/null
 run_grant legacy_owner owner | grep -F '"status":"PASS"' >/dev/null
+
+expect_grant_scope_failure() {
+  local output
+  if output="$(run_grant legacy_owner owner 2>&1)"; then
+    echo "audit grant unexpectedly passed with forbidden privilege" >&2
+    exit 1
+  fi
+  grep -F '"code":"audit_runtime_write_scope_too_broad"' <<<"${output}" >/dev/null
+}
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT TRUNCATE ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+expect_grant_scope_failure
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE TRUNCATE ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (id) ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+expect_grant_scope_failure
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (id) ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+
+if [[ "${postgres_version}" == "17" ]]; then
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT MAINTAIN ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+  expect_grant_scope_failure
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE MAINTAIN ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+fi
+
 run_preflight | grep -F '"status":"PASS"' >/dev/null
 
 docker exec -e PGPASSWORD=runtime "${database_container}" \
