@@ -44,12 +44,12 @@ inventory, not authenticated product smoke.
 
 ## Blocking gates
 
-1. The approved operator apply created `vayada-github-actions-coordinated-deploy`
+1. **Resolved IAM prerequisite.** The approved operator apply created `vayada-github-actions-coordinated-deploy`
    and its inline policy, verified against the approved trust/policy document.
    Updating the platform CI inline policy failed with `LimitExceeded: Maximum
-   policy size of 10240 bytes exceeded`. CI still cannot maintain the receiver.
-   The revised scoped plan creates `vayada-coordinated-receiver-management` as
-   a managed policy and attaches it to the platform role, retaining the same
+   policy size of 10240 bytes exceeded`, temporarily leaving CI without receiver access.
+   The revised scoped plan created `vayada-coordinated-receiver-management` as
+   a managed policy and attached it to the platform role, retaining the same
    receiver management grant plus read-only access to its own policy metadata.
    The revised two-resource plan was approved and applied successfully. Direct
    policy/attachment verification and CI permission simulations pass.
