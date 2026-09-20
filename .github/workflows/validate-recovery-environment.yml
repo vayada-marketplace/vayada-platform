@@ -5,6 +5,7 @@ on:
     paths:
       - "rehearsal/coordinated/**"
       - ".github/workflows/validate-recovery-environment.yml"
+      - ".github/workflows/probe-recovery-environment.yml"
 
 permissions:
   contents: read
@@ -23,4 +24,4 @@ jobs:
       - run: terraform fmt -check
       - run: terraform init -backend=false -input=false -lockfile=readonly
       - run: terraform validate
-      - run: python3 -m unittest test_fixture.py
+      - run: python3 -m unittest discover -p 'test_*.py'

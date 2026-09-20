@@ -61,13 +61,45 @@ An apply starts six billed tasks and public addresses. After the rehearsal,
 produce a separately reviewed shutdown plan; preserve logs, images and runtime
 control evidence until acceptance. There is no automated resource destruction.
 
+## Private preflight runner
+
+`runner.py` defaults to read-only inspection. It checks the six exact service
+identities, approved subnet/security group, bootstrap image/command/environment,
+execution role, absence of a task role/secrets, and healthy task identities.
+Physical network IDs are pinned to the approved bootstrap; replacing the network
+requires a reviewed runner update.
+
+`--run` additionally requires the `vayada-recovery-runner` assumed role. It
+registers and starts one non-root, read-only probe task inside the fixture
+network. That task checks all six private endpoints' service and bootstrap
+revision identities. Redirects and environment proxies are disabled. The role
+is main-only, allows only the probe task family in the fixture cluster and the
+fixture execution role, and explicitly denies service and SSM state mutations.
+No image publishing or deployment authority is granted.
+
+After approval of the new role's saved Terraform plan and reviewed main revision:
+
+```sh
+gh workflow run probe-recovery-environment.yml \
+  --repo vayada-marketplace/vayada-platform --ref main
+```
+
+The manual workflow holds the existing global ECS mutation lock. It uploads
+90-day evidence only on success and marks recovery scenarios `not-run`. AWS CLI
+calls have 45-second subprocess limits; task polling is bounded to 240 seconds,
+with cleanup of the exact launched task on timeout/error. The probe's six HTTP
+requests each have a five-second timeout. Unexpected cancellation during AWS
+launch may prevent collecting the task ARN: inspect the fixture cluster before
+retrying. Probe task definitions and logs remain as evidence; no tasks loop or
+listen indefinitely.
+
 ## What this does not yet enable
 
-This PR provides the environment bootstrap, not the recovery runner. No GitHub
-mutation role, publisher role, SSM runtime records, synthetic release artifacts,
-or production-role extension is created. A separate reviewed change must add
-fixture-only IAM, publication identity, reconciliation target validation and
-private task-to-task smoke transport before running scenario injections.
+The environment and private preflight do not yet run recovery scenarios. No
+publisher role, SSM runtime records, synthetic release artifacts or
+production-role extension is created. A separate reviewed change must add
+fixture publication identity, reconciliation target validation and scoped
+mutation authority before running scenario injections.
 
 Production smoke helpers must never be used for these targets: they point at
 live domains. Reuse the actual reconciler's state/retry/hold/rollback logic with
