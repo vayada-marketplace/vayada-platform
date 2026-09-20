@@ -88,6 +88,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Verify scoped identity grants and denials
         run: bash scripts/test-target-database-identity-runtime-grant.sh "${{ matrix.postgres }}"
 

@@ -93,15 +93,14 @@ try {
       attributes.rolcreatedb || attributes.rolinherit || attributes.rolbypassrls ||
       attributes.rolreplication) throw new Error("identity_role_unsafe_attributes");
   const memberships = await client.query(
-    "SELECT 1 FROM pg_catalog.pg_auth_members WHERE member = $1 LIMIT 1", [attributes.oid],
+    "SELECT 1 FROM pg_catalog.pg_auth_members WHERE member = $1 OR roleid = $1 LIMIT 1", [attributes.oid],
   );
   if (memberships.rowCount) throw new Error("identity_role_inherits_membership");
   const owned = await client.query(`
-    SELECT 1 FROM pg_catalog.pg_class WHERE relowner = $1
-    UNION ALL SELECT 1 FROM pg_catalog.pg_namespace WHERE nspowner = $1
-    UNION ALL SELECT 1 FROM pg_catalog.pg_proc WHERE proowner = $1
-    UNION ALL SELECT 1 FROM pg_catalog.pg_type WHERE typowner = $1
-    LIMIT 1
+    SELECT 1 FROM pg_catalog.pg_shdepend
+     WHERE refclassid = 'pg_catalog.pg_authid'::pg_catalog.regclass
+       AND refobjid = $1 AND deptype = 'o'
+     LIMIT 1
   `, [attributes.oid]);
   if (owned.rowCount) throw new Error("identity_role_owns_objects");
   const databaseAccess = await client.query(`
@@ -164,7 +163,8 @@ try {
   // Refuse an existing write privilege outside the reviewed matrix, including
   // privileges inherited through PUBLIC and column-level grants.
   const excess = await client.query(`
-    SELECT n.nspname || '.' || c.relname AS relation, p.name AS privilege
+    SELECT n.nspname || '.' || c.relname AS relation, p.name AS privilege,
+           pg_catalog.has_table_privilege($1, c.oid, p.name || ' WITH GRANT OPTION') AS can_delegate
       FROM pg_catalog.pg_class c
       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
       CROSS JOIN unnest($2::text[]) AS p(name)
@@ -174,10 +174,12 @@ try {
   `, [role, knownPrivileges]);
   for (const row of excess.rows) {
     const allowed = privileges.get(row.relation)?.split(", ") ?? [];
-    if (!allowed.includes(row.privilege)) throw new Error("identity_role_existing_privilege_too_broad");
+    if (!allowed.includes(row.privilege) || row.can_delegate)
+      throw new Error("identity_role_existing_privilege_too_broad");
   }
   const columnExcess = await client.query(`
-    SELECT n.nspname || '.' || c.relname AS relation, a.attname, p.name AS privilege
+    SELECT n.nspname || '.' || c.relname AS relation, a.attname, p.name AS privilege,
+           pg_catalog.has_column_privilege($1, c.oid, a.attname, p.name || ' WITH GRANT OPTION') AS can_delegate
       FROM pg_catalog.pg_attribute a
       JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -188,7 +190,8 @@ try {
   `, [role]);
   for (const row of columnExcess.rows) {
     const allowed = privileges.get(row.relation)?.split(", ") ?? [];
-    if (!allowed.includes(row.privilege)) throw new Error("identity_role_existing_column_privilege_too_broad");
+    if (!allowed.includes(row.privilege) || row.can_delegate)
+      throw new Error("identity_role_existing_column_privilege_too_broad");
   }
   const sequenceExcess = await client.query(`
     SELECT 1 FROM pg_catalog.pg_class c

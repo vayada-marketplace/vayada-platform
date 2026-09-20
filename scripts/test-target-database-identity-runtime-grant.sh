@@ -128,6 +128,29 @@ if output="$(run_grant vayada_next_identity_runtime identity 2>&1)"; then
   echo "non-owner grant unexpectedly passed" >&2
   exit 1
 fi
+if output="$(run_grant postgres postgres 2>&1)"; then
+  echo "non-owner grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"identity_grant_table_owner_required"' <<<"${output}" >/dev/null
+
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'CREATE ROLE identity_delegate; GRANT vayada_next_identity_runtime TO identity_delegate' >/dev/null
+expect_grant_failure identity_role_inherits_membership
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE vayada_next_identity_runtime FROM identity_delegate; CREATE SCHEMA role_owned AUTHORIZATION vayada_next_identity_runtime' >/dev/null
+expect_grant_failure identity_role_owns_objects
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'DROP SCHEMA role_owned' >/dev/null
+
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'GRANT SELECT ON identity.users TO vayada_next_identity_runtime WITH GRANT OPTION' >/dev/null
+expect_grant_failure identity_role_existing_privilege_too_broad
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE SELECT ON identity.users FROM vayada_next_identity_runtime; GRANT SELECT (id) ON identity.users TO vayada_next_identity_runtime WITH GRANT OPTION' >/dev/null
+expect_grant_failure identity_role_existing_column_privilege_too_broad
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE SELECT (id) ON identity.users FROM vayada_next_identity_runtime' >/dev/null
 
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c 'ALTER TABLE platform.jobs DISABLE ROW LEVEL SECURITY' >/dev/null
