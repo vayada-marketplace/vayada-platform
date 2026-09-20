@@ -2,9 +2,13 @@ import pg from "pg";
 
 const connectionString = process.env.TARGET_DATABASE_MIGRATION_URL;
 if (!connectionString) throw new Error("migration_url_missing");
+const connectionUrl = new URL(connectionString);
+if (connectionUrl.searchParams.get("sslmode") === "require" && !connectionUrl.searchParams.has("uselibpqcompat")) {
+  connectionUrl.searchParams.set("uselibpqcompat", "true");
+}
 
 const client = new pg.Client({
-  connectionString,
+  connectionString: connectionUrl.toString(),
   connectionTimeoutMillis: 10_000,
   query_timeout: 15_000,
   statement_timeout: 15_000,

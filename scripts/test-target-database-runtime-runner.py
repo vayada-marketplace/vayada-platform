@@ -5,6 +5,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = (ROOT / "scripts/run-target-database-runtime-preflight.sh").read_text()
+GRANT = (ROOT / "scripts/grant-target-database-product-audit-insert.mjs").read_text()
 IAM = (ROOT / "infra/target_database_preflight_iam.tf").read_text()
 
 
@@ -22,6 +23,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('secret_name="TARGET_DATABASE_MIGRATION_URL"', RUNNER)
         self.assertIn('secret_parameter="/vayada/prod/target-database-url"', RUNNER)
         self.assertIn('code_file="grant-target-database-product-audit-insert.mjs"', RUNNER)
+        self.assertIn('connectionUrl.searchParams.set("uselibpqcompat", "true")', GRANT)
 
     def test_task_is_bounded_and_cleaned_up(self) -> None:
         self.assertIn("trap cleanup EXIT", RUNNER)
