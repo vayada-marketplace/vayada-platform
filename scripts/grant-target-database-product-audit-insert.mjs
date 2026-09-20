@@ -1,20 +1,36 @@
 import pg from "pg";
 
-const connectionString = process.env.TARGET_DATABASE_MIGRATION_URL;
-if (!connectionString) throw new Error("migration_url_missing");
-const connectionUrl = new URL(connectionString);
-if (connectionUrl.searchParams.get("sslmode") === "require" && !connectionUrl.searchParams.has("uselibpqcompat")) {
-  connectionUrl.searchParams.set("uselibpqcompat", "true");
-}
-
-const client = new pg.Client({
-  connectionString: connectionUrl.toString(),
-  connectionTimeoutMillis: 10_000,
-  query_timeout: 15_000,
-  statement_timeout: 15_000,
-});
-
+let client;
 try {
+  const connectionString = process.env.TARGET_DATABASE_MIGRATION_URL;
+  if (!connectionString) throw new Error("migration_url_missing");
+  const connectionUrl = new URL(connectionString);
+  const parameters = [...connectionUrl.searchParams.entries()];
+  const localFixture = process.env.VAYADA_AUDIT_GRANT_LOCAL_FIXTURE === "1" &&
+    connectionUrl.hostname === "vayada-db-preflight" && parameters.length === 0;
+  let ssl;
+  if (!localFixture) {
+    if (connectionUrl.hostname !== "vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com" ||
+        connectionUrl.port !== "5432")
+      throw new Error("unexpected_database_host");
+    if (connectionUrl.searchParams.get("sslmode") !== "require")
+      throw new Error("rds_ssl_required");
+    if (parameters.length !== 1 || parameters[0][0] !== "sslmode")
+      throw new Error("unsupported_connection_parameters");
+    const ca = process.env.VAYADA_DB_RDS_CA_BUNDLE;
+    if (!ca) throw new Error("rds_ca_missing");
+    connectionUrl.searchParams.delete("sslmode");
+    ssl = { ca, rejectUnauthorized: true, servername: connectionUrl.hostname };
+  }
+
+  client = new pg.Client({
+    connectionString: connectionUrl.toString(),
+    ssl,
+    connectionTimeoutMillis: 10_000,
+    query_timeout: 15_000,
+    statement_timeout: 15_000,
+  });
+
   await client.connect();
   const role = await client.query(
     "SELECT 1 FROM pg_roles WHERE rolname = 'vayada_next_api_runtime'",
@@ -49,10 +65,15 @@ try {
     "runtime_role_missing",
     "audit_runtime_write_scope_too_broad",
     "audit_runtime_insert_missing",
+    "unexpected_database_host",
+    "rds_ca_missing",
+    "rds_ssl_required",
+    "migration_url_missing",
+    "unsupported_connection_parameters",
   ]);
   const code = expected.has(error.message) ? error.message : error.code ?? "audit_grant_failed";
   console.error(JSON.stringify({ status: "FAIL", code }));
   process.exitCode = 1;
 } finally {
-  await client.end();
+  await client?.end().catch(() => undefined);
 }

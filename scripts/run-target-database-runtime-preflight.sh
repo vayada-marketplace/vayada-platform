@@ -7,6 +7,7 @@ done
 
 region="eu-west-1"
 mode="${1:-preflight}"
+ca_bundle=""
 case "${mode}" in
   preflight)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -17,6 +18,15 @@ case "${mode}" in
     ;;
   --grant-product-audit-insert)
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
+    for command_name in curl shasum; do
+      command -v "${command_name}" >/dev/null || { echo "Required command not found: ${command_name}" >&2; exit 1; }
+    done
+    ca_bundle="$(curl -fsSL --connect-timeout 5 --max-time 15 \
+      https://truststore.pki.rds.amazonaws.com/eu-west-1/eu-west-1-bundle.pem)"
+    ca_hash="$(printf '%s' "${ca_bundle}" | shasum -a 256 | cut -d ' ' -f 1)"
+    [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
+      echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
+    }
     code_file="grant-target-database-product-audit-insert.mjs"
     secret_name="TARGET_DATABASE_MIGRATION_URL"
     secret_parameter="/vayada/prod/target-database-url"
@@ -32,7 +42,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 payload="$(gzip -9 -c "${script_dir}/${code_file}" | base64 | tr -d '\n')"
 bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';fs.writeFileSync(p,z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));import(p).catch(()=>{console.error(JSON.stringify({status:'FAIL',code:'runtime_preflight_bootstrap_failed'}));process.exit(1)})"
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
-  '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],environment:[{name:"VAYADA_DB_RUNTIME_PREFLIGHT_CODE",value:$code}]}]}')"
+  --arg ca "${ca_bundle}" \
+  '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
+    environment:([{name:"VAYADA_DB_RUNTIME_PREFLIGHT_CODE",value:$code}] +
+      (if $ca == "" then [] else [{name:"VAYADA_DB_RDS_CA_BUNDLE",value:$ca}] end))}]}')"
 [[ "${#overrides}" -le 8192 ]] || { echo "ECS command override exceeds the 8192-byte limit." >&2; exit 1; }
 
 current_task="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" \

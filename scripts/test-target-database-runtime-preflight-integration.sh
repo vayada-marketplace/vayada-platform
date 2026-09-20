@@ -27,6 +27,7 @@ docker volume create "${node_modules_container}" >/dev/null
 docker run --detach --rm \
   --name "${database_container}" \
   --network "${network}" \
+  --network-alias vayada-db-preflight \
   --env POSTGRES_PASSWORD=postgres \
   "postgres:${postgres_version}" >/dev/null
 
@@ -109,12 +110,14 @@ cp "${root}/scripts/grant-target-database-product-audit-insert.mjs" "${work}/gra
 run_grant() {
   local database_role="$1"
   local database_password="$2"
+  local fixture_flag="${3:-1}"
   docker run --rm \
     --network "${network}" \
     --volume "${node_modules_container}:/work" \
     --volume "${work}/grant.mjs:/work/grant.mjs:ro" \
     --workdir /work \
-    --env "TARGET_DATABASE_MIGRATION_URL=postgresql://${database_role}:${database_password}@${database_container}:5432/postgres" \
+    --env "TARGET_DATABASE_MIGRATION_URL=postgresql://${database_role}:${database_password}@vayada-db-preflight:5432/postgres" \
+    --env "VAYADA_AUDIT_GRANT_LOCAL_FIXTURE=${fixture_flag}" \
     node:22-bookworm node grant.mjs
 }
 
@@ -137,6 +140,36 @@ expect_failure() {
   fi
   grep -F "${expected}" <<<"${output}" >/dev/null
 }
+
+if untrusted_host_output="$(run_grant legacy_owner owner 0 2>&1)"; then
+  echo "non-RDS grant without explicit test fixture unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"unexpected_database_host"' <<<"${untrusted_host_output}" >/dev/null
+
+if ambiguous_tls_output="$(docker run --rm \
+  --volume "${node_modules_container}:/work" \
+  --volume "${work}/grant.mjs:/work/grant.mjs:ro" \
+  --workdir /work \
+  --env 'TARGET_DATABASE_MIGRATION_URL=postgresql://legacy_owner:owner@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require&ssl=0' \
+  --env VAYADA_DB_RDS_CA_BUNDLE=test-ca \
+  node:22-bookworm node grant.mjs 2>&1)"; then
+  echo "conflicting TLS parameter unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"unsupported_connection_parameters"' <<<"${ambiguous_tls_output}" >/dev/null
+
+if override_host_output="$(docker run --rm \
+  --volume "${node_modules_container}:/work" \
+  --volume "${work}/grant.mjs:/work/grant.mjs:ro" \
+  --workdir /work \
+  --env 'TARGET_DATABASE_MIGRATION_URL=postgresql://legacy_owner:owner@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require&host=elsewhere.example.test' \
+  --env VAYADA_DB_RDS_CA_BUNDLE=test-ca \
+  node:22-bookworm node grant.mjs 2>&1)"; then
+  echo "overridden database host unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"unsupported_connection_parameters"' <<<"${override_host_output}" >/dev/null
 
 if non_owner_output="$(run_grant vayada_next_api_runtime runtime 2>&1)"; then
   echo "non-owner audit grant unexpectedly passed" >&2

@@ -296,7 +296,9 @@ GRANT INSERT ON platform.product_audit_events TO vayada_next_api_runtime;
 Use `scripts/run-target-database-runtime-preflight.sh --grant-product-audit-insert`
 to apply this one grant from a temporary task inside the database network.
 The task receives only the migration-owner URL and no application secrets;
-it checks table ownership and refuses to run if the runtime role has audit
+the runner checksum-pins the official eu-west-1 RDS CA bundle and the task
+verifies the database certificate and hostname. It checks table ownership
+and refuses to run if the runtime role has audit
 `UPDATE` or `DELETE`. Then run `scripts/run-target-database-runtime-preflight.sh`
 before relying on runtime login. Its allowlist requires audit
 `INSERT` while continuing to reject audit `UPDATE` and `DELETE`.
