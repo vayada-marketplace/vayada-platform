@@ -1,0 +1,40 @@
+{
+  "scope": "targeted remaining IAM bootstrap after inline-policy quota failure",
+  "previousPlanResult": "Receiver role and inline policy created; CI inline policy update failed quota and was not applied.",
+  "terraformVersion": "1.5.7",
+  "planSha256": "b6e8f93a837b71514871b8054a3a3726e2478053d3a14d444e56d2c0c0d295d0",
+  "actions": {
+    "aws_iam_policy.coordinated_receiver_management": [
+      "create"
+    ],
+    "aws_iam_role_policy_attachment.coordinated_receiver_management": [
+      "create"
+    ]
+  },
+  "resources": {
+    "aws_iam_policy.coordinated_receiver_management": {
+      "description": "Scoped platform CI management of the coordinated receiver role",
+      "name": "vayada-coordinated-receiver-management",
+      "path": "/",
+      "policy": "{\"Statement\":[{\"Action\":[\"iam:UpdateRole\",\"iam:UpdateAssumeRolePolicy\",\"iam:UntagRole\",\"iam:TagRole\",\"iam:PutRolePolicy\",\"iam:ListRolePolicies\",\"iam:ListAttachedRolePolicies\",\"iam:GetRolePolicy\",\"iam:GetRole\",\"iam:CreateRole\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:iam::269416271598:role/vayada-github-actions-coordinated-deploy\",\"Sid\":\"ManageCoordinatedReceiverRole\"},{\"Action\":[\"iam:ListPolicyVersions\",\"iam:GetPolicyVersion\",\"iam:GetPolicy\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:iam::269416271598:policy/vayada-coordinated-receiver-management\",\"Sid\":\"ReadOwnManagedPolicy\"}],\"Version\":\"2012-10-17\"}",
+      "tags": null
+    },
+    "aws_iam_role_policy_attachment.coordinated_receiver_management": {
+      "role": "vayada-github-actions-platform-deploy"
+    }
+  },
+  "limitations": [
+    "Private plan contains state, never commit or upload it.",
+    "Unrelated variables are placeholders; never run untargeted apply from this scratch directory.",
+    "Consumed approved plan; do not reapply."
+  ],
+  "executionResult": {
+    "status": "applied with explicit user approval",
+    "resourcesAdded": 2,
+    "resourcesChanged": 0,
+    "resourcesDestroyed": 0,
+    "verifiedPolicyAndAttachment": true,
+    "platformPermissionSimulation": "Receiver management and own-policy reads all allowed",
+    "recordedAt": "2026-09-20T07:33:01.770330+00:00"
+  }
+}

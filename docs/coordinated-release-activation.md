@@ -1,9 +1,12 @@
 # VAY-2029 activation record and runbook
 
-Status: **NOT READY — no activation or infrastructure mutation performed.**
+Status: **NOT READY — activation disabled; approved receiver IAM and CI
+managed-policy bootstrap applied and verified. Receiver access and remaining
+activation gates are still open.**
 Read with [the architecture](https://linear.app/vayadacom/document/coordinated-deployment-architecture-and-acceptance-plan-3f706981f863)
 and [runtime controls](coordinated-releases.md). VAY-2027 and VAY-2028 were
-explicitly accepted; that is not evidence that the receiver IAM is installed.
+explicitly accepted. Receiver IAM installation was subsequently verified during
+the VAY-2029 operator bootstrap recorded below.
 
 ## Reviewed inputs and observed state
 
@@ -41,12 +44,18 @@ inventory, not authenticated product smoke.
 
 ## Blocking gates
 
-1. AWS `GetRole` reports `NoSuchEntity` for
-   `vayada-github-actions-coordinated-deploy`. [Apply 35212756725](https://github.com/vayada-marketplace/vayada-platform/actions/runs/35212756725)
-   failed because `vayada-github-actions-platform-deploy` lacks `iam:CreateRole`
-   on that exact role. An authorized infrastructure operator must prepare and
-   approve scoped IAM bootstrap and a clean Terraform plan. Do not retry the
-   failed apply unchanged or grant wildcard IAM administration.
+1. **Resolved IAM prerequisite.** The approved operator apply created `vayada-github-actions-coordinated-deploy`
+   and its inline policy, verified against the approved trust/policy document.
+   Updating the platform CI inline policy failed with `LimitExceeded: Maximum
+   policy size of 10240 bytes exceeded`, temporarily leaving CI without receiver access.
+   The revised scoped plan created `vayada-coordinated-receiver-management` as
+   a managed policy and attached it to the platform role, retaining the same
+   receiver management grant plus read-only access to its own policy metadata.
+   The revised two-resource plan was approved and applied successfully. Direct
+   policy/attachment verification and CI permission simulations pass.
+   Historical [apply 35212756725](https://github.com/vayada-marketplace/vayada-platform/actions/runs/35212756725)
+   originally failed `iam:CreateRole`; do not retry that broad apply unchanged.
+
 2. `COORDINATED_RELEASE_READ_TOKEN` is absent from the platform repository and
    `next` environment secret listings. Organization-secret inspection is denied
    (HTTP 403), so inherited availability remains unverified. Configure a
@@ -192,3 +201,34 @@ Keep VAY-2029 In Progress until deployed evidence and explicit human acceptance.
   findings in these changes. Complexity pass found no additional abstraction
   to remove. No product code changed; product builds/smoke are not claimed here.
 - These checks do not complete the ticket's integrated or deployed acceptance.
+
+## Scoped IAM bootstrap execution and remaining plan
+
+The [original reviewed plan](evidence/vay-2029/iam-bootstrap-plan.json) was
+approved and partially applied: receiver role/policy creation succeeded; the
+platform inline-policy update failed the role's aggregate 10,240-byte quota.
+Created resources remain intact and match the approved trust and policy.
+
+The [revised approved plan](evidence/vay-2029/iam-managed-policy-plan.json)
+created one managed policy and its attachment successfully (2 added, 0 changed,
+0 destroyed). Direct policy/attachment checks and CI permission simulations pass. It makes no changes to the
+receiver, existing inline policies, ECS, databases or runtime SSM values.
+`ManageCoordinatedReceiverRole` is scoped to the receiver ARN; `ReadOwnManagedPolicy`
+allows only GetPolicy/GetPolicyVersion/ListPolicyVersions on the new policy.
+There is no wildcard IAM management or self-policy editing permission.
+
+The private plans remain outside Git. They are targeted recovery plans using
+placeholders for unrelated excluded secret variables, not full-stack drift
+plans. Never execute an untargeted apply from that scratch directory. Both saved plans are consumed and must not be reused. CI plan run `35496945536`, attempt 2, passes after bootstrap and reports
+"No changes. Your infrastructure matches the configuration." Receiver OIDC and
+cross-repository artifact access still require separate proof. Merging the
+approved IAM configuration retains it on main; monitor the triggered Terraform
+workflow and stop on unexpected changes. Coordinated activation remains gated.
+
+Additional coordinated blocker reported by VAY-1543: normal API is still task
+`:1116`; [run 35496636149](https://github.com/vayada-marketplace/vayada-platform/actions/runs/35496636149)
+rejected digest `sha256:afd694c997eb910e7019a7e9f6cf521f030f49e167bab2b2b32fc50f541da242`
+because it has no reviewed immutable split-launcher attestation. Preserve that
+guard and the API hold; do not dispatch a duplicate or use coordinated resume
+to bypass this compatibility gate. The coordinated path must enforce the same
+compatibility check before activation is eligible.
