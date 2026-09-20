@@ -25,6 +25,8 @@ on:
       - "scripts/run-target-database-runtime-preflight.sh"
       - "scripts/target-database-runtime-preflight.mjs"
       - "scripts/grant-target-database-product-audit-insert.mjs"
+      - "scripts/grant-target-database-identity-runtime.mjs"
+      - "scripts/test-target-database-identity-runtime-grant.sh"
       - "scripts/test-target-database-runtime-preflight.py"
       - "scripts/test-target-database-runtime-runner.py"
       - "scripts/test-target-database-runtime-preflight-integration.sh"
@@ -78,6 +80,20 @@ permissions:
   contents: read
 
 jobs:
+  identity-runtime-grant:
+    name: Identity runtime grant (PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        postgres: ["16", "17"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify scoped identity grants and denials
+        run: bash scripts/test-target-database-identity-runtime-grant.sh "${{ matrix.postgres }}"
+
   target-database-runtime-preflight:
     name: Runtime database preflight (PostgreSQL ${{ matrix.postgres }})
     runs-on: ubuntu-latest
@@ -146,6 +162,8 @@ jobs:
           bash -n scripts/run-target-database-runtime-preflight.sh
           node --check scripts/target-database-runtime-preflight.mjs
           node --check scripts/grant-target-database-product-audit-insert.mjs
+          node --check scripts/grant-target-database-identity-runtime.mjs
+          bash -n scripts/test-target-database-identity-runtime-grant.sh
           python3 scripts/test-target-database-runtime-preflight.py
           python3 scripts/test-target-database-runtime-runner.py
           python3 scripts/test-next-api-split-compatible-image.py
