@@ -232,6 +232,50 @@ class DeploymentGuards(unittest.TestCase):
         self.assertIn("--read-only", probe)
         self.assertNotIn("synthetic-token", " ".join(probe))
 
+    def test_published_offer_opt_in_is_scoped_and_keeps_workers_paused(self):
+        source = {"environment": [{"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}], "secrets": []}
+        api["configure_channex_staging"](source, meals=True, inventory=True,
+                                          worker_enabled="false", published_offers=True)
+        env = {e["name"]: e["value"] for e in source["environment"]}
+        self.assertEqual(env["PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED"], "true")
+        self.assertEqual(env["PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID"], api["PROPERTY"])
+        self.assertEqual(env["PMS_CHANNEX_PROVISIONING_MODE"], "mutating")
+        self.assertEqual(env["PMS_CHANNEX_WORKER_ENABLED"], "false")
+        self.assertEqual(env["API_BACKGROUND_WORKERS_ENABLED"], "false")
+        self.assertEqual(env["PMS_CHANNEX_BOOKING_SYNC_MODE"], "observe_only")
+        api["configure_channex_staging"](source, meals=True, inventory=True, worker_enabled="false")
+        self.assertNotIn("PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED",
+                         {e["name"] for e in source["environment"]})
+
+    def test_published_offer_probe_requires_compiled_flag(self):
+        calls = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="synthetic-token", stderr=""))
+        with patch.object(subprocess, "run", calls):
+            api["verify_inventory_image"]("sha256:" + "b" * 64, published_offers=True)
+        probe = calls.call_args_list[-1].args[0]
+        self.assertIn("stagingPublishedOffersEnabled !== true", probe[-1])
+        self.assertIn("PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED:'true'", probe[-1])
+        self.assertIn("--read-only", probe)
+
+    def test_published_offer_requires_scoped_inventory_before_aws(self):
+        main = api["main"]
+        aws = MagicMock(side_effect=AssertionError("AWS must not be called"))
+        with patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40,
+                                "--channex-staging", "--channex-staging-published-offers"]), patch.dict(main.__globals__, {"aws": aws}):
+            with self.assertRaisesRegex(ValueError, "require scoped staging inventory"):
+                main()
+        aws.assert_not_called()
+
+    def test_published_offer_enable_and_disable_cannot_be_combined(self):
+        main = api["main"]
+        aws = MagicMock(side_effect=AssertionError("AWS must not be called"))
+        with patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40,
+                                "--channex-staging", "--channex-staging-inventory",
+                                "--channex-staging-published-offers",
+                                "--disable-channex-staging-published-offers"]), patch.dict(main.__globals__, {"aws": aws}):
+            with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+                main()
+        aws.assert_not_called()
+
     def test_no_show_requires_staging_before_aws(self):
         main = api["main"]
         aws = MagicMock(side_effect=AssertionError("AWS must not be called"))
@@ -447,6 +491,20 @@ class WorkerStateChanges(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Disable room closure"):
                 fn(existing, definition, "next-" + "a" * 40, "running", True, inventory=True)
         self.assertEqual(calls.call_count, 1)
+
+    def test_published_offers_must_be_disabled_before_worker_resume(self):
+        existing, definition = self.fixture("false", inventory=True)
+        container = definition["containerDefinitions"][0]
+        api["configure_channex_staging"](container, meals=True, inventory=True,
+                                          worker_enabled="false", published_offers=True)
+        fn = api["change_staging_worker"]
+        calls = MagicMock(return_value={"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]})
+        with patch.dict(fn.__globals__, {"aws": calls}):
+            with self.assertRaisesRegex(ValueError, "Disable scoped published offers"):
+                fn(existing, definition, "next-" + "a" * 40, "running", True, plan=True, inventory=True)
+        api["configure_channex_staging"](container, meals=True, inventory=True, worker_enabled="false")
+        with patch.dict(fn.__globals__, {"aws": calls}):
+            fn(existing, definition, "next-" + "a" * 40, "running", True, plan=True, inventory=True)
 
     def test_pause_resume_preserve_every_other_task_field_and_never_touch_routes(self):
         for enabled, state, value in (("true", "paused", "false"), ("false", "running", "true")):

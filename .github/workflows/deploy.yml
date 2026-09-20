@@ -38,6 +38,12 @@ on:
         required: false
         type: boolean
         default: false
+      channex_staging_published_offers:
+        description: "Preserve, enable, or disable saved-offer provisioning on the synthetic Channex property"
+        required: false
+        type: choice
+        options: [preserve, enabled, disabled]
+        default: preserve
       room_closure:
         description: "Enable room closure on the already-paused synthetic canary"
         required: false
@@ -499,6 +505,7 @@ jobs:
           CHANNEX_STAGING: ${{ inputs.channex_staging }}
           CHANNEX_STAGING_MEALS: ${{ inputs.channex_staging_meals }}
           CHANNEX_STAGING_INVENTORY: ${{ inputs.channex_staging_inventory }}
+          CHANNEX_STAGING_PUBLISHED_OFFERS: ${{ inputs.channex_staging_published_offers }}
           ROOM_CLOSURE: ${{ inputs.room_closure }}
           CHANNEX_STAGING_ALERTS: ${{ inputs.channex_staging_alerts }}
           CHANNEX_STAGING_NO_SHOW: ${{ inputs.channex_staging_no_show }}
@@ -507,6 +514,7 @@ jobs:
           set -euo pipefail
           test "$ENVIRONMENT" = next
           if [ "${CHANNEX_WORKER_STATE:-preserve}" != preserve ]; then test "$SERVICE" = next-maps-canary; fi
+          if [ "$CHANNEX_STAGING_PUBLISHED_OFFERS" != preserve ]; then test "$SERVICE" = next-maps-canary; fi
           if [ "$SERVICE" = next-maps-guest ]; then python3 scripts/deploy-next-maps-frontends.py --guest-image-sha "$IMAGE_SHA" --guest-image-digest "$IMAGE_DIGEST"; exit 0; fi
           if [ "$SERVICE" = next-maps-guest-remove ]; then python3 scripts/deploy-next-maps-frontends.py --remove-guest; exit 0; fi
           if [ "$SERVICE" = next-maps-frontends ]; then python3 scripts/deploy-next-maps-frontends.py; exit 0; fi
@@ -515,6 +523,8 @@ jobs:
           if [ "$CHANNEX_STAGING" = true ]; then args+=(--channex-staging); fi
           if [ "$CHANNEX_STAGING_MEALS" = true ]; then args+=(--channex-staging-meals); fi
           if [ "$CHANNEX_STAGING_INVENTORY" = true ]; then args+=(--channex-staging-inventory); fi
+          if [ "$CHANNEX_STAGING_PUBLISHED_OFFERS" = enabled ]; then args+=(--channex-staging-published-offers); fi
+          if [ "$CHANNEX_STAGING_PUBLISHED_OFFERS" = disabled ]; then args+=(--disable-channex-staging-published-offers); fi
           if [ "$ROOM_CLOSURE" = true ]; then args+=(--room-closure); fi
           if [ "$CHANNEX_STAGING_ALERTS" = true ]; then args+=(--channex-staging-alerts); fi
           if [ "$CHANNEX_STAGING_NO_SHOW" = true ]; then args+=(--channex-staging-no-show); fi
