@@ -252,7 +252,8 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/channex-api-key`        | `pms-api`                          |
 | `/vayada/prod/firecrawl-api-key`      | `pms-api`                          |
 | `/vayada/prod/cloudflare-api-token`   | platform Terraform                 |
-| `/vayada/prod/target-database-url`    | `next-api`                         |
+| `/vayada/prod/target-database-url`    | `next-api` startup migrations      |
+| `/vayada/prod/target-database-runtime-url` | `next-api` runtime            |
 | `/vayada/prod/workos-api-key`         | `next-api`                         |
 | `/vayada/prod/workos-client-id`       | `next-api`                         |
 | `/vayada/prod/workos-webhook-secret`  | `next-api`                         |
@@ -264,8 +265,9 @@ environment as:
 
 | Backend env var | SSM parameter or Terraform variable |
 | --- | --- |
-| `TARGET_DATABASE_URL` | `/vayada/prod/target-database-url` |
-| `AUTH_DATABASE_URL` | `/vayada/prod/target-database-url` |
+| `TARGET_DATABASE_URL` | `/vayada/prod/target-database-runtime-url` |
+| `AUTH_DATABASE_URL` | `/vayada/prod/target-database-runtime-url` |
+| `TARGET_DATABASE_MIGRATION_URL` | `/vayada/prod/target-database-url` |
 | `WORKOS_CLIENT_ID` | `/vayada/prod/workos-client-id` |
 | `WORKOS_WEBHOOK_SECRET` | `/vayada/prod/workos-webhook-secret` |
 | `AUTH_COOKIE_SECRET` | `/vayada/prod/auth-cookie-secret` |
@@ -273,6 +275,26 @@ environment as:
 | `MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_CURRENT_KEY_VERSION` | Terraform variable committed as the active version identifier |
 | `MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_KEYS_JSON` | `/vayada/prod/marketplace-communication-unsubscribe-signing-keys` |
 | `WORKOS_AUDIENCE`, `WORKOS_ISSUER`, `WORKOS_JWKS_URL` | Terraform variables from matching GitHub Actions secrets |
+
+The existing `target-database-url` remains the migration-owner credential and
+is available only to the startup migration child. The long-running API,
+finance inventory, and Stripe smoke task use `target-database-runtime-url`.
+`target-database-runtime-url` is provisioned outside Terraform so its database
+principal and receipt-table privileges can be proved before this mapping is
+applied. It must identify the exact restricted `vayada_next_api_runtime` role,
+not merely contain a URL string different from the migration credential.
+
+Roll out in two phases. First deploy application release
+`8c2cdef397522740c9fe7803efc2ed36d637bac5` (or retain an already-split task),
+then provision and prove the runtime role/SSM parameter before applying this
+mapping. Hosted apply verifies both conditions and fails closed otherwise.
+Do not activate receipt-protected owners while a pre-split task definition is a
+rollback candidate. After activation, every rollback must retain the three
+split bindings above; restoring the migration-owner URL to `TARGET_DATABASE_URL`
+or `AUTH_DATABASE_URL` is prohibited. Production next-api deploys and rollbacks
+must also use an immutable digest reviewed in
+`scripts/next-api-split-compatible-images.txt`; add a digest only after its
+launcher is proved to remove the migration credential before starting the API.
 
 Set the required GitHub Actions repository secrets before merging or applying a
 live `next-api` task definition: `TF_VAR_TARGET_DATABASE_URL`,
@@ -428,7 +450,7 @@ definition. It is deliberately not attached to an ECS service, listener, or
 public DNS name. Its default command exits immediately, so it cannot start the
 API or duplicate target background workers by accident.
 
-The task receives the production-owned target database URL for isolated QA
+The task receives the restricted target database runtime URL for isolated QA
 property checks and a dedicated restricted `rk_test_` Stripe credential from
 `/vayada/staging/next-stripe-test-secret-key`. The restricted key must keep all
 unrelated permissions at `None` and grant only these connected-account

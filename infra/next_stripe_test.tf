@@ -27,7 +27,7 @@ resource "aws_ecs_task_definition" "next_stripe_test_smoke" {
       secrets = [
         {
           name      = "TARGET_DATABASE_URL"
-          valueFrom = "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/prod/target-database-url"
+          valueFrom = "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/prod/target-database-runtime-url"
         },
         {
           name      = "STRIPE_SECRET_KEY"

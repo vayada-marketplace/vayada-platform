@@ -341,10 +341,11 @@ locals {
         { name = "AUTH_AFFILIATE_DASHBOARD_LOGOUT_URL", value = "https://next-affiliate.vayada.com/login" },
       ]
       secrets = concat([
-        { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
+        { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-runtime-url" },
+        { name = "TARGET_DATABASE_MIGRATION_URL", valueFrom = "/vayada/prod/target-database-url" },
         { name = "CHANNEX_API_KEY", valueFrom = "/vayada/prod/channex-api-key" },
         { name = "CHANNEX_WEBHOOK_SECRET", valueFrom = "/vayada/prod/next-channex-webhook-token" },
-        { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/target-database-url" },
+        { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/target-database-runtime-url" },
         { name = "STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/stripe-secret-key" },
         { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/stripe-webhook-secret" },
         { name = "RESEND_API_KEY", valueFrom = "/vayada/prod/resend-api-key" },
@@ -621,7 +622,7 @@ resource "aws_ecs_task_definition" "services" {
           length(trimspace(var.workos_jwks_url)) > 0
         )
       )
-      error_message = "next-api.vayada.com requires production target DB/Auth, booking email, and Stripe values: TF_VAR_TARGET_DATABASE_URL, TF_VAR_WORKOS_API_KEY, TF_VAR_WORKOS_WEBHOOK_SECRET, TF_VAR_AUTH_COOKIE_SECRET, TF_VAR_RESEND_API_KEY, TF_VAR_STRIPE_SECRET_KEY, TF_VAR_STRIPE_WEBHOOK_SECRET, TF_VAR_WORKOS_AUDIENCE, TF_VAR_WORKOS_ISSUER, and TF_VAR_WORKOS_JWKS_URL. It also requires /vayada/prod/workos-client-id in SSM."
+      error_message = "next-api.vayada.com requires production target migration DB, Auth, booking email, and Stripe values: TF_VAR_TARGET_DATABASE_URL, TF_VAR_WORKOS_API_KEY, TF_VAR_WORKOS_WEBHOOK_SECRET, TF_VAR_AUTH_COOKIE_SECRET, TF_VAR_RESEND_API_KEY, TF_VAR_STRIPE_SECRET_KEY, TF_VAR_STRIPE_WEBHOOK_SECRET, TF_VAR_WORKOS_AUDIENCE, TF_VAR_WORKOS_ISSUER, and TF_VAR_WORKOS_JWKS_URL. It also requires externally provisioned /vayada/prod/target-database-runtime-url and /vayada/prod/workos-client-id SSM parameters."
     }
 
   }

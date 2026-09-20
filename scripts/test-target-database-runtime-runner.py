@@ -5,7 +5,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = (ROOT / "scripts/run-target-database-runtime-preflight.sh").read_text()
-IAM = (ROOT / "infra/github_actions_iam.tf").read_text()
+IAM = (ROOT / "infra/target_database_preflight_iam.tf").read_text()
 
 
 class RuntimePreflightRunnerTest(unittest.TestCase):
