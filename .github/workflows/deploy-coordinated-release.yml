@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Reconcile all services or resume one held physical service
+        description: Reconcile, resume, activate, or verify publication without deployment
         required: true
         type: choice
-        options: [ordinary, resume, activate]
+        options: [ordinary, resume, activate, verify]
         default: ordinary
       published_artifact_id:
         description: Exact non-expired published artifact ID from vayada
@@ -122,6 +122,7 @@ jobs:
   api:
     name: Reconcile API and verify readiness
     needs: prepare
+    if: ${{ needs.prepare.result == 'success' && inputs.operation != 'verify' }}
     environment: next
     runs-on: ubuntu-latest
     steps:
@@ -179,7 +180,7 @@ jobs:
   finalize:
     name: Report per-service durable result
     needs: [prepare, api, frontends]
-    if: always() && needs.prepare.result == 'success'
+    if: always() && needs.prepare.result == 'success' && inputs.operation != 'verify'
     environment: next
     runs-on: ubuntu-latest
     steps:

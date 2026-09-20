@@ -847,7 +847,8 @@ class Aws:
             fail(f"ECR does not contain the immutable desired image for {key}")
         tags = details[0].get("imageTags") or []
         expected_source_tag = f"next-{image['imageSourceSha']}"
-        if expected_source_tag not in tags:
+        preparation_tag = f"next-prepare-{image['imageSourceSha']}"
+        if expected_source_tag not in tags and preparation_tag not in tags:
             fail(f"ECR digest for {key} is not tagged with {expected_source_tag}")
 
     def register_rendered_task(self, key: str, snapshot: dict[str, Any], digest: str) -> str:
@@ -1240,6 +1241,20 @@ def prepare_release(args: argparse.Namespace) -> None:
         publisher_run=publisher_run,
         config=config,
     )
+    if args.operation == "verify":
+        # End before ownership/state access: verification must not become activation.
+        aws = Aws(CommandRunner(), config)
+        target = manifest["source"]["sha"]
+        for source in {image["imageSourceSha"] for image in manifest["services"].values()}:
+            if github.compare(source, target) not in {"ahead", "identical"}:
+                fail("Published image source is not an ancestor of the release")
+        for key, image in manifest["services"].items():
+            aws.verify_image(key, image)
+        result = {"manifestId": manifest["manifestId"], "sourceSha": target,
+                  "verification": "publication-ancestry-images", "deploymentReadiness": "not-checked"}
+        (output / "verification.json").write_text(json.dumps(result, indent=2) + "\n")
+        print(json.dumps(result))
+        return
     runner = CommandRunner()
     aws = Aws(runner, config)
     mode = ownership_mode(aws, config)
@@ -1883,7 +1898,7 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("--manifest-sha256")
     prepare.add_argument("--published-record-sha256")
     prepare.add_argument("--dispatch-json")
-    prepare.add_argument("--operation", choices=("ordinary", "resume", "activate"), required=True)
+    prepare.add_argument("--operation", choices=("ordinary", "resume", "activate", "verify"), required=True)
     prepare.add_argument("--service")
     prepare.add_argument("--operation-id", required=True)
     prepare.add_argument("--output-dir", required=True)

@@ -125,6 +125,36 @@ class ContractTests(unittest.TestCase):
         manifest, record = self.validate()
         self.assertEqual(manifest["manifestId"], record["manifestId"])
 
+    def test_publication_verification_checks_real_contract_without_state_or_ecs_access(self):
+        for order, bad_hash in (("ahead", False), ("diverged", False), ("ahead", True)):
+            with self.subTest(order=order, bad_hash=bad_hash), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory)
+                (output / "manifest.json").write_bytes(self.manifest_path.read_bytes())
+                (output / "published-record.json").write_bytes(self.record_path.read_bytes())
+                github = mock.Mock()
+                github.download_bundle.return_value = self.artifact()
+                github.json.side_effect = [self.build_run(), self.publisher_run()]
+                github.compare.return_value = order
+                aws = mock.Mock()
+                args = argparse.Namespace(config=release.DEFAULT_CONFIG, artifact_id=93001,
+                    output_dir=directory, dispatch_json=None, operation="verify",
+                    manifest_sha256="0" * 64 if bad_hash else release.sha256_file(self.manifest_path),
+                    published_record_sha256=release.sha256_file(self.record_path))
+                with mock.patch.dict(release.os.environ, {"COORDINATED_RELEASE_READ_TOKEN": "test-token"}), \
+                     mock.patch.object(release, "GitHub", return_value=github), \
+                     mock.patch.object(release, "Aws", return_value=aws):
+                    if bad_hash or order == "diverged":
+                        with self.assertRaises(release.ReleaseError):
+                            release.prepare_release(args)
+                        self.assertEqual(aws.method_calls, [])
+                        self.assertFalse((output / "verification.json").exists())
+                    else:
+                        release.prepare_release(args)
+                        self.assertEqual(aws.method_calls, [mock.call.verify_image(key, image)
+                            for key, image in self.manifest["services"].items()])
+                        self.assertEqual(release.read_json(output / "verification.json")["deploymentReadiness"], "not-checked")
+                    self.assertFalse((output / "plan.json").exists())
+
     def test_producer_invalid_repository_fixture_is_rejected(self):
         invalid = release.read_json(ROOT / "deployment" / "contract" / "fixtures" / "manifest-v1.invalid-wrong-repository.json")
         with self.assertRaisesRegex(release.ReleaseError, "repository"):
@@ -527,6 +557,19 @@ class PhysicalIdentityTests(unittest.TestCase):
                 "imageSourceSha": "1" * 40,
             })
 
+    def test_preparation_tag_binds_the_same_exact_source_and_digest(self):
+        image = {"ecrRepository": "vayada-next-api", "digest": "sha256:" + "a" * 64,
+                 "imageSourceSha": "1" * 40}
+        aws = release.Aws(self.Runner(self.config), self.config)
+        for source in ("1" * 40, "2" * 40):
+            with mock.patch.object(aws, "json", return_value={"imageDetails": [{
+                "imageDigest": image["digest"], "imageTags": ["next-prepare-" + source]}]}):
+                if source == image["imageSourceSha"]:
+                    aws.verify_image("next-target-backend", image)
+                else:
+                    with self.assertRaises(release.ReleaseError):
+                        aws.verify_image("next-target-backend", image)
+
     def test_task_render_changes_only_allowlisted_container_image(self):
         runner = self.Runner(self.config)
         aws = release.Aws(runner, self.config)
@@ -722,7 +765,8 @@ class WorkflowContractTests(unittest.TestCase):
         control = (ROOT / ".github" / "workflows" / "manage-coordinated-release.yml").read_text()
         deployment = (ROOT / ".github" / "workflows" / "deploy-coordinated-release.yml").read_text()
         self.assertIn("options: [hold, acknowledge, set-legacy-mode]", control)
-        self.assertIn("options: [ordinary, resume, activate]", deployment)
+        self.assertIn("options: [ordinary, resume, activate, verify]", deployment)
+        self.assertIn("needs.prepare.result == 'success' && inputs.operation != 'verify'", deployment)
         self.assertIn("published_record_sha256", deployment)
 
 
