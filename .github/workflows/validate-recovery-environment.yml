@@ -1,0 +1,26 @@
+name: Validate isolated recovery environment
+
+on:
+  pull_request:
+    paths:
+      - "rehearsal/coordinated/**"
+      - ".github/workflows/validate-recovery-environment.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rehearsal/coordinated
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.5.7
+      - run: terraform fmt -check
+      - run: terraform init -backend=false -input=false -lockfile=readonly
+      - run: terraform validate
+      - run: python3 -m unittest test_fixture.py
