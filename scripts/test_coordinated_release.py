@@ -4,6 +4,7 @@ import argparse
 import copy
 import datetime as dt
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
@@ -16,6 +17,24 @@ SPEC = importlib.util.spec_from_file_location("coordinated_release", ROOT / "scr
 release = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
 SPEC.loader.exec_module(release)
+
+
+class GitHubDownloadTests(unittest.TestCase):
+    def test_api_authentication_is_not_forwarded_to_signed_downloads(self):
+        def open_request(request, *, timeout):
+            self.assertEqual(timeout, 30)
+            self.assertEqual(request.get_header("Authorization"), "Bearer test-token")
+            redirect = release.urllib.request.HTTPRedirectHandler().redirect_request(
+                request, None, 302, "Found", {},
+                "https://storage.example/artifact?signature=test",
+            )
+            self.assertIsNone(redirect.get_header("Authorization"))
+            self.assertEqual(redirect.get_header("Accept"), "application/vnd.github+json")
+            return io.BytesIO(b"artifact bytes")
+
+        with mock.patch.object(release.urllib.request, "urlopen", side_effect=open_request):
+            result = release.GitHub("owner/repo", "test-token").request("/actions/artifacts/1/zip")
+        self.assertEqual(result, b"artifact bytes")
 
 
 class ContractTests(unittest.TestCase):
