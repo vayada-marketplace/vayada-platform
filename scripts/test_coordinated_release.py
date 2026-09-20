@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import argparse
 import copy
 import datetime as dt
 import importlib.util
@@ -518,6 +519,103 @@ class PhysicalIdentityTests(unittest.TestCase):
         self.assertTrue(runner.registered["containerDefinitions"][0]["image"].endswith("@sha256:" + "b" * 64))
 
 
+class ActivationTests(unittest.TestCase):
+    def setUp(self):
+        self.config = release.load_config()
+        self.key = "next-booking-admin"
+        self.manifest = release.read_json(ROOT / "deployment/contract/fixtures/manifest-v1.valid.json")
+        self.snapshot = {"digest": "sha256:" + "a" * 64, "taskDefinitionArn": "live-task"}
+        self.aws = mock.Mock()
+        self.aws.get_parameter.return_value = None
+        self.aws.json.return_value = {"imageDetails": [{"imageDigest": self.snapshot["digest"],
+            "imageTags": ["next-" + "1" * 40]}]}
+        self.github = mock.Mock()
+        self.run = {"head_sha": "1" * 40, "head_branch": "main", "event": "push",
+            "status": "completed", "conclusion": "success", "id": 42, "run_attempt": 1,
+            "path": ".github/workflows/deploy-next-booking-admin.yml",
+            "repository": {"full_name": "vayada-marketplace/vayada"},
+            "head_repository": {"full_name": "vayada-marketplace/vayada"}}
+        self.github.json.return_value = {"workflow_runs": [self.run]}
+        self.github.compare.return_value = "ahead"
+
+    def bootstrap(self):
+        return release.bootstrap_evidence(self.aws, self.github, self.config, self.key, self.snapshot, self.manifest)
+
+    def test_bootstrap_binds_live_digest_to_trusted_build(self):
+        proof = self.bootstrap()
+        self.assertEqual(proof["evidence"]["buildRunId"], 42)
+        self.assertEqual(proof["digest"], self.snapshot["digest"])
+        self.github.compare.assert_called_once_with("1" * 40, self.manifest["source"]["sha"])
+        self.aws.put_parameter.assert_not_called()
+
+    def test_bootstrap_rejects_unknown_mutable_manual_or_newer_source(self):
+        self.snapshot["digest"] = None
+        with self.assertRaises(release.ReleaseError): self.bootstrap()
+        self.snapshot["digest"] = "sha256:" + "a" * 64
+        for event in ("workflow_dispatch", "pull_request"):
+            self.run["event"] = event
+            with self.assertRaisesRegex(release.ReleaseError, "trusted automatic"): self.bootstrap()
+        self.run["event"] = "push"
+        for order in ("behind", "diverged"):
+            self.github.compare.return_value = order
+            with self.assertRaisesRegex(release.ReleaseError, "regress or diverge"): self.bootstrap()
+        self.aws.json.return_value["imageDetails"][0]["imageTags"] = ["next-latest"]
+        with self.assertRaisesRegex(release.ReleaseError, "unknown or ambiguous"): self.bootstrap()
+
+    def test_frontend_resume_checks_exact_api_and_requests_fresh_smoke(self):
+        api = {"action": "skip", "observedDigest": "old", "desiredDigest": "new"}
+        with self.assertRaisesRegex(release.ReleaseError, "API digest"):
+            release.require_resume_api_readiness(api, False)
+        api["observedDigest"] = "new"
+        with self.assertRaisesRegex(release.ReleaseError, "API digest"):
+            release.require_resume_api_readiness(api, True)
+        release.require_resume_api_readiness(api, False)
+        self.assertEqual(api["action"], "verify")
+
+    def test_frontend_resume_verifies_api_without_clearing_its_hold(self):
+        api = "next-target-backend"
+        fixture = ROOT / "deployment/contract/fixtures/manifest-v1.valid.json"
+        digest = self.manifest["services"][api]["digest"]
+        plan = {"schemaVersion": 1, "manifestId": self.manifest["manifestId"],
+                "manifestSha256": release.sha256_file(fixture), "operation": "resume",
+                "resumeService": self.key, "operationId": "resume-42",
+                "services": {api: {"action": "verify"}}}
+        snapshot = {"digest": digest, "taskDefinitionArn": "api-task", "image": "api-image",
+                    "serviceArn": "api-service"}
+        self.aws.service_snapshot.return_value = snapshot
+        for api_hold in (None, {"status": "active", "dependentFrontendsCompatible": True}):
+            self.aws.get_parameter.side_effect = lambda name: api_hold if name.endswith("/hold") else None
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "plan.json"
+                path.write_text(json.dumps(plan))
+                args = argparse.Namespace(config=release.DEFAULT_CONFIG, manifest=fixture, plan=path, service=api)
+                with mock.patch.object(release, "Aws", return_value=self.aws), \
+                     mock.patch.object(release, "smoke_service") as smoke, \
+                     mock.patch.object(release, "clear_hold") as clear:
+                    release.reconcile_service(args)
+                    smoke.assert_called_once()
+                    clear.assert_not_called()
+                    self.aws.update_service.assert_not_called()
+
+    def test_legacy_stale_events_remain_fenced_after_system_rollback(self):
+        args = argparse.Namespace(config=release.DEFAULT_CONFIG, service=self.key, event_name="repository_dispatch")
+        def state(name):
+            if name.endswith("ownership-mode"):
+                return {"schemaVersion": 1, "mode": "legacy", "changedAt": "2026-09-20T00:00:00Z", "operationId": "rollback-1"}
+            return {"manifestId": "retained-release"}
+        self.aws.get_parameter.side_effect = state
+        with mock.patch.object(release, "Aws", return_value=self.aws):
+            with self.assertRaisesRegex(release.ReleaseError, "remains fenced"):
+                release.guard_legacy(args)
+        self.aws.update_service.assert_not_called()
+
+    def test_legacy_before_first_activation_still_works(self):
+        args = argparse.Namespace(config=release.DEFAULT_CONFIG, service=self.key, event_name="repository_dispatch")
+        with mock.patch.object(release, "Aws", return_value=self.aws):
+            release.guard_legacy(args)
+        self.aws.update_service.assert_not_called()
+
+
 class WorkflowContractTests(unittest.TestCase):
     def test_batch_lock_api_gate_parallel_frontends_and_independent_failures(self):
         workflow = (ROOT / ".github" / "workflows" / "deploy-coordinated-release.yml").read_text()
@@ -525,6 +623,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("needs: [prepare, api]", workflow)
         self.assertIn("if: needs.api.result == 'success'", workflow)
         self.assertIn("fail-fast: false", workflow)
+        self.assertIn("NEXT_BOOKING_CANARY_URL: ${{ vars.NEXT_BOOKING_CANARY_URL }}", workflow)
+        self.assertIn("NEXT_BOOKING_CANARY_NAME: ${{ vars.NEXT_BOOKING_CANARY_NAME }}", workflow)
         for service in release.load_config()["services"]:
             self.assertIn(service, workflow)
 

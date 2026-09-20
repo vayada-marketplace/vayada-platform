@@ -13,14 +13,14 @@ on:
         required: false
         type: choice
         options:
-          - ""
+          - "none"
           - next-target-backend
           - next-pms-frontend
           - next-booking-frontend
           - next-booking-admin
           - next-marketplace-frontend
           - next-marketplace-admin
-        default: ""
+        default: "none"
       reason:
         description: Required reason for a service hold
         required: false
@@ -33,8 +33,8 @@ on:
         description: Barrier kind for an acknowledgment
         required: false
         type: choice
-        options: ["", migration, backfill, application]
-        default: ""
+        options: ["none", migration, backfill, application]
+        default: "none"
       introduced_at:
         description: Source SHA that introduced the barrier
         required: false
@@ -58,7 +58,7 @@ permissions:
 
 concurrency:
   group: production-ecs-mutations
-  cancel-in-progress: false
+  queue: max
 
 jobs:
   control:
