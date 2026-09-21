@@ -78,6 +78,7 @@ CREATE TABLE marketplace.affiliate_agreement_lifecycle_events (id uuid PRIMARY K
 CREATE TABLE marketplace.affiliate_click_occurrences (id uuid PRIMARY KEY);
 CREATE TABLE booking.affiliate_click_contexts (id uuid PRIMARY KEY);
 CREATE TABLE booking.affiliate_click_admissions (id uuid PRIMARY KEY);
+CREATE TABLE booking.affiliate_original_booking_bindings (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_records (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_revocations (id uuid PRIMARY KEY);
 CREATE TABLE pms.inventory_coverage_validation_queue (id uuid PRIMARY KEY);
@@ -296,6 +297,9 @@ docker exec -e PGPASSWORD=runtime "${database_container}" \
 docker exec -e PGPASSWORD=runtime "${database_container}" \
   psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
   -c "SELECT count(*) FROM booking.affiliate_click_admissions" >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "SELECT count(*) FROM booking.affiliate_original_booking_bindings" >/dev/null
 if docker exec -e PGPASSWORD=runtime "${database_container}" \
   psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
   -c "INSERT INTO marketplace.affiliate_links(id) VALUES ('00000000-0000-0000-0000-000000000001')" \
