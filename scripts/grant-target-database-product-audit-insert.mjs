@@ -79,30 +79,50 @@ async function grantJobsInsert(client, supportsMaintain) {
   `);
   if (ownership.rowCount !== 1 || !ownership.rows[0].is_table_owner)
     throw new Error("jobs_table_owner_required");
-  const prohibited = [
-    "UPDATE", "DELETE", "TRUNCATE", "TRIGGER", "REFERENCES",
-    ...(supportsMaintain ? ["MAINTAIN"] : []),
-  ];
-  const violations = await client.query(`
-    SELECT privilege.name
-      FROM unnest($1::text[]) AS privilege(name)
-     WHERE pg_catalog.has_table_privilege('vayada_next_api_runtime', 'platform.jobs', privilege.name)
-    UNION ALL
-    SELECT attribute.attname || ':' || privilege.name
-      FROM pg_catalog.pg_attribute AS attribute
-      CROSS JOIN (VALUES ('UPDATE'), ('REFERENCES')) AS privilege(name)
-     WHERE attribute.attrelid = 'platform.jobs'::regclass
-       AND attribute.attnum > 0 AND NOT attribute.attisdropped
-       AND pg_catalog.has_column_privilege(
-         'vayada_next_api_runtime', attribute.attrelid, attribute.attname, privilege.name
-       )
-  `, [prohibited]);
-  if (violations.rowCount !== 0) throw new Error("jobs_runtime_write_scope_too_broad");
-  await client.query("GRANT INSERT ON platform.jobs TO vayada_next_api_runtime");
-  const granted = await client.query(`
-    SELECT pg_catalog.has_table_privilege('vayada_next_api_runtime', 'platform.jobs', 'INSERT') AS can_insert
-  `);
-  if (!granted.rows[0].can_insert) throw new Error("jobs_runtime_insert_missing");
+  await client.query("BEGIN");
+  try {
+    await client.query("SET LOCAL lock_timeout = '2s'");
+    await client.query("LOCK TABLE platform.jobs IN ACCESS EXCLUSIVE MODE");
+    const lockedOwnership = await client.query(`
+      SELECT current_user = pg_catalog.pg_get_userbyid(relation.relowner) AS is_table_owner
+        FROM pg_catalog.pg_class AS relation
+       WHERE relation.oid = pg_catalog.to_regclass('platform.jobs')
+         AND relation.relkind IN ('r', 'p')
+    `);
+    if (lockedOwnership.rowCount !== 1 || !lockedOwnership.rows[0].is_table_owner)
+      throw new Error("jobs_table_owner_required");
+    const prohibited = [
+      "UPDATE", "DELETE", "TRUNCATE", "TRIGGER", "REFERENCES",
+      ...(supportsMaintain ? ["MAINTAIN"] : []),
+    ];
+    const checkScope = async () => client.query(`
+      SELECT privilege.name
+        FROM unnest($1::text[]) AS privilege(name)
+       WHERE pg_catalog.has_table_privilege('vayada_next_api_runtime', 'platform.jobs', privilege.name)
+      UNION ALL
+      SELECT attribute.attname || ':' || privilege.name
+        FROM pg_catalog.pg_attribute AS attribute
+        CROSS JOIN (VALUES ('UPDATE'), ('REFERENCES')) AS privilege(name)
+       WHERE attribute.attrelid = 'platform.jobs'::regclass
+         AND attribute.attnum > 0 AND NOT attribute.attisdropped
+         AND pg_catalog.has_column_privilege(
+           'vayada_next_api_runtime', attribute.attrelid, attribute.attname, privilege.name
+         )
+    `, [prohibited]);
+    if ((await checkScope()).rowCount !== 0)
+      throw new Error("jobs_runtime_write_scope_too_broad");
+    await client.query("GRANT INSERT ON platform.jobs TO vayada_next_api_runtime");
+    const granted = await client.query(`
+      SELECT pg_catalog.has_table_privilege('vayada_next_api_runtime', 'platform.jobs', 'INSERT') AS can_insert
+    `);
+    if (!granted.rows[0].can_insert) throw new Error("jobs_runtime_insert_missing");
+    if ((await checkScope()).rowCount !== 0)
+      throw new Error("jobs_runtime_write_scope_too_broad");
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
   console.log(JSON.stringify({ status: "PASS", grant: "platform.jobs:INSERT" }));
 }
 

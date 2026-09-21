@@ -210,14 +210,20 @@ if docker exec -e PGPASSWORD=runtime "${database_container}" \
   exit 1
 fi
 docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE INSERT ON platform.jobs FROM vayada_next_api_runtime" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
   "GRANT UPDATE (id) ON platform.jobs TO vayada_next_api_runtime" >/dev/null
 if jobs_broad_output="$(run_grant legacy_owner owner 1 jobs_insert 2>&1)"; then
   echo "jobs grant unexpectedly passed with UPDATE privilege" >&2
   exit 1
 fi
 grep -F '"code":"jobs_runtime_write_scope_too_broad"' <<<"${jobs_broad_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -tAc \
+  "SELECT has_table_privilege('vayada_next_api_runtime', 'platform.jobs', 'INSERT')" \
+  | grep -Fx f >/dev/null
 docker exec "${database_container}" psql -U postgres -c \
   "REVOKE UPDATE (id) ON platform.jobs FROM vayada_next_api_runtime" >/dev/null
+run_grant legacy_owner owner 1 jobs_insert | grep -F '"grant":"platform.jobs:INSERT"' >/dev/null
 
 docker exec "${database_container}" psql -U postgres -c \
   "GRANT INSERT ON marketplace.affiliate_links TO vayada_next_api_runtime" >/dev/null
