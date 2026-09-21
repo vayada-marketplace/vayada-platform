@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import base64
 import gzip
+import re
+import subprocess
 from pathlib import Path
 import unittest
 
@@ -71,6 +73,18 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
         encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
         self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
+
+    def test_affiliate_grant_selects_pinned_ca_and_fits_serialized_budget(self) -> None:
+        # Execute the runner's actual CA-selection condition for this mode.
+        condition = re.search(r'  if (\[\[ .*? \]\]); then\n    command -v node', RUNNER).group(1)
+        selected = subprocess.run(
+            ["bash", "-c", 'mode=--grant-affiliate-read; ' + condition],
+            check=False,
+        )
+        self.assertEqual(selected.returncode, 0)
+        encoded = base64.b64encode(gzip.compress(GRANT.encode(), compresslevel=9, mtime=0))
+        # Leave headroom for the pinned CA, bootstrap, JSON fields and AWS serialization.
+        self.assertLessEqual(len(encoded) + 2100 + 1400, 8192)
 
     def test_cleanup_is_scoped_to_dedicated_cluster_and_log_group(self) -> None:
         self.assertIn('cluster="vayada-target-database-runtime-preflight"', RUNNER)
