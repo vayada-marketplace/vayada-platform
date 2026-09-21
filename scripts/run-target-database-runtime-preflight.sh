@@ -70,7 +70,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "${mode}" == "--grant-identity-runtime" ]]; then
+  if [[ "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -82,12 +82,12 @@ if [[ "${ca_required}" == true ]]; then
       process.stdin.on("end", () => console.log(new X509Certificate(input).fingerprint256));
     ')"
     [[ "${ca_fingerprint}" == "6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86" ]] || {
-      echo "Identity grant CA fingerprint mismatch." >&2; exit 1;
+      echo "Pinned grant CA fingerprint mismatch." >&2; exit 1;
     }
   fi
   ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
-  if [[ "${mode}" == "--grant-identity-runtime" && "${#ca_payload}" -gt 2100 ]]; then
-    echo "Identity grant CA payload exceeds the reviewed ECS override budget." >&2; exit 1
+  if [[ ( "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" ) && "${#ca_payload}" -gt 2100 ]]; then
+    echo "Pinned grant CA payload exceeds the reviewed ECS override budget." >&2; exit 1
   fi
 fi
 cluster="vayada-target-database-runtime-preflight"
