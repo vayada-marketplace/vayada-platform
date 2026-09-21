@@ -158,3 +158,18 @@ events fenced; explicit held manual recovery remains available.
 - Expired/missing/tampered artifact or divergent history: fail closed and
   publish a new complete release; never reconstruct desired state from tags or
   timestamps.
+## Build baseline and receiver order
+
+`previousManifestId` / `previousSourceSha` identify the producer's build baseline,
+not the last release accepted by this receiver. A complete release may follow a
+published release whose dispatch was lost, or may have been planned against an
+older baseline before another publication finished. Requiring immediate equality
+with receiver desired state would reject both valid sequences.
+
+Receiver ordering uses desired-source ancestry and still rejects divergent
+history and a different manifest for an already accepted source. The previous
+build source must also be an ancestor of the candidate. Trusted producer
+publications contain all six service images and cumulative append-only barriers;
+the receiver merges retained checkpoint obligations and checks acknowledgments
+and completion before accepting the next desired release. Coalescing does not
+acknowledge a barrier or authorize skipping a required checkpoint deployment.

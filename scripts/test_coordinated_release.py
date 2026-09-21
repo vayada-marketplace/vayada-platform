@@ -296,20 +296,6 @@ class OrderingAndBarrierTests(unittest.TestCase):
         desired = {"sourceSha": "1" * 40}
         self.assertEqual(release.assess_order("1" * 40, desired, None), "duplicate")
 
-    def test_new_release_cannot_skip_retained_manifest_chain(self):
-        desired = {
-            "manifestId": "vayada-release/v1/" + "0" * 40 + "/1/1",
-            "sourceSha": "0" * 40,
-        }
-        skipped = copy.deepcopy(self.manifest)
-        skipped["previousManifestId"] = "vayada-release/v1/" + "2" * 40 + "/2/1"
-        skipped["previousSourceSha"] = "2" * 40
-        with self.assertRaisesRegex(release.ReleaseError, "skips"):
-            release.validate_manifest_chain(skipped, desired, "new")
-        skipped["previousManifestId"] = desired["manifestId"]
-        skipped["previousSourceSha"] = desired["sourceSha"]
-        release.validate_manifest_chain(skipped, desired, "new")
-
     def test_missing_and_corrupt_ownership_state_fail_safely(self):
         class State:
             def __init__(self, value):
