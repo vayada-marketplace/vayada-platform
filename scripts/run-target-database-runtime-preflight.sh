@@ -8,6 +8,7 @@ done
 region="eu-west-1"
 mode="${1:-preflight}"
 ca_bundle=""
+ca_payload=""
 grant_scope=""
 case "${mode}" in
   preflight)
@@ -37,6 +38,7 @@ case "${mode}" in
     [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
       echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
     }
+    ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
     code_file="grant-target-database-product-audit-insert.mjs"
     secret_name="TARGET_DATABASE_MIGRATION_URL"
     secret_parameter="/vayada/prod/target-database-url"
@@ -50,12 +52,12 @@ service="vayada-next-api-service"
 container="vayada-next-api"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 payload="$(gzip -9 -c "${script_dir}/${code_file}" | base64 | tr -d '\n')"
-bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';fs.writeFileSync(p,z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));import(p).catch(()=>{console.error(JSON.stringify({status:'FAIL',code:'runtime_preflight_bootstrap_failed'}));process.exit(1)})"
+bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';if(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP)process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();fs.writeFileSync(p,z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));import(p).catch(()=>{console.error(JSON.stringify({status:'FAIL',code:'runtime_preflight_bootstrap_failed'}));process.exit(1)})"
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
-  --arg ca "${ca_bundle}" --arg scope "${grant_scope}" \
+  --arg ca "${ca_payload}" --arg scope "${grant_scope}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
     environment:([{name:"VAYADA_DB_RUNTIME_PREFLIGHT_CODE",value:$code}] +
-      (if $ca == "" then [] else [{name:"VAYADA_DB_RDS_CA_BUNDLE",value:$ca}] end) +
+      (if $ca == "" then [] else [{name:"VAYADA_DB_RDS_CA_BUNDLE_GZIP",value:$ca}] end) +
       (if $scope == "" then [] else [{name:"VAYADA_DB_GRANT_SCOPE",value:$scope}] end))}]}')"
 [[ "${#overrides}" -le 8192 ]] || { echo "ECS command override exceeds the 8192-byte limit." >&2; exit 1; }
 
