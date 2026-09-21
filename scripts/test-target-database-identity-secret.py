@@ -2,11 +2,11 @@
 import contextlib
 import importlib.util
 import io
-import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 script = Path(__file__).with_name("create-target-database-identity-secret.py")
@@ -21,38 +21,64 @@ owner_url = (
 
 
 class IdentitySecretTest(unittest.TestCase):
-    def test_aws_passes_secret_on_stdin_only(self):
-        with patch.object(secret.subprocess, "run") as run:
-            run.return_value.returncode = 0
-            run.return_value.stdout = "{}"
-            secret.aws("ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin",
-                       payload='{"Value":"private"}')
-            command = run.call_args.args[0]
-            self.assertNotIn("private", " ".join(command))
-            self.assertEqual(run.call_args.kwargs["input"], '{"Value":"private"}')
+    def test_secret_write_uses_sdk_without_a_command_argument(self):
+        client = Mock()
+        session = Mock()
+        session.client.side_effect = lambda service: (
+            Mock(get_caller_identity=Mock(return_value={"Account": secret.ACCOUNT}))
+            if service == "sts" else client
+        )
+        boto3 = SimpleNamespace(Session=Mock(return_value=session))
+        with patch.dict(sys.modules, {"boto3": boto3}), \
+             patch.object(secret.subprocess, "run") as run:
+            secret.put_identity_parameter({"Value": "private"})
+        client.put_parameter.assert_called_once_with(Value="private")
+        run.assert_not_called()
+
+    def test_secret_write_failure_does_not_expose_sdk_error(self):
+        client = Mock()
+        client.put_parameter.side_effect = ValueError("private credential")
+        session = Mock()
+        session.client.side_effect = lambda service: (
+            Mock(get_caller_identity=Mock(return_value={"Account": secret.ACCOUNT}))
+            if service == "sts" else client
+        )
+        boto3 = SimpleNamespace(Session=Mock(return_value=session))
+        with patch.dict(sys.modules, {"boto3": boto3}):
+            with self.assertRaisesRegex(RuntimeError, "^identity_secret_write_failed$"):
+                secret.put_identity_parameter({"Value": "private"})
+
+    def test_sdk_account_mismatch_never_writes(self):
+        session = Mock()
+        session.client.return_value.get_caller_identity.return_value = {"Account": "other"}
+        boto3 = SimpleNamespace(Session=Mock(return_value=session))
+        with patch.dict(sys.modules, {"boto3": boto3}):
+            with self.assertRaisesRegex(RuntimeError, "^identity_secret_write_failed$"):
+                secret.put_identity_parameter({"Value": "private"})
+        session.client.assert_called_once_with("sts")
 
     def test_create_is_absent_only_and_does_not_print_url(self):
         calls = []
+        writes = []
 
-        def fake_aws(*args, payload=None):
-            calls.append((args, payload))
+        def fake_aws(*args):
+            calls.append(args)
             if args[:2] == ("sts", "get-caller-identity"):
                 return {"Account": secret.ACCOUNT}
             if args[:2] == ("ssm", "get-parameter"):
                 return {"Parameter": {"Value": owner_url}}
             if args[:2] == ("ssm", "describe-parameters"):
                 return {"Parameters": []}
-            if args[:2] == ("ssm", "put-parameter"):
-                return {"Version": 1}
             self.fail("unexpected AWS call")
 
         output = io.StringIO()
         with patch.object(secret, "aws", side_effect=fake_aws), \
+             patch.object(secret, "put_identity_parameter", side_effect=writes.append), \
              patch.object(secret.secrets, "token_urlsafe", return_value="private-token"), \
              patch.object(sys, "argv", [str(script), "--create"]), \
              contextlib.redirect_stdout(output):
             secret.main()
-        payload = json.loads(calls[-1][1])
+        payload = writes[0]
         self.assertFalse(payload["Overwrite"])
         self.assertEqual(payload["Name"], secret.IDENTITY_PARAMETER)
         self.assertIn("vayada_next_identity_runtime:private-token@", payload["Value"])

@@ -303,7 +303,8 @@ current ECS mapping above remains unchanged by this grant contract.
 
 After the #2530 migration is confirmed on an exact deployed next-api image,
 use `python3 scripts/create-target-database-identity-secret.py --check` to
-verify access and absence of the dedicated SSM parameter. `--create` generates
+verify access and absence of the dedicated SSM parameter. `--create` requires
+Python `boto3` with the same authorized AWS account and generates
 one random password in process memory and writes only a `SecureString` identity
 URL to `/vayada/prod/target-database-identity-runtime-url`; it never prints the
 URL or passes it as a command argument. Run
