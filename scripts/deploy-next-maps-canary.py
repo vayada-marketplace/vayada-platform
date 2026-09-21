@@ -113,7 +113,7 @@ def aws(aws_service, operation, **values):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
-def verify_inventory_image(digest, closure=False, no_show=False, published_offers=False):
+def verify_inventory_image(digest, closure=False, no_show=False, published_offers=False, worker_database=False):
     """Probe compiled config without AWS/DB credentials or container networking."""
     image = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     password = subprocess.run(["aws", "ecr", "get-login-password", "--region", REGION],
@@ -124,7 +124,7 @@ def verify_inventory_image(digest, closure=False, no_show=False, published_offer
     subprocess.run(["docker", "pull", image], check=True, capture_output=True, text=True)
     probe = """import { loadConfig } from '/app/apps/api/dist/config.js';
 const c = loadConfig({TARGET_DATABASE_URL:'postgresql://synthetic', PMS_OPERATIONS_SOURCE:'target',
-CHANNEX_API_BASE_URL:'https://staging.channex.io', CHANNEX_API_KEY:'synthetic',
+CHANNEX_API_BASE_URL:'https://staging.channex.io', CHANNEX_API_KEY:'synthetic', PMS_CHANNEX_WORKER_ENABLED:'false',
 API_BACKGROUND_WORKERS_ENABLED:'false', PMS_CHANNEX_ARI_SYNC_MODE:'mutating',
 PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID:'%s', PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true'});
 if(c.channexManagement.stagingInventoryEnabled !== true) throw new Error('Inventory-capable image required');
@@ -140,6 +140,8 @@ if(loadConfig({PMS_ROOM_CLOSURE_ENABLED:'true'}).pmsRoomClosureEnabled !== true)
     if published_offers:
         probe = probe.replace("PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true'", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED:'true', PMS_CHANNEX_PROVISIONING_MODE:'mutating', PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED:'true'")
         probe += "\nif(c.channexManagement.stagingPublishedOffersEnabled !== true) throw new Error('Published-offer-capable image required');"
+    if worker_database:
+        probe += "\nconst {CHANNEX_MANAGEMENT_WORKER_ROLE:r}=await import('/app/apps/api/dist/jobs/channexManagementWorkerPrivileges.js'); if(r!=='vayada_next_channex_management_worker') throw new Error('Worker boundary image required'); await import('/app/apps/api/dist/jobs/channexManagementWorkerStartup.js');"
     subprocess.run(["docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
                     "--entrypoint", "node", image, "--input-type=module", "-e", probe],
                    check=True, capture_output=True, text=True)
@@ -172,6 +174,49 @@ def configure_channex_staging(container, meals=False, worker_enabled="true", inv
     container["environment"] += [{"name": k, "value": v} for k, v in settings.items()]
     container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in {*settings, "CHANNEX_API_KEY", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED", "PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED", "PMS_ROOM_CLOSURE_ENABLED", "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"}]
     container["secrets"].append({"name": "CHANNEX_API_KEY", "valueFrom": CHANNEX_SECRET})
+
+
+CHANNEX_WORKER_SECRET_NAME = "PMS_CHANNEX_MANAGEMENT_DATABASE_URL"
+CHANNEX_WORKER_SECRET_PARAMETER = "/vayada/prod/target-database-channex-management-worker-url"
+
+
+def map_channex_worker_database(container):
+    env = {e["name"]: e["value"] for e in container["environment"]}
+    if (env.get("PMS_CHANNEX_WORKER_ENABLED") != "false" or
+            env.get("CHANNEX_API_BASE_URL") != "https://staging.channex.io" or
+            env.get("PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID") != PROPERTY):
+        raise ValueError("Worker database mapping requires the paused scoped staging canary")
+    if CHANNEX_WORKER_SECRET_NAME in env:
+        raise ValueError("Worker database URL must come only from the reviewed secret")
+    general = [x for x in container.get("secrets", []) if x["name"] == "TARGET_DATABASE_URL"]
+    if general != [{"name": "TARGET_DATABASE_URL", "valueFrom": "/vayada/prod/target-database-runtime-url"}]:
+        raise ValueError("General API runtime mapping must remain unchanged")
+    container["secrets"] = [x for x in container["secrets"] if x["name"] != CHANNEX_WORKER_SECRET_NAME]
+    container["secrets"].append({"name": CHANNEX_WORKER_SECRET_NAME, "valueFrom": CHANNEX_WORKER_SECRET_PARAMETER})
+
+
+def verify_channex_worker_tasks(task_definition, digest):
+    definition = aws("ecs", "describe-task-definition", taskDefinition=task_definition)["taskDefinition"]
+    container = next(c for c in definition["containerDefinitions"] if c["name"] == "vayada-next-api")
+    expected = copy.deepcopy(container)
+    map_channex_worker_database(expected)
+    if sorted(container["secrets"], key=lambda x: (x["name"], x["valueFrom"])) != sorted(expected["secrets"], key=lambda x: (x["name"], x["valueFrom"])):
+        raise ValueError("Deployed worker secret mapping differs from the reviewed mapping")
+    image = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
+    if container["image"] != image:
+        raise ValueError("Deployed worker image is not the reviewed immutable image")
+    arns = aws("ecs", "list-tasks", cluster=CLUSTER, serviceName=SERVICE)["taskArns"]
+    if not arns:
+        raise ValueError("No running worker canary task")
+    result = aws("ecs", "describe-tasks", cluster=CLUSTER, tasks=arns)
+    if result.get("failures") or len(result["tasks"]) != len(arns):
+        raise ValueError("Cannot attest every running worker canary task")
+    for task in result["tasks"]:
+        if task["taskDefinitionArn"] != task_definition or task["lastStatus"] != "RUNNING":
+            raise ValueError("Worker canary rollout still contains another revision")
+        actual = next(c for c in task["containers"] if c["name"] == "vayada-next-api")
+        if actual.get("imageDigest") != digest or actual["image"] != image:
+            raise ValueError("Running worker canary image differs from deployment")
 
 
 def configure_channex_alerts(container):
@@ -279,6 +324,7 @@ def main():
     parser.add_argument("--remove", action="store_true")
     parser.add_argument("--activate-guest", action="store_true")
     parser.add_argument("--channex-staging", action="store_true")
+    parser.add_argument("--channex-worker-database", action="store_true")
     parser.add_argument("--channex-staging-meals", action="store_true")
     parser.add_argument("--channex-staging-inventory", action="store_true")
     parser.add_argument("--channex-staging-published-offers", action="store_true")
@@ -288,6 +334,8 @@ def main():
     parser.add_argument("--channex-staging-no-show", action="store_true")
     parser.add_argument("--channex-worker-state", choices=("preserve", "paused", "running"), default="preserve")
     args = parser.parse_args()
+    if args.channex_worker_database and (not args.channex_staging or not args.channex_staging_inventory or args.channex_worker_state != "preserve"):
+        raise ValueError("Worker database mapping requires scoped staging inventory and preserved pause")
     if args.room_closure and (not args.channex_staging or not args.channex_staging_inventory or args.channex_worker_state != "preserve"):
         raise ValueError("Room closure requires scoped inventory staging with worker state preserve")
     if args.channex_worker_state != "preserve" and not args.channex_staging:
@@ -370,9 +418,11 @@ def main():
             raise ValueError("Existing staging routes require an existing service")
         described = aws("ecs", "describe-task-definition", taskDefinition=existing[0]["taskDefinition"], include=["TAGS"])
         staging_definition = {**described["taskDefinition"], "tags": described.get("tags", [])}
+    mapped_worker_database = args.channex_worker_database
     has_published_offers = False
     if staging_definition:
         container = next(c for c in staging_definition["containerDefinitions"] if c["name"] == "vayada-next-api")
+        mapped_worker_database |= any(x["name"] == CHANNEX_WORKER_SECRET_NAME for x in container.get("secrets", []))
         has_closure_config = any(e["name"] == "PMS_ROOM_CLOSURE_ENABLED" and e["value"] == "true" for e in container.get("environment", []))
         if args.channex_staging_alerts and has_closure_config and not args.room_closure:
             raise ValueError("Existing staging room closure requires --room-closure to preserve configuration")
@@ -386,6 +436,8 @@ def main():
     published_offers = args.channex_staging_published_offers or (has_published_offers and not args.disable_channex_staging_published_offers)
     if published_offers and (not args.channex_staging or not args.channex_staging_inventory or args.channex_worker_state != "preserve"):
         raise ValueError("Preserving published offers requires scoped staging inventory and worker state preserve")
+    if mapped_worker_database:
+        require_paused_closure_service(existing, staging_definition, "Worker database mapping")
     if args.room_closure:
         require_paused_closure_service(existing, staging_definition)
     if published_offers or args.disable_channex_staging_published_offers:
@@ -413,7 +465,7 @@ def main():
                  imageIds=[{"imageTag": args.image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
     if args.channex_staging_inventory or args.channex_staging_no_show or published_offers:
-        verify_inventory_image(digest, closure=args.room_closure, no_show=args.channex_staging_no_show, published_offers=published_offers)
+        verify_inventory_image(digest, closure=args.room_closure, no_show=args.channex_staging_no_show, published_offers=published_offers, worker_database=mapped_worker_database)
     if args.activate_guest:
         activate_guest(existing, group, owned_rules, conditions, digest)
         return
@@ -431,6 +483,10 @@ def main():
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
         configure_channex_staging(source, meals=args.channex_staging_meals, inventory=args.channex_staging_inventory, no_show=args.channex_staging_no_show, published_offers=published_offers,
                                   worker_enabled=staging_worker_value(staging_definition) if staging_definition else "true", closure=args.room_closure)
+    if mapped_worker_database:
+        parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key":"Name", "Option":"Equals", "Values":[CHANNEX_WORKER_SECRET_PARAMETER]}])["Parameters"]
+        assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
+        map_channex_worker_database(source)
     if args.channex_staging_alerts or has_alerts:
         parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_WEBHOOK_SECRET.split(":parameter")[1]]}])["Parameters"]
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
@@ -488,6 +544,8 @@ def main():
             time.sleep(10)
         else:
             raise RuntimeError("Canary did not become healthy")
+        if mapped_worker_database:
+            verify_channex_worker_tasks(task, digest)
         for rule in owned_rules:
             if matching_conditions(rule["Conditions"], conditions[2]):
                 continue

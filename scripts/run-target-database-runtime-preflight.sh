@@ -15,6 +15,8 @@ extra_secret_name=""
 extra_secret_parameter=""
 provision_scope=""
 finance_property=""
+channex_property=""
+channex_image=""
 case "${mode}" in
   preflight)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -68,6 +70,33 @@ case "${mode}" in
       fi
     fi
     ;;
+  --provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker)
+    ca_required=true
+    family="vayada-next-api-db-runtime-preflight"
+    code_file="channex-management-worker-database.mjs"
+    secret_name="PMS_CHANNEX_MANAGEMENT_DATABASE_URL"
+    secret_parameter="/vayada/prod/target-database-channex-management-worker-url"
+    if [[ "${mode}" == "--provision-channex-management-worker" ]]; then
+      [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
+      code_file="provision-target-database-identity-runtime.mjs"
+      provision_scope="channex_management"
+      secret_name="TARGET_DATABASE_ADMIN_URL"
+      secret_parameter="/vayada/prod/db-marketplace-url"
+      extra_secret_name="PMS_CHANNEX_MANAGEMENT_DATABASE_URL"
+      extra_secret_parameter="/vayada/prod/target-database-channex-management-worker-url"
+    else
+      [[ "$#" -eq 3 && "$2" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ && "$3" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+        echo "Channex grant/preflight requires the reviewed property UUID and immutable image digest." >&2; exit 2;
+      }
+      channex_property="$2"
+      channex_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$3"
+      if [[ "${mode}" == "--grant-channex-management-worker" ]]; then
+        grant_scope="channex_management"
+        secret_name="TARGET_DATABASE_MIGRATION_URL"
+        secret_parameter="/vayada/prod/target-database-url"
+      fi
+    fi
+    ;;
   --provision-identity-role|--grant-identity-runtime|--inspect-identity-role)
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
     ca_required=true
@@ -98,7 +127,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-affiliate-read" || "${mode}" == *finance-expense-worker ]]; then
+  if [[ "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-affiliate-read" || "${mode}" == *finance-expense-worker || "${mode}" == *channex-management-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -126,13 +155,14 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 payload="$(gzip -9 -c "${script_dir}/${code_file}" | base64 | tr -d '\n')"
 bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';if(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP)process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();fs.writeFileSync(p,z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));import(p).catch(()=>{console.error(JSON.stringify({status:'FAIL',code:'runtime_preflight_bootstrap_failed'}));process.exit(1)})"
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
-  --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" \
+  --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg channex_property "${channex_property}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
     environment:([{name:"VAYADA_DB_RUNTIME_PREFLIGHT_CODE",value:$code}] +
       (if $ca == "" then [] else [{name:"VAYADA_DB_RDS_CA_BUNDLE_GZIP",value:$ca}] end) +
       (if $scope == "" then [] else [{name:"VAYADA_DB_GRANT_SCOPE",value:$scope}] end) +
       (if $provision_scope == "" then [] else [{name:"VAYADA_DB_PROVISION_SCOPE",value:$provision_scope}] end) +
-      (if $finance_property == "" then [] else [{name:"FINANCE_EXPENSE_WORKER_PROPERTY_ID",value:$finance_property}] end))}]}')"
+      (if $finance_property == "" then [] else [{name:"FINANCE_EXPENSE_WORKER_PROPERTY_ID",value:$finance_property}] end) +
+      (if $channex_property == "" then [] else [{name:"PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID",value:$channex_property}] end))}]}')"
 [[ "${#overrides}" -le 8192 ]] || { echo "ECS command override exceeds the 8192-byte limit." >&2; exit 1; }
 
 current_task="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" \
@@ -141,13 +171,14 @@ source_definition="$(aws ecs describe-task-definition --task-definition "${curre
   --query taskDefinition --output json)"
 temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" \
   --arg secret_name "${secret_name}" --arg secret_parameter "${secret_parameter}" \
-  --arg extra_secret_name "${extra_secret_name}" --arg extra_secret_parameter "${extra_secret_parameter}" '
+  --arg extra_secret_name "${extra_secret_name}" --arg extra_secret_parameter "${extra_secret_parameter}" --arg channex_image "${channex_image}" '
   del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
   | del(.taskRoleArn)
   | .family=$family
   | .containerDefinitions=[.containerDefinitions[]|select(.name==$container)
       | .secrets=[{name:$secret_name,valueFrom:$secret_parameter}]
       | if $extra_secret_name == "" then . else .secrets += [{name:$extra_secret_name,valueFrom:$extra_secret_parameter}] end
+      | if $channex_image == "" then . else .image=$channex_image end
       | .environment=[]
       | .portMappings=[]]
 ' <<<"${source_definition}")"
