@@ -25,6 +25,7 @@ on:
       - "scripts/run-target-database-runtime-preflight.sh"
       - "scripts/target-database-runtime-preflight.mjs"
       - "scripts/grant-target-database-product-audit-insert.mjs"
+      - "scripts/finance-expense-worker-database.mjs"
       - "scripts/grant-target-database-identity-runtime.mjs"
       - "scripts/provision-target-database-identity-runtime.mjs"
       - "scripts/inspect-target-database-identity-role.mjs"
@@ -166,6 +167,7 @@ jobs:
           bash -n scripts/run-target-database-runtime-preflight.sh
           node --check scripts/target-database-runtime-preflight.mjs
           node --check scripts/grant-target-database-product-audit-insert.mjs
+          node --check scripts/finance-expense-worker-database.mjs
           node --check scripts/grant-target-database-identity-runtime.mjs
           node --check scripts/provision-target-database-identity-runtime.mjs
           node --check scripts/inspect-target-database-identity-role.mjs

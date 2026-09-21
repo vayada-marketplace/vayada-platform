@@ -72,6 +72,19 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
         self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
 
+    def test_finance_modes_keep_scope_explicit_and_fit_task_override(self) -> None:
+        self.assertIn('--provision-finance-expense-worker|--grant-finance-expense-worker|--preflight-finance-expense-worker)', RUNNER)
+        self.assertIn('finance_property="$2"', RUNNER)
+        self.assertIn('provision_scope="finance_expense"', RUNNER)
+        self.assertIn('secret_parameter="/vayada/prod/target-database-finance-expense-worker-url"', RUNNER)
+        for filename in ('finance-expense-worker-database.mjs', 'provision-target-database-identity-runtime.mjs'):
+            encoded = base64.b64encode(gzip.compress((ROOT / 'scripts' / filename).read_bytes(), compresslevel=9, mtime=0))
+            self.assertLessEqual(len(encoded) + 2100 + 1400, 8192)
+        ecs = (ROOT / 'infra/ecs.tf').read_text()
+        self.assertIn('{ name = "FINANCE_EXPENSE_WORKER_ENABLED", value = "false" }', ecs)
+        self.assertIn('var.finance_expense_worker_secret_mapped ? [', ecs)
+        self.assertIn('{ name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-runtime-url" }', ecs)
+
     def test_cleanup_is_scoped_to_dedicated_cluster_and_log_group(self) -> None:
         self.assertIn('cluster="vayada-target-database-runtime-preflight"', RUNNER)
         self.assertIn(

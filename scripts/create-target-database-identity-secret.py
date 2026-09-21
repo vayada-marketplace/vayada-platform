@@ -12,7 +12,10 @@ REGION = "eu-west-1"
 ACCOUNT = "269416271598"
 HOST = "vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com"
 OWNER_PARAMETER = "/vayada/prod/target-database-url"
-IDENTITY_PARAMETER = "/vayada/prod/target-database-identity-runtime-url"
+FINANCE = "--finance-expense" in sys.argv
+IDENTITY_PARAMETER = ("/vayada/prod/target-database-finance-expense-worker-url" if FINANCE
+                      else "/vayada/prod/target-database-identity-runtime-url")
+ROLE = "vayada_next_finance_expense_worker" if FINANCE else "vayada_next_identity_runtime"
 
 
 def aws(*args):
@@ -37,7 +40,7 @@ def put_identity_parameter(parameter):
 
 
 def main():
-    mode = sys.argv[1:] if len(sys.argv) == 2 else []
+    mode = [arg for arg in sys.argv[1:] if arg != "--finance-expense"]
     if mode not in (["--check"], ["--create"]):
         raise RuntimeError("expected_check_or_create")
     if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
@@ -45,7 +48,8 @@ def main():
     owner = aws("ssm", "get-parameter", "--name", OWNER_PARAMETER, "--with-decryption")
     url = urlsplit(owner["Parameter"]["Value"])
     if (url.scheme != "postgresql" or url.hostname != HOST or url.port != 5432 or
-            url.query != "sslmode=require" or not url.path or url.fragment):
+            url.query != "sslmode=require" or not url.path or url.fragment or
+            (FINANCE and url.path != "/vayada_target_prod")):
         raise RuntimeError("owner_database_url_untrusted")
     existing = aws("ssm", "describe-parameters", "--parameter-filters",
                    f"Key=Name,Option=Equals,Values={IDENTITY_PARAMETER}")
@@ -56,7 +60,7 @@ def main():
         return
     password = secrets.token_urlsafe(48)
     identity_url = urlunsplit((
-        "postgresql", f"vayada_next_identity_runtime:{quote(password, safe='')}@{HOST}:5432",
+        "postgresql", f"{ROLE}:{quote(password, safe='')}@{HOST}:5432",
         url.path, url.query, "",
     ))
     put_identity_parameter({
@@ -65,7 +69,7 @@ def main():
         "Tags": [
             {"Key": "Project", "Value": "vayada"},
             {"Key": "Environment", "Value": "production"},
-            {"Key": "Purpose", "Value": "VAY-2038-identity-runtime"},
+            {"Key": "Purpose", "Value": "VAY-2044-finance-expense" if FINANCE else "VAY-2038-identity-runtime"},
         ],
     })
     print(json.dumps({"status": "PASS", "mode": "create", "parameter": IDENTITY_PARAMETER}))

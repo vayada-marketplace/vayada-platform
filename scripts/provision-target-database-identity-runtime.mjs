@@ -1,7 +1,8 @@
 import pg from "pg";
 import { randomUUID } from "node:crypto";
 
-const role = "vayada_next_identity_runtime";
+const finance = process.env.VAYADA_DB_PROVISION_SCOPE === "finance_expense";
+const role = finance ? "vayada_next_finance_expense_worker" : "vayada_next_identity_runtime";
 const expectedHost = "vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com";
 let client;
 let provisionAttempted = false;
@@ -33,15 +34,16 @@ const safeCleanup = async () => {
   await client.query("BEGIN");
   await client.query(`DO $cleanup$
     BEGIN
-      EXECUTE pg_catalog.format('REVOKE CONNECT ON DATABASE %I FROM vayada_next_identity_runtime',
+      EXECUTE pg_catalog.format('REVOKE CONNECT ON DATABASE %I FROM ${role}',
         pg_catalog.current_database());
-      DROP ROLE vayada_next_identity_runtime;
+      DROP ROLE ${role};
     END $cleanup$`);
   await client.query("COMMIT");
 };
 try {
+  if (process.env.VAYADA_DB_PROVISION_SCOPE && !finance) throw new Error("identity_provision_scope_invalid");
   const ownerRaw = process.env.TARGET_DATABASE_ADMIN_URL;
-  const identityRaw = process.env.IDENTITY_DATABASE_URL;
+  const identityRaw = finance ? process.env.FINANCE_EXPENSE_WORKER_DATABASE_URL : process.env.IDENTITY_DATABASE_URL;
   if (!ownerRaw || !identityRaw) throw new Error("identity_provision_secrets_missing");
   const owner = new URL(ownerRaw);
   const identity = new URL(identityRaw);
@@ -96,12 +98,12 @@ try {
   await client.query(`DO $provision$
     BEGIN
       EXECUTE pg_catalog.format(
-        'CREATE ROLE vayada_next_identity_runtime LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L',
+        'CREATE ROLE ${role} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L',
         pg_catalog.current_setting('vayada.identity_password')
       );
-      EXECUTE pg_catalog.format('GRANT CONNECT ON DATABASE %I TO vayada_next_identity_runtime',
+      EXECUTE pg_catalog.format('GRANT CONNECT ON DATABASE %I TO ${role}',
         pg_catalog.current_database());
-      EXECUTE pg_catalog.format('COMMENT ON ROLE vayada_next_identity_runtime IS %L',
+      EXECUTE pg_catalog.format('COMMENT ON ROLE ${role} IS %L',
         pg_catalog.current_setting('vayada.identity_provision_marker'));
     END $provision$`);
   await client.query("COMMIT");
@@ -109,7 +111,7 @@ try {
     connectionTimeoutMillis: 10_000, query_timeout: 15_000, statement_timeout: 15_000 });
   try {
     if (local && process.env.VAYADA_IDENTITY_PROVISION_FORCE_MARKER_MISMATCH === "1") {
-      await client.query("COMMENT ON ROLE vayada_next_identity_runtime IS 'different-invocation'");
+      await client.query(`COMMENT ON ROLE ${role} IS 'different-invocation'`);
       throw new Error("identity_provision_login_unexpected");
     }
     if (local && process.env.VAYADA_IDENTITY_PROVISION_FORCE_LOGIN_FAILURE === "1")
@@ -136,7 +138,7 @@ try {
     }
   }
   const expected = new Set([
-    "identity_provision_secrets_missing", "identity_provision_owner_endpoint_untrusted",
+    "identity_provision_scope_invalid", "identity_provision_secrets_missing", "identity_provision_owner_endpoint_untrusted",
     "identity_provision_url_untrusted", "identity_provision_role_already_exists",
     "identity_provision_login_unexpected", "identity_provision_cluster_database_acl_unsafe",
     "identity_provision_cleanup_failed",
