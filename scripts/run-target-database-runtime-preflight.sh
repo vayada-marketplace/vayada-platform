@@ -10,6 +10,9 @@ mode="${1:-preflight}"
 ca_bundle=""
 ca_payload=""
 grant_scope=""
+ca_required=false
+extra_secret_name=""
+extra_secret_parameter=""
 case "${mode}" in
   preflight)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -19,6 +22,7 @@ case "${mode}" in
     family="vayada-next-api-db-runtime-preflight"
     ;;
   --grant-product-audit-insert|--grant-affiliate-read|--grant-domain-events-append|--grant-jobs-insert)
+    ca_required=true
     if [[ "${mode}" == "--grant-affiliate-read" ]]; then
       grant_scope="affiliate_read"
     elif [[ "${mode}" == "--grant-domain-events-append" ]]; then
@@ -29,23 +33,57 @@ case "${mode}" in
       grant_scope="audit_insert"
     fi
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
-    for command_name in curl shasum; do
-      command -v "${command_name}" >/dev/null || { echo "Required command not found: ${command_name}" >&2; exit 1; }
-    done
-    ca_bundle="$(curl -fsSL --connect-timeout 5 --max-time 15 \
-      https://truststore.pki.rds.amazonaws.com/eu-west-1/eu-west-1-bundle.pem)"
-    ca_hash="$(printf '%s' "${ca_bundle}" | shasum -a 256 | cut -d ' ' -f 1)"
-    [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
-      echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
-    }
-    ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
     code_file="grant-target-database-product-audit-insert.mjs"
     secret_name="TARGET_DATABASE_MIGRATION_URL"
     secret_parameter="/vayada/prod/target-database-url"
     family="vayada-next-api-db-runtime-preflight"
     ;;
+  --provision-identity-role|--grant-identity-runtime)
+    [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
+    ca_required=true
+    secret_name="TARGET_DATABASE_MIGRATION_URL"
+    secret_parameter="/vayada/prod/target-database-url"
+    family="vayada-next-api-db-runtime-preflight"
+    if [[ "${mode}" == "--provision-identity-role" ]]; then
+      code_file="provision-target-database-identity-runtime.mjs"
+      extra_secret_name="IDENTITY_DATABASE_URL"
+      extra_secret_parameter="/vayada/prod/target-database-identity-runtime-url"
+    else
+      code_file="grant-target-database-identity-runtime.mjs"
+    fi
+    ;;
   *) echo "Unknown mode: ${mode}" >&2; exit 2 ;;
 esac
+if [[ "${ca_required}" == true ]]; then
+  for command_name in curl shasum; do
+    command -v "${command_name}" >/dev/null || { echo "Required command not found: ${command_name}" >&2; exit 1; }
+  done
+  ca_bundle="$(curl -fsSL --connect-timeout 5 --max-time 15 \
+    https://truststore.pki.rds.amazonaws.com/eu-west-1/eu-west-1-bundle.pem)"
+  ca_hash="$(printf '%s' "${ca_bundle}" | shasum -a 256 | cut -d ' ' -f 1)"
+  [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
+    echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
+  }
+  if [[ "${mode}" == "--grant-identity-runtime" ]]; then
+    command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
+    # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
+    # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
+    ca_bundle="${ca_bundle%%-----END CERTIFICATE-----*}-----END CERTIFICATE-----"
+    ca_fingerprint="$(printf '%s' "${ca_bundle}" | node -e '
+      const { X509Certificate } = require("node:crypto");
+      let input = "";
+      process.stdin.on("data", (part) => input += part);
+      process.stdin.on("end", () => console.log(new X509Certificate(input).fingerprint256));
+    ')"
+    [[ "${ca_fingerprint}" == "6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86" ]] || {
+      echo "Identity grant CA fingerprint mismatch." >&2; exit 1;
+    }
+  fi
+  ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
+  if [[ "${mode}" == "--grant-identity-runtime" && "${#ca_payload}" -gt 2100 ]]; then
+    echo "Identity grant CA payload exceeds the reviewed ECS override budget." >&2; exit 1
+  fi
+fi
 cluster="vayada-target-database-runtime-preflight"
 service_cluster="vayada-backend-cluster"
 service="vayada-next-api-service"
@@ -66,12 +104,14 @@ current_task="$(aws ecs describe-services --cluster "${service_cluster}" --servi
 source_definition="$(aws ecs describe-task-definition --task-definition "${current_task}" --region "${region}" \
   --query taskDefinition --output json)"
 temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" \
-  --arg secret_name "${secret_name}" --arg secret_parameter "${secret_parameter}" '
+  --arg secret_name "${secret_name}" --arg secret_parameter "${secret_parameter}" \
+  --arg extra_secret_name "${extra_secret_name}" --arg extra_secret_parameter "${extra_secret_parameter}" '
   del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
   | del(.taskRoleArn)
   | .family=$family
   | .containerDefinitions=[.containerDefinitions[]|select(.name==$container)
       | .secrets=[{name:$secret_name,valueFrom:$secret_parameter}]
+      | if $extra_secret_name == "" then . else .secrets += [{name:$extra_secret_name,valueFrom:$extra_secret_parameter}] end
       | .environment=[]
       | .portMappings=[]]
 ' <<<"${source_definition}")"

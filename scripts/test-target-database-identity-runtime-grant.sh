@@ -30,10 +30,7 @@ docker exec "${database}" pg_isready -U postgres >/dev/null
 
 docker exec -i "${database}" psql -U postgres -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 CREATE ROLE legacy_owner LOGIN PASSWORD 'owner';
-CREATE ROLE vayada_next_identity_runtime LOGIN PASSWORD 'identity' NOINHERIT
-  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 REVOKE CREATE, TEMPORARY ON DATABASE postgres FROM PUBLIC;
-GRANT CONNECT ON DATABASE postgres TO vayada_next_identity_runtime;
 CREATE SCHEMA identity AUTHORIZATION legacy_owner;
 CREATE SCHEMA platform AUTHORIZATION legacy_owner;
 CREATE SCHEMA booking AUTHORIZATION legacy_owner;
@@ -99,6 +96,21 @@ SQL
 docker run --rm --volume "${modules}:/work" --workdir /work node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/grant-target-database-identity-runtime.mjs" "${work}/grant.mjs"
+cp "${root}/scripts/provision-target-database-identity-runtime.mjs" "${work}/provision.mjs"
+run_provision() {
+  docker run --rm --network "${network}" --volume "${modules}:/work" \
+    --volume "${work}/provision.mjs:/work/provision.mjs:ro" --workdir /work \
+    --env "TARGET_DATABASE_MIGRATION_URL=postgresql://postgres:postgres@vayada-identity-grant-db:5432/postgres" \
+    --env "IDENTITY_DATABASE_URL=postgresql://vayada_next_identity_runtime:identity@vayada-identity-grant-db:5432/postgres" \
+    --env VAYADA_IDENTITY_PROVISION_LOCAL_FIXTURE=1 \
+    node:22-bookworm node provision.mjs
+}
+run_provision | grep -F '"status":"PASS"' >/dev/null
+if output="$(run_provision 2>&1)"; then
+  echo 'identity role provision unexpectedly allowed a duplicate' >&2
+  exit 1
+fi
+grep -F '"code":"identity_provision_role_already_exists"' <<<"${output}" >/dev/null
 run_grant() {
   local user="${1:-legacy_owner}"
   local password="${2:-owner}"
