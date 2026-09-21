@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import base64
+import gzip
 from pathlib import Path
 import unittest
 
@@ -49,6 +51,14 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('extra_secret_parameter="/vayada/prod/target-database-identity-runtime-url"', RUNNER)
         self.assertIn('.secrets += [{name:$extra_secret_name,valueFrom:$extra_secret_parameter}]', RUNNER)
         self.assertNotIn('secret_name="AUTH_DATABASE_URL"', RUNNER)
+
+    def test_identity_grant_pins_one_ca_and_fits_override_budget(self) -> None:
+        self.assertIn('ca_bundle="${ca_bundle%%-----END CERTIFICATE-----*}-----END CERTIFICATE-----"', RUNNER)
+        self.assertIn('6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86', RUNNER)
+        self.assertIn('${#ca_payload}" -gt 2100', RUNNER)
+        grant_code = (ROOT / 'scripts/grant-target-database-identity-runtime.mjs').read_bytes()
+        encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
+        self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
 
     def test_cleanup_is_scoped_to_dedicated_cluster_and_log_group(self) -> None:
         self.assertIn('cluster="vayada-target-database-runtime-preflight"', RUNNER)

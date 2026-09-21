@@ -310,6 +310,9 @@ URL or passes it as a command argument. Run
 `bash scripts/run-target-database-runtime-preflight.sh --provision-identity-role`
 once, then `--grant-identity-runtime`. Both use a bounded, no-task-role ECS task
 with only the migration-owner URL (plus the new identity URL for provisioning).
+The identity grant runner pins the current `rds-ca-rsa2048-g1` root from the
+verified regional bundle to fit ECS overrides; recheck the RDS CA before use
+after any certificate rotation.
 The role-creation step refuses an existing role and does not rotate passwords.
 A failed step leaves the SSM parameter unmapped and requires inspection rather
 than a blind retry. Restricted-role canary and a separate reviewed Terraform
