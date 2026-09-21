@@ -85,6 +85,25 @@ class IdentitySecretTest(unittest.TestCase):
         self.assertNotIn("private-token", output.getvalue())
         self.assertNotIn("owner-secret", output.getvalue())
 
+    def test_finance_selector_uses_distinct_secret_role_and_target_database(self):
+        with patch.object(sys, "argv", [str(script), "--finance-expense", "--create"]):
+            finance = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(finance)
+            responses = [{"Account": finance.ACCOUNT},
+                         {"Parameter": {"Value": owner_url.replace("/postgres?", "/vayada_target_prod?")}},
+                         {"Parameters": []}]
+            output = io.StringIO()
+            with patch.object(finance, "aws", side_effect=responses), \
+                 patch.object(finance, "put_identity_parameter") as write, \
+                 patch.object(finance.secrets, "token_urlsafe", return_value="private-token"), \
+                 contextlib.redirect_stdout(output):
+                finance.main()
+            payload = write.call_args.args[0]
+            self.assertEqual(payload["Name"], "/vayada/prod/target-database-finance-expense-worker-url")
+            self.assertIn("vayada_next_finance_expense_worker:private-token@", payload["Value"])
+            self.assertFalse(payload["Overwrite"])
+            self.assertNotIn("private-token", output.getvalue())
+
     def test_existing_parameter_blocks_creation(self):
         responses = [
             {"Account": secret.ACCOUNT},

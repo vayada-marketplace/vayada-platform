@@ -13,6 +13,8 @@ grant_scope=""
 ca_required=false
 extra_secret_name=""
 extra_secret_parameter=""
+provision_scope=""
+finance_property=""
 case "${mode}" in
   preflight)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -39,6 +41,32 @@ case "${mode}" in
     secret_name="TARGET_DATABASE_MIGRATION_URL"
     secret_parameter="/vayada/prod/target-database-url"
     family="vayada-next-api-db-runtime-preflight"
+    ;;
+  --provision-finance-expense-worker|--grant-finance-expense-worker|--preflight-finance-expense-worker)
+    ca_required=true
+    family="vayada-next-api-db-runtime-preflight"
+    code_file="finance-expense-worker-database.mjs"
+    secret_name="FINANCE_EXPENSE_WORKER_DATABASE_URL"
+    secret_parameter="/vayada/prod/target-database-finance-expense-worker-url"
+    if [[ "${mode}" == "--provision-finance-expense-worker" ]]; then
+      [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
+      code_file="provision-target-database-identity-runtime.mjs"
+      provision_scope="finance_expense"
+      secret_name="TARGET_DATABASE_ADMIN_URL"
+      secret_parameter="/vayada/prod/db-marketplace-url"
+      extra_secret_name="FINANCE_EXPENSE_WORKER_DATABASE_URL"
+      extra_secret_parameter="/vayada/prod/target-database-finance-expense-worker-url"
+    else
+      [[ "$#" -eq 2 && "$2" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || {
+        echo "Finance grant/preflight requires the reviewed property UUID." >&2; exit 2;
+      }
+      finance_property="$2"
+      if [[ "${mode}" == "--grant-finance-expense-worker" ]]; then
+        grant_scope="finance_expense"
+        secret_name="TARGET_DATABASE_MIGRATION_URL"
+        secret_parameter="/vayada/prod/target-database-url"
+      fi
+    fi
     ;;
   --provision-identity-role|--grant-identity-runtime|--inspect-identity-role)
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -70,7 +98,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-affiliate-read" ]]; then
+  if [[ "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-affiliate-read" || "${mode}" == *finance-expense-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -98,11 +126,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 payload="$(gzip -9 -c "${script_dir}/${code_file}" | base64 | tr -d '\n')"
 bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';if(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP)process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();fs.writeFileSync(p,z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));import(p).catch(()=>{console.error(JSON.stringify({status:'FAIL',code:'runtime_preflight_bootstrap_failed'}));process.exit(1)})"
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
-  --arg ca "${ca_payload}" --arg scope "${grant_scope}" \
+  --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
     environment:([{name:"VAYADA_DB_RUNTIME_PREFLIGHT_CODE",value:$code}] +
       (if $ca == "" then [] else [{name:"VAYADA_DB_RDS_CA_BUNDLE_GZIP",value:$ca}] end) +
-      (if $scope == "" then [] else [{name:"VAYADA_DB_GRANT_SCOPE",value:$scope}] end))}]}')"
+      (if $scope == "" then [] else [{name:"VAYADA_DB_GRANT_SCOPE",value:$scope}] end) +
+      (if $provision_scope == "" then [] else [{name:"VAYADA_DB_PROVISION_SCOPE",value:$provision_scope}] end) +
+      (if $finance_property == "" then [] else [{name:"FINANCE_EXPENSE_WORKER_PROPERTY_ID",value:$finance_property}] end))}]}')"
 [[ "${#overrides}" -le 8192 ]] || { echo "ECS command override exceeds the 8192-byte limit." >&2; exit 1; }
 
 current_task="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" \
