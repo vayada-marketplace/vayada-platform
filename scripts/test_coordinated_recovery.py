@@ -9,6 +9,7 @@ import contextlib
 import copy
 import datetime as dt
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -160,6 +161,108 @@ class RecoverySequenceTests(unittest.TestCase):
         release.finalize_release(argparse.Namespace(
             config=release.DEFAULT_CONFIG, manifest=self.manifest_path, plan=self.plan_path,
         ))
+
+    def publish_fixture(self):
+        """Rebind synthetic publication bytes; keep the real publication validator."""
+        self.manifest_path.write_text(json.dumps(self.manifest))
+        self.fixture.manifest = self.manifest
+        record = self.fixture.record
+        record["manifestId"] = self.manifest["manifestId"]
+        record["idempotencyKey"] = self.manifest["manifestId"]
+        record["manifestSha256"] = release.sha256_file(self.manifest_path)
+        record["publishedArtifactName"] = (
+            f"next-release-published-v1-{self.manifest['source']['sha']}-41001-2"
+        )
+        self.record_path.write_text(json.dumps(record))
+        self.github.download_bundle.return_value = self.fixture.artifact()
+
+    def durable_snapshot(self):
+        return copy.deepcopy((self.aws.state, self.aws.live, self.aws.tasks, self.aws.mutations))
+
+    def test_stale_delivery_preserves_all_durable_state_and_live_tasks(self):
+        desired = self.aws.state[self.path("desired-release")]
+        desired["sourceSha"] = "2" * 40
+        desired["manifestId"] = "vayada-release/v1/" + "2" * 40 + "/41002/1"
+        self.github.compare.side_effect = lambda source, target: "behind" if source == "2" * 40 else "ahead"
+        before = self.durable_snapshot()
+        plan = self.prepare("stale-delivery")
+        self.assertEqual(plan["order"], "stale")
+        self.assertEqual({row["action"] for row in plan["services"].values()}, {"skip"})
+        for key in self.config["services"]:
+            self.reconcile(key)
+        self.finalize()
+        self.assertEqual(self.durable_snapshot(), before)
+        self.assertEqual(self.smoke_calls, [])
+
+    def test_legacy_automatic_events_remain_fenced_after_ownership_rollback(self):
+        self.prepare("accepted-release")
+        # Model only ownership rollback: the accepted desired record must survive.
+        self.aws.state[self.path("ownership-mode")]["mode"] = "legacy"
+        before = self.durable_snapshot()
+        for key in self.config["services"]:
+            with self.subTest(service=key):
+                with self.assertRaisesRegex(release.ReleaseError, "remains fenced"):
+                    release.guard_legacy(argparse.Namespace(
+                        config=release.DEFAULT_CONFIG, service=key,
+                        event_name="repository_dispatch", operation_id="delayed-legacy",
+                    ))
+                self.assertEqual(self.durable_snapshot(), before)
+        self.assertEqual(self.aws.state[self.path("desired-release")]["manifestId"], self.manifest["manifestId"])
+
+    def test_successor_cannot_skip_retained_checkpoint_evidence_or_completion(self):
+        barrier = self.manifest["barriers"][0]
+        barrier["requiredCheckpointManifestId"] = self.manifest["manifestId"]
+        checkpoint_id = self.manifest["manifestId"]
+        ack_path = self.path(f"checkpoints/{barrier['id']}")
+        completion_path = self.path(f"checkpoint-completions/{barrier['id']}")
+        self.aws.state[ack_path]["checkpointManifestId"] = checkpoint_id
+        self.publish_fixture()
+        self.prepare("checkpoint-release")
+        self.reconcile(self.api)
+        with self.assertRaisesRegex(release.ReleaseError, "not fully deployed"):
+            self.finalize()
+        self.assertNotIn(completion_path, self.aws.state)
+        self.assertEqual(self.aws.state[self.path("checkpoint-obligations")]["barriers"], [barrier])
+        for key in self.config["services"]:
+            if key != self.api:
+                self.reconcile(key)
+        self.finalize()
+        acknowledgment = copy.deepcopy(self.aws.state[ack_path])
+        completion = copy.deepcopy(self.aws.state[completion_path])
+        self.assertEqual(completion["checkpointManifestId"], checkpoint_id)
+        self.assertEqual(completion["operationId"], "checkpoint-release")
+
+        # A successor deliberately omits the barrier: durable obligations still apply.
+        self.manifest["previousManifestId"] = checkpoint_id
+        self.manifest["previousSourceSha"] = self.manifest["source"]["sha"]
+        self.manifest["source"]["sha"] = "2" * 40
+        self.manifest["manifestId"] = "vayada-release/v1/" + "2" * 40 + "/41001/2"
+        self.manifest["barriers"] = []
+        self.publish_fixture()
+        for failure in ("missing-ack", "mismatched-ack", "missing-completion", "mismatched-completion"):
+            with self.subTest(failure=failure):
+                self.aws.state[ack_path] = copy.deepcopy(acknowledgment)
+                self.aws.state[completion_path] = copy.deepcopy(completion)
+                if failure == "missing-ack":
+                    del self.aws.state[ack_path]
+                elif failure == "mismatched-ack":
+                    self.aws.state[ack_path]["checkpointManifestId"] = self.manifest["manifestId"]
+                elif failure == "missing-completion":
+                    del self.aws.state[completion_path]
+                else:
+                    self.aws.state[completion_path]["checkpointManifestId"] = self.manifest["manifestId"]
+                before = self.durable_snapshot()
+                with self.assertRaisesRegex(release.ReleaseError, "blocked by checkpoints"):
+                    self.prepare(failure)
+                self.assertEqual(self.durable_snapshot(), before)
+        self.aws.state[ack_path] = acknowledgment
+        self.aws.state[completion_path] = completion
+        plan = self.prepare("checkpoint-satisfied")
+        self.assertEqual(plan["order"], "new")
+        self.assertEqual(self.aws.state[self.path("checkpoint-obligations")]["barriers"], [])
+        for key in self.config["services"]:
+            self.reconcile(key)
+        self.finalize()
 
     def test_success_then_duplicate_verifies_without_repeating_updates(self):
         self.prepare("first")

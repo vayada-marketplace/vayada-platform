@@ -1,0 +1,39 @@
+name: Rehearse deployment lock without mutations
+
+on:
+  workflow_dispatch:
+
+# No checkout, secrets, OIDC, AWS calls or deployment commands.
+permissions: {}
+
+# Must match Terraform Apply and Deploy coordinated release at workflow scope.
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+
+jobs:
+  begin:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: date --utc --iso-8601=seconds
+
+  workers:
+    needs: begin
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [one, two]
+    steps:
+      - name: Hold both parallel workers for one minute
+        run: sleep 60
+
+  end:
+    needs: workers
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: date --utc --iso-8601=seconds
