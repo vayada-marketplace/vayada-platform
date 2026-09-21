@@ -75,6 +75,9 @@ CREATE TABLE platform.jobs (id uuid PRIMARY KEY);
 CREATE TABLE pms.channel_connections (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_links (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_agreement_lifecycle_events (id uuid PRIMARY KEY);
+CREATE TABLE marketplace.affiliate_click_occurrences (id uuid PRIMARY KEY);
+CREATE TABLE booking.affiliate_click_contexts (id uuid PRIMARY KEY);
+CREATE TABLE booking.affiliate_click_admissions (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_records (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_revocations (id uuid PRIMARY KEY);
 CREATE TABLE pms.inventory_coverage_validation_queue (id uuid PRIMARY KEY);
@@ -259,24 +262,24 @@ docker exec "${database_container}" psql -U postgres -c \
 run_grant legacy_owner owner 1 expense_category_insert | grep -F '"grant":"finance.expense_categories:INSERT"' >/dev/null
 
 docker exec "${database_container}" psql -U postgres -c \
-  "GRANT INSERT ON marketplace.affiliate_links TO vayada_next_api_runtime" >/dev/null
+  "GRANT INSERT ON marketplace.affiliate_click_occurrences TO vayada_next_api_runtime" >/dev/null
 if affiliate_broad_output="$(run_grant legacy_owner owner 1 affiliate_read 2>&1)"; then
   echo "affiliate read grant unexpectedly passed with write privilege" >&2
   exit 1
 fi
 grep -F '"code":"affiliate_runtime_write_scope_too_broad"' <<<"${affiliate_broad_output}" >/dev/null
 docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE INSERT ON marketplace.affiliate_links FROM vayada_next_api_runtime" >/dev/null
+  "REVOKE INSERT ON marketplace.affiliate_click_occurrences FROM vayada_next_api_runtime" >/dev/null
 
 docker exec "${database_container}" psql -U postgres -c \
-  "GRANT UPDATE (id) ON marketplace.affiliate_agreement_lifecycle_events TO vayada_next_api_runtime" >/dev/null
+  "GRANT UPDATE (id) ON booking.affiliate_click_admissions TO vayada_next_api_runtime" >/dev/null
 if affiliate_column_output="$(run_grant legacy_owner owner 1 affiliate_read 2>&1)"; then
   echo "affiliate read grant unexpectedly passed with column write privilege" >&2
   exit 1
 fi
 grep -F '"code":"affiliate_runtime_write_scope_too_broad"' <<<"${affiliate_column_output}" >/dev/null
 docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE UPDATE (id) ON marketplace.affiliate_agreement_lifecycle_events FROM vayada_next_api_runtime" >/dev/null
+  "REVOKE UPDATE (id) ON booking.affiliate_click_admissions FROM vayada_next_api_runtime" >/dev/null
 
 docker exec -e PGPASSWORD=runtime "${database_container}" \
   psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
@@ -284,6 +287,15 @@ docker exec -e PGPASSWORD=runtime "${database_container}" \
 docker exec -e PGPASSWORD=runtime "${database_container}" \
   psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
   -c "SELECT count(*) FROM marketplace.affiliate_agreement_lifecycle_events" >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "SELECT count(*) FROM marketplace.affiliate_click_occurrences" >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "SELECT count(*) FROM booking.affiliate_click_contexts" >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "SELECT count(*) FROM booking.affiliate_click_admissions" >/dev/null
 if docker exec -e PGPASSWORD=runtime "${database_container}" \
   psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
   -c "INSERT INTO marketplace.affiliate_links(id) VALUES ('00000000-0000-0000-0000-000000000001')" \

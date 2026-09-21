@@ -27,6 +27,9 @@ async function assertAuditWriteScope(client, supportsMaintain) {
 const affiliateReadTables = [
   "marketplace.affiliate_links",
   "marketplace.affiliate_agreement_lifecycle_events",
+  "marketplace.affiliate_click_occurrences",
+  "booking.affiliate_click_contexts",
+  "booking.affiliate_click_admissions",
 ];
 
 async function grantDomainEventAppend(client, supportsMaintain) {

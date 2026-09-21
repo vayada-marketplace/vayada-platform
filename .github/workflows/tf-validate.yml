@@ -6,6 +6,7 @@ on:
       - "infra/**"
       - "deployment/**"
       - "docs/coordinated-releases.md"
+      - "docs/environments.md"
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
       - "scripts/test_coordinated_recovery.py"
@@ -28,6 +29,8 @@ on:
       - "scripts/finance-expense-worker-database.mjs"
       - "scripts/grant-target-database-identity-runtime.mjs"
       - "scripts/provision-target-database-identity-runtime.mjs"
+      - "scripts/restore-rds-admin-from-ssm.py"
+      - "scripts/test_restore_rds_admin_from_ssm.py"
       - "scripts/inspect-target-database-identity-role.mjs"
       - "scripts/create-target-database-identity-secret.py"
       - "scripts/test-target-database-identity-secret.py"
@@ -78,6 +81,7 @@ on:
       - ".github/workflows/deploy-coordinated-release.yml"
       - ".github/workflows/manage-coordinated-release.yml"
       - ".github/workflows/tf-apply.yml"
+      - ".github/workflows/rotate-rds-admin.yml"
       - ".github/workflows/tf-plan.yml"
       - ".github/workflows/tf-validate.yml"
 
@@ -170,6 +174,7 @@ jobs:
           node --check scripts/finance-expense-worker-database.mjs
           node --check scripts/grant-target-database-identity-runtime.mjs
           node --check scripts/provision-target-database-identity-runtime.mjs
+          python3 -m unittest scripts/test_restore_rds_admin_from_ssm.py
           node --check scripts/inspect-target-database-identity-role.mjs
           bash -n scripts/test-target-database-identity-runtime-grant.sh
           python3 scripts/test-target-database-identity-secret.py
