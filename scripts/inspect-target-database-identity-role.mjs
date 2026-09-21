@@ -15,6 +15,7 @@ try {
   client = new pg.Client({ connectionString: url.toString(), ssl,
     connectionTimeoutMillis: 10_000, query_timeout: 15_000, statement_timeout: 15_000 });
   await client.connect();
+  await client.query("SET search_path TO pg_catalog");
   const result = await client.query(`
     SELECT (r.rolcreaterole OR r.rolsuper) AS can_create_role,
            pg_catalog.pg_get_userbyid(d.datdba) = current_user AS owns_database,
@@ -23,7 +24,7 @@ try {
            EXISTS (SELECT 1 FROM pg_catalog.pg_roles
                     WHERE rolname = 'vayada_next_identity_runtime') AS identity_role_exists
       FROM pg_catalog.pg_roles r
-      JOIN pg_catalog.pg_database d ON d.datname = current_database()
+      JOIN pg_catalog.pg_database d ON d.datname = pg_catalog.current_database()
      WHERE r.rolname = current_user
   `);
   if (result.rowCount !== 1) throw new Error("identity_inspect_role_unavailable");
