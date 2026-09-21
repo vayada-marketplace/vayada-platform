@@ -173,3 +173,25 @@ publications contain all six service images and cumulative append-only barriers;
 the receiver merges retained checkpoint obligations and checks acknowledgments
 and completion before accepting the next desired release. Coalescing does not
 acknowledge a barrier or authorize skipping a required checkpoint deployment.
+
+## Retrying a published release
+
+Validate build and publisher metadata at the exact recorded run attempts. A
+later rerun must not make an existing immutable publication untrusted merely
+because GitHub's latest run metadata now describes a different attempt. All
+existing workflow/source/lifecycle and artifact ownership checks still apply.
+
+For deployment retries, start a new `deploy-coordinated-release.yml` dispatch
+with the same published artifact ID and both exact hashes. Choose `ordinary`
+unless an explicitly reviewed activation or single-service held resume is
+required. Ordinary retry never clears a hold. Preparation rereads current
+desired state, barriers, holds and live targets, then API readiness gates the
+frontend jobs under the shared deployment lock.
+
+Do not use GitHub's **Re-run failed jobs** to resume an old prepared plan. API,
+frontend and finalization jobs reject a preparation output from a different
+run attempt before downloading artifacts or acquiring AWS credentials. A full
+rerun can proceed only when preparation actually succeeds in that same attempt;
+the original operation's ownership and hold preconditions still apply. Fresh
+dispatch is preferred so the retry operation is selected explicitly. Never
+reuse an old API result to bypass readiness after intervening deployments.

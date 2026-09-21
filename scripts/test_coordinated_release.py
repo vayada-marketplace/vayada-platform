@@ -6,6 +6,10 @@ import datetime as dt
 import importlib.util
 import io
 import json
+import os
+import re
+import subprocess
+import textwrap
 import tempfile
 import unittest
 import zipfile
@@ -779,6 +783,24 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("parameter/vayada/prod/coordinated-deployments/v1/*", iam)
         self.assertNotIn("ssm:DeleteParameter", iam)
         self.assertNotIn('resource "aws_ssm_parameter"', iam)
+
+    def test_partial_rerun_fails_before_download_or_credentials(self):
+        workflow = (ROOT / ".github/workflows/deploy-coordinated-release.yml").read_text()
+        self.assertIn("attempt: ${{ steps.attempt.outputs.value }}", workflow)
+        self.assertIn('run: echo "value=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"', workflow)
+        for job in ("api", "frontends", "finalize"):
+            # Extract only the named job; nested YAML keys have at least four spaces.
+            body = re.split(r"\n  [a-z]+:\n", workflow.split(f"\n  {job}:\n", 1)[1])[0]
+            self.assertIn("PREPARED_ATTEMPT: ${{ needs.prepare.outputs.attempt }}", body)
+            self.assertLess(body.index("Require preparation in this attempt"), body.index("actions/checkout"))
+            script = textwrap.dedent(body.split("        run: |\n", 1)[1].split("      - uses:", 1)[0])
+            for prepared, current, succeeds in (("1", "1", True), ("2", "2", True), ("1", "2", False), ("", "2", False)):
+                with self.subTest(job=job, prepared=prepared, current=current):
+                    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                        env={**os.environ, "PREPARED_ATTEMPT": prepared, "GITHUB_RUN_ATTEMPT": current})
+                    self.assertEqual(result.returncode == 0, succeeds)
+                    if not succeeds:
+                        self.assertIn("Dispatch the exact published artifact again", result.stdout)
 
     def test_control_workflow_does_not_resume_without_exact_release_workflow(self):
         control = (ROOT / ".github" / "workflows" / "manage-coordinated-release.yml").read_text()

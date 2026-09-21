@@ -92,7 +92,7 @@ class RecoverySequenceTests(unittest.TestCase):
         self.github = mock.Mock()
         self.github.download_bundle.return_value = self.fixture.artifact()
         self.github.json.side_effect = lambda path: (
-            self.fixture.build_run() if path.endswith("41001") else self.fixture.publisher_run()
+            self.fixture.build_run() if "/41001/attempts/" in path else self.fixture.publisher_run()
         )
         self.github.compare.return_value = "ahead"
         self.smoke_failures = set()
@@ -178,6 +178,29 @@ class RecoverySequenceTests(unittest.TestCase):
 
     def durable_snapshot(self):
         return copy.deepcopy((self.aws.state, self.aws.live, self.aws.tasks, self.aws.mutations))
+
+    def test_historical_publication_survives_later_build_and_publisher_attempts(self):
+        build = self.fixture.build_run()
+        publisher = self.fixture.publisher_run()
+        publisher["status"], publisher["conclusion"] = "completed", "failure"
+        historical = {
+            f"/actions/runs/{build['id']}/attempts/{build['run_attempt']}": build,
+            f"/actions/runs/{publisher['id']}/attempts/{publisher['run_attempt']}": publisher,
+        }
+        def metadata(path):
+            if path in historical:
+                return historical[path]
+            # Latest endpoints would expose a later unsuccessful rerun.
+            latest = copy.deepcopy(build if path.endswith(str(build["id"])) else publisher)
+            latest["run_attempt"] += 1
+            latest["conclusion"] = "failure"
+            return latest
+        self.github.json.side_effect = metadata
+        self.prepare("redispatch-original-publication")
+        for key in self.config["services"]:
+            self.reconcile(key)
+        self.finalize()
+        self.assertEqual(self.github.json.call_args_list, [mock.call(path) for path in historical])
 
     def test_new_release_accepts_published_but_undelivered_baseline(self):
         # Desired A, published B never delivered, complete C was assembled from B.

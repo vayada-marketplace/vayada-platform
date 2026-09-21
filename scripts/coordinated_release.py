@@ -1220,8 +1220,15 @@ def prepare_release(args: argparse.Namespace) -> None:
             "publisherRunAttempt": (record.get("publisher") or {}).get("runAttempt"),
             "idempotencyKey": manifest.get("manifestId"),
         }
-    build_run = github.json(f"/actions/runs/{manifest.get('build', {}).get('runId', 0)}")
-    publisher_run = github.json(f"/actions/runs/{(record.get('publisher') or {}).get('runId', 0)}")
+    build = manifest.get("build") or {}
+    publisher = record.get("publisher") or {}
+    build_id = positive_int(build.get("runId"), "build.runId")
+    build_attempt = positive_int(build.get("runAttempt"), "build.runAttempt")
+    publisher_id = positive_int(publisher.get("runId"), "publisher.runId")
+    publisher_attempt = positive_int(publisher.get("runAttempt"), "publisher.runAttempt")
+    # Later reruns must not change the metadata used to validate immutable publications.
+    build_run = github.json(f"/actions/runs/{build_id}/attempts/{build_attempt}")
+    publisher_run = github.json(f"/actions/runs/{publisher_id}/attempts/{publisher_attempt}")
     manifest, record = validate_publication(
         manifest_path=output / "manifest.json",
         record_path=output / "published-record.json",
