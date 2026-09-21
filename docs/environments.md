@@ -254,6 +254,7 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/cloudflare-api-token`   | platform Terraform                 |
 | `/vayada/prod/target-database-url`    | `next-api` startup migrations      |
 | `/vayada/prod/target-database-runtime-url` | `next-api` runtime            |
+| `/vayada/prod/target-database-identity-runtime-url` | future `AUTH_DATABASE_URL` (not yet created or mapped) |
 | `/vayada/prod/workos-api-key`         | `next-api`                         |
 | `/vayada/prod/workos-client-id`       | `next-api`                         |
 | `/vayada/prod/workos-webhook-secret`  | `next-api`                         |
