@@ -318,6 +318,9 @@ The role-creation step refuses an existing role and does not rotate passwords.
 A failed step leaves the SSM parameter unmapped and requires inspection rather
 than a blind retry. Restricted-role canary and a separate reviewed Terraform
 mapping change are still required before live `AUTH_DATABASE_URL` cutover.
+`--inspect-identity-role` is a read-only owner-credential diagnostic for role
+existence, role-creation ability, and database CONNECT grant authority; it
+does not provision or grant anything.
 
 The API records authentication and other product events in
 `platform.product_audit_events`. The migration owner must grant the runtime

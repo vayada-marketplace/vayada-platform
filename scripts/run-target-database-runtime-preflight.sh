@@ -40,7 +40,7 @@ case "${mode}" in
     secret_parameter="/vayada/prod/target-database-url"
     family="vayada-next-api-db-runtime-preflight"
     ;;
-  --provision-identity-role|--grant-identity-runtime)
+  --provision-identity-role|--grant-identity-runtime|--inspect-identity-role)
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
     ca_required=true
     secret_name="TARGET_DATABASE_MIGRATION_URL"
@@ -50,6 +50,8 @@ case "${mode}" in
       code_file="provision-target-database-identity-runtime.mjs"
       extra_secret_name="IDENTITY_DATABASE_URL"
       extra_secret_parameter="/vayada/prod/target-database-identity-runtime-url"
+    elif [[ "${mode}" == "--inspect-identity-role" ]]; then
+      code_file="inspect-target-database-identity-role.mjs"
     else
       code_file="grant-target-database-identity-runtime.mjs"
     fi

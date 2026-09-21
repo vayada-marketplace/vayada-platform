@@ -27,6 +27,7 @@ on:
       - "scripts/grant-target-database-product-audit-insert.mjs"
       - "scripts/grant-target-database-identity-runtime.mjs"
       - "scripts/provision-target-database-identity-runtime.mjs"
+      - "scripts/inspect-target-database-identity-role.mjs"
       - "scripts/create-target-database-identity-secret.py"
       - "scripts/test-target-database-identity-secret.py"
       - "scripts/test-target-database-identity-runtime-grant.sh"
@@ -167,6 +168,7 @@ jobs:
           node --check scripts/grant-target-database-product-audit-insert.mjs
           node --check scripts/grant-target-database-identity-runtime.mjs
           node --check scripts/provision-target-database-identity-runtime.mjs
+          node --check scripts/inspect-target-database-identity-role.mjs
           bash -n scripts/test-target-database-identity-runtime-grant.sh
           python3 scripts/test-target-database-identity-secret.py
           python3 scripts/test-target-database-runtime-preflight.py

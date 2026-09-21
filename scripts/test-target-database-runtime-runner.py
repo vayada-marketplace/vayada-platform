@@ -45,9 +45,12 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn("Runtime preflight task exceeded five minutes", RUNNER)
 
     def test_identity_modes_use_only_owner_and_dedicated_identity_secrets(self) -> None:
-        self.assertIn('--provision-identity-role|--grant-identity-runtime)', RUNNER)
+        self.assertIn('--provision-identity-role|--grant-identity-runtime|--inspect-identity-role)', RUNNER)
         self.assertIn('code_file="provision-target-database-identity-runtime.mjs"', RUNNER)
         self.assertIn('code_file="grant-target-database-identity-runtime.mjs"', RUNNER)
+        self.assertIn('code_file="inspect-target-database-identity-role.mjs"', RUNNER)
+        inspect_branch = RUNNER.split('elif [[ "${mode}" == "--inspect-identity-role" ]]', 1)[1].split('else', 1)[0]
+        self.assertNotIn('extra_secret_name=', inspect_branch)
         self.assertIn('extra_secret_name="IDENTITY_DATABASE_URL"', RUNNER)
         self.assertIn('extra_secret_parameter="/vayada/prod/target-database-identity-runtime-url"', RUNNER)
         self.assertIn('.secrets += [{name:$extra_secret_name,valueFrom:$extra_secret_parameter}]', RUNNER)
