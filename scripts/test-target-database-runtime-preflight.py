@@ -30,6 +30,7 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertIn('"platform.product_audit_events": ["SELECT", "INSERT"]', CHECK)
         self.assertIn('"platform.domain_events": ["INSERT"]', CHECK)
         self.assertIn('"platform.jobs": ["INSERT"]', CHECK)
+        self.assertIn('"finance.expense_categories": ["INSERT"]', CHECK)
         self.assertIn('code === "runtime_relation_read_missing"', CHECK)
         for code in (
             "runtime_schema_usage_missing",

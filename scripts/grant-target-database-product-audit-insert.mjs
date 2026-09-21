@@ -126,6 +126,63 @@ async function grantJobsInsert(client, supportsMaintain) {
   console.log(JSON.stringify({ status: "PASS", grant: "platform.jobs:INSERT" }));
 }
 
+async function grantExpenseCategoryInsert(client, supportsMaintain) {
+  const table = "finance.expense_categories";
+  const ownership = await client.query(`
+    SELECT current_user = pg_catalog.pg_get_userbyid(relation.relowner) AS is_table_owner
+      FROM pg_catalog.pg_class AS relation
+     WHERE relation.oid = pg_catalog.to_regclass($1)
+       AND relation.relkind IN ('r', 'p')
+  `, [table]);
+  if (ownership.rowCount !== 1 || !ownership.rows[0].is_table_owner)
+    throw new Error("expense_categories_table_owner_required");
+  await client.query("BEGIN");
+  try {
+    await client.query("SET LOCAL lock_timeout = '2s'");
+    await client.query("LOCK TABLE finance.expense_categories IN ACCESS EXCLUSIVE MODE");
+    const lockedOwnership = await client.query(`
+      SELECT current_user = pg_catalog.pg_get_userbyid(relation.relowner) AS is_table_owner
+        FROM pg_catalog.pg_class AS relation
+       WHERE relation.oid = pg_catalog.to_regclass($1)
+         AND relation.relkind IN ('r', 'p')
+    `, [table]);
+    if (lockedOwnership.rowCount !== 1 || !lockedOwnership.rows[0].is_table_owner)
+      throw new Error("expense_categories_table_owner_required");
+    const prohibited = [
+      "UPDATE", "DELETE", "TRUNCATE", "TRIGGER", "REFERENCES",
+      ...(supportsMaintain ? ["MAINTAIN"] : []),
+    ];
+    const checkScope = async () => client.query(`
+      SELECT privilege.name
+        FROM unnest($2::text[]) AS privilege(name)
+       WHERE pg_catalog.has_table_privilege('vayada_next_api_runtime', $1, privilege.name)
+      UNION ALL
+      SELECT attribute.attname || ':' || privilege.name
+        FROM pg_catalog.pg_attribute AS attribute
+        CROSS JOIN (VALUES ('UPDATE'), ('REFERENCES')) AS privilege(name)
+       WHERE attribute.attrelid = pg_catalog.to_regclass($1)
+         AND attribute.attnum > 0 AND NOT attribute.attisdropped
+         AND pg_catalog.has_column_privilege(
+           'vayada_next_api_runtime', attribute.attrelid, attribute.attname, privilege.name
+         )
+    `, [table, prohibited]);
+    if ((await checkScope()).rowCount !== 0)
+      throw new Error("expense_categories_runtime_write_scope_too_broad");
+    await client.query("GRANT INSERT ON finance.expense_categories TO vayada_next_api_runtime");
+    const granted = await client.query(`
+      SELECT pg_catalog.has_table_privilege('vayada_next_api_runtime', $1, 'INSERT') AS can_insert
+    `, [table]);
+    if (!granted.rows[0].can_insert) throw new Error("expense_categories_runtime_insert_missing");
+    if ((await checkScope()).rowCount !== 0)
+      throw new Error("expense_categories_runtime_write_scope_too_broad");
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+  console.log(JSON.stringify({ status: "PASS", grant: "finance.expense_categories:INSERT" }));
+}
+
 async function grantAffiliateRead(client, supportsMaintain) {
   for (const table of affiliateReadTables) {
     const ownership = await client.query(`
@@ -204,7 +261,7 @@ try {
   );
   const supportsMaintain = version.rows[0].value >= 170000;
   const scope = process.env.VAYADA_DB_GRANT_SCOPE ?? "audit_insert";
-  if (!["audit_insert", "affiliate_read", "domain_events_append", "jobs_insert"].includes(scope))
+  if (!["audit_insert", "affiliate_read", "domain_events_append", "jobs_insert", "expense_category_insert"].includes(scope))
     throw new Error("unknown_grant_scope");
   const role = await client.query(
     "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vayada_next_api_runtime'",
@@ -216,6 +273,8 @@ try {
     await grantDomainEventAppend(client, supportsMaintain);
   } else if (scope === "jobs_insert") {
     await grantJobsInsert(client, supportsMaintain);
+  } else if (scope === "expense_category_insert") {
+    await grantExpenseCategoryInsert(client, supportsMaintain);
   } else {
     const check = await client.query(`
       SELECT current_user = pg_catalog.pg_get_userbyid(table_info.relowner) AS is_table_owner
@@ -257,6 +316,9 @@ try {
     "jobs_table_owner_required",
     "jobs_runtime_write_scope_too_broad",
     "jobs_runtime_insert_missing",
+    "expense_categories_table_owner_required",
+    "expense_categories_runtime_write_scope_too_broad",
+    "expense_categories_runtime_insert_missing",
     "unknown_grant_scope",
   ]);
   const code = expected.has(error.message) ? error.message : error.code ?? "runtime_grant_failed";
