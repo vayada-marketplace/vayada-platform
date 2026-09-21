@@ -529,16 +529,6 @@ def assess_order(current_sha: str, desired: dict[str, Any] | None, compare_statu
     fail("Release source history diverges from the accepted desired release")
 
 
-def validate_manifest_chain(manifest: dict[str, Any], desired: dict[str, Any] | None, order: str) -> None:
-    if order != "new" or desired is None:
-        return
-    if (
-        manifest["previousManifestId"] != desired["manifestId"]
-        or manifest["previousSourceSha"] != desired["sourceSha"]
-    ):
-        fail("Release manifest chain skips the retained desired release")
-
-
 def validate_checkpoint_obligations(value: dict[str, Any] | None) -> list[dict[str, Any]]:
     if value is None:
         return []
@@ -1278,7 +1268,9 @@ def prepare_release(args: argparse.Namespace) -> None:
         fail("Activation target is older than the retained desired release")
     if order == "duplicate" and desired and desired.get("manifestId") != manifest["manifestId"]:
         fail("A different manifest already exists for this source revision")
-    validate_manifest_chain(manifest, desired, order)
+    # previousManifestId names the producer build baseline, not receiver acceptance.
+    # Complete publications may coalesce undelivered releases or use an older baseline.
+    # Source ancestry orders delivery; durable checkpoint obligations below remain binding.
     previous_sha = manifest["previousSourceSha"]
     if previous_sha is not None and github.compare(previous_sha, manifest["source"]["sha"]) not in {"ahead", "identical"}:
         fail("Manifest previousSourceSha is not an ancestor of its source")

@@ -179,6 +179,46 @@ class RecoverySequenceTests(unittest.TestCase):
     def durable_snapshot(self):
         return copy.deepcopy((self.aws.state, self.aws.live, self.aws.tasks, self.aws.mutations))
 
+    def test_new_release_accepts_published_but_undelivered_baseline(self):
+        # Desired A, published B never delivered, complete C was assembled from B.
+        self.manifest["previousSourceSha"] = "2" * 40
+        self.manifest["previousManifestId"] = "vayada-release/v1/" + "2" * 40 + "/41002/1"
+        self.publish_fixture()
+        plan = self.prepare("coalesced-release")
+        self.assertEqual(plan["order"], "new")
+        for key in self.config["services"]:
+            self.reconcile(key)
+        self.finalize()
+        self.assertEqual(self.aws.state[self.path("desired-release")]["manifestId"], self.manifest["manifestId"])
+        self.assertTrue(all(self.state(key, "provenance")["manifestId"] == self.manifest["manifestId"]
+                            for key in self.config["services"]))
+
+    def test_new_release_accepts_baseline_older_than_receiver_desired(self):
+        # C planned from A while B's publication was still running; B was accepted first.
+        desired = self.aws.state[self.path("desired-release")]
+        desired["sourceSha"] = "2" * 40
+        desired["manifestId"] = "vayada-release/v1/" + "2" * 40 + "/41002/1"
+        plan = self.prepare("older-build-baseline")
+        self.assertEqual(plan["order"], "new")
+        for key in self.config["services"]:
+            self.reconcile(key)
+        self.finalize()
+        self.assertEqual(self.aws.state[self.path("desired-release")]["manifestId"], self.manifest["manifestId"])
+
+    def test_coalesced_release_cannot_skip_checkpoint_or_diverge_from_baseline(self):
+        self.manifest["previousSourceSha"] = "2" * 40
+        self.manifest["previousManifestId"] = "vayada-release/v1/" + "2" * 40 + "/41002/1"
+        self.publish_fixture()
+        del self.aws.state[self.path("checkpoints/" + self.manifest["barriers"][0]["id"])]
+        before = self.durable_snapshot()
+        with self.assertRaisesRegex(release.ReleaseError, "blocked by checkpoints"):
+            self.prepare("unacknowledged-coalesced-release")
+        self.assertEqual(self.durable_snapshot(), before)
+        self.github.compare.side_effect = lambda source, target: "diverged" if source == "2" * 40 else "ahead"
+        with self.assertRaisesRegex(release.ReleaseError, "previousSourceSha is not an ancestor"):
+            self.prepare("divergent-build-baseline")
+        self.assertEqual(self.durable_snapshot(), before)
+
     def test_stale_delivery_preserves_all_durable_state_and_live_tasks(self):
         desired = self.aws.state[self.path("desired-release")]
         desired["sourceSha"] = "2" * 40
