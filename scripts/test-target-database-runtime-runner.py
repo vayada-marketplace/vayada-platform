@@ -72,6 +72,12 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
         self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
 
+    def test_affiliate_read_grant_reuses_pinned_ca_and_fits_override_budget(self) -> None:
+        self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-affiliate-read"'), 3)
+        grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
+        encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
+        self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
+
     def test_cleanup_is_scoped_to_dedicated_cluster_and_log_group(self) -> None:
         self.assertIn('cluster="vayada-target-database-runtime-preflight"', RUNNER)
         self.assertIn(
