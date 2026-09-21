@@ -31,6 +31,8 @@ docker exec "${database}" pg_isready -U postgres >/dev/null
 docker exec -i "${database}" psql -U postgres -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 CREATE ROLE legacy_owner LOGIN PASSWORD 'owner';
 REVOKE CREATE, TEMPORARY ON DATABASE postgres FROM PUBLIC;
+CREATE DATABASE identity_sibling;
+REVOKE CONNECT, CREATE, TEMPORARY ON DATABASE identity_sibling FROM PUBLIC;
 CREATE SCHEMA identity AUTHORIZATION legacy_owner;
 CREATE SCHEMA platform AUTHORIZATION legacy_owner;
 CREATE SCHEMA booking AUTHORIZATION legacy_owner;
@@ -98,13 +100,47 @@ docker run --rm --volume "${modules}:/work" --workdir /work node:22-bookworm \
 cp "${root}/scripts/grant-target-database-identity-runtime.mjs" "${work}/grant.mjs"
 cp "${root}/scripts/provision-target-database-identity-runtime.mjs" "${work}/provision.mjs"
 run_provision() {
+  local force_failure="${1:-0}"
+  local force_marker_mismatch="${2:-0}"
   docker run --rm --network "${network}" --volume "${modules}:/work" \
     --volume "${work}/provision.mjs:/work/provision.mjs:ro" --workdir /work \
-    --env "TARGET_DATABASE_MIGRATION_URL=postgresql://postgres:postgres@vayada-identity-grant-db:5432/postgres" \
+    --env "TARGET_DATABASE_ADMIN_URL=postgresql://postgres:postgres@vayada-identity-grant-db:5432/postgres" \
     --env "IDENTITY_DATABASE_URL=postgresql://vayada_next_identity_runtime:identity@vayada-identity-grant-db:5432/postgres" \
     --env VAYADA_IDENTITY_PROVISION_LOCAL_FIXTURE=1 \
+    --env "VAYADA_IDENTITY_PROVISION_FORCE_LOGIN_FAILURE=${force_failure}" \
+    --env "VAYADA_IDENTITY_PROVISION_FORCE_MARKER_MISMATCH=${force_marker_mismatch}" \
     node:22-bookworm node provision.mjs
 }
+if output="$(run_provision 2>&1)"; then
+  echo 'identity role provision unexpectedly allowed template database access' >&2
+  exit 1
+fi
+grep -F '"code":"identity_provision_cluster_database_acl_unsafe"' <<<"${output}" >/dev/null
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE CONNECT, CREATE, TEMPORARY ON DATABASE template1 FROM PUBLIC' >/dev/null
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'GRANT CONNECT ON DATABASE identity_sibling TO PUBLIC' >/dev/null
+if output="$(run_provision 2>&1)"; then
+  echo 'identity role provision unexpectedly allowed sibling database access' >&2
+  exit 1
+fi
+grep -F '"code":"identity_provision_cluster_database_acl_unsafe"' <<<"${output}" >/dev/null
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE CONNECT ON DATABASE identity_sibling FROM PUBLIC' >/dev/null
+if output="$(run_provision 1 2>&1)"; then
+  echo 'identity role forced login failure unexpectedly passed' >&2
+  exit 1
+fi
+grep -F '"code":"identity_provision_login_unexpected"' <<<"${output}" >/dev/null
+docker exec "${database}" psql -U postgres -Atqc \
+  "SELECT count(*) FROM pg_roles WHERE rolname = 'vayada_next_identity_runtime'" | grep -Fx 0 >/dev/null
+if output="$(run_provision 0 1 2>&1)"; then
+  echo 'identity role mismatched cleanup marker unexpectedly passed' >&2
+  exit 1
+fi
+grep -F '"code":"identity_provision_cleanup_failed"' <<<"${output}" >/dev/null
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE CONNECT ON DATABASE postgres FROM vayada_next_identity_runtime; DROP ROLE vayada_next_identity_runtime' >/dev/null
 run_provision | grep -F '"status":"PASS"' >/dev/null
 if output="$(run_provision 2>&1)"; then
   echo 'identity role provision unexpectedly allowed a duplicate' >&2
