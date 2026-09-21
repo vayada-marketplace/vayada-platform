@@ -90,6 +90,13 @@ jobs:
           TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
           TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
 
+      - name: Preserve installed writer admission and session revocation
+        run: |
+          terraform show -json tfplan > writer-boundary-plan.json
+          python3 ../scripts/assert-platform-writer-boundary-plan.py writer-boundary-plan.json
+          rm writer-boundary-plan.json
+        working-directory: infra
+
       - name: Guard Terraform apply phase
         run: bash ../scripts/guard-finance-folio-kms-plan.sh tfplan apply
         working-directory: infra

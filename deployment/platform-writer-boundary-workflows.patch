@@ -1,0 +1,89 @@
+--- a/.github/workflows/deploy.yml
++++ b/.github/workflows/deploy.yml
+@@ -97,11 +97,16 @@
+
+ jobs:
+   deploy:
++    environment: platform-mutations-v2
+     if: (github.event.client_payload.service || inputs.service) != 'next-maps-canary' && (github.event.client_payload.service || inputs.service) != 'next-maps-canary-remove' && (github.event.client_payload.service || inputs.service) != 'next-maps-guest' && (github.event.client_payload.service || inputs.service) != 'next-maps-guest-remove' && (github.event.client_payload.service || inputs.service) != 'next-maps-frontends' && (github.event.client_payload.service || inputs.service) != 'next-maps-frontends-remove'
+     name: Deploy ${{ github.event.client_payload.service || inputs.service }}
+     runs-on: ubuntu-latest
+
+     steps:
++      - name: Require reviewed main workflow
++        env:
++          WORKFLOW_REF: ${{ github.ref }}
++        run: test "$WORKFLOW_REF" = refs/heads/main
+       - name: Checkout code
+         uses: actions/checkout@v7
+
+@@ -476,10 +481,14 @@
+           wait-for-service-stability: true
+
+   maps-canary:
+-    environment: next
++    environment: platform-mutations-v2
+     if: github.event_name == 'workflow_dispatch' && (inputs.service == 'next-maps-canary' || inputs.service == 'next-maps-canary-remove' || inputs.service == 'next-maps-guest' || inputs.service == 'next-maps-guest-remove' || inputs.service == 'next-maps-frontends' || inputs.service == 'next-maps-frontends-remove')
+     runs-on: ubuntu-latest
+     steps:
++      - name: Require reviewed main workflow
++        env:
++          WORKFLOW_REF: ${{ github.ref }}
++        run: test "$WORKFLOW_REF" = refs/heads/main
+       - uses: actions/checkout@v7
+       - name: Validate Channex worker state scope
+         env:
+--- a/.github/workflows/tf-apply.yml
++++ b/.github/workflows/tf-apply.yml
+@@ -26,10 +26,15 @@
+
+ jobs:
+   apply:
++    environment: platform-mutations-v2
+     name: Apply
+     runs-on: ubuntu-latest
+
+     steps:
++      - name: Require reviewed main workflow
++        env:
++          WORKFLOW_REF: ${{ github.ref }}
++        run: test "$WORKFLOW_REF" = refs/heads/main
+       - name: Checkout code
+         uses: actions/checkout@v7
+
+--- a/.github/workflows/rotate-rds-admin.yml
++++ b/.github/workflows/rotate-rds-admin.yml
+@@ -20,9 +20,14 @@
+
+ jobs:
+   rotate:
++    environment: platform-mutations-v2
+     name: Rotate protected administrator credential
+     runs-on: ubuntu-latest
+     steps:
++      - name: Require reviewed main workflow
++        env:
++          WORKFLOW_REF: ${{ github.ref }}
++        run: test "$WORKFLOW_REF" = refs/heads/main
+       - name: Check explicit confirmation
+         env:
+           CONFIRMATION: ${{ inputs.confirmation }}
+--- a/.github/workflows/tf-plan.yml
++++ b/.github/workflows/tf-plan.yml
+@@ -19,6 +19,7 @@
+
+ jobs:
+   plan:
++    if: github.event.pull_request.head.repo.full_name == github.repository
+     name: Plan
+     runs-on: ubuntu-latest
+
+@@ -29,7 +30,7 @@
+       - name: Configure AWS credentials
+         uses: aws-actions/configure-aws-credentials@v6
+         with:
+-          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
++          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-plan
+           aws-region: ${{ env.AWS_REGION }}
+
+       - name: Setup Terraform

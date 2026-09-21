@@ -25,9 +25,9 @@ data "aws_iam_policy_document" "github_actions_platform_deploy_trust" {
     }
 
     condition {
-      test     = "StringLike"
+      test     = var.platform_writer_boundary.enforce_trust ? "StringEquals" : "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:vayada-marketplace/vayada-platform:*"]
+      values   = [var.platform_writer_boundary.enforce_trust ? local.platform_mutation_subject : "repo:vayada-marketplace/vayada-platform:*"]
     }
   }
 }
