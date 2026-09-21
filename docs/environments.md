@@ -310,7 +310,19 @@ URL to `/vayada/prod/target-database-identity-runtime-url`; it never prints the
 URL or passes it as a command argument. Run
 `bash scripts/run-target-database-runtime-preflight.sh --provision-identity-role`
 once, then `--grant-identity-runtime`. Both use a bounded, no-task-role ECS task
-with only the migration-owner URL (plus the new identity URL for provisioning).
+with only the credential required for that operation. Role provisioning uses
+the existing protected `/vayada/prod/db-marketplace-url` RDS administrator
+credential after validating its exact username, host, and source database; it
+connects that administrator only to `vayada_target_prod` and receives the new
+identity URL solely to set and verify the restricted login password. The grant
+step uses only the target migration-owner URL.
+Provisioning refuses to create the cluster-wide PostgreSQL role while PUBLIC
+database ACLs would let it create or use temporary objects in the target, or
+connect to any other database, including connectable templates. The new role
+is atomically marked with a per-run nonce. If post-commit login verification fails,
+the runner reconnects with the administrator, rechecks the role's restricted
+attributes, nonce, and lack of membership or ownership, then removes it; unsafe or
+incomplete cleanup fails closed for manual inspection.
 The identity grant runner pins the current `rds-ca-rsa2048-g1` root from the
 verified regional bundle to fit ECS overrides; recheck the RDS CA before use
 after any certificate rotation.

@@ -48,6 +48,8 @@ case "${mode}" in
     family="vayada-next-api-db-runtime-preflight"
     if [[ "${mode}" == "--provision-identity-role" ]]; then
       code_file="provision-target-database-identity-runtime.mjs"
+      secret_name="TARGET_DATABASE_ADMIN_URL"
+      secret_parameter="/vayada/prod/db-marketplace-url"
       extra_secret_name="IDENTITY_DATABASE_URL"
       extra_secret_parameter="/vayada/prod/target-database-identity-runtime-url"
     elif [[ "${mode}" == "--inspect-identity-role" ]]; then

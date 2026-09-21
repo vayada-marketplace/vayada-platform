@@ -47,6 +47,8 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
     def test_identity_modes_use_only_owner_and_dedicated_identity_secrets(self) -> None:
         self.assertIn('--provision-identity-role|--grant-identity-runtime|--inspect-identity-role)', RUNNER)
         self.assertIn('code_file="provision-target-database-identity-runtime.mjs"', RUNNER)
+        self.assertIn('secret_name="TARGET_DATABASE_ADMIN_URL"', RUNNER)
+        self.assertIn('secret_parameter="/vayada/prod/db-marketplace-url"', RUNNER)
         self.assertIn('code_file="grant-target-database-identity-runtime.mjs"', RUNNER)
         self.assertIn('code_file="inspect-target-database-identity-role.mjs"', RUNNER)
         inspect_branch = RUNNER.split('elif [[ "${mode}" == "--inspect-identity-role" ]]', 1)[1].split('else', 1)[0]
