@@ -70,6 +70,62 @@ async function grantDomainEventAppend(client, supportsMaintain) {
   console.log(JSON.stringify({ status: "PASS", grant: "platform.domain_events:SELECT,INSERT" }));
 }
 
+async function grantJobsInsert(client, supportsMaintain) {
+  const ownership = await client.query(`
+    SELECT current_user = pg_catalog.pg_get_userbyid(relation.relowner) AS is_table_owner
+      FROM pg_catalog.pg_class AS relation
+     WHERE relation.oid = pg_catalog.to_regclass('platform.jobs')
+       AND relation.relkind IN ('r', 'p')
+  `);
+  if (ownership.rowCount !== 1 || !ownership.rows[0].is_table_owner)
+    throw new Error("jobs_table_owner_required");
+  await client.query("BEGIN");
+  try {
+    await client.query("SET LOCAL lock_timeout = '2s'");
+    await client.query("LOCK TABLE platform.jobs IN ACCESS EXCLUSIVE MODE");
+    const lockedOwnership = await client.query(`
+      SELECT current_user = pg_catalog.pg_get_userbyid(relation.relowner) AS is_table_owner
+        FROM pg_catalog.pg_class AS relation
+       WHERE relation.oid = pg_catalog.to_regclass('platform.jobs')
+         AND relation.relkind IN ('r', 'p')
+    `);
+    if (lockedOwnership.rowCount !== 1 || !lockedOwnership.rows[0].is_table_owner)
+      throw new Error("jobs_table_owner_required");
+    const prohibited = [
+      "UPDATE", "DELETE", "TRUNCATE", "TRIGGER", "REFERENCES",
+      ...(supportsMaintain ? ["MAINTAIN"] : []),
+    ];
+    const checkScope = async () => client.query(`
+      SELECT privilege.name
+        FROM unnest($1::text[]) AS privilege(name)
+       WHERE pg_catalog.has_table_privilege('vayada_next_api_runtime', 'platform.jobs', privilege.name)
+      UNION ALL
+      SELECT attribute.attname || ':' || privilege.name
+        FROM pg_catalog.pg_attribute AS attribute
+        CROSS JOIN (VALUES ('UPDATE'), ('REFERENCES')) AS privilege(name)
+       WHERE attribute.attrelid = 'platform.jobs'::regclass
+         AND attribute.attnum > 0 AND NOT attribute.attisdropped
+         AND pg_catalog.has_column_privilege(
+           'vayada_next_api_runtime', attribute.attrelid, attribute.attname, privilege.name
+         )
+    `, [prohibited]);
+    if ((await checkScope()).rowCount !== 0)
+      throw new Error("jobs_runtime_write_scope_too_broad");
+    await client.query("GRANT INSERT ON platform.jobs TO vayada_next_api_runtime");
+    const granted = await client.query(`
+      SELECT pg_catalog.has_table_privilege('vayada_next_api_runtime', 'platform.jobs', 'INSERT') AS can_insert
+    `);
+    if (!granted.rows[0].can_insert) throw new Error("jobs_runtime_insert_missing");
+    if ((await checkScope()).rowCount !== 0)
+      throw new Error("jobs_runtime_write_scope_too_broad");
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+  console.log(JSON.stringify({ status: "PASS", grant: "platform.jobs:INSERT" }));
+}
+
 async function grantAffiliateRead(client, supportsMaintain) {
   for (const table of affiliateReadTables) {
     const ownership = await client.query(`
@@ -148,7 +204,7 @@ try {
   );
   const supportsMaintain = version.rows[0].value >= 170000;
   const scope = process.env.VAYADA_DB_GRANT_SCOPE ?? "audit_insert";
-  if (!["audit_insert", "affiliate_read", "domain_events_append"].includes(scope))
+  if (!["audit_insert", "affiliate_read", "domain_events_append", "jobs_insert"].includes(scope))
     throw new Error("unknown_grant_scope");
   const role = await client.query(
     "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vayada_next_api_runtime'",
@@ -158,6 +214,8 @@ try {
     await grantAffiliateRead(client, supportsMaintain);
   } else if (scope === "domain_events_append") {
     await grantDomainEventAppend(client, supportsMaintain);
+  } else if (scope === "jobs_insert") {
+    await grantJobsInsert(client, supportsMaintain);
   } else {
     const check = await client.query(`
       SELECT current_user = pg_catalog.pg_get_userbyid(table_info.relowner) AS is_table_owner
@@ -196,6 +254,9 @@ try {
     "domain_events_table_owner_required",
     "domain_events_runtime_write_scope_too_broad",
     "domain_events_runtime_grant_missing",
+    "jobs_table_owner_required",
+    "jobs_runtime_write_scope_too_broad",
+    "jobs_runtime_insert_missing",
     "unknown_grant_scope",
   ]);
   const code = expected.has(error.message) ? error.message : error.code ?? "runtime_grant_failed";

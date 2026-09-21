@@ -353,6 +353,15 @@ preflight-tightening PR. This release permits but does not yet require event
 `INSERT`, so platform apply remains safe before the grant. Do not change
 `AUTH_DATABASE_URL` or enable the separate identity role as part of this grant.
 
+For the paused Channex staging canary's saved-offer command, use
+`scripts/run-target-database-runtime-preflight.sh --grant-jobs-insert` to grant
+only `INSERT` on `platform.jobs` to the general runtime role. The owner-only
+runner rejects existing `UPDATE`, `DELETE`, and other job-table escalation.
+This grant is staged in the runtime preflight: it is allowed but not yet
+required until the grant is applied and the command/worker permission matrix
+has been reviewed. Keep the worker paused during that review; this grant alone
+does not authorize a provider write or prove worker readiness.
+
 Roll out in two phases. First deploy application release
 `8c2cdef397522740c9fe7803efc2ed36d637bac5` (or retain an already-split task),
 then provision and prove the runtime role/SSM parameter before applying this
