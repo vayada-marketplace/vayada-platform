@@ -7,6 +7,8 @@ on:
       - "deployment/**"
       - "docs/coordinated-releases.md"
       - "docs/environments.md"
+      - "scripts/assert-platform-writer-boundary-plan.py"
+      - "scripts/test_platform_writer_boundary.py"
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
       - "scripts/test_coordinated_recovery.py"
@@ -124,6 +126,7 @@ jobs:
 
       - name: Validate operations scripts
         run: |
+          python3 -m unittest scripts/test_platform_writer_boundary.py -v
           python3 -m py_compile scripts/coordinated_release.py
           python3 -m unittest scripts/test_coordinated_release.py -v
           python3 -m unittest scripts/test_coordinated_recovery.py -v

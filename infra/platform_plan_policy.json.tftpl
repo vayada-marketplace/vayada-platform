@@ -1,0 +1,210 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ProviderInventory",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeServices",
+        "ecs:DescribeTaskDefinition",
+        "ecs:DescribeTaskSets",
+        "ecs:DescribeClusters",
+        "ecs:ListTagsForResource",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSecurityGroupRules",
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeTags",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeLoadBalancerAttributes",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:DescribeListenerAttributes",
+        "elasticloadbalancing:DescribeListenerCertificates",
+        "elasticloadbalancing:DescribeRules",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetGroupAttributes",
+        "elasticloadbalancing:DescribeTags",
+        "route53:ListHostedZones",
+        "route53:ListHostedZonesByName",
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets",
+        "route53:ListTagsForResource",
+        "acm:DescribeCertificate",
+        "acm:ListTagsForCertificate",
+        "acm:ListCertificates",
+        "logs:DescribeLogGroups",
+        "logs:ListTagsLogGroup",
+        "logs:ListTagsForResource",
+        "logs:DescribeResourcePolicies",
+        "kms:ListAliases"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RepositoryMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:DescribeRepositories",
+        "ecr:GetLifecyclePolicy",
+        "ecr:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:ecr:${region}:${account_id}:repository/vayada-*"
+    },
+    {
+      "Sid": "CloudFrontMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:GetDistribution",
+        "cloudfront:GetDistributionConfig",
+        "cloudfront:ListTagsForResource",
+        "cloudfront:GetOriginAccessControl",
+        "cloudfront:GetOriginAccessControlConfig",
+        "cloudfront:DescribeFunction",
+        "cloudfront:GetFunction"
+      ],
+      "Resource": [
+        "arn:aws:cloudfront::${account_id}:distribution/*",
+        "arn:aws:cloudfront::${account_id}:origin-access-control/*",
+        "arn:aws:cloudfront::${account_id}:function/*"
+      ]
+    },
+    {
+      "Sid": "BucketMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketAcl",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetBucketCORS",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetBucketWebsite",
+        "s3:GetAccelerateConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetBucketLogging",
+        "s3:GetBucketTagging",
+        "s3:GetBucketOwnershipControls",
+        "s3:GetBucketNotification",
+        "s3:GetReplicationConfiguration",
+        "s3:GetBucketRequestPayment",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": "arn:aws:s3:::vayada-*"
+    },
+    {
+      "Sid": "ExactManagedObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::vayada-terraform-state/platform/terraform.tfstate",
+        "arn:aws:s3:::vayada-uploads-prod/branding/vayada-bimi.svg"
+      ]
+    },
+    {
+      "Sid": "TerraformLock",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Resource": "arn:aws:dynamodb:${region}:${account_id}:table/vayada-terraform-lock",
+      "Condition": {
+        "ForAllValues:StringEquals": {
+          "dynamodb:LeadingKeys": [
+            "vayada-terraform-state/platform/terraform.tfstate",
+            "vayada-terraform-state/platform/terraform.tfstate-md5"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "TerraformLockMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:DescribeTable"
+      ],
+      "Resource": "arn:aws:dynamodb:${region}:${account_id}:table/vayada-terraform-lock"
+    },
+    {
+      "Sid": "RoleMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:ListRolePolicies",
+        "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRoleTags"
+      ],
+      "Resource": [
+        "arn:aws:iam::${account_id}:role/vayada-*",
+        "arn:aws:iam::${account_id}:role/ecsTaskRole",
+        "arn:aws:iam::${account_id}:role/ecsTaskExecutionRole"
+      ]
+    },
+    {
+      "Sid": "PolicyMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions"
+      ],
+      "Resource": "arn:aws:iam::${account_id}:policy/vayada-*"
+    },
+    {
+      "Sid": "ParameterMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:ssm:${region}:${account_id}:parameter/vayada/prod/*",
+        "arn:aws:ssm:${region}:${account_id}:parameter/vayada/staging/*"
+      ]
+    },
+    {
+      "Sid": "ExactKeyMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:ListResourceTags"
+      ],
+      "Resource": ${kms_resources}
+    },
+    {
+      "Sid": "MailMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "ses:GetConfigurationSet",
+        "ses:GetConfigurationSetEventDestinations",
+        "ses:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:ses:${region}:${account_id}:configuration-set/vayada-transactional"
+    },
+    {
+      "Sid": "MailEventMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "events:DescribeEventBus",
+        "events:DescribeRule",
+        "events:ListTagsForResource",
+        "events:ListTargetsByRule"
+      ],
+      "Resource": [
+        "arn:aws:events:${region}:${account_id}:event-bus/default",
+        "arn:aws:events:${region}:${account_id}:rule/vayada-ses-events"
+      ]
+    }
+  ]
+}
