@@ -55,9 +55,14 @@ env:
 jobs:
   prepare:
     name: Validate and plan full release
+    outputs:
+      attempt: ${{ steps.attempt.outputs.value }}
     environment: next
     runs-on: ubuntu-latest
     steps:
+      - name: Record preparation attempt
+        id: attempt
+        run: echo "value=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
 
       - uses: aws-actions/configure-aws-credentials@v6
@@ -126,6 +131,14 @@ jobs:
     environment: next
     runs-on: ubuntu-latest
     steps:
+      - name: Require preparation in this attempt
+        env:
+          PREPARED_ATTEMPT: ${{ needs.prepare.outputs.attempt }}
+        run: |
+          if [ "$PREPARED_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]; then
+            echo "::error::Partial reruns cannot reuse a prior plan. Dispatch the exact published artifact again so preparation and API readiness run under the deployment lock."
+            exit 1
+          fi
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
@@ -161,6 +174,14 @@ jobs:
     environment: next
     runs-on: ubuntu-latest
     steps:
+      - name: Require preparation in this attempt
+        env:
+          PREPARED_ATTEMPT: ${{ needs.prepare.outputs.attempt }}
+        run: |
+          if [ "$PREPARED_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]; then
+            echo "::error::Partial reruns cannot reuse a prior plan. Dispatch the exact published artifact again so preparation and API readiness run under the deployment lock."
+            exit 1
+          fi
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
@@ -184,6 +205,14 @@ jobs:
     environment: next
     runs-on: ubuntu-latest
     steps:
+      - name: Require preparation in this attempt
+        env:
+          PREPARED_ATTEMPT: ${{ needs.prepare.outputs.attempt }}
+        run: |
+          if [ "$PREPARED_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]; then
+            echo "::error::Partial reruns cannot reuse a prior plan. Dispatch the exact published artifact again so preparation and API readiness run under the deployment lock."
+            exit 1
+          fi
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
