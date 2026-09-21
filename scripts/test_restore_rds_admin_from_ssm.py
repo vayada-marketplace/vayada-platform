@@ -57,11 +57,15 @@ class RestoreRdsAdminTests(unittest.TestCase):
 
     def test_terraform_preserves_rotated_value_and_scopes_rds_write(self):
         ssm = (ROOT / "infra/ssm.tf").read_text()
-        iam = (ROOT / "infra/github_actions_iam.tf").read_text()
+        iam = (ROOT / "infra/rds_admin_rotation_iam.tf").read_text()
         self.assertIn('from = aws_ssm_parameter.secrets["db-marketplace-url"]', ssm)
         self.assertIn("ignore_changes = [value]", ssm)
         self.assertIn('actions   = ["rds:ModifyDBInstance"]', iam)
         self.assertIn("db:vayada-database", iam)
+        self.assertIn("aws_iam_role_policy_attachment", iam)
+        for action in ("iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions"):
+            self.assertIn(action, iam)
+        self.assertIn('id = "arn:aws:iam::269416271598:policy/vayada-rds-admin-rotation"', iam)
 
     def test_validate_accepts_exact_resources(self):
         url = MODULE.validate(*trusted_clients(), recovery=False)

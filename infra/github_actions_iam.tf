@@ -187,18 +187,6 @@ data "aws_iam_policy_document" "github_actions_platform_deploy" {
   }
 
   statement {
-    effect    = "Allow"
-    actions   = ["rds:DescribeDBInstances"]
-    resources = ["*"]
-  }
-
-  statement {
-    effect    = "Allow"
-    actions   = ["rds:ModifyDBInstance"]
-    resources = ["arn:aws:rds:${var.aws_region}:${var.aws_account_id}:db:vayada-database"]
-  }
-
-  statement {
     effect = "Allow"
     actions = [
       "ssm:GetParameter",
