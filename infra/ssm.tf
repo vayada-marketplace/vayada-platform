@@ -3,12 +3,11 @@
 locals {
   prod_core_ssm_secrets = {
     # Database connection URLs
-    "db-booking-url"     = "postgresql://vayada_booking_user:${var.db_booking_password}@${var.rds_endpoint}:5432/vayada_booking_db"
-    "db-auth-url"        = "postgresql://vayada_auth_user:${var.db_auth_password}@${var.rds_endpoint}:5432/vayada_auth_db"
-    "db-pms-url"         = "postgresql://vayada_pms_user:${var.db_pms_password}@${var.rds_endpoint}:5432/vayada_pms_db"
-    "db-marketplace-url" = "postgresql://vayada_admin:${var.db_master_password}@${var.rds_endpoint}:5432/postgres?sslmode=require"
-    "db-auth-url-ssl"    = "postgresql://vayada_auth_user:${var.db_auth_password}@${var.rds_endpoint}:5432/vayada_auth_db?sslmode=require&uselibpqcompat=true"
-    "db-pms-url-ssl"     = "postgresql://vayada_pms_user:${var.db_pms_password}@${var.rds_endpoint}:5432/vayada_pms_db?sslmode=require"
+    "db-booking-url"  = "postgresql://vayada_booking_user:${var.db_booking_password}@${var.rds_endpoint}:5432/vayada_booking_db"
+    "db-auth-url"     = "postgresql://vayada_auth_user:${var.db_auth_password}@${var.rds_endpoint}:5432/vayada_auth_db"
+    "db-pms-url"      = "postgresql://vayada_pms_user:${var.db_pms_password}@${var.rds_endpoint}:5432/vayada_pms_db"
+    "db-auth-url-ssl" = "postgresql://vayada_auth_user:${var.db_auth_password}@${var.rds_endpoint}:5432/vayada_auth_db?sslmode=require&uselibpqcompat=true"
+    "db-pms-url-ssl"  = "postgresql://vayada_pms_user:${var.db_pms_password}@${var.rds_endpoint}:5432/vayada_pms_db?sslmode=require"
 
     # Application secrets
     "jwt-secret-key"                = var.jwt_secret_key
@@ -72,6 +71,29 @@ locals {
     ],
   )
 
+}
+
+moved {
+  from = aws_ssm_parameter.secrets["db-marketplace-url"]
+  to   = aws_ssm_parameter.marketplace_database_url
+}
+
+resource "aws_ssm_parameter" "marketplace_database_url" {
+  name  = "/vayada/prod/db-marketplace-url"
+  type  = "SecureString"
+  value = "postgresql://vayada_admin:${var.db_master_password}@${var.rds_endpoint}:5432/postgres?sslmode=require"
+
+  tags = {
+    Project     = "vayada"
+    Environment = "production"
+    ManagedBy   = "terraform"
+  }
+
+  # RDS master-password rotation is an audited operational workflow. Terraform
+  # owns this parameter's metadata but must not restore an older secret value.
+  lifecycle {
+    ignore_changes = [value]
+  }
 }
 
 resource "aws_ssm_parameter" "secrets" {

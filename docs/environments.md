@@ -334,6 +334,19 @@ mapping change are still required before live `AUTH_DATABASE_URL` cutover.
 existence, role-creation ability, and database CONNECT grant authority; it
 does not provision or grant anything.
 
+If the protected marketplace administrator URL and the RDS master password
+diverge, use the manually dispatched `Rotate RDS Administrator` workflow with
+the exact `VAY-2038` confirmation. It runs under the shared
+`production-ecs-mutations` lock, rotates only `vayada-database`, updates only
+`/vayada/prod/db-marketplace-url`, and restarts only the legacy Marketplace API.
+An exact, tagged pending `SecureString` makes interrupted runs retryable and is
+removed only after the service stabilizes. The workflow emits sanitized stage
+codes and never prints the password. Terraform owns the parameter metadata but
+ignores its operationally rotated value so a later apply cannot restore an
+older credential. After a successful run, synchronize the repository's
+`TF_VAR_DB_MASTER_PASSWORD` secret from the protected parameter without putting
+the value in arguments or logs.
+
 The API records authentication and other product events in
 `platform.product_audit_events`. The migration owner must grant the runtime
 role only the missing privilege needed for this append-only sink. Runtime
