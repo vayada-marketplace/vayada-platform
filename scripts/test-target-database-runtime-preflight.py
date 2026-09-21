@@ -28,7 +28,8 @@ class RuntimePreflightContractTest(unittest.TestCase):
 
     def test_each_required_application_privilege_is_checked(self) -> None:
         self.assertIn('"platform.product_audit_events": ["SELECT", "INSERT"]', CHECK)
-        self.assertIn('stagedRelationPrivileges = { "platform.domain_events": ["INSERT"] }', CHECK)
+        self.assertIn('"platform.domain_events": ["INSERT"]', CHECK)
+        self.assertIn('"platform.jobs": ["INSERT"]', CHECK)
         self.assertIn('code === "runtime_relation_read_missing"', CHECK)
         for code in (
             "runtime_schema_usage_missing",

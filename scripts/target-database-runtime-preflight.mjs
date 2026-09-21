@@ -10,8 +10,11 @@ const requiredRelationPrivileges = {
   "platform.product_audit_events": ["SELECT", "INSERT"],
   "pms.channel_connections": ["SELECT", "INSERT", "UPDATE"],
 };
-// Permit the reviewed append-only grant before the later release requires it.
-const stagedRelationPrivileges = { "platform.domain_events": ["INSERT"] };
+// Permit reviewed grants before later releases require them.
+const stagedRelationPrivileges = {
+  "platform.domain_events": ["INSERT"],
+  "platform.jobs": ["INSERT"],
+};
 const protectedRelations = [
   "platform.channex_adoption_approval_records",
   "platform.channex_adoption_approval_revocations",

@@ -17,11 +17,13 @@ case "${mode}" in
     secret_parameter="/vayada/prod/target-database-runtime-url"
     family="vayada-next-api-db-runtime-preflight"
     ;;
-  --grant-product-audit-insert|--grant-affiliate-read|--grant-domain-events-append)
+  --grant-product-audit-insert|--grant-affiliate-read|--grant-domain-events-append|--grant-jobs-insert)
     if [[ "${mode}" == "--grant-affiliate-read" ]]; then
       grant_scope="affiliate_read"
     elif [[ "${mode}" == "--grant-domain-events-append" ]]; then
       grant_scope="domain_events_append"
+    elif [[ "${mode}" == "--grant-jobs-insert" ]]; then
+      grant_scope="jobs_insert"
     else
       grant_scope="audit_insert"
     fi

@@ -70,6 +70,7 @@ CREATE TABLE platform.external_webhook_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.domain_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.idempotency_keys (id uuid PRIMARY KEY);
 CREATE TABLE platform.product_audit_events (id uuid PRIMARY KEY);
+CREATE TABLE platform.jobs (id uuid PRIMARY KEY);
 CREATE TABLE pms.channel_connections (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_links (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_agreement_lifecycle_events (id uuid PRIMARY KEY);
@@ -97,6 +98,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON platform.idempotency_keys
   TO vayada_next_api_runtime;
 GRANT SELECT ON platform.product_audit_events
   TO vayada_next_api_runtime;
+GRANT SELECT ON platform.jobs TO vayada_next_api_runtime;
 GRANT SELECT ON platform.legacy_owner_approval_records,
   platform.legacy_owner_approval_revocations TO vayada_next_api_runtime;
 GRANT EXECUTE ON FUNCTION app.hotel_count() TO vayada_next_api_runtime;
@@ -191,6 +193,37 @@ if affiliate_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 aff
 fi
 grep -F '"code":"affiliate_table_owner_required"' <<<"${affiliate_non_owner_output}" >/dev/null
 run_grant legacy_owner owner 1 affiliate_read | grep -F '"grant":"affiliate_tables:SELECT"' >/dev/null
+
+if jobs_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 jobs_insert 2>&1)"; then
+  echo "non-owner jobs grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"jobs_table_owner_required"' <<<"${jobs_non_owner_output}" >/dev/null
+run_grant legacy_owner owner 1 jobs_insert | grep -F '"grant":"platform.jobs:INSERT"' >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO platform.jobs(id) VALUES ('00000000-0000-0000-0000-000000000003')" >/dev/null
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "UPDATE platform.jobs SET id=id WHERE false" >/dev/null 2>&1; then
+  echo "runtime role unexpectedly updated jobs" >&2
+  exit 1
+fi
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE INSERT ON platform.jobs FROM vayada_next_api_runtime" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (id) ON platform.jobs TO vayada_next_api_runtime" >/dev/null
+if jobs_broad_output="$(run_grant legacy_owner owner 1 jobs_insert 2>&1)"; then
+  echo "jobs grant unexpectedly passed with UPDATE privilege" >&2
+  exit 1
+fi
+grep -F '"code":"jobs_runtime_write_scope_too_broad"' <<<"${jobs_broad_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -tAc \
+  "SELECT has_table_privilege('vayada_next_api_runtime', 'platform.jobs', 'INSERT')" \
+  | grep -Fx f >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (id) ON platform.jobs FROM vayada_next_api_runtime" >/dev/null
+run_grant legacy_owner owner 1 jobs_insert | grep -F '"grant":"platform.jobs:INSERT"' >/dev/null
 
 docker exec "${database_container}" psql -U postgres -c \
   "GRANT INSERT ON marketplace.affiliate_links TO vayada_next_api_runtime" >/dev/null
@@ -295,6 +328,17 @@ docker exec "${database_container}" psql -U postgres -c \
 expect_failure runtime_unapproved_relation_write_forbidden
 docker exec "${database_container}" psql -U postgres -c \
   "REVOKE DELETE ON platform.domain_events FROM vayada_next_api_runtime" >/dev/null
+
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE INSERT ON platform.jobs FROM vayada_next_api_runtime" >/dev/null
+run_preflight | grep -F '"status":"PASS"' >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT INSERT ON platform.jobs TO vayada_next_api_runtime" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT DELETE ON platform.jobs TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_unapproved_relation_write_forbidden
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE DELETE ON platform.jobs FROM vayada_next_api_runtime" >/dev/null
 
 docker exec -e PGPASSWORD=runtime "${database_container}" \
   psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
