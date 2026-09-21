@@ -366,6 +366,17 @@ required until the grant is applied and the command/worker permission matrix
 has been reviewed. Keep the worker paused during that review; this grant alone
 does not authorize a provider write or prove worker readiness.
 
+For VAY-2039 expense-category creation, first deploy the application change
+that removes the property-row `FOR UPDATE` lock from the create path. After
+review, run `scripts/run-target-database-runtime-preflight.sh
+--grant-expense-category-insert` to grant only `INSERT` on
+`finance.expense_categories` to the general runtime role. The owner-checked
+runner rejects existing `UPDATE`, `DELETE`, and other destructive privileges.
+Run the runtime preflight again and verify a bounded create/read/replay on the
+documented test property. This grant is staged (allowed but not yet required)
+to keep the rollout safe before application deployment. It does not authorize
+category updates/archival, expense writes, or Financials activation.
+
 Roll out in two phases. First deploy application release
 `8c2cdef397522740c9fe7803efc2ed36d637bac5` (or retain an already-split task),
 then provision and prove the runtime role/SSM parameter before applying this
