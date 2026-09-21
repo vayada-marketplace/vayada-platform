@@ -15,14 +15,25 @@ OWNER_PARAMETER = "/vayada/prod/target-database-url"
 IDENTITY_PARAMETER = "/vayada/prod/target-database-identity-runtime-url"
 
 
-def aws(*args, payload=None):
+def aws(*args):
     result = subprocess.run(
-        ["aws", *args, "--region", REGION], input=payload,
+        ["aws", *args, "--region", REGION],
         text=True, capture_output=True, check=False,
     )
     if result.returncode:
         raise RuntimeError("aws_command_failed")
     return json.loads(result.stdout)
+
+
+def put_identity_parameter(parameter):
+    try:
+        import boto3
+        session = boto3.Session(region_name=REGION)
+        if session.client("sts").get_caller_identity()["Account"] != ACCOUNT:
+            raise RuntimeError("unexpected_sdk_account")
+        session.client("ssm").put_parameter(**parameter)
+    except Exception:
+        raise RuntimeError("identity_secret_write_failed") from None
 
 
 def main():
@@ -48,7 +59,7 @@ def main():
         "postgresql", f"vayada_next_identity_runtime:{quote(password, safe='')}@{HOST}:5432",
         url.path, url.query, "",
     ))
-    aws("ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin", payload=json.dumps({
+    put_identity_parameter({
         "Name": IDENTITY_PARAMETER, "Type": "SecureString", "KeyId": "alias/aws/ssm",
         "Value": identity_url, "Overwrite": False,
         "Tags": [
@@ -56,7 +67,7 @@ def main():
             {"Key": "Environment", "Value": "production"},
             {"Key": "Purpose", "Value": "VAY-2038-identity-runtime"},
         ],
-    }))
+    })
     print(json.dumps({"status": "PASS", "mode": "create", "parameter": IDENTITY_PARAMETER}))
 
 
