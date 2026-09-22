@@ -25,6 +25,8 @@ on:
       - "scripts/test-target-database-credential-split.py"
       - "scripts/assert-target-database-split-deployment-ready.py"
       - "scripts/test-target-database-split-deployment-ready.py"
+      - "scripts/pause-next-api-channex-worker.py"
+      - "scripts/test-pause-next-api-channex-worker.py"
       - "scripts/run-target-database-runtime-preflight.sh"
       - "scripts/target-database-runtime-preflight.mjs"
       - "scripts/grant-target-database-product-audit-insert.mjs"
@@ -181,6 +183,7 @@ jobs:
           python3 scripts/test-target-database-identity-secret.py
           python3 scripts/test-target-database-runtime-preflight.py
           python3 scripts/test-target-database-runtime-runner.py
+          python3 scripts/test-pause-next-api-channex-worker.py
           python3 scripts/test-next-api-split-compatible-image.py
           bash scripts/test-finance-folio-kms-plan-guard.sh
           bash -n scripts/guard-finance-folio-kms-plan.sh
