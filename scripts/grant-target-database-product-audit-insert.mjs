@@ -30,6 +30,7 @@ const affiliateReadTables = [
   "marketplace.affiliate_click_occurrences",
   "booking.affiliate_click_contexts",
   "booking.affiliate_click_admissions",
+  "booking.affiliate_original_booking_bindings",
 ];
 
 async function grantDomainEventAppend(client, supportsMaintain) {
