@@ -34,3 +34,35 @@ definition; verify that rollback completes before proceeding.
 
 For a read-only preflight, invoke the script with the same staging flags,
 `--channex-worker-state paused` (or `running`), and `--plan`.
+
+## Baseline next API recovery (VAY-2041)
+
+The baseline `vayada-next-api` service has no management-worker credential.
+Its previous `PMS_CHANNEX_CONNECTION_MODE=mutating` implicitly enabled that
+worker. Image `next-b02ff0b9c110e8771ffb553e5ab6915d2809b424` rejected this
+configuration at startup in task revision 1125. Setting only the worker flag
+to false also fails: unscoped mutating durable commands require an enabled worker.
+
+Terraform and the normal deployment workflow therefore set the worker flag to
+false and all six durable capabilities (connection, provisioning, ARI, booking
+sync, markups, messaging) to `observe_only`. This makes their mutation endpoints
+unavailable during recovery. Reviews and iframe keep their existing independent
+configuration. No worker credential or staging scope is added to this service.
+The deployment script enforces the same pause on an optional rollback artifact.
+The staging canary uses its separate workflow and is unaffected.
+
+Recovery uses the protected `Deploy App Service` workflow on reviewed `main`:
+service `next-target-backend`, environment `next`, repository `vayada-next-api`,
+image SHA `b02ff0b9c110e8771ffb553e5ab6915d2809b424`, and expected digest
+`sha256:b24bb28fa25c60584c5955196dd1bf9ed5ab069bc89a20301ac83bd81373958c`.
+Supply the coordinated operation reason and retain image compatibility checks.
+Merging the Terraform change also triggers its normal plan/apply workflow;
+inspect that plan and outcome before dispatching a second rollout.
+
+After deployment, verify the actual running task has that immutable digest,
+the seven pause settings, and no management-worker secret. Require a completed
+ECS rollout, no new startup failures, and passing auth and public Booking smoke
+checks before reporting recovery. This PR's local config test is not live
+rollout evidence. Resume management only through a separate reviewed rollout
+with the least-privilege credential and worker preflight; do not flip the flag
+alone or reuse the general runtime credential.

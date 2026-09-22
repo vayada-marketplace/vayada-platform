@@ -435,6 +435,13 @@ jobs:
           CURRENT_TASK_DEFINITION: task-definition.json
         run: python3 scripts/set-adaptive-onboarding.py
 
+      - name: Keep next API Channex processing paused
+        env:
+          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
+          TASK_DEFINITION: ${{ steps.render-task-def.outputs.task-definition }}
+          ROLLBACK_TASK_DEFINITION: ${{ steps.render-rollback-task-def.outputs.task-definition }}
+        run: python3 scripts/pause-next-api-channex-worker.py
+
       - name: Deploy to ECS
         id: deploy
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
