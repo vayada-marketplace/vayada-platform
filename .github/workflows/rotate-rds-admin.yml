@@ -38,5 +38,5 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - name: Install pinned AWS SDK
         run: python3 -m pip install --disable-pip-version-check boto3==1.42.14
-      - name: Rotate RDS and restart its only runtime consumer
+      - name: Rotate RDS and restart its reviewed runtime consumer
         run: python3 scripts/restore-rds-admin-from-ssm.py apply
