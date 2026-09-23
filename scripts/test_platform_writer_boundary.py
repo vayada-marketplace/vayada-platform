@@ -22,10 +22,10 @@ def revoke(cutoff):
 
 
 class BoundaryTests(unittest.TestCase):
-    def test_default_stage_is_inert(self):
+    def test_bootstrap_stage_does_not_enforce_or_revoke(self):
         config = json.loads((ROOT / "infra/platform_writer_boundary.auto.tfvars.json").read_text())
         self.assertEqual(config["platform_writer_boundary"],
-                         {"bootstrap_plan_role": False, "enforce_trust": False, "revoke_before": None})
+                         {"bootstrap_plan_role": True, "enforce_trust": False, "revoke_before": None})
         guard.check({"resource_changes": []})
 
     def test_installed_trust_cannot_be_relaxed_or_deleted(self):
