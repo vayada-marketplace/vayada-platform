@@ -46,8 +46,18 @@ Before apply, independently review the complete saved plan and require:
   dedicated AWS endpoint group, and S3 image-layer traffic;
 - the database security group admits TCP 5432 only from the runner security
   group and has no egress rules;
-- the task image remains pinned by digest and the execution policy can read
-  only the new restore's RDS-managed secret.
+- the task image remains pinned by digest; only the isolated one-time bootstrap
+  task execution role can read the new restore's RDS-managed master secret;
+- the separate inventory task execution role can read only the dedicated
+  count-only reader secret, and the bootstrap task role can only write that
+  exact reader secret;
+- the inventory login has no direct table or column `SELECT`, schema `CREATE`,
+  temporary-object creation, or table/sequence write privileges; the bootstrap
+  removes PostgreSQL's default `PUBLIC` temporary-object privilege and `PUBLIC`
+  execute on other application `SECURITY DEFINER` routines only on this
+  isolated restore. Connect access is also removed from connectable template
+  databases on this isolated restore; they are not inventoried. The scanner can
+  call the fixed safe row-count function.
 
 Creating the additional RDS copy starts AWS compute/storage and managed-secret
 charges. Do not apply without a fresh, explicit approval of the exact saved
@@ -61,7 +71,7 @@ the plan contains anything outside the allowlist, stop and retain its state
 and evidence for review. Never run `destroy`, reuse a saved plan, or copy state
 between this root and the platform root.
 
-This file split and plan do not authorize an apply or inventory run. The
-`vay2017-metadata-preflight` GitHub environment continues to gate inventory
-execution separately. First apply, live isolation verification, inventory,
-and cleanup remain distinct approval points.
+This file split and plan do not authorize an apply, reader-provisioning run, or
+inventory run. The `vay2017-metadata-preflight` GitHub environment gates
+provisioning and inventory separately. First apply, live isolation verification,
+reader provisioning, inventory, and cleanup remain distinct approval points.
