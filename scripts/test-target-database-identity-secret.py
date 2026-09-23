@@ -123,6 +123,27 @@ class IdentitySecretTest(unittest.TestCase):
             self.assertFalse(payload["Overwrite"])
             self.assertNotIn("private-token", output.getvalue())
 
+    def test_export_selector_uses_a_third_secret_and_role(self):
+        with patch.object(sys, "argv", [str(script), "--finance-export", "--create"]):
+            export_spec = importlib.util.spec_from_file_location("export_secret", script)
+            export = importlib.util.module_from_spec(export_spec)
+            export_spec.loader.exec_module(export)
+            responses = [{"Account": export.ACCOUNT},
+                         {"Parameter": {"Value": owner_url.replace("/postgres?", "/vayada_target_prod?")}},
+                         {"Parameters": []}]
+            output = io.StringIO()
+            with patch.object(export, "aws", side_effect=responses), \
+                 patch.object(export, "put_identity_parameter") as write, \
+                 patch.object(export.secrets, "token_urlsafe", return_value="private-token"), \
+                 contextlib.redirect_stdout(output):
+                export.main()
+            payload = write.call_args.args[0]
+            self.assertEqual(payload["Name"], "/vayada/prod/target-database-finance-export-worker-url")
+            self.assertIn("vayada_next_finance_export_worker:private-token@", payload["Value"])
+            self.assertNotIn("expense", payload["Value"])
+            self.assertFalse(payload["Overwrite"])
+            self.assertNotIn("private-token", output.getvalue())
+
     def test_existing_parameter_blocks_creation(self):
         responses = [
             {"Account": secret.ACCOUNT},
