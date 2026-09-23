@@ -90,8 +90,8 @@ on:
       - "scripts/test-vay2017-rehearsal-metadata.mjs"
       - "scripts/run-vay2017-rehearsal-metadata.sh"
       - "scripts/check-vay2017-rehearsal-isolation.sh"
-      - "scripts/attach-vay2017-rehearsal-security-group.sh"
       - "scripts/fixtures/vay2017-restore-attestation.json"
+      - "scripts/fixtures/vay2017-isolated-restore-plan.json"
       - "docs/vay2017-metadata-rehearsal.md"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/deploy-coordinated-release.yml"
@@ -226,8 +226,8 @@ jobs:
           node --test scripts/test-vay2017-rehearsal-metadata.mjs
           bash -n scripts/run-vay2017-rehearsal-metadata.sh
           bash -n scripts/check-vay2017-rehearsal-isolation.sh
-          bash -n scripts/attach-vay2017-rehearsal-security-group.sh
           jq empty scripts/fixtures/vay2017-restore-attestation.json
+          jq empty scripts/fixtures/vay2017-isolated-restore-plan.json
 
       - name: Validate auth gateway contract
         run: bash scripts/validate-auth-gateway-contract.sh
