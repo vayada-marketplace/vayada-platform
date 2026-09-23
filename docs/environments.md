@@ -404,6 +404,16 @@ documented test property. This grant is staged (allowed but not yet required)
 to keep the rollout safe before application deployment. It does not authorize
 category updates/archival, expense writes, or Financials activation.
 
+For VAY-2037 supplier-bill creation and correction rows, first deploy the
+application change that removes the redundant property and expense row locks.
+Then run `scripts/run-target-database-runtime-preflight.sh
+--grant-expense-insert` to grant only `INSERT` on `finance.expenses` to the
+general runtime role. The owner-checked runner refuses existing `UPDATE`,
+`DELETE`, or other destructive privileges. Run the standard runtime preflight
+again before the bounded create/read/correction/replay smoke. This grant does
+not authorize in-place expense updates, archive operations, payments,
+reservations, or Financials activation.
+
 Roll out in two phases. First deploy application release
 `8c2cdef397522740c9fe7803efc2ed36d637bac5` (or retain an already-split task),
 then provision and prove the runtime role/SSM parameter before applying this

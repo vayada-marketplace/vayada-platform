@@ -13,6 +13,7 @@ const requiredRelationPrivileges = {
 // Permit reviewed grants before later releases require them.
 const stagedRelationPrivileges = {
   "finance.expense_categories": ["INSERT"],
+  "finance.expenses": ["INSERT"],
   "platform.domain_events": ["INSERT"],
   "platform.jobs": ["INSERT"],
 };

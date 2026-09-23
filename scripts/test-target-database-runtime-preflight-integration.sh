@@ -71,6 +71,7 @@ CREATE TABLE app.hotel (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name
 CREATE TABLE booking.guest_bookings (id uuid PRIMARY KEY);
 CREATE TABLE finance.payments (id uuid PRIMARY KEY);
 CREATE TABLE finance.expense_categories (id uuid PRIMARY KEY);
+CREATE TABLE finance.expenses (id uuid PRIMARY KEY);
 CREATE TABLE platform.external_webhook_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.domain_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.idempotency_keys (id uuid PRIMARY KEY);
@@ -105,7 +106,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON booking.guest_bookings
 GRANT SELECT, INSERT, UPDATE ON finance.payments,
   platform.external_webhook_events, pms.channel_connections
   TO vayada_next_api_runtime;
-GRANT SELECT ON finance.expense_categories TO vayada_next_api_runtime;
+GRANT SELECT ON finance.expense_categories, finance.expenses TO vayada_next_api_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON platform.idempotency_keys
   TO vayada_next_api_runtime;
 GRANT SELECT ON platform.product_audit_events
@@ -243,6 +244,35 @@ if category_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 expe
 fi
 grep -F '"code":"expense_categories_table_owner_required"' <<<"${category_non_owner_output}" >/dev/null
 run_grant legacy_owner owner 1 expense_category_insert | grep -F '"grant":"finance.expense_categories:INSERT"' >/dev/null
+
+if expense_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 expense_insert 2>&1)"; then
+  echo "non-owner expense grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"expenses_table_owner_required"' <<<"${expense_non_owner_output}" >/dev/null
+run_grant legacy_owner owner 1 expense_insert | grep -F '"grant":"finance.expenses:INSERT"' >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO finance.expenses(id) VALUES ('00000000-0000-0000-0000-000000000005')" >/dev/null
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "UPDATE finance.expenses SET id=id WHERE false" >/dev/null 2>&1; then
+  echo "runtime role unexpectedly updated expenses" >&2
+  exit 1
+fi
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE INSERT ON finance.expenses FROM vayada_next_api_runtime; GRANT UPDATE (id) ON finance.expenses TO vayada_next_api_runtime" >/dev/null
+if expense_broad_output="$(run_grant legacy_owner owner 1 expense_insert 2>&1)"; then
+  echo "expense grant unexpectedly passed with UPDATE privilege" >&2
+  exit 1
+fi
+grep -F '"code":"expenses_runtime_write_scope_too_broad"' <<<"${expense_broad_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -tAc \
+  "SELECT has_table_privilege('vayada_next_api_runtime', 'finance.expenses', 'INSERT')" \
+  | grep -Fx f >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (id) ON finance.expenses FROM vayada_next_api_runtime" >/dev/null
+run_grant legacy_owner owner 1 expense_insert | grep -F '"grant":"finance.expenses:INSERT"' >/dev/null
 docker exec -e PGPASSWORD=runtime "${database_container}" \
   psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
   -c "INSERT INTO finance.expense_categories(id) VALUES ('00000000-0000-0000-0000-000000000004')" >/dev/null
