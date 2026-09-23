@@ -426,6 +426,17 @@ again before the bounded create/read/correction/replay smoke. This grant does
 not authorize in-place expense updates, archive operations, payments,
 reservations, or Financials activation.
 
+For VAY-2046 recurring-expense creation, first deploy the application change
+that uses a plain property read on create while retaining the existing locks
+for update and disable. Then run
+`scripts/run-target-database-runtime-preflight.sh --grant-recurring-expense-insert`
+to grant only `INSERT` on `finance.recurring_expense_rules` to the general API
+runtime. The owner-checked grant rejects existing broader writes. Run the
+standard runtime preflight, then verify a bounded create/read/replay using the
+reviewed test property after its shared test window is released. This grant is
+staged (allowed but not yet required) and does not enable the expense worker or
+authorize recurring-rule updates.
+
 Roll out in two phases. First deploy application release
 `8c2cdef397522740c9fe7803efc2ed36d637bac5` (or retain an already-split task),
 then provision and prove the runtime role/SSM parameter before applying this

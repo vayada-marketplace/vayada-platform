@@ -21,7 +21,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn("del(.taskRoleArn)", RUNNER)
 
     def test_audit_grant_uses_only_the_owner_secret_in_explicit_mode(self) -> None:
-        self.assertIn('--grant-product-audit-insert|--grant-affiliate-read|--grant-platform-runtime-read|--grant-domain-events-append|--grant-jobs-insert|--grant-expense-category-insert|--grant-expense-insert)', RUNNER)
+        self.assertIn('--grant-product-audit-insert|--grant-affiliate-read|--grant-platform-runtime-read|--grant-domain-events-append|--grant-jobs-insert|--grant-expense-category-insert|--grant-expense-insert|--grant-recurring-expense-insert)', RUNNER)
         self.assertIn('grant_scope="audit_insert"', RUNNER)
         self.assertIn('grant_scope="affiliate_read"', RUNNER)
         self.assertIn('grant_scope="platform_runtime_read"', RUNNER)
@@ -29,6 +29,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('grant_scope="jobs_insert"', RUNNER)
         self.assertIn('grant_scope="expense_category_insert"', RUNNER)
         self.assertIn('grant_scope="expense_insert"', RUNNER)
+        self.assertIn('grant_scope="recurring_expense_insert"', RUNNER)
         self.assertIn('secret_name="TARGET_DATABASE_MIGRATION_URL"', RUNNER)
         self.assertIn('secret_parameter="/vayada/prod/target-database-url"', RUNNER)
         self.assertIn('code_file="grant-target-database-product-audit-insert.mjs"', RUNNER)
@@ -138,6 +139,13 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
 
     def test_expense_grant_reuses_pinned_ca_and_fits_override_budget(self) -> None:
         self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-expense-insert"'), 3)
+        grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
+        encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
+        self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
+
+    def test_recurring_expense_grant_reuses_pinned_ca_and_fits_override_budget(self) -> None:
+        self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-recurring-expense-insert"'), 3)
+        self.assertIn('finance.recurring_expense_rules', GRANT)
         grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
         encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
         self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
