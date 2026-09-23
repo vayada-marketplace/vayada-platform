@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK = ROOT / "scripts/assert-target-database-split-deployment-ready.py"
 OWNER = "/vayada/prod/target-database-url"
 RUNTIME = "/vayada/prod/target-database-runtime-url"
+IDENTITY = "/vayada/prod/target-database-identity-runtime-url"
+FINANCE_EXPENSE = "/vayada/prod/target-database-finance-expense-worker-url"
 RELEASE = "8c2cdef397522740c9fe7803efc2ed36d637bac5"
 REPOSITORY = "269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api"
 DIGEST = "sha256:b097e04a61d5bd3b5910bbf856f13849bddd7b66c5883a4e2e160e311737bfca"
@@ -111,7 +113,23 @@ class DeploymentReadinessTest(unittest.TestCase):
             run(f"{REPOSITORY}@{DIGEST}", secrets, reviewed_digest=None).returncode,
             0,
         )
+        self.assertEqual(run(f"{REPOSITORY}@{DIGEST}", {
+            **secrets,
+            "FINANCE_EXPENSE_WORKER_DATABASE_URL": FINANCE_EXPENSE,
+        }).returncode, 0)
         self.assertNotEqual(run(f"{REPOSITORY}:next-latest", secrets).returncode, 0)
+
+    def test_accepts_identity_split_only_with_pinned_running_digest(self) -> None:
+        secrets = {
+            "TARGET_DATABASE_URL": RUNTIME,
+            "AUTH_DATABASE_URL": IDENTITY,
+            "TARGET_DATABASE_MIGRATION_URL": OWNER,
+        }
+        self.assertEqual(run(f"{REPOSITORY}@{DIGEST}", secrets).returncode, 0)
+        self.assertNotEqual(
+            run(f"{REPOSITORY}@{DIGEST}", secrets, reviewed_digest=None).returncode,
+            0,
+        )
 
     def test_rejects_partial_drifted_or_hidden_owner_mapping(self) -> None:
         cases = [
@@ -121,6 +139,48 @@ class DeploymentReadinessTest(unittest.TestCase):
                 "AUTH_DATABASE_URL": RUNTIME,
                 "TARGET_DATABASE_MIGRATION_URL": OWNER,
                 "HIDDEN_OWNER_URL": OWNER,
+            },
+            {
+                "TARGET_DATABASE_URL": RUNTIME,
+                "AUTH_DATABASE_URL": IDENTITY,
+                "TARGET_DATABASE_MIGRATION_URL": OWNER,
+                "HIDDEN_IDENTITY_URL": IDENTITY,
+            },
+            {
+                "TARGET_DATABASE_URL": RUNTIME,
+                "AUTH_DATABASE_URL": IDENTITY,
+                "TARGET_DATABASE_MIGRATION_URL": OWNER,
+                "HIDDEN_URL": "/vayada/prod/db-marketplace-url",
+            },
+            {
+                "TARGET_DATABASE_URL": RUNTIME,
+                "AUTH_DATABASE_URL": IDENTITY,
+                "TARGET_DATABASE_MIGRATION_URL": OWNER,
+                "HIDDEN_URL": "/vayada/prod/db-auth-url",
+            },
+            {
+                "TARGET_DATABASE_URL": RUNTIME,
+                "AUTH_DATABASE_URL": IDENTITY,
+                "TARGET_DATABASE_MIGRATION_URL": OWNER,
+                "FINANCE_EXPENSE_WORKER_DATABASE_URL": "/vayada/prod/db-marketplace-url",
+            },
+            {
+                "TARGET_DATABASE_URL": RUNTIME,
+                "AUTH_DATABASE_URL": IDENTITY,
+                "TARGET_DATABASE_MIGRATION_URL": OWNER,
+                "POSTGRES_URL": "/vayada/prod/postgres-admin-url",
+            },
+            {
+                "TARGET_DATABASE_URL": RUNTIME,
+                "AUTH_DATABASE_URL": IDENTITY,
+                "TARGET_DATABASE_MIGRATION_URL": OWNER,
+                "PG_URL": "/vayada/prod/pg-owner-url",
+            },
+            {
+                "TARGET_DATABASE_URL": RUNTIME,
+                "AUTH_DATABASE_URL": IDENTITY,
+                "TARGET_DATABASE_MIGRATION_URL": OWNER,
+                "RDS_URL": "/vayada/prod/rds-master-url",
             },
         ]
         for secrets in cases:

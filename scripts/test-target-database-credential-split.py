@@ -18,7 +18,7 @@ class TargetDatabaseCredentialSplitTest(unittest.TestCase):
             ecs,
         )
         self.assertIn(
-            '{ name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/target-database-runtime-url" }',
+            '{ name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/target-database-identity-runtime-url" }',
             ecs,
         )
         self.assertIn(
@@ -41,6 +41,8 @@ class TargetDatabaseCredentialSplitTest(unittest.TestCase):
         self.assertIn(
             "`target-database-runtime-url` is provisioned outside Terraform", docs
         )
+        self.assertNotIn("target_database_identity_runtime_url", ssm)
+        self.assertIn("`/vayada/prod/target-database-identity-runtime-url`", docs)
 
     def test_one_off_api_tasks_do_not_receive_migration_owner(self) -> None:
         for path in ("infra/finance_folio_inventory.tf", "infra/next_stripe_test.tf"):
