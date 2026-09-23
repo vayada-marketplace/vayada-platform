@@ -1,5 +1,6 @@
 # Terraform
 infra/.terraform/
+infra/vay2017-metadata-runner/.terraform/
 infra/terraform.tfvars
 infra/*.tfstate
 infra/*.tfstate.backup

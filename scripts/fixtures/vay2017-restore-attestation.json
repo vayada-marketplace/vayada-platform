@@ -1,0 +1,22 @@
+{
+  "attestationVersion": 1,
+  "accountId": "269416271598",
+  "region": "eu-west-1",
+  "eventName": "RestoreDBInstanceFromDBSnapshot",
+  "eventId": "6c80019b-26bd-460c-8750-5a950bf48441",
+  "eventTime": "2026-09-20T16:19:33Z",
+  "sourceDatabaseId": "vayada-database",
+  "sourceSnapshotId": "vay2017-legacy-source-freeze-20260920",
+  "restoreInstanceId": "vay2017-legacy-rehearsal-20260921",
+  "restoreInstanceResourceId": "db-MHCPB2UKUGKW6FLKDBQC4RQWJQ",
+  "restoreInstanceArn": "arn:aws:rds:eu-west-1:269416271598:db:vay2017-legacy-rehearsal-20260921",
+  "restoreEngine": "postgres",
+  "restoreEngineVersion": "17.9",
+  "restoreStorageEncrypted": true,
+  "restorePubliclyAccessible": false,
+  "restoreAvailabilityZone": "eu-west-1a",
+  "restoreVpcId": "vpc-055e8074dc3b2422a",
+  "restoreVpcCidr": "172.31.0.0/16",
+  "masterUserSecretArn": "arn:aws:secretsmanager:eu-west-1:269416271598:secret:rds!db-bb1527b2-f71e-4e01-9c29-b1a6b27a409c-doPxWf",
+  "verificationMethod": "AWS CloudTrail event-history lookup matched the restore event request to this snapshot and instance; the instance resource ID and ARN were independently checked on 2026-09-23."
+}
