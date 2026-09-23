@@ -28,6 +28,11 @@ on:
         required: false
         type: boolean
         default: false
+      channex_worker_database:
+        description: "Map reviewed dedicated worker credential on the paused scoped canary"
+        required: false
+        type: boolean
+        default: false
       channex_staging_meals:
         description: "Also process scoped meal jobs (requires reviewed meal-worker image)"
         required: false
@@ -119,6 +124,7 @@ jobs:
           CHANNEX_WORKER_STATE: ${{ inputs.channex_worker_state }}
           SERVICE: ${{ github.event.client_payload.service || inputs.service }}
           ENVIRONMENT: ${{ inputs.environment }}
+          CHANNEX_WORKER_DATABASE: ${{ inputs.channex_worker_database }}
           CHANNEX_STAGING: ${{ inputs.channex_staging }}
           ACTIVATE_GUEST: ${{ inputs.activate_guest }}
         run: bash scripts/validate-channex-worker-state.sh
@@ -494,6 +500,7 @@ jobs:
           CHANNEX_WORKER_STATE: ${{ inputs.channex_worker_state }}
           SERVICE: ${{ github.event.client_payload.service || inputs.service }}
           ENVIRONMENT: ${{ inputs.environment }}
+          CHANNEX_WORKER_DATABASE: ${{ inputs.channex_worker_database }}
           CHANNEX_STAGING: ${{ inputs.channex_staging }}
           ACTIVATE_GUEST: ${{ inputs.activate_guest }}
         run: bash scripts/validate-channex-worker-state.sh
@@ -509,6 +516,7 @@ jobs:
           SERVICE: ${{ inputs.service }}
           ENVIRONMENT: ${{ inputs.environment }}
           ACTIVATE_GUEST: ${{ inputs.activate_guest }}
+          CHANNEX_WORKER_DATABASE: ${{ inputs.channex_worker_database }}
           CHANNEX_STAGING: ${{ inputs.channex_staging }}
           CHANNEX_STAGING_MEALS: ${{ inputs.channex_staging_meals }}
           CHANNEX_STAGING_INVENTORY: ${{ inputs.channex_staging_inventory }}
@@ -528,6 +536,7 @@ jobs:
           if [ "$SERVICE" = next-maps-frontends-remove ]; then python3 scripts/deploy-next-maps-frontends.py --remove; exit 0; fi
           args=(--image-sha "$IMAGE_SHA" --channex-worker-state "${CHANNEX_WORKER_STATE:-preserve}")
           if [ "$CHANNEX_STAGING" = true ]; then args+=(--channex-staging); fi
+          if [ "$CHANNEX_WORKER_DATABASE" = true ]; then args+=(--channex-worker-database); fi
           if [ "$CHANNEX_STAGING_MEALS" = true ]; then args+=(--channex-staging-meals); fi
           if [ "$CHANNEX_STAGING_INVENTORY" = true ]; then args+=(--channex-staging-inventory); fi
           if [ "$CHANNEX_STAGING_PUBLISHED_OFFERS" = enabled ]; then args+=(--channex-staging-published-offers); fi

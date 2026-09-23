@@ -9,6 +9,14 @@ if [ "${ROOM_CLOSURE:-false}" = true ]; then
   test "${CHANNEX_WORKER_STATE:-preserve}" = preserve
 fi
 
+if [ "${CHANNEX_WORKER_DATABASE:-false}" = true ]; then
+  test "${SERVICE:-}" = next-maps-canary
+  test "${ENVIRONMENT:-}" = next
+  test "${CHANNEX_STAGING:-}" = true
+  test "${ACTIVATE_GUEST:-false}" != true
+  test "${CHANNEX_WORKER_STATE:-preserve}" = preserve
+fi
+
 case "${CHANNEX_WORKER_STATE:-preserve}" in
   preserve) exit 0 ;;
   paused|running)

@@ -44,6 +44,8 @@ on:
       - "scripts/test-target-database-identity-runtime-grant.sh"
       - "scripts/test-target-database-runtime-preflight.py"
       - "scripts/test-target-database-runtime-runner.py"
+      - "scripts/channex-management-worker-database.mjs"
+      - "scripts/test-channex-worker-database.py"
       - "scripts/test-target-database-runtime-preflight-integration.sh"
       - "scripts/next-api-split-compatible-images.txt"
       - "scripts/assert-next-api-split-compatible-image.py"
@@ -205,6 +207,7 @@ jobs:
           python3 scripts/test-target-database-identity-secret.py
           python3 scripts/test-target-database-runtime-preflight.py
           python3 scripts/test-target-database-runtime-runner.py
+          python3 scripts/test-channex-worker-database.py
           python3 scripts/test-pause-next-api-channex-worker.py
           python3 scripts/test-next-api-split-compatible-image.py
           bash scripts/test-finance-folio-kms-plan-guard.sh
