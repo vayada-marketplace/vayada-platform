@@ -152,6 +152,13 @@ jobs:
               --query Parameter.Name \
               --output text
           )" = /vayada/prod/target-database-runtime-url
+          test "$(
+            aws ssm get-parameter \
+              --name /vayada/prod/target-database-identity-runtime-url \
+              --region "${AWS_REGION}" \
+              --query Parameter.Name \
+              --output text
+          )" = /vayada/prod/target-database-identity-runtime-url
           bash scripts/run-target-database-runtime-preflight.sh
 
       - name: Terraform apply

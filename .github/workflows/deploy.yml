@@ -534,7 +534,7 @@ jobs:
           if [ "$SERVICE" = next-maps-guest-remove ]; then python3 scripts/deploy-next-maps-frontends.py --remove-guest; exit 0; fi
           if [ "$SERVICE" = next-maps-frontends ]; then python3 scripts/deploy-next-maps-frontends.py; exit 0; fi
           if [ "$SERVICE" = next-maps-frontends-remove ]; then python3 scripts/deploy-next-maps-frontends.py --remove; exit 0; fi
-          args=(--image-sha "$IMAGE_SHA" --channex-worker-state "${CHANNEX_WORKER_STATE:-preserve}")
+          args=(--image-sha "$IMAGE_SHA" --image-digest "$IMAGE_DIGEST" --channex-worker-state "${CHANNEX_WORKER_STATE:-preserve}")
           if [ "$CHANNEX_STAGING" = true ]; then args+=(--channex-staging); fi
           if [ "$CHANNEX_WORKER_DATABASE" = true ]; then args+=(--channex-worker-database); fi
           if [ "$CHANNEX_STAGING_MEALS" = true ]; then args+=(--channex-staging-meals); fi

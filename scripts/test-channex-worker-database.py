@@ -26,9 +26,15 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
         return value
 
     def test_mapping_requires_paused_property_scope_and_preserves_general_role(self):
+        for parameter in canary.GENERAL_RUNTIME_SECRET_PARAMETERS:
+            with self.subTest(parameter=parameter):
+                value = self.container()
+                value["secrets"][0]["valueFrom"] = parameter
+                canary.map_channex_worker_database(value)
+                self.assertEqual(next(x for x in value["secrets"] if x["name"] == "TARGET_DATABASE_URL")["valueFrom"], parameter)
+                self.assertEqual(next(x for x in value["secrets"] if x["name"] == canary.CHANNEX_WORKER_SECRET_NAME)["valueFrom"], canary.CHANNEX_WORKER_SECRET_PARAMETER)
         value = self.container()
         canary.map_channex_worker_database(value)
-        self.assertEqual(next(x for x in value["secrets"] if x["name"] == canary.CHANNEX_WORKER_SECRET_NAME)["valueFrom"], canary.CHANNEX_WORKER_SECRET_PARAMETER)
         for key, bad in [("PMS_CHANNEX_WORKER_ENABLED","true"), ("CHANNEX_API_BASE_URL","https://app.channex.io"), ("PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID","other")]:
             changed = copy.deepcopy(value)
             next(x for x in changed["environment"] if x["name"] == key)["value"] = bad
@@ -37,6 +43,12 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
         value["secrets"][0]["valueFrom"] = "/vayada/prod/target-database-url"
         with self.assertRaises(ValueError):
             canary.map_channex_worker_database(value)
+
+    def test_mapped_worker_requires_exact_reviewed_image_digest(self):
+        canary.verify_reviewed_digest(DIGEST, DIGEST, required=True)
+        for reviewed in (None, "sha256:" + "b" * 64, "sha256:bad"):
+            with self.subTest(reviewed=reviewed), self.assertRaises(ValueError):
+                canary.verify_reviewed_digest(DIGEST, reviewed, required=True)
 
     def test_running_task_digest_and_mapping_are_attested(self):
         value = self.container()

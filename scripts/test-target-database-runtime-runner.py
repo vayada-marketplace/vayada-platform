@@ -21,12 +21,14 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn("del(.taskRoleArn)", RUNNER)
 
     def test_audit_grant_uses_only_the_owner_secret_in_explicit_mode(self) -> None:
-        self.assertIn('--grant-product-audit-insert|--grant-affiliate-read|--grant-domain-events-append|--grant-jobs-insert|--grant-expense-category-insert)', RUNNER)
+        self.assertIn('--grant-product-audit-insert|--grant-affiliate-read|--grant-platform-runtime-read|--grant-domain-events-append|--grant-jobs-insert|--grant-expense-category-insert|--grant-expense-insert)', RUNNER)
         self.assertIn('grant_scope="audit_insert"', RUNNER)
         self.assertIn('grant_scope="affiliate_read"', RUNNER)
+        self.assertIn('grant_scope="platform_runtime_read"', RUNNER)
         self.assertIn('grant_scope="domain_events_append"', RUNNER)
         self.assertIn('grant_scope="jobs_insert"', RUNNER)
         self.assertIn('grant_scope="expense_category_insert"', RUNNER)
+        self.assertIn('grant_scope="expense_insert"', RUNNER)
         self.assertIn('secret_name="TARGET_DATABASE_MIGRATION_URL"', RUNNER)
         self.assertIn('secret_parameter="/vayada/prod/target-database-url"', RUNNER)
         self.assertIn('code_file="grant-target-database-product-audit-insert.mjs"', RUNNER)
@@ -85,6 +87,18 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
         encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
         self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
+
+    def test_platform_runtime_read_grant_is_narrow_and_fits_override_budget(self) -> None:
+        self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-platform-runtime-read"'), 3)
+        self.assertIn('"platform.pricing_runtime_property_scopes"', GRANT)
+        self.assertIn('"platform.channex_management_worker_properties"', GRANT)
+        self.assertIn('platform_runtime_scope_too_broad', GRANT)
+        self.assertIn('SELECT WITH GRANT OPTION', GRANT)
+        self.assertIn('VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE', GRANT)
+        grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
+        encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
+        self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
+
     def test_finance_modes_keep_scope_explicit_and_fit_task_override(self) -> None:
         self.assertIn('--provision-finance-expense-worker|--grant-finance-expense-worker|--preflight-finance-expense-worker)', RUNNER)
         self.assertIn('finance_property="$2"', RUNNER)
@@ -113,6 +127,13 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
 
     def test_affiliate_read_grant_reuses_pinned_ca_and_fits_override_budget(self) -> None:
         self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-affiliate-read"'), 3)
+
+        grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
+        encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
+        self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
+
+    def test_expense_grant_reuses_pinned_ca_and_fits_override_budget(self) -> None:
+        self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-expense-insert"'), 3)
         grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
         encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
         self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)

@@ -8,6 +8,8 @@ import sys
 ECR_REPOSITORY = "269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api"
 OWNER_PARAMETER = "/vayada/prod/target-database-url"
 RUNTIME_PARAMETER = "/vayada/prod/target-database-runtime-url"
+IDENTITY_PARAMETER = "/vayada/prod/target-database-identity-runtime-url"
+FINANCE_EXPENSE_PARAMETER = "/vayada/prod/target-database-finance-expense-worker-url"
 PARAMETER_ARN = re.compile(
     r"^arn:aws:ssm:eu-west-1:269416271598:parameter(?P<name>/vayada/prod/[^/]+)$"
 )
@@ -110,20 +112,54 @@ def main() -> None:
     secrets = {
         item["name"]: parameter_name(item.get("valueFrom")) for item in secret_entries
     }
+    reviewed_database_secrets = protected_names | {"FINANCE_EXPENSE_WORKER_DATABASE_URL"}
+    for name, value in secrets.items():
+        normalized_name = name.strip().lower()
+        normalized_value = (value or "").strip().lower()
+        database_like = (
+            "database" in normalized_name
+            or "postgres" in normalized_name
+            or re.search(r"(^|_)db(_|$)", normalized_name)
+            or re.search(r"(^|_)(pg|rds)(_|$)", normalized_name)
+            or "database" in normalized_value
+            or "postgres" in normalized_value
+            or re.search(r"(^|[/_-])(db|pg|rds)([/_-]|$)", normalized_value)
+        )
+        if database_like and name not in reviewed_database_secrets:
+            fail("unreviewed database secret mapping is forbidden")
+    finance_value = secrets.get("FINANCE_EXPENSE_WORKER_DATABASE_URL")
+    if finance_value is not None and finance_value != FINANCE_EXPENSE_PARAMETER:
+        fail("finance expense worker database secret mapping is unexpected")
     owner_refs = {name for name, value in secrets.items() if value == OWNER_PARAMETER}
     runtime_refs = {name for name, value in secrets.items() if value == RUNTIME_PARAMETER}
+    identity_refs = {name for name, value in secrets.items() if value == IDENTITY_PARAMETER}
 
-    split = {
+    identity_split = {
+        "TARGET_DATABASE_URL": RUNTIME_PARAMETER,
+        "AUTH_DATABASE_URL": IDENTITY_PARAMETER,
+        "TARGET_DATABASE_MIGRATION_URL": OWNER_PARAMETER,
+    }
+    runtime_split = {
         "TARGET_DATABASE_URL": RUNTIME_PARAMETER,
         "AUTH_DATABASE_URL": RUNTIME_PARAMETER,
         "TARGET_DATABASE_MIGRATION_URL": OWNER_PARAMETER,
     }
-    is_split = all(secrets.get(name) == value for name, value in split.items())
-    if is_split:
+    is_identity_split = all(secrets.get(name) == value for name, value in identity_split.items())
+    is_runtime_split = all(secrets.get(name) == value for name, value in runtime_split.items())
+    if is_identity_split:
+        if owner_refs != {"TARGET_DATABASE_MIGRATION_URL"}:
+            fail("identity-split task has an unexpected owner database secret reference")
+        if runtime_refs != {"TARGET_DATABASE_URL"}:
+            fail("identity-split task has an unexpected runtime database secret reference")
+        if identity_refs != {"AUTH_DATABASE_URL"}:
+            fail("identity-split task has an unexpected identity database secret reference")
+    elif is_runtime_split:
         if owner_refs != {"TARGET_DATABASE_MIGRATION_URL"}:
             fail("split task has an unexpected owner database secret reference")
         if runtime_refs != {"TARGET_DATABASE_URL", "AUTH_DATABASE_URL"}:
             fail("split task has an unexpected runtime database secret reference")
+        if identity_refs:
+            fail("split task unexpectedly references the identity database secret")
     else:
         unsplit = {
             "TARGET_DATABASE_URL": OWNER_PARAMETER,
@@ -135,6 +171,8 @@ def main() -> None:
             fail("pre-split task has an unexpected owner database secret reference")
         if runtime_refs:
             fail("pre-split task unexpectedly references the runtime database secret")
+        if identity_refs:
+            fail("pre-split task unexpectedly references the identity database secret")
         if "TARGET_DATABASE_MIGRATION_URL" in secrets:
             fail("pre-split task unexpectedly carries a migration override")
 
@@ -163,7 +201,7 @@ def main() -> None:
             fail("running task lacks one exact next-api image digest")
         running_digests.append(app_containers[0]["imageDigest"])
 
-    if is_split:
+    if is_identity_split or is_runtime_split:
         prefix = f"{ECR_REPOSITORY}@"
         if not image.startswith(prefix) or not DIGEST.fullmatch(image[len(prefix):]):
             fail("split task definition must pin the exact next-api image digest")
@@ -172,7 +210,8 @@ def main() -> None:
             fail("split task digest lacks a launcher-compatibility attestation")
         if any(digest != expected_digest for digest in running_digests):
             fail("running split task digest does not match its pinned task definition")
-        print("target database split preflight passed: current tasks are already split")
+        state = "identity split" if is_identity_split else "runtime split"
+        print(f"target database split preflight passed: current tasks use the reviewed {state}")
         return
 
     reviewed_tags = {
