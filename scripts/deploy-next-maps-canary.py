@@ -113,6 +113,13 @@ def aws(aws_service, operation, **values):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
+def verify_reviewed_digest(actual, reviewed, required=False):
+    if required and not reviewed:
+        raise ValueError("Worker database mapping requires the reviewed image digest")
+    if reviewed and (not re.fullmatch(r"sha256:[a-f0-9]{64}", reviewed) or actual != reviewed):
+        raise ValueError("ECR image digest differs from the reviewed image digest")
+
+
 def verify_inventory_image(digest, closure=False, no_show=False, published_offers=False, worker_database=False):
     """Probe compiled config without AWS/DB credentials or container networking."""
     image = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
@@ -268,7 +275,7 @@ def require_paused_closure_service(existing, definition, feature="Room closure")
         raise ValueError(f"{feature} requires a completed paused-service rollout")
 
 
-def change_staging_worker(existing, definition, image_sha, state, meals, plan=False, inventory=False, no_show=False):
+def change_staging_worker(existing, definition, image_sha, state, meals, plan=False, inventory=False, no_show=False, reviewed_digest=None, mapped_worker_database=False):
     service = existing[0]
     primary = service["deployments"]
     assert len(primary) == 1 and primary[0]["rolloutState"] == "COMPLETED"
@@ -290,6 +297,7 @@ def change_staging_worker(existing, definition, image_sha, state, meals, plan=Fa
     assert not any(x["name"] in {e["name"] for e in expected["environment"]} | {"API_BACKGROUND_WORKERS_ENABLED"} for x in container["secrets"])
     digest = aws("ecr", "describe-images", repositoryName="vayada-next-api", imageIds=[{"imageTag": image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
+    verify_reviewed_digest(digest, reviewed_digest, required=mapped_worker_database)
     assert container["image"] == f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}", "Pause/resume must retain the deployed image"
     if state == "running" and env.get("PMS_ROOM_CLOSURE_ENABLED") == "true":
         raise ValueError("Disable room closure before resuming the staging worker")
@@ -324,6 +332,7 @@ def change_staging_worker(existing, definition, image_sha, state, meals, plan=Fa
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image-sha", required=True)
+    parser.add_argument("--image-digest")
     parser.add_argument("--plan", action="store_true")
     parser.add_argument("--remove", action="store_true")
     parser.add_argument("--activate-guest", action="store_true")
@@ -442,6 +451,8 @@ def main():
         raise ValueError("Preserving published offers requires scoped staging inventory and worker state preserve")
     if mapped_worker_database:
         require_paused_closure_service(existing, staging_definition, "Worker database mapping")
+        if not args.image_digest and not args.remove:
+            raise ValueError("Worker database mapping requires the reviewed image digest")
     if args.room_closure:
         require_paused_closure_service(existing, staging_definition)
     if published_offers or args.disable_channex_staging_published_offers:
@@ -449,7 +460,7 @@ def main():
     if args.channex_worker_state != "preserve":
         if not staging_definition:
             raise ValueError("Pause/resume requires an existing configured staging service")
-        change_staging_worker(existing, staging_definition, args.image_sha, args.channex_worker_state, args.channex_staging_meals, args.plan, inventory=args.channex_staging_inventory, no_show=args.channex_staging_no_show)
+        change_staging_worker(existing, staging_definition, args.image_sha, args.channex_worker_state, args.channex_staging_meals, args.plan, inventory=args.channex_staging_inventory, no_show=args.channex_staging_no_show, reviewed_digest=args.image_digest, mapped_worker_database=mapped_worker_database)
         return
     if args.plan:
         return
@@ -468,6 +479,7 @@ def main():
     digest = aws("ecr", "describe-images", repositoryName="vayada-next-api",
                  imageIds=[{"imageTag": args.image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
+    verify_reviewed_digest(digest, args.image_digest, required=mapped_worker_database)
     if args.channex_staging_inventory or args.channex_staging_no_show or published_offers:
         verify_inventory_image(digest, closure=args.room_closure, no_show=args.channex_staging_no_show, published_offers=published_offers, worker_database=mapped_worker_database)
     if args.activate_guest:

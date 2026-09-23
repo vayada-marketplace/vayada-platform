@@ -31,6 +31,7 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
                 value = self.container()
                 value["secrets"][0]["valueFrom"] = parameter
                 canary.map_channex_worker_database(value)
+                self.assertEqual(next(x for x in value["secrets"] if x["name"] == "TARGET_DATABASE_URL")["valueFrom"], parameter)
                 self.assertEqual(next(x for x in value["secrets"] if x["name"] == canary.CHANNEX_WORKER_SECRET_NAME)["valueFrom"], canary.CHANNEX_WORKER_SECRET_PARAMETER)
         value = self.container()
         canary.map_channex_worker_database(value)
@@ -42,6 +43,12 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
         value["secrets"][0]["valueFrom"] = "/vayada/prod/target-database-url"
         with self.assertRaises(ValueError):
             canary.map_channex_worker_database(value)
+
+    def test_mapped_worker_requires_exact_reviewed_image_digest(self):
+        canary.verify_reviewed_digest(DIGEST, DIGEST, required=True)
+        for reviewed in (None, "sha256:" + "b" * 64, "sha256:bad"):
+            with self.subTest(reviewed=reviewed), self.assertRaises(ValueError):
+                canary.verify_reviewed_digest(DIGEST, reviewed, required=True)
 
     def test_running_task_digest_and_mapping_are_attested(self):
         value = self.container()
