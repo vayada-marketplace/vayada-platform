@@ -373,6 +373,14 @@ owner-only, verified-RDS-certificate task. It refuses pre-existing write
 privileges; affiliate write permissions require a separate review. Then rerun
 the runtime preflight before platform apply.
 
+When the runtime preflight reports missing reads for
+`platform.pricing_runtime_property_scopes` and
+`platform.channex_management_worker_properties`, run
+`scripts/run-target-database-runtime-preflight.sh --grant-platform-runtime-read`.
+The owner-checked task grants only `SELECT` on those two tables and refuses to
+run if the runtime role already has any write privilege on either table. Then
+rerun the runtime preflight before platform apply.
+
 Before routing booking-web attribution through `TARGET_DATABASE_URL` for the
 VAY-2038 identity credential split, run
 `scripts/run-target-database-runtime-preflight.sh --grant-domain-events-append`.

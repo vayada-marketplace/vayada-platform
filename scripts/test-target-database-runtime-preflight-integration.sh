@@ -139,6 +139,7 @@ run_grant() {
     --env "TARGET_DATABASE_MIGRATION_URL=postgresql://${database_role}:${database_password}@vayada-db-preflight:5432/postgres" \
     --env "VAYADA_AUDIT_GRANT_LOCAL_FIXTURE=${fixture_flag}" \
     --env "VAYADA_DB_GRANT_SCOPE=${grant_scope}" \
+    --env "VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE=${VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE:-0}" \
     node:22-bookworm node grant.mjs
 }
 
@@ -343,6 +344,58 @@ if docker exec -e PGPASSWORD=runtime "${database_container}" \
   echo "runtime role unexpectedly wrote an affiliate link" >&2
   exit 1
 fi
+
+if platform_read_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 platform_runtime_read 2>&1)"; then
+  echo "non-owner platform runtime read grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"platform_runtime_table_owner_required"' <<<"${platform_read_non_owner_output}" >/dev/null
+run_grant legacy_owner owner 1 platform_runtime_read | grep -F '"grant":"platform_runtime_tables:SELECT"' >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "SELECT count(*) FROM platform.pricing_runtime_property_scopes" >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "SELECT count(*) FROM platform.channex_management_worker_properties" >/dev/null
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO platform.pricing_runtime_property_scopes(database_login) VALUES ('vayada_runtime_probe')" \
+  >/dev/null 2>&1; then
+  echo "runtime role unexpectedly wrote a platform runtime scope" >&2
+  exit 1
+fi
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (property_id) ON platform.channex_management_worker_properties TO vayada_next_api_runtime" >/dev/null
+if platform_read_broad_output="$(run_grant legacy_owner owner 1 platform_runtime_read 2>&1)"; then
+  echo "platform runtime read grant unexpectedly passed with column write privilege" >&2
+  exit 1
+fi
+grep -F '"code":"platform_runtime_scope_too_broad"' <<<"${platform_read_broad_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (property_id) ON platform.channex_management_worker_properties FROM vayada_next_api_runtime" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE SELECT ON platform.pricing_runtime_property_scopes, platform.channex_management_worker_properties FROM vayada_next_api_runtime" >/dev/null
+if platform_read_rollback_output="$(
+  VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE=1 run_grant legacy_owner owner 1 platform_runtime_read 2>&1
+)"; then
+  echo "forced post-grant failure unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"platform_runtime_forced_post_grant_failure"' <<<"${platform_read_rollback_output}" >/dev/null
+for table in platform.pricing_runtime_property_scopes platform.channex_management_worker_properties; do
+  docker exec "${database_container}" psql -U postgres -tAc \
+    "SELECT has_table_privilege('vayada_next_api_runtime', '${table}', 'SELECT')" | grep -Fx f >/dev/null
+done
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT SELECT ON platform.pricing_runtime_property_scopes TO vayada_next_api_runtime WITH GRANT OPTION" >/dev/null
+if platform_read_grant_option_output="$(run_grant legacy_owner owner 1 platform_runtime_read 2>&1)"; then
+  echo "platform runtime read grant unexpectedly passed with SELECT grant option" >&2
+  exit 1
+fi
+grep -F '"code":"platform_runtime_scope_too_broad"' <<<"${platform_read_grant_option_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE GRANT OPTION FOR SELECT ON platform.pricing_runtime_property_scopes FROM vayada_next_api_runtime" >/dev/null
+run_grant legacy_owner owner 1 platform_runtime_read | grep -F '"grant":"platform_runtime_tables:SELECT"' >/dev/null
 
 if domain_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 domain_events_append 2>&1)"; then
   echo "non-owner domain event grant unexpectedly passed" >&2
