@@ -8,6 +8,7 @@ readonly snapshot="vay2017-legacy-source-freeze-20260920"
 readonly vpc="vpc-055e8074dc3b2422a"
 readonly script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly attestation_file="$script_dir/fixtures/vay2017-restore-attestation.json"
+readonly image_digest="sha256:a6f1001b1713e5f86e52cf757b3e67c794ec936639273dc041cedc7b95ea7b3c"
 
 aws sts get-caller-identity --query Account --output text | grep -Fxq "$account" || {
   echo "Refusing: AWS account is not the reviewed rehearsal account." >&2
@@ -17,16 +18,33 @@ snapshot_json="$(aws rds describe-db-snapshots --region "$region" --db-snapshot-
   --query 'DBSnapshots[0].{id:DBSnapshotIdentifier,status:Status,source:DBInstanceIdentifier,encrypted:Encrypted,engine:Engine,version:EngineVersion}' --output json)"
 jq -e --arg snapshot "$snapshot" '.id == $snapshot and .status == "available" and .source == "vayada-database" and .encrypted == true and .engine == "postgres" and .version == "17.9"' \
   <<<"$snapshot_json" >/dev/null || { echo "Source snapshot safety check failed." >&2; exit 1; }
-jq -e --arg account "$account" --arg snapshot "$snapshot" --arg instance "$instance" \
-  '.attestationVersion == 1 and .accountId == $account and .region == "eu-west-1" and .eventName == "RestoreDBInstanceFromDBSnapshot" and .eventId == "6c80019b-26bd-460c-8750-5a950bf48441" and .eventTime == "2026-09-20T16:19:33Z" and .sourceDatabaseId == "vayada-database" and .sourceSnapshotId == $snapshot and .restoreInstanceId == $instance and .restoreInstanceResourceId == "db-MHCPB2UKUGKW6FLKDBQC4RQWJQ" and .restoreInstanceArn == "arn:aws:rds:eu-west-1:269416271598:db:vay2017-legacy-rehearsal-20260921" and (.verificationMethod | type == "string")' \
+jq -e --arg account "$account" --arg snapshot "$snapshot" --arg instance "$instance" --arg vpc "$vpc" \
+  '.attestationVersion == 1 and .accountId == $account and .region == "eu-west-1" and .eventName == "RestoreDBInstanceFromDBSnapshot" and .eventId == "6c80019b-26bd-460c-8750-5a950bf48441" and .eventTime == "2026-09-20T16:19:33Z" and .sourceDatabaseId == "vayada-database" and .sourceSnapshotId == $snapshot and .restoreInstanceId == $instance and .restoreInstanceResourceId == "db-MHCPB2UKUGKW6FLKDBQC4RQWJQ" and .restoreInstanceArn == "arn:aws:rds:eu-west-1:269416271598:db:vay2017-legacy-rehearsal-20260921" and .restoreEngine == "postgres" and .restoreEngineVersion == "17.9" and .restoreStorageEncrypted == true and .restorePubliclyAccessible == false and .restoreAvailabilityZone == "eu-west-1a" and .restoreVpcId == $vpc and .restoreVpcCidr == "172.31.0.0/16" and .masterUserSecretArn == "arn:aws:secretsmanager:eu-west-1:269416271598:secret:rds!db-bb1527b2-f71e-4e01-9c29-b1a6b27a409c-doPxWf" and (.verificationMethod | type == "string")' \
   "$attestation_file" >/dev/null || { echo "Versioned restore attestation does not match the reviewed source and target." >&2; exit 1; }
 
 db_json="$(aws rds describe-db-instances --region "$region" --db-instance-identifier "$instance" \
-  --query 'DBInstances[0].{id:DBInstanceIdentifier,resourceId:DbiResourceId,arn:DBInstanceArn,status:DBInstanceStatus,engine:Engine,version:EngineVersion,encrypted:StorageEncrypted,public:PubliclyAccessible,az:AvailabilityZone,vpc:DBSubnetGroup.VpcId,groups:VpcSecurityGroups[*].VpcSecurityGroupId}' --output json)"
+  --query 'DBInstances[0].{id:DBInstanceIdentifier,resourceId:DbiResourceId,arn:DBInstanceArn,secretArn:MasterUserSecret.SecretArn,status:DBInstanceStatus,engine:Engine,version:EngineVersion,encrypted:StorageEncrypted,public:PubliclyAccessible,az:AvailabilityZone,vpc:DBSubnetGroup.VpcId,groups:VpcSecurityGroups[*].VpcSecurityGroupId}' --output json)"
 jq -e --arg instance "$instance" --arg vpc "$vpc" \
   --arg resource_id "$(jq -r '.restoreInstanceResourceId' "$attestation_file")" --arg arn "$(jq -r '.restoreInstanceArn' "$attestation_file")" \
-  '.id == $instance and .resourceId == $resource_id and .arn == $arn and .status == "available" and .engine == "postgres" and .version == "17.9" and .encrypted == true and .public == false and .az == "eu-west-1a" and .vpc == $vpc' \
+  --arg secret_arn "$(jq -r '.masterUserSecretArn' "$attestation_file")" \
+  '.id == $instance and .resourceId == $resource_id and .arn == $arn and .secretArn == $secret_arn and .status == "available" and .engine == "postgres" and .version == "17.9" and .encrypted == true and .public == false and .az == "eu-west-1a" and .vpc == $vpc' \
   <<<"$db_json" >/dev/null || { echo "Restored database safety check failed." >&2; exit 1; }
+
+vpc_json="$(aws ec2 describe-vpcs --region "$region" --vpc-ids "$vpc" \
+  --query 'Vpcs[0].{id:VpcId,cidr:CidrBlock}' --output json)"
+jq -e --arg vpc "$vpc" '.id == $vpc and .cidr == "172.31.0.0/16"' <<<"$vpc_json" >/dev/null || {
+  echo "The rehearsal VPC no longer matches the reviewed address plan." >&2
+  exit 1
+}
+[[ "$(aws ec2 describe-vpc-attribute --region "$region" --vpc-id "$vpc" --attribute enableDnsSupport --query 'EnableDnsSupport.Value' --output text)" == "True" &&
+   "$(aws ec2 describe-vpc-attribute --region "$region" --vpc-id "$vpc" --attribute enableDnsHostnames --query 'EnableDnsHostnames.Value' --output text)" == "True" ]] || {
+  echo "The rehearsal VPC must have DNS support and DNS hostnames enabled." >&2
+  exit 1
+}
+
+ecr_digest="$(aws ecr describe-images --region "$region" --repository-name vayada-next-api \
+  --image-ids imageDigest="$image_digest" --query 'imageDetails[0].imageDigest' --output text)"
+[[ "$ecr_digest" == "$image_digest" ]] || { echo "The pinned scanner image digest is unavailable." >&2; exit 1; }
 
 database_group="$(aws ec2 describe-security-groups --region "$region" \
   --filters "Name=vpc-id,Values=$vpc" "Name=group-name,Values=vay2017-metadata-database" \

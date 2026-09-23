@@ -14,32 +14,16 @@ locals {
   vay2017_rehearsal_state_machine_name = "vay2017-metadata-inventory"
   vay2017_rehearsal_log_group_name     = "/aws/ecs/vay2017-metadata-runner"
   vay2017_rehearsal_github_role_name   = "vayada-github-actions-vay2017-metadata"
+  vay2017_rehearsal_ecr_repository_arn = "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/vayada-next-api"
+  vay2017_rehearsal_ecr_repository_url = "${var.aws_account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/vayada-next-api"
+  vay2017_rehearsal_s3_prefix_list_id  = "pl-6da54004"
+  vay2017_rehearsal_attestation        = jsondecode(file("${path.module}/../scripts/fixtures/vay2017-restore-attestation.json"))
   vay2017_rehearsal_endpoint_names = toset([
     "ecr.api",
     "ecr.dkr",
     "logs",
     "secretsmanager",
   ])
-}
-
-data "aws_vpc" "vay2017_rehearsal" {
-  id = local.vay2017_rehearsal_vpc_id
-}
-
-data "aws_db_instance" "vay2017_rehearsal" {
-  db_instance_identifier = local.vay2017_rehearsal_db_instance_id
-}
-
-data "aws_db_snapshot" "vay2017_rehearsal_source" {
-  db_snapshot_identifier = local.vay2017_rehearsal_snapshot_id
-}
-
-data "aws_ecr_repository" "vay2017_rehearsal" {
-  name = "vayada-next-api"
-}
-
-data "aws_prefix_list" "vay2017_s3" {
-  name = "com.amazonaws.eu-west-1.s3"
 }
 
 resource "aws_subnet" "vay2017_rehearsal_private" {
@@ -55,37 +39,23 @@ resource "aws_subnet" "vay2017_rehearsal_private" {
 
   lifecycle {
     precondition {
-      condition     = data.aws_vpc.vay2017_rehearsal.cidr_block == "172.31.0.0/16"
+      condition     = local.vay2017_rehearsal_attestation.restoreVpcId == local.vay2017_rehearsal_vpc_id && local.vay2017_rehearsal_attestation.restoreVpcCidr == "172.31.0.0/16"
       error_message = "The VAY-2017 rehearsal VPC changed; re-review its address plan before creating a subnet."
     }
     precondition {
-      condition     = data.aws_vpc.vay2017_rehearsal.enable_dns_support && data.aws_vpc.vay2017_rehearsal.enable_dns_hostnames
-      error_message = "Private AWS interface endpoints require VPC DNS support and DNS hostnames."
-    }
-    precondition {
       condition = (
-        data.aws_db_instance.vay2017_rehearsal.db_instance_identifier == local.vay2017_rehearsal_db_instance_id &&
-        data.aws_db_instance.vay2017_rehearsal.engine == "postgres" &&
-        data.aws_db_instance.vay2017_rehearsal.engine_version == "17.9" &&
-        data.aws_db_instance.vay2017_rehearsal.storage_encrypted &&
-        !data.aws_db_instance.vay2017_rehearsal.publicly_accessible &&
-        data.aws_db_instance.vay2017_rehearsal.availability_zone == local.vay2017_rehearsal_subnet_az
+        local.vay2017_rehearsal_attestation.restoreInstanceId == local.vay2017_rehearsal_db_instance_id &&
+        local.vay2017_rehearsal_attestation.restoreInstanceResourceId == local.vay2017_rehearsal_db_resource_id &&
+        local.vay2017_rehearsal_attestation.restoreInstanceArn == local.vay2017_rehearsal_db_arn &&
+        local.vay2017_rehearsal_attestation.restoreEngine == "postgres" &&
+        local.vay2017_rehearsal_attestation.restoreEngineVersion == "17.9" &&
+        local.vay2017_rehearsal_attestation.restoreStorageEncrypted &&
+        !local.vay2017_rehearsal_attestation.restorePubliclyAccessible &&
+        local.vay2017_rehearsal_attestation.restoreAvailabilityZone == local.vay2017_rehearsal_subnet_az &&
+        local.vay2017_rehearsal_attestation.sourceSnapshotId == local.vay2017_rehearsal_snapshot_id &&
+        local.vay2017_rehearsal_attestation.sourceDatabaseId == "vayada-database"
       )
-      error_message = "The restored database no longer matches the reviewed private PostgreSQL rehearsal identity."
-    }
-    precondition {
-      condition     = length(data.aws_db_instance.vay2017_rehearsal.master_user_secret) == 1
-      error_message = "The exact rehearsal RDS instance must expose one AWS-managed master secret."
-    }
-    precondition {
-      condition = (
-        data.aws_db_snapshot.vay2017_rehearsal_source.status == "available" &&
-        data.aws_db_snapshot.vay2017_rehearsal_source.db_instance_identifier == "vayada-database" &&
-        data.aws_db_snapshot.vay2017_rehearsal_source.encrypted &&
-        data.aws_db_snapshot.vay2017_rehearsal_source.engine == "postgres" &&
-        data.aws_db_snapshot.vay2017_rehearsal_source.engine_version == "17.9"
-      )
-      error_message = "The VAY-2017 source snapshot no longer matches the reviewed encrypted PostgreSQL source."
+      error_message = "The checked-in restore attestation does not match the reviewed private PostgreSQL rehearsal identity."
     }
   }
 }
@@ -159,7 +129,7 @@ resource "aws_vpc_security_group_egress_rule" "vay2017_runner_ecr_s3" {
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443
-  prefix_list_id    = data.aws_prefix_list.vay2017_s3.id
+  prefix_list_id    = local.vay2017_rehearsal_s3_prefix_list_id
 }
 
 resource "aws_security_group" "vay2017_rehearsal_database" {
@@ -261,13 +231,13 @@ data "aws_iam_policy_document" "vay2017_task_execution" {
       "ecr:BatchGetImage",
       "ecr:GetDownloadUrlForLayer",
     ]
-    resources = [data.aws_ecr_repository.vay2017_rehearsal.arn]
+    resources = [local.vay2017_rehearsal_ecr_repository_arn]
   }
 
   statement {
     sid       = "ReadOnlyRestoredDatabaseMasterSecret"
     actions   = ["secretsmanager:GetSecretValue"]
-    resources = [data.aws_db_instance.vay2017_rehearsal.master_user_secret[0].secret_arn]
+    resources = [local.vay2017_rehearsal_attestation.masterUserSecretArn]
   }
 
   statement {
@@ -303,7 +273,7 @@ resource "aws_ecs_task_definition" "vay2017_metadata" {
   execution_role_arn       = aws_iam_role.vay2017_task_execution.arn
   container_definitions = jsonencode([{
     name      = "metadata-runner"
-    image     = "${data.aws_ecr_repository.vay2017_rehearsal.repository_url}@${local.vay2017_rehearsal_image_digest}"
+    image     = "${local.vay2017_rehearsal_ecr_repository_url}@${local.vay2017_rehearsal_image_digest}"
     essential = true
     command   = ["node", "--input-type=module", "-e", file("${path.module}/../scripts/vay2017-rehearsal-metadata.mjs")]
     environment = [
@@ -319,10 +289,10 @@ resource "aws_ecs_task_definition" "vay2017_metadata" {
       { name = "VAY2017_SCANNER_SOURCE_CHECKSUM", value = filesha256("${path.module}/../scripts/vay2017-rehearsal-metadata.mjs") },
     ]
     secrets = [
-      { name = "VAY2017_DB_HOST", valueFrom = "${data.aws_db_instance.vay2017_rehearsal.master_user_secret[0].secret_arn}:host::" },
-      { name = "VAY2017_DB_PORT", valueFrom = "${data.aws_db_instance.vay2017_rehearsal.master_user_secret[0].secret_arn}:port::" },
-      { name = "VAY2017_DB_USER", valueFrom = "${data.aws_db_instance.vay2017_rehearsal.master_user_secret[0].secret_arn}:username::" },
-      { name = "VAY2017_DB_PASSWORD", valueFrom = "${data.aws_db_instance.vay2017_rehearsal.master_user_secret[0].secret_arn}:password::" },
+      { name = "VAY2017_DB_HOST", valueFrom = "${local.vay2017_rehearsal_attestation.masterUserSecretArn}:host::" },
+      { name = "VAY2017_DB_PORT", valueFrom = "${local.vay2017_rehearsal_attestation.masterUserSecretArn}:port::" },
+      { name = "VAY2017_DB_USER", valueFrom = "${local.vay2017_rehearsal_attestation.masterUserSecretArn}:username::" },
+      { name = "VAY2017_DB_PASSWORD", valueFrom = "${local.vay2017_rehearsal_attestation.masterUserSecretArn}:password::" },
     ]
     readonlyRootFilesystem = true
     privileged             = false
@@ -518,11 +488,17 @@ data "aws_iam_policy_document" "vay2017_github_inventory" {
       "ec2:DescribeSecurityGroups",
       "ec2:DescribeSubnets",
       "ec2:DescribeVpcEndpoints",
+      "ec2:DescribeVpcAttribute",
       "ec2:DescribeVpcs",
       "rds:DescribeDBInstances",
       "rds:DescribeDBSnapshots",
     ]
     resources = ["*"]
+  }
+  statement {
+    sid       = "VerifyPinnedScannerImage"
+    actions   = ["ecr:DescribeImages"]
+    resources = [local.vay2017_rehearsal_ecr_repository_arn]
   }
 }
 
