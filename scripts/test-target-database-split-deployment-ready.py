@@ -26,6 +26,7 @@ def run(
     *,
     running_digest: str = DIGEST,
     stable: bool = True,
+    desired_count: int = 1,
     running_task_definition: str = TASK_DEFINITION,
     reviewed_digest: str | None = DIGEST,
     environment: list[dict[str, str]] | None = None,
@@ -36,8 +37,8 @@ def run(
     ]
     service = {"services": [{
         "taskDefinition": TASK_DEFINITION,
-        "desiredCount": 1,
-        "runningCount": 1 if stable else 0,
+        "desiredCount": desired_count,
+        "runningCount": desired_count if stable else 0,
         "pendingCount": 0,
         "deployments": [{"status": "PRIMARY", "rolloutState": "COMPLETED"}],
     }]}
@@ -54,11 +55,12 @@ def run(
     reviewed_image = {"imageDetails": [] if reviewed_digest is None else [{
         "imageDigest": reviewed_digest, "imageTags": [f"next-{RELEASE}"],
     }]}
-    running_tasks = {"tasks": [{
+    running_task = {
         "lastStatus": "RUNNING",
         "taskDefinitionArn": running_task_definition,
         "containers": [{"name": "vayada-next-api", "imageDigest": running_digest}],
-    }], "failures": []}
+    }
+    running_tasks = {"tasks": [running_task for _ in range(desired_count)], "failures": []}
     with tempfile.TemporaryDirectory() as directory:
         paths = []
         for name, document in (
@@ -74,6 +76,13 @@ def run(
 
 
 class DeploymentReadinessTest(unittest.TestCase):
+    def test_rejects_more_than_one_task(self) -> None:
+        self.assertNotEqual(run(
+            f"{REPOSITORY}:next-{RELEASE}",
+            {"TARGET_DATABASE_URL": OWNER, "AUTH_DATABASE_URL": OWNER},
+            desired_count=2,
+        ).returncode, 0)
+
     def test_accepts_exact_compatible_pre_split_launcher_and_running_digest(self) -> None:
         result = run(
             f"{REPOSITORY}:next-{RELEASE}",
@@ -142,12 +151,44 @@ class DeploymentReadinessTest(unittest.TestCase):
                 "TARGET_DATABASE_MIGRATION_URL": OWNER,
                 "FINANCE_EXPORT_WORKER_DATABASE_URL": FINANCE_EXPORT,
             },
-            environment=[{
-                "name": "FINANCE_EXPORT_WORKER_PROPERTY_ID",
-                "value": FINANCE_EXPORT_PROPERTY_ID,
-            }],
+            environment=[
+                {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"},
+                {
+                    "name": "FINANCE_EXPORT_WORKER_PROPERTY_ID",
+                    "value": FINANCE_EXPORT_PROPERTY_ID,
+                },
+            ],
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_accepts_only_exact_enabled_finance_export_scope(self) -> None:
+        secrets = {
+            "TARGET_DATABASE_URL": RUNTIME,
+            "AUTH_DATABASE_URL": IDENTITY,
+            "TARGET_DATABASE_MIGRATION_URL": OWNER,
+            "FINANCE_EXPORT_WORKER_DATABASE_URL": FINANCE_EXPORT,
+        }
+        environment = [
+            {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "true"},
+            {"name": "FINANCE_EXPORT_WORKER_PROPERTY_ID", "value": FINANCE_EXPORT_PROPERTY_ID},
+            {"name": "FINANCE_EXPORT_WORKER_EXPORT_ID", "value": "f3429f38-b462-4453-b7f1-d901fc86ebfa"},
+        ]
+        self.assertEqual(run(f"{REPOSITORY}@{DIGEST}", secrets, environment=environment).returncode, 0)
+        for changed_environment in (
+            [*environment[:2], {"name": "FINANCE_EXPORT_WORKER_EXPORT_ID", "value": "00000000-0000-4000-8000-000000000000"}],
+            environment[:2],
+            [{"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"}, *environment[1:]],
+            environment[1:],
+        ):
+            with self.subTest(environment=changed_environment):
+                self.assertNotEqual(run(
+                    f"{REPOSITORY}@{DIGEST}", secrets, environment=changed_environment
+                ).returncode, 0)
+        self.assertNotEqual(run(
+            f"{REPOSITORY}@{DIGEST}",
+            {name: value for name, value in secrets.items() if name != "FINANCE_EXPORT_WORKER_DATABASE_URL"},
+            environment=environment,
+        ).returncode, 0)
 
     def test_rejects_wrong_finance_export_worker_mapping_or_scope(self) -> None:
         secrets = {

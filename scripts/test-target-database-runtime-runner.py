@@ -121,9 +121,12 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
             encoded = base64.b64encode(gzip.compress((ROOT / 'scripts' / filename).read_bytes(), compresslevel=9, mtime=0))
             self.assertLessEqual(len(encoded) + 2100 + 1400, 8192)
         ecs = (ROOT / 'infra/ecs.tf').read_text()
-        self.assertIn('{ name = "FINANCE_EXPORT_WORKER_ENABLED", value = "false" }', ecs)
+        self.assertIn('{ name = "FINANCE_EXPORT_WORKER_ENABLED", value = "true" }', ecs)
+        self.assertIn('{ name = "FINANCE_EXPORT_WORKER_EXPORT_ID", value = "f3429f38-b462-4453-b7f1-d901fc86ebfa" }', ecs)
         self.assertIn('var.finance_export_worker_secret_mapped ? [', ecs)
         self.assertIn('/vayada/prod/target-database-finance-export-worker-url', ecs)
+        self.assertIn('Enabled finance export worker must target only the reviewed export, property, and dedicated database secret.', ecs)
+        self.assertIn('The next-api Financials export activation is limited to exactly one ECS task.', ecs)
 
         provisioner = (ROOT / 'scripts/provision-target-database-identity-runtime.mjs').read_text()
         self.assertIn('new Map([', provisioner)

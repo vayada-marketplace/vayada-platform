@@ -6,10 +6,10 @@ and policy-digest preflight in
 `apps/api/dist/jobs/financeExportWorkerBoundary.js`. The platform runner imports
 that module from the reviewed immutable app image.
 
-This mapping-only stage maps the dedicated export-worker secret and reviewed
-property by default, while `FINANCE_EXPORT_WORKER_ENABLED` remains hardcoded to
-`false`. It assumes the role, secret, grant, and preflights have already been
-completed using these explicit steps:
+This activation stage maps the dedicated export-worker secret and reviewed
+property, then enables exactly one ECS task for the exact reviewed export ID.
+It assumes the role, secret, grant, default-off image deployment, and preflights
+have already been completed using these explicit steps:
 
 ```sh
 python3 scripts/create-target-database-identity-secret.py --finance-export --check
@@ -26,16 +26,20 @@ The absent-only SSM secret is
 Channex worker, API runtime, identity runtime, or migration owner. The one-shot
 grant refuses drift or a different existing property scope.
 
-Apply Terraform with the reviewed default property UUID; the ECS task still sets
-`FINANCE_EXPORT_WORKER_ENABLED=false`. Verify the exact source SHA, image digest,
-task-definition revision, secret mapping, worker preflight, and unchanged general
-API runtime preflight before the separately reviewed enablement revision. To roll
-back this stage, set `finance_export_worker_secret_mapped=false` and
-`finance_export_worker_property_id=""`, then apply while the worker remains
-disabled.
+Before applying this activation, verify the exact source SHA, image digest,
+default-off task-definition revision, secret mapping, worker preflight, and
+unchanged general API runtime preflight. The Terraform plan must contain only the
+exact export ID, the exact property, the dedicated secret, and one desired task.
 
 During the exclusive VAY-1138 window, enable one task only for existing export
 `f3429f38-b462-4453-b7f1-d901fc86ebfa`. Do not enqueue another export. Rollback
-first disables the worker and then removes its secret mapping; preserve the job,
-audit, and artifact rows. No Financials activation, payment, reservation,
-backfill, or shared-fixture mutation is authorized here.
+first sets `FINANCE_EXPORT_WORKER_ENABLED=false` and removes
+`FINANCE_EXPORT_WORKER_EXPORT_ID`, then applies. A subsequent reviewed apply sets
+`finance_export_worker_secret_mapped=false` and
+`finance_export_worker_property_id=""`. Preserve the job, audit, and artifact
+rows. No Financials activation, payment, reservation, backfill, or shared-fixture
+mutation is authorized here.
+
+The activation task must set both `FINANCE_EXPORT_WORKER_ENABLED=true` and
+`FINANCE_EXPORT_WORKER_EXPORT_ID=f3429f38-b462-4453-b7f1-d901fc86ebfa`.
+The deployment readiness guard rejects an enabled worker without that exact ID.

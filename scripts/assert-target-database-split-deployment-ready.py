@@ -12,6 +12,7 @@ IDENTITY_PARAMETER = "/vayada/prod/target-database-identity-runtime-url"
 FINANCE_EXPENSE_PARAMETER = "/vayada/prod/target-database-finance-expense-worker-url"
 FINANCE_EXPORT_PARAMETER = "/vayada/prod/target-database-finance-export-worker-url"
 FINANCE_EXPORT_PROPERTY_ID = "65f6b2fc-c783-4963-9d6b-a85f82319769"
+FINANCE_EXPORT_ID = "f3429f38-b462-4453-b7f1-d901fc86ebfa"
 PARAMETER_ARN = re.compile(
     r"^arn:aws:ssm:eu-west-1:269416271598:parameter(?P<name>/vayada/prod/[^/]+)$"
 )
@@ -58,9 +59,9 @@ def main() -> None:
     if len(primary) != 1 or primary[0].get("rolloutState") != "COMPLETED":
         fail("next-api service does not have one completed PRIMARY deployment")
     desired = service.get("desiredCount")
-    if not isinstance(desired, int) or desired < 1:
-        fail("next-api service must desire at least one task")
-    if service.get("runningCount") != desired or service.get("pendingCount") != 0:
+    if desired != 1:
+        fail("next-api service must desire exactly one task")
+    if service.get("runningCount") != 1 or service.get("pendingCount") != 0:
         fail("next-api service is not stable")
 
     task = task_document.get("taskDefinition", task_document)
@@ -145,6 +146,17 @@ def main() -> None:
         "FINANCE_EXPORT_WORKER_PROPERTY_ID"
     ) != FINANCE_EXPORT_PROPERTY_ID:
         fail("finance export worker property scope is unexpected")
+    export_enabled = environment.get("FINANCE_EXPORT_WORKER_ENABLED")
+    export_id = environment.get("FINANCE_EXPORT_WORKER_EXPORT_ID")
+    if export_value is not None and export_enabled not in {"false", "true"}:
+        fail("finance export worker enablement state is unexpected")
+    if export_enabled == "true":
+        if export_value != FINANCE_EXPORT_PARAMETER:
+            fail("enabled finance export worker lacks its dedicated database secret")
+        if export_id != FINANCE_EXPORT_ID:
+            fail("enabled finance export worker export scope is unexpected")
+    elif export_id is not None:
+        fail("disabled finance export worker unexpectedly carries an export scope")
     owner_refs = {name for name, value in secrets.items() if value == OWNER_PARAMETER}
     runtime_refs = {name for name, value in secrets.items() if value == RUNTIME_PARAMETER}
     identity_refs = {name for name, value in secrets.items() if value == IDENTITY_PARAMETER}
@@ -198,8 +210,8 @@ def main() -> None:
         and DIGEST.fullmatch(item.get("imageDigest", ""))
     }
     running_tasks = tasks_document.get("tasks", [])
-    if tasks_document.get("failures") or len(running_tasks) != desired:
-        fail("could not inspect every running next-api task")
+    if tasks_document.get("failures") or len(running_tasks) != 1:
+        fail("expected exactly one inspected running next-api task")
     running_digests = []
     for running_task in running_tasks:
         if running_task.get("lastStatus") != "RUNNING":
