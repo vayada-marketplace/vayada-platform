@@ -1,7 +1,5 @@
 import pg from "pg";
 
-// VAY-2038: explicit auth-connection contract. A separate, password-provisioned
-// LOGIN role must exist before this owner-only grant runner is invoked.
 const role = "vayada_next_identity_runtime";
 const privileges = new Map([
   ["hotel_catalog.properties", "SELECT"],
@@ -33,9 +31,11 @@ const privileges = new Map([
   ["platform.product_audit_events", "SELECT, INSERT"],
 ]);
 const sharedTables = [...privileges.keys()].filter((table) => table.startsWith("platform."));
+const publicReads = new Set([
+  "booking.pricing_runtime_effective_authority_scopes",
+  "booking.pricing_runtime_effective_property_scopes",
+]);
 const knownPrivileges = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
-// Canonical pg_get_expr output from migration 0327 on PostgreSQL 16 and 17.
-// A changed policy must be reviewed before the identity credential is mapped.
 const ownerBypass = "(CURRENT_USER <> 'vayada_next_identity_runtime'::name)";
 const expectedPolicies = new Map([
   ["platform.external_webhook_events", new Map([
@@ -149,8 +149,6 @@ try {
           FROM pg_catalog.pg_policies
          WHERE schemaname = 'platform' AND tablename = $1 AND permissive = 'PERMISSIVE'
       `, [table.split(".")[1]]);
-      // Additional restrictive policies can only narrow these grants. Verify
-      // every permissive policy exactly; another worker must never add a bypass.
       const expected = expectedPolicies.get(table);
       if (policies.rowCount !== expected.size || policies.rows.some((policy) => {
         const key = `${policy.policyname}:${policy.cmd}`;
@@ -163,8 +161,22 @@ try {
     }
   }
 
-  // Refuse an existing write privilege outside the reviewed matrix, including
-  // privileges inherited through PUBLIC and column-level grants.
+  const publicReadContracts = await client.query(`
+    SELECT count(*)::int AS count FROM unnest($1::text[]) item(name)
+    JOIN pg_class c ON c.oid=to_regclass(item.name)
+    WHERE c.relkind='v' AND current_user=pg_get_userbyid(c.relowner)
+      AND c.reloptions@>ARRAY['security_barrier=true']::text[]
+      AND (SELECT array_agg(acl.privilege_type||':'||acl.is_grantable)
+           FROM aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) acl
+           WHERE acl.grantee=0)=ARRAY['SELECT:false']
+      AND NOT EXISTS(SELECT 1 FROM aclexplode(c.relacl) acl
+                     WHERE acl.grantee=(SELECT oid FROM pg_roles WHERE rolname=$2))
+      AND NOT EXISTS(SELECT 1 FROM pg_attribute a, LATERAL aclexplode(a.attacl) acl
+                     WHERE a.attrelid=c.oid AND acl.grantee=(SELECT oid FROM pg_roles WHERE rolname=$2))
+  `, [[...publicReads], role]);
+  if (publicReadContracts.rows[0].count !== publicReads.size)
+    throw new Error("identity_public_read_contract_unsafe");
+
   const excess = await client.query(`
     SELECT n.nspname || '.' || c.relname AS relation, p.name AS privilege,
            pg_catalog.has_table_privilege($1, c.oid, p.name || ' WITH GRANT OPTION') AS can_delegate
@@ -177,7 +189,9 @@ try {
   `, [role, knownPrivileges]);
   for (const row of excess.rows) {
     const allowed = privileges.get(row.relation)?.split(", ") ?? [];
-    if (!allowed.includes(row.privilege) || row.can_delegate)
+    const expectedPublicRead = publicReads.has(row.relation) &&
+      row.privilege === "SELECT";
+    if ((!allowed.includes(row.privilege) && !expectedPublicRead) || row.can_delegate)
       throw new Error("identity_role_existing_privilege_too_broad");
   }
   const columnExcess = await client.query(`
@@ -193,7 +207,9 @@ try {
   `, [role]);
   for (const row of columnExcess.rows) {
     const allowed = privileges.get(row.relation)?.split(", ") ?? [];
-    if (!allowed.includes(row.privilege) || row.can_delegate)
+    const expectedPublicRead = publicReads.has(row.relation) &&
+      row.privilege === "SELECT";
+    if ((!allowed.includes(row.privilege) && !expectedPublicRead) || row.can_delegate)
       throw new Error("identity_role_existing_column_privilege_too_broad");
   }
   const sequenceExcess = await client.query(`
@@ -223,6 +239,7 @@ try {
     "identity_role_owns_objects", "identity_role_database_ddl_privilege",
     "identity_role_connect_missing", "identity_role_owns_database",
     "identity_role_schema_create_privilege", "identity_role_callable_definer",
+    "identity_public_read_contract_unsafe",
     "identity_grant_table_owner_required", "identity_shared_rls_missing",
     "identity_shared_rls_policy_unexpected", "identity_role_existing_privilege_too_broad",
     "identity_role_existing_column_privilege_too_broad",
