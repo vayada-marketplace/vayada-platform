@@ -92,6 +92,7 @@ on:
       - "scripts/check-vay2017-rehearsal-isolation.sh"
       - "scripts/fixtures/vay2017-restore-attestation.json"
       - "scripts/fixtures/vay2017-isolated-restore-plan.json"
+      - "docs/vay2017-metadata-infrastructure-lane.md"
       - "docs/vay2017-metadata-rehearsal.md"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/deploy-coordinated-release.yml"

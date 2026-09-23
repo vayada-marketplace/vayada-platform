@@ -28,7 +28,7 @@ execution_arn="$(aws stepfunctions start-execution --region "$region" --state-ma
   exit 1
 }
 
-deadline=$((SECONDS + 900))
+deadline=$((SECONDS + 3900))
 execution_status="RUNNING"
 execution_output=""
 while (( SECONDS < deadline )); do
@@ -46,10 +46,20 @@ while (( SECONDS < deadline )); do
     *) echo "Metadata inventory returned an unexpected execution state." >&2; exit 1 ;;
   esac
 done
-[[ "$execution_status" == "SUCCEEDED" ]] || { echo "Metadata inventory exceeded its 15-minute limit." >&2; exit 1; }
+[[ "$execution_status" == "SUCCEEDED" ]] || { echo "Metadata inventory exceeded its 60-minute limit." >&2; exit 1; }
 
-task_arn="$(jq -er 'fromjson | .result.taskArn | select(type == "string")' <<<"$execution_output")" || {
+task_arn="$(jq -er '.result.taskArn | select(type == "string")' <<<"$execution_output")" || {
   echo "Metadata inventory completed without returning the fixed ECS task identity." >&2
+  exit 1
+}
+container_exit_code="$(jq -r '.completion.containerExitCode // empty' <<<"$execution_output")"
+task_stop_code="$(jq -r '.completion.stopCode // empty' <<<"$execution_output")"
+[[ "$container_exit_code" == "0" ]] || {
+  case "$task_stop_code" in
+    TaskFailedToStart) echo "Metadata inventory task failed to start." >&2 ;;
+    EssentialContainerExited) echo "Metadata inventory container exited unsuccessfully." >&2 ;;
+    *) echo "Metadata inventory task did not exit successfully." >&2 ;;
+  esac
   exit 1
 }
 [[ "$task_arn" == arn:aws:ecs:eu-west-1:269416271598:task/vay2017-metadata-rehearsal/* ]] || {

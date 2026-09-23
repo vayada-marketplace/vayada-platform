@@ -65,6 +65,7 @@ test('metadata collection inventories every database and empty schema with exact
   const artifact = await collectMetadata(fakeConnect(calls, connections), identity, '2026-09-21T00:00:00.000Z');
   assert.deepEqual(connections, ['postgres', 'app_db', 'postgres']);
   assert.equal(calls.filter(({ sql }) => sql === 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY').length, 3);
+  assert.equal(calls.filter(({ sql }) => sql === "SET LOCAL statement_timeout = '15min'").length, 2);
   assert.equal(calls.filter(({ sql }) => sql === 'COMMIT').length, 3);
   assert.deepEqual(artifact.databases.map(({ name }) => name), ['app_db', 'postgres']);
   assert.deepEqual(artifact.databases[0].schemas, ['empty_schema', 'public']);
@@ -103,10 +104,18 @@ test('sanitized errors omit raw messages, hosts, and credentials', () => {
   assert.doesNotMatch(output, /secret|db\.example|postgres:\/\//);
 });
 
+test('sanitized errors preserve only known internal, PostgreSQL, and connection error codes', () => {
+  assert.equal(sanitizeError(new Error('row_count_invalid')).code, 'row_count_invalid');
+  assert.equal(sanitizeError({ code: '23505', message: 'duplicate key details' }).code, '23505');
+  assert.equal(sanitizeError({ code: 'ERR_TLS_CERT_ALTNAME_INVALID' }).code, 'ERR_TLS_CERT_ALTNAME_INVALID');
+  assert.equal(sanitizeError({ code: 'password-is-secret', message: 'password-is-secret' }).code, 'UNKNOWN');
+});
+
 test('runner contains no row-value query or caller-controlled SQL', async () => {
   const source = await readFile(new URL('./vay2017-rehearsal-metadata.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /process\.env\.[A-Z0-9_]+\s*\|\|\s*['"`].*SELECT/i);
   assert.match(source, /transaction_timeout|statement_timeout/);
+  assert.match(source, /SET LOCAL statement_timeout = '15min'/);
   assert.match(source, /rejectUnauthorized:\s*true/);
 });
 
@@ -133,6 +142,9 @@ test('infrastructure keeps execution fixed and network access private and narrow
   assert.match(tf, /resource "aws_vpc_security_group_egress_rule" "vay2017_runner_ecr_s3"/);
   assert.doesNotMatch(tf, /0\.0\.0\.0\/0|nat_gateway|\bpublic_ip\s*=\s*true|assign_public_ip\s*=\s*true/i);
   assert.match(tf, /master_user_secret\[0\]\.secret_arn/);
+  assert.match(tf, /VAY2017_DB_HOST"\s*,\s*value\s*=\s*aws_db_instance\.vay2017_isolated_restore\.address/);
+  assert.match(tf, /VAY2017_DB_PORT"\s*,\s*value\s*=\s*tostring\(aws_db_instance\.vay2017_isolated_restore\.port\)/);
+  assert.doesNotMatch(tf, /VAY2017_DB_HOST"\s*,\s*valueFrom|VAY2017_DB_PORT"\s*,\s*valueFrom/);
   assert.match(tf, /"secretsmanager:GetSecretValue"/);
   assert.doesNotMatch(tf, /ec2:Describe|rds:Describe|ecr:DescribeImages/);
   assert.doesNotMatch(tf, /data "aws_(vpc|db_instance|db_snapshot|ecr_repository|prefix_list)"/);
@@ -143,10 +155,20 @@ test('infrastructure keeps execution fixed and network access private and narrow
   assert.match(tf, /10\.230\.0\.0\/24/);
   assert.doesNotMatch(tf, /0\.0\.0\.0\/0|nat_gateway|publicly_accessible\s*=\s*true/i);
   assert.doesNotMatch(tf, /target-database-url|target-database-runtime-url|db-marketplace-url|vayada-database\.c7eiqkoq4as4/);
-  assert.match(tf, /ResultSelector[\s\S]*taskArn\.\$[\s\S]*ResultPath/);
+  assert.match(tf, /"taskArn\.\$"\s*=\s*"\$\.Tasks\[0\]\.TaskArn"/);
+  assert.match(tf, /DescribeCompletedMetadataTask[\s\S]*aws-sdk:ecs:describeTasks[\s\S]*States\.Array\(\$\.result\.taskArn\)[\s\S]*"containerExitCode\.\$"\s*=\s*"\$\.Tasks\[0\]\.Containers\[0\]\.ExitCode"[\s\S]*"stopCode\.\$"\s*=\s*"\$\.Tasks\[0\]\.StopCode"[\s\S]*ResultPath\s*=\s*"\$\.completion"/);
+  assert.match(tf, /TimeoutSeconds\s*=\s*3600/);
+  assert.match(tf, /StepFunctionsGetEventsForECSTaskRule/);
+  assert.doesNotMatch(tf, /sid\s*=\s*"ManageStepFunctionsCompletionRule"[\s\S]*resources\s*=\s*\["\*"\]/);
+  assert.match(await readFile(new URL('../.github/workflows/tf-validate.yml', import.meta.url), 'utf8'), /docs\/vay2017-metadata-infrastructure-lane\.md/);
   assert.doesNotMatch(tf, /Overrides|commandOverrides|ecs:RunTask.*\*/i);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /environment: vay2017-metadata-preflight/);
+  assert.match(runner, /\.completion\.containerExitCode/);
+  assert.match(runner, /\.completion\.stopCode/);
+  assert.doesNotMatch(runner, /fromjson/);
+  assert.match(runner, /deadline=\$\(\(SECONDS \+ 3900\)\)/);
+  assert.match(await readFile(new URL('../.github/workflows/vay2017-metadata-inventory.yml', import.meta.url), 'utf8'), /timeout-minutes:\s*70/);
   assert.match(tf, /repo:vayada-marketplace\/vayada-platform:environment:vay2017-metadata-preflight/);
   assert.match(workflow, /role\/vayada-github-actions-vay2017-metadata/);
   assert.doesNotMatch(workflow, /vayada-github-actions-platform-deploy/);

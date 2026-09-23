@@ -50,6 +50,34 @@ export const rowCountSql = (schema, table) => (
   `SELECT count(*)::text AS row_count FROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)}`
 );
 
+const INTERNAL_ERROR_CODES = new Set([
+  'read_only_transaction_required',
+  'restore_identity_invalid',
+  'snapshot_identity_invalid',
+  'restore_resource_identity_invalid',
+  'image_digest_invalid',
+  'scanner_source_checksum_invalid',
+  'restore_attestation_checksum_invalid',
+  'row_count_invalid',
+]);
+
+const NODE_CONNECTION_ERROR_CODES = new Set([
+  'ECONNABORTED',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ETIMEDOUT',
+  'EPIPE',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'ERR_TLS_HANDSHAKE_TIMEOUT',
+  'CERT_HAS_EXPIRED',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+]);
+
 async function beginReadOnly(client) {
   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   const mode = await client.query('SHOW transaction_read_only');
@@ -63,9 +91,12 @@ async function rollbackQuietly(client) {
 }
 
 export function sanitizeError(error) {
-  const code = typeof error?.code === 'string' && /^[A-Z0-9]{2,8}$/.test(error.code)
-    ? error.code
-    : 'UNKNOWN';
+  const driverCode = typeof error?.code === 'string' ? error.code : '';
+  const code = /^[A-Z0-9]{5}$/.test(driverCode) || NODE_CONNECTION_ERROR_CODES.has(driverCode)
+    ? driverCode
+    : typeof error?.message === 'string' && INTERNAL_ERROR_CODES.has(error.message)
+      ? error.message
+      : 'UNKNOWN';
   return { status: 'FAIL', stage: 'metadata-read', code };
 }
 
@@ -148,6 +179,9 @@ export async function collectMetadata(connect, identity, now = new Date().toISOS
         }
       }
 
+      if (tables.length > 0) {
+        await client.query("SET LOCAL statement_timeout = '15min'");
+      }
       for (const table of tables) {
         const countResult = await client.query(rowCountSql(table.schema, table.name));
         table.rowCount = countResult.rows[0]?.row_count ?? null;

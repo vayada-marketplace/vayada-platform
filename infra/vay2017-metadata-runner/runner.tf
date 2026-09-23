@@ -399,10 +399,10 @@ resource "aws_ecs_task_definition" "vay2017_metadata" {
       { name = "VAY2017_RESTORE_ATTESTATION_CHECKSUM", value = filesha256("${path.module}/../../scripts/fixtures/vay2017-isolated-restore-plan.json") },
       { name = "VAY2017_IMAGE_DIGEST", value = local.vay2017_rehearsal_image_digest },
       { name = "VAY2017_SCANNER_SOURCE_CHECKSUM", value = filesha256("${path.module}/../../scripts/vay2017-rehearsal-metadata.mjs") },
+      { name = "VAY2017_DB_HOST", value = aws_db_instance.vay2017_isolated_restore.address },
+      { name = "VAY2017_DB_PORT", value = tostring(aws_db_instance.vay2017_isolated_restore.port) },
     ]
     secrets = [
-      { name = "VAY2017_DB_HOST", valueFrom = "${aws_db_instance.vay2017_isolated_restore.master_user_secret[0].secret_arn}:host::" },
-      { name = "VAY2017_DB_PORT", valueFrom = "${aws_db_instance.vay2017_isolated_restore.master_user_secret[0].secret_arn}:port::" },
       { name = "VAY2017_DB_USER", valueFrom = "${aws_db_instance.vay2017_isolated_restore.master_user_secret[0].secret_arn}:username::" },
       { name = "VAY2017_DB_PASSWORD", valueFrom = "${aws_db_instance.vay2017_isolated_restore.master_user_secret[0].secret_arn}:password::" },
     ]
@@ -488,12 +488,7 @@ data "aws_iam_policy_document" "vay2017_state_machine" {
   statement {
     sid       = "ManageStepFunctionsCompletionRule"
     actions   = ["events:PutTargets", "events:PutRule", "events:DescribeRule"]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "events:ManagedBy"
-      values   = ["states.amazonaws.com"]
-    }
+    resources = ["arn:aws:events:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:rule/StepFunctionsGetEventsForECSTaskRule"]
   }
 }
 
@@ -514,7 +509,7 @@ resource "aws_sfn_state_machine" "vay2017_metadata" {
       RunFixedMetadataTask = {
         Type           = "Task"
         Resource       = "arn:aws:states:::ecs:runTask.sync"
-        TimeoutSeconds = 600
+        TimeoutSeconds = 3600
         Parameters = {
           Cluster              = aws_ecs_cluster.vay2017_metadata.arn
           TaskDefinition       = aws_ecs_task_definition.vay2017_metadata.arn
@@ -533,6 +528,20 @@ resource "aws_sfn_state_machine" "vay2017_metadata" {
           "taskArn.$" = "$.Tasks[0].TaskArn"
         }
         ResultPath = "$.result"
+        Next       = "DescribeCompletedMetadataTask"
+      }
+      DescribeCompletedMetadataTask = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::aws-sdk:ecs:describeTasks"
+        Parameters = {
+          Cluster   = aws_ecs_cluster.vay2017_metadata.arn
+          "Tasks.$" = "States.Array($.result.taskArn)"
+        }
+        ResultSelector = {
+          "containerExitCode.$" = "$.Tasks[0].Containers[0].ExitCode"
+          "stopCode.$"          = "$.Tasks[0].StopCode"
+        }
+        ResultPath = "$.completion"
         End        = true
       }
     }
