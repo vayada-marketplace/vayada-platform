@@ -475,7 +475,8 @@ def main():
     if published_offers and (not args.channex_staging or not args.channex_staging_inventory):
         raise ValueError("Preserving published offers requires scoped staging inventory")
     if mapped_worker_database:
-        require_paused_closure_service(existing, staging_definition, "Worker database mapping")
+        if args.channex_worker_state != "paused":
+            require_paused_closure_service(existing, staging_definition, "Worker database mapping")
         if not args.image_digest and not args.remove:
             raise ValueError("Worker database mapping requires the reviewed image digest")
     if args.room_closure:
