@@ -422,10 +422,9 @@ resource "aws_iam_role_policy" "vay2017_state_machine" {
 }
 
 resource "aws_sfn_state_machine" "vay2017_metadata" {
-  name            = local.vay2017_rehearsal_state_machine_name
-  role_arn        = aws_iam_role.vay2017_state_machine.arn
-  type            = "STANDARD"
-  timeout_seconds = 900
+  name     = local.vay2017_rehearsal_state_machine_name
+  role_arn = aws_iam_role.vay2017_state_machine.arn
+  type     = "STANDARD"
   definition = jsonencode({
     Comment = "Run one fixed VAY-2043 read-only metadata inventory task. Input is intentionally unused."
     StartAt = "RunFixedMetadataTask"
