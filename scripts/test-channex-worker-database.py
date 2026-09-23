@@ -94,18 +94,35 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
         for filename in ('channex-management-worker-database.mjs','provision-target-database-identity-runtime.mjs'):
             encoded = base64.b64encode(gzip.compress((ROOT / 'scripts' / filename).read_bytes(), compresslevel=9, mtime=0))
             self.assertLessEqual(len(encoded)+2100+1400,8192)
+        worker = sum(len(base64.b64encode(gzip.compress((ROOT / 'scripts' / filename).read_bytes(), compresslevel=9, mtime=0))) for filename in ('channex-management-worker-database.mjs','channex-policy-consumer-roles.mjs'))
+        self.assertLessEqual(worker+2100+1600,8192)
+        self.assertIn('VAYADA_DB_RUNTIME_PREFLIGHT_HELPER', runner)
 
     def test_grant_runner_replaces_public_function_execute_with_direct_role_grants(self):
         runner = (ROOT / "scripts/channex-management-worker-database.mjs").read_text()
+        roles = (ROOT / "scripts/channex-policy-consumer-roles.mjs").read_text()
         self.assertIn("channexManagementWorkerFunctions", runner)
         self.assertIn("channex_worker_function_owner_required", runner)
         self.assertIn("REVOKE EXECUTE ON FUNCTION", runner)
         self.assertIn("GRANT EXECUTE ON FUNCTION", runner)
-        self.assertIn('"vayada_next_api_runtime"', runner)
-        self.assertIn('"vayada_next_identity_runtime"', runner)
-        self.assertIn('"vayada_next_finance_expense_worker"', runner)
+        self.assertIn('"vayada_next_api_runtime"', roles)
+        self.assertIn('"vayada_next_identity_runtime"', roles)
+        self.assertIn('"vayada_next_finance_expense_worker"', roles)
         self.assertIn('name.startsWith("platform.")', runner)
+        self.assertIn("channex_worker_required_policy_consumer_missing", roles)
         self.assertIn("channex_worker_policy_consumer_function_access_missing", runner)
+
+    def test_policy_consumer_roles_require_api_and_identity_but_not_finance(self):
+        roles = (ROOT / "scripts/channex-policy-consumer-roles.mjs").as_uri()
+        script = f'''import assert from "node:assert/strict";
+          import {{selectPolicyConsumerRoles}} from "{roles}";
+          assert.deepEqual(selectPolicyConsumerRoles([
+            "vayada_next_api_runtime", "vayada_next_identity_runtime"
+          ]), ["vayada_next_api_runtime", "vayada_next_identity_runtime"]);
+          assert.throws(() => selectPolicyConsumerRoles([
+            "vayada_next_api_runtime", "vayada_next_finance_expense_worker"
+          ]), /channex_worker_required_policy_consumer_missing/);'''
+        subprocess.run(["node", "--input-type=module", "-e", script], check=True)
 
 
 if __name__ == "__main__":

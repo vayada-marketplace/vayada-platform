@@ -2,12 +2,7 @@ import pg from "pg";
 import { assertChannexManagementWorkerBoundary, channexManagementWorkerFunctions } from "/app/apps/api/dist/jobs/channexManagementWorkerBoundary.js";
 
 import { channexManagementWorkerPrivileges, CHANNEX_MANAGEMENT_WORKER_ROLE as role } from "/app/apps/api/dist/jobs/channexManagementWorkerPrivileges.js";
-
-const policyConsumerRoles = [
-  "vayada_next_api_runtime",
-  "vayada_next_identity_runtime",
-  "vayada_next_finance_expense_worker",
-];
+import { policyConsumerRoleCandidates, selectPolicyConsumerRoles } from "./channex-policy-consumer-roles.mjs";
 const policyConsumerFunctions = channexManagementWorkerFunctions.filter(name =>
   name.startsWith("platform."),
 );
@@ -30,6 +25,11 @@ try {
   const propertyId = process.env.PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(propertyId??"")) throw new Error("channex_worker_property_required");
   await client.query("BEGIN");
+  const existingPolicyConsumerRoles = (await client.query(
+    "SELECT rolname FROM pg_roles WHERE rolname=ANY($1::text[]) ORDER BY rolname",
+    [policyConsumerRoleCandidates],
+  )).rows.map(row=>row.rolname);
+  const policyConsumerRoles = selectPolicyConsumerRoles(existingPolicyConsumerRoles);
   if (grant) {
     const names = Object.keys(channexManagementWorkerPrivileges);
     const owned = (await client.query("SELECT count(*)::int AS count FROM pg_class WHERE oid=ANY($1::regclass[]) AND relowner=(SELECT oid FROM pg_roles WHERE rolname=current_user)",[names])).rows[0];
