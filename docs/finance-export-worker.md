@@ -1,7 +1,7 @@
 # Financials export worker staged rollout (VAY-2045)
 
 The app contract is `engineering/finance-export-worker-runtime-permissions.md`.
-The application owns migration 0410 and exports the exact table/column matrix
+The application owns migration 0412 and exports the exact table/column matrix
 and policy-digest preflight in
 `apps/api/dist/jobs/financeExportWorkerBoundary.js`. The platform runner imports
 that module from the reviewed immutable app image.
