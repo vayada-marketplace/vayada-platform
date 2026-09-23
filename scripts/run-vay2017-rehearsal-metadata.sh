@@ -24,8 +24,6 @@ aws sts get-caller-identity --query Account --output text | grep -Fxq "$account"
   echo "Refusing: AWS account is not the reviewed rehearsal account." >&2
   exit 1
 }
-bash "$(dirname "$0")/check-vay2017-rehearsal-isolation.sh"
-
 execution_name="vay2017-$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID:-local}"
 execution_arn="$(aws stepfunctions start-execution --region "$region" --state-machine-arn "$machine_arn" \
   --name "$execution_name" --input '{}' --query executionArn --output text)" || {

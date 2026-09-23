@@ -130,7 +130,7 @@ test('infrastructure keeps execution fixed and network access private and narrow
   assert.doesNotMatch(tf, /0\.0\.0\.0\/0|nat_gateway|\bpublic_ip\s*=\s*true|assign_public_ip\s*=\s*true/i);
   assert.match(tf, /masterUserSecretArn/);
   assert.match(tf, /"secretsmanager:GetSecretValue"/);
-  assert.match(tf, /ecr:DescribeImages/);
+  assert.doesNotMatch(tf, /ec2:Describe|rds:Describe|ecr:DescribeImages/);
   assert.doesNotMatch(tf, /data "aws_(vpc|db_instance|db_snapshot|ecr_repository|prefix_list)"/);
   assert.match(tf, /vay2017-legacy-rehearsal-20260921/);
   assert.match(tf, /vay2017-legacy-source-freeze-20260920/);
@@ -145,7 +145,7 @@ test('infrastructure keeps execution fixed and network access private and narrow
   assert.doesNotMatch(workflow, /vayada-github-actions-platform-deploy/);
   assert.doesNotMatch(workflow, /inputs:|workflow_call:/);
   assert.match(runner, /--input '\{\}'/);
-  assert.match(runner, /check-vay2017-rehearsal-isolation\.sh/);
+  assert.doesNotMatch(runner, /check-vay2017-rehearsal-isolation\.sh/);
   const isolation = await readFile(new URL('./check-vay2017-rehearsal-isolation.sh', import.meta.url), 'utf8');
   assert.match(isolation, /describe-vpc-attribute/);
   assert.match(isolation, /describe-images/);

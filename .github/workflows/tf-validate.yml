@@ -86,6 +86,13 @@ on:
       - "scripts/migration-rehearsal-browser.mjs"
       - "scripts/migration-rehearsal-browser-runner.mjs"
       - "scripts/test-migration-rehearsal-browser.mjs"
+      - "scripts/vay2017-rehearsal-metadata.mjs"
+      - "scripts/test-vay2017-rehearsal-metadata.mjs"
+      - "scripts/run-vay2017-rehearsal-metadata.sh"
+      - "scripts/check-vay2017-rehearsal-isolation.sh"
+      - "scripts/attach-vay2017-rehearsal-security-group.sh"
+      - "scripts/fixtures/vay2017-restore-attestation.json"
+      - "docs/vay2017-metadata-rehearsal.md"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/deploy-coordinated-release.yml"
       - ".github/workflows/manage-coordinated-release.yml"
@@ -93,6 +100,7 @@ on:
       - ".github/workflows/rotate-rds-admin.yml"
       - ".github/workflows/tf-plan.yml"
       - ".github/workflows/tf-validate.yml"
+      - ".github/workflows/vay2017-metadata-inventory.yml"
 
 permissions:
   contents: read
@@ -214,6 +222,12 @@ jobs:
           bash -n scripts/guard-finance-folio-kms-plan.sh
           bash scripts/test-finance-folio-kms-phase-guard.sh
           node scripts/test-marketplace-communication-unsubscribe-keys.mjs
+          node --check scripts/vay2017-rehearsal-metadata.mjs
+          node --test scripts/test-vay2017-rehearsal-metadata.mjs
+          bash -n scripts/run-vay2017-rehearsal-metadata.sh
+          bash -n scripts/check-vay2017-rehearsal-isolation.sh
+          bash -n scripts/attach-vay2017-rehearsal-security-group.sh
+          jq empty scripts/fixtures/vay2017-restore-attestation.json
 
       - name: Validate auth gateway contract
         run: bash scripts/validate-auth-gateway-contract.sh

@@ -44,6 +44,8 @@ resource "aws_subnet" "vay2017_rehearsal_private" {
     }
     precondition {
       condition = (
+        local.vay2017_rehearsal_attestation.accountId == var.aws_account_id &&
+        local.vay2017_rehearsal_attestation.region == var.aws_region &&
         local.vay2017_rehearsal_attestation.restoreInstanceId == local.vay2017_rehearsal_db_instance_id &&
         local.vay2017_rehearsal_attestation.restoreInstanceResourceId == local.vay2017_rehearsal_db_resource_id &&
         local.vay2017_rehearsal_attestation.restoreInstanceArn == local.vay2017_rehearsal_db_arn &&
@@ -53,7 +55,8 @@ resource "aws_subnet" "vay2017_rehearsal_private" {
         !local.vay2017_rehearsal_attestation.restorePubliclyAccessible &&
         local.vay2017_rehearsal_attestation.restoreAvailabilityZone == local.vay2017_rehearsal_subnet_az &&
         local.vay2017_rehearsal_attestation.sourceSnapshotId == local.vay2017_rehearsal_snapshot_id &&
-        local.vay2017_rehearsal_attestation.sourceDatabaseId == "vayada-database"
+        local.vay2017_rehearsal_attestation.sourceDatabaseId == "vayada-database" &&
+        local.vay2017_rehearsal_attestation.masterUserSecretArn == "arn:aws:secretsmanager:eu-west-1:269416271598:secret:rds!db-bb1527b2-f71e-4e01-9c29-b1a6b27a409c-doPxWf"
       )
       error_message = "The checked-in restore attestation does not match the reviewed private PostgreSQL rehearsal identity."
     }
@@ -479,26 +482,6 @@ data "aws_iam_policy_document" "vay2017_github_inventory" {
     sid       = "ReadOnlySanitizedInventoryLogs"
     actions   = ["logs:GetLogEvents"]
     resources = ["${aws_cloudwatch_log_group.vay2017_metadata.arn}:*"]
-  }
-  statement {
-    sid = "InspectOnlyRehearsalNetworkAndSource"
-    actions = [
-      "ec2:DescribePrefixLists",
-      "ec2:DescribeRouteTables",
-      "ec2:DescribeSecurityGroups",
-      "ec2:DescribeSubnets",
-      "ec2:DescribeVpcEndpoints",
-      "ec2:DescribeVpcAttribute",
-      "ec2:DescribeVpcs",
-      "rds:DescribeDBInstances",
-      "rds:DescribeDBSnapshots",
-    ]
-    resources = ["*"]
-  }
-  statement {
-    sid       = "VerifyPinnedScannerImage"
-    actions   = ["ecr:DescribeImages"]
-    resources = [local.vay2017_rehearsal_ecr_repository_arn]
   }
 }
 
