@@ -101,6 +101,11 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
         self.assertIn("channex_worker_function_owner_required", runner)
         self.assertIn("REVOKE EXECUTE ON FUNCTION", runner)
         self.assertIn("GRANT EXECUTE ON FUNCTION", runner)
+        self.assertIn('"vayada_next_api_runtime"', runner)
+        self.assertIn('"vayada_next_identity_runtime"', runner)
+        self.assertIn('"vayada_next_finance_expense_worker"', runner)
+        self.assertIn('name.startsWith("platform.")', runner)
+        self.assertIn("channex_worker_policy_consumer_function_access_missing", runner)
 
 
 if __name__ == "__main__":

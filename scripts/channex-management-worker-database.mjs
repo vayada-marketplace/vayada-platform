@@ -3,6 +3,15 @@ import { assertChannexManagementWorkerBoundary, channexManagementWorkerFunctions
 
 import { channexManagementWorkerPrivileges, CHANNEX_MANAGEMENT_WORKER_ROLE as role } from "/app/apps/api/dist/jobs/channexManagementWorkerPrivileges.js";
 
+const policyConsumerRoles = [
+  "vayada_next_api_runtime",
+  "vayada_next_identity_runtime",
+  "vayada_next_finance_expense_worker",
+];
+const policyConsumerFunctions = channexManagementWorkerFunctions.filter(name =>
+  name.startsWith("platform."),
+);
+
 // The checked-in runner selects grant vs preflight; the matrix is shipped in the
 // attested application image, shared with the worker startup check.
 let client;
@@ -31,6 +40,8 @@ try {
       await client.query(`REVOKE EXECUTE ON FUNCTION ${functionName} FROM PUBLIC`);
       await client.query(`GRANT EXECUTE ON FUNCTION ${functionName} TO ${role}`);
     }
+    for (const functionName of policyConsumerFunctions)
+      await client.query(`GRANT EXECUTE ON FUNCTION ${functionName} TO ${policyConsumerRoles.join(",")}`);
     await assertChannexManagementWorkerBoundary(client,{allowMissingGrants:true});
     await client.query("LOCK TABLE platform.channex_management_worker_properties IN EXCLUSIVE MODE");
     const scope = (await client.query("SELECT property_id::text FROM platform.channex_management_worker_properties")).rows;
@@ -45,6 +56,19 @@ try {
     if (login.current_user !== role || login.session_user !== role) throw new Error("channex_worker_login_mismatch");
   }
   await assertChannexManagementWorkerBoundary(client,{propertyId});
+  const consumerAccess = await client.query(
+    `WITH required_roles(name) AS (SELECT unnest($1::text[])),
+      required_functions(name) AS (SELECT unnest($2::text[]))
+     SELECT required_roles.name AS role, required_functions.name AS function
+     FROM required_roles CROSS JOIN required_functions
+     LEFT JOIN pg_roles account ON account.rolname=required_roles.name
+     LEFT JOIN pg_proc procedure ON procedure.oid=to_regprocedure(required_functions.name)
+     WHERE account.oid IS NULL OR procedure.oid IS NULL OR NOT EXISTS (
+       SELECT 1 FROM aclexplode(COALESCE(procedure.proacl,acldefault('f',procedure.proowner))) acl
+       WHERE acl.grantee=account.oid AND acl.privilege_type='EXECUTE')`,
+    [policyConsumerRoles,policyConsumerFunctions],
+  );
+  if (consumerAccess.rowCount) throw new Error("channex_worker_policy_consumer_function_access_missing");
   await client.query("COMMIT");
   console.log(JSON.stringify({status:"PASS",role,mode:grant?"grant":"preflight"}));
 } catch(error) {
