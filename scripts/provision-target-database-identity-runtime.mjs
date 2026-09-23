@@ -1,9 +1,22 @@
 import pg from "pg";
 import { randomUUID } from "node:crypto";
 
-const finance = process.env.VAYADA_DB_PROVISION_SCOPE === "finance_expense";
-const channex = process.env.VAYADA_DB_PROVISION_SCOPE === "channex_management";
-const role = channex ? "vayada_next_channex_management_worker" : finance ? "vayada_next_finance_expense_worker" : "vayada_next_identity_runtime";
+const scope = process.env.VAYADA_DB_PROVISION_SCOPE ?? "";
+const worker = new Map([
+  ["finance_expense", {
+    role: "vayada_next_finance_expense_worker",
+    secret: "FINANCE_EXPENSE_WORKER_DATABASE_URL",
+  }],
+  ["finance_export", {
+    role: "vayada_next_finance_export_worker",
+    secret: "FINANCE_EXPORT_WORKER_DATABASE_URL",
+  }],
+  ["channex_management", {
+    role: "vayada_next_channex_management_worker",
+    secret: "PMS_CHANNEX_MANAGEMENT_DATABASE_URL",
+  }],
+]).get(scope);
+const role = worker?.role ?? "vayada_next_identity_runtime";
 const expectedHost = "vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com";
 let client;
 let provisionAttempted = false;
@@ -42,9 +55,9 @@ const safeCleanup = async () => {
   await client.query("COMMIT");
 };
 try {
-  if (process.env.VAYADA_DB_PROVISION_SCOPE && !finance && !channex) throw new Error("identity_provision_scope_invalid");
+  if (scope && !worker) throw new Error("identity_provision_scope_invalid");
   const ownerRaw = process.env.TARGET_DATABASE_ADMIN_URL;
-  const identityRaw = channex ? process.env.PMS_CHANNEX_MANAGEMENT_DATABASE_URL : finance ? process.env.FINANCE_EXPENSE_WORKER_DATABASE_URL : process.env.IDENTITY_DATABASE_URL;
+  const identityRaw = process.env[worker?.secret ?? "IDENTITY_DATABASE_URL"];
   if (!ownerRaw || !identityRaw) throw new Error("identity_provision_secrets_missing");
   const owner = new URL(ownerRaw);
   const identity = new URL(identityRaw);

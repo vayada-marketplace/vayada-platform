@@ -120,6 +120,7 @@ run_provision() {
     --env VAYADA_IDENTITY_PROVISION_LOCAL_FIXTURE=1 \
     --env "VAYADA_DB_PROVISION_SCOPE=${provision_scope}" \
     --env "FINANCE_EXPENSE_WORKER_DATABASE_URL=postgresql://vayada_next_finance_expense_worker:finance@vayada-identity-grant-db:5432/postgres" \
+    --env "FINANCE_EXPORT_WORKER_DATABASE_URL=postgresql://vayada_next_finance_export_worker:export@vayada-identity-grant-db:5432/postgres" \
     --env "VAYADA_IDENTITY_PROVISION_FORCE_LOGIN_FAILURE=${force_failure}" \
     --env "VAYADA_IDENTITY_PROVISION_FORCE_MARKER_MISMATCH=${force_marker_mismatch}" \
     node:22-bookworm node provision.mjs
@@ -158,6 +159,9 @@ docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
 run_provision 0 0 finance_expense | grep -F '"role":"vayada_next_finance_expense_worker"' >/dev/null
 docker exec "${database}" psql -U postgres -Atqc \
   "SELECT rolcanlogin AND NOT (rolsuper OR rolinherit OR rolcreaterole OR rolcreatedb OR rolbypassrls OR rolreplication) FROM pg_roles WHERE rolname='vayada_next_finance_expense_worker'" | grep -Fx t >/dev/null
+run_provision 0 0 finance_export | grep -F '"role":"vayada_next_finance_export_worker"' >/dev/null
+docker exec "${database}" psql -U postgres -Atqc \
+  "SELECT rolcanlogin AND NOT (rolsuper OR rolinherit OR rolcreaterole OR rolcreatedb OR rolbypassrls OR rolreplication) FROM pg_roles WHERE rolname='vayada_next_finance_export_worker'" | grep -Fx t >/dev/null
 run_provision | grep -F '"status":"PASS"' >/dev/null
 if output="$(run_provision 2>&1)"; then
   echo 'identity role provision unexpectedly allowed a duplicate' >&2
