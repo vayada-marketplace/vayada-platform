@@ -7,7 +7,6 @@ import {
   INVENTORY_SQL,
   SCHEMAS_SQL,
   sanitizeError,
-  quoteIdentifier,
   rowCountSql,
 } from './vay2017-rehearsal-metadata.mjs';
 
@@ -19,14 +18,15 @@ const identity = {
   restoreAttestationChecksum: 'c'.repeat(64),
   imageDigest: `sha256:${'a'.repeat(64)}`,
   scannerSourceChecksum: 'b'.repeat(64),
+  readerFunctionChecksum: 'd'.repeat(64),
 };
 
 function fakeConnect(calls, connections) {
   return async (databaseName) => {
     connections.push(databaseName);
     return {
-      async query(sql) {
-        calls.push({ databaseName, sql });
+      async query(sql, values) {
+        calls.push({ databaseName, sql, values });
         if (sql.startsWith('SHOW')) return { rows: [{ transaction_read_only: 'on' }] };
         if (sql === DATABASES_SQL) return { rows: [{ database_name: 'app_db' }, { database_name: 'postgres' }] };
         if (sql === SCHEMAS_SQL) return { rows: [{ schema_name: 'empty_schema' }, { schema_name: 'public' }] };
@@ -34,7 +34,7 @@ function fakeConnect(calls, connections) {
           { schema_name: 'public', table_name: 'reservations', column_ordinal: 1, column_name: 'id', data_type: 'uuid', not_null: true, primary_key: true, primary_key_ordinal: 1 },
           { schema_name: 'public', table_name: 'reservations', column_ordinal: 2, column_name: 'guest_name', data_type: 'text', not_null: false, primary_key: false, primary_key_ordinal: null },
         ] };
-        if (sql.startsWith('SELECT count(*)::text AS row_count FROM ')) return { rows: [{ row_count: '10' }] };
+        if (sql.startsWith('SELECT vay2017_metadata.count_table_rows(')) return { rows: [{ row_count: '10' }] };
         return { rows: [] };
       },
       async end() {},
@@ -44,6 +44,7 @@ function fakeConnect(calls, connections) {
 
 test('inventory queries read database, schema, and table catalogs; exact counts are isolated', () => {
   assert.match(DATABASES_SQL, /pg_catalog\.pg_database/);
+  assert.match(DATABASES_SQL, /NOT datistemplate/);
   assert.match(SCHEMAS_SQL, /pg_catalog\.pg_namespace/);
   assert.match(INVENTORY_SQL, /pg_catalog\.pg_class/);
   assert.match(INVENTORY_SQL, /pg_catalog\.pg_namespace/);
@@ -52,10 +53,11 @@ test('inventory queries read database, schema, and table catalogs; exact counts 
   assert.doesNotMatch(INVENTORY_SQL, /reltuples/);
   assert.doesNotMatch(INVENTORY_SQL, /\bSELECT\s+\*\b|\bFROM\s+(?!pg_catalog\.)[a-z_][\w.]*/i);
   assert.doesNotMatch(INVENTORY_SQL, /\b(INSERT|UPDATE|DELETE|TRUNCATE|CREATE|ALTER|DROP)\b/i);
-  assert.equal(quoteIdentifier('public"; DROP TABLE x;--'), '"public""; DROP TABLE x;--"');
+  assert.match(SCHEMAS_SQL, /nspname <> 'vay2017_metadata'/);
+  assert.match(INVENTORY_SQL, /n\.nspname <> 'vay2017_metadata'/);
   assert.equal(
-    rowCountSql('public"; DROP TABLE x;--', 'records'),
-    'SELECT count(*)::text AS row_count FROM "public""; DROP TABLE x;--"."records"',
+    rowCountSql(),
+    'SELECT vay2017_metadata.count_table_rows($1, $2) AS row_count',
   );
 });
 
@@ -66,6 +68,9 @@ test('metadata collection inventories every database and empty schema with exact
   assert.deepEqual(connections, ['postgres', 'app_db', 'postgres']);
   assert.equal(calls.filter(({ sql }) => sql === 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY').length, 3);
   assert.equal(calls.filter(({ sql }) => sql === "SET LOCAL statement_timeout = '15min'").length, 2);
+  assert.deepEqual(calls.filter(({ sql }) => sql === rowCountSql()).map(({ values }) => values), [
+    ['public', 'reservations'], ['public', 'reservations'],
+  ]);
   assert.equal(calls.filter(({ sql }) => sql === 'COMMIT').length, 3);
   assert.deepEqual(artifact.databases.map(({ name }) => name), ['app_db', 'postgres']);
   assert.deepEqual(artifact.databases[0].schemas, ['empty_schema', 'public']);
@@ -74,6 +79,9 @@ test('metadata collection inventories every database and empty schema with exact
   assert.match(artifact.rowCountSemantics, /exact COUNT\(\*\)/);
   assert.equal(artifact.imageDigest, identity.imageDigest);
   assert.equal(artifact.scannerSourceChecksum, identity.scannerSourceChecksum);
+  assert.equal(artifact.readerFunctionChecksum, identity.readerFunctionChecksum);
+  assert.equal(artifact.artifactVersion, 2);
+  assert.equal(artifact.queryVersion, 'v2');
   assert.equal(artifact.restoreResourceId, identity.restoreResourceId);
   assert.equal(artifact.restoreInstanceArn, identity.restoreInstanceArn);
   assert.equal(artifact.restoreAttestationChecksum, identity.restoreAttestationChecksum);
@@ -89,6 +97,7 @@ test('wrong restore, snapshot, and image identities fail before queries', async 
     { restoreInstanceId: 'vayada-database' },
     { sourceSnapshotId: 'another-snapshot' },
     { imageDigest: 'sha256:latest' },
+    { readerFunctionChecksum: 'not-a-checksum' },
   ]) {
     const calls = [];
     const connections = [];
@@ -98,9 +107,11 @@ test('wrong restore, snapshot, and image identities fail before queries', async 
   }
 });
 
-test('sanitized errors omit raw messages, hosts, and credentials', () => {
+test('sanitized errors omit raw messages, hosts, and credentials but retain safe phase and class', () => {
   const output = JSON.stringify(sanitizeError(new Error('postgres://user:secret@db.example.test')));
-  assert.deepEqual(JSON.parse(output), { status: 'FAIL', stage: 'metadata-read', code: 'UNKNOWN' });
+  assert.deepEqual(JSON.parse(output), {
+    status: 'FAIL', stage: 'metadata-read', code: 'UNKNOWN', errorClass: 'Error',
+  });
   assert.doesNotMatch(output, /secret|db\.example|postgres:\/\//);
 });
 
@@ -109,6 +120,42 @@ test('sanitized errors preserve only known internal, PostgreSQL, and connection 
   assert.equal(sanitizeError({ code: '23505', message: 'duplicate key details' }).code, '23505');
   assert.equal(sanitizeError({ code: 'ERR_TLS_CERT_ALTNAME_INVALID' }).code, 'ERR_TLS_CERT_ALTNAME_INVALID');
   assert.equal(sanitizeError({ code: 'password-is-secret', message: 'password-is-secret' }).code, 'UNKNOWN');
+  const phaseError = Object.assign(new Error('metadata_read_failed', {
+    cause: Object.assign(new Error('password=secret host=db.private'), { code: '42501' }),
+  }), { metadataPhase: 'schema-inventory' });
+  const safe = sanitizeError(phaseError);
+  assert.deepEqual(safe, {
+    status: 'FAIL', stage: 'schema-inventory', code: '42501', errorClass: 'Error',
+  });
+  assert.doesNotMatch(JSON.stringify(safe), /secret|db\.private/);
+});
+
+test('failed catalog reads report their safe phase and SQLSTATE only', async () => {
+  const calls = [];
+  const connect = async () => ({
+    async query(sql) {
+      calls.push(sql);
+      if (sql.startsWith('SHOW')) return { rows: [{ transaction_read_only: 'on' }] };
+      if (sql === DATABASES_SQL) return { rows: [{ database_name: 'app_db' }] };
+      if (sql === SCHEMAS_SQL) {
+        throw Object.assign(new Error('password=secret relation=private'), { code: '42501' });
+      }
+      return { rows: [] };
+    },
+    async end() {},
+  });
+  await assert.rejects(
+    collectMetadata(connect, identity),
+    (error) => {
+      const safe = sanitizeError(error);
+      assert.deepEqual(safe, {
+        status: 'FAIL', stage: 'schema-inventory', code: '42501', errorClass: 'Error',
+      });
+      assert.doesNotMatch(JSON.stringify(safe), /secret|private/);
+      return true;
+    },
+  );
+  assert.equal(calls.includes('ROLLBACK'), true);
 });
 
 test('runner contains no row-value query or caller-controlled SQL', async () => {
@@ -126,6 +173,9 @@ test('infrastructure keeps execution fixed and network access private and narrow
   const workflow = await readFile(new URL('../.github/workflows/vay2017-metadata-inventory.yml', import.meta.url), 'utf8');
   const runner = await readFile(new URL('./run-vay2017-rehearsal-metadata.sh', import.meta.url), 'utf8');
   const attestation = JSON.parse(await readFile(new URL('./fixtures/vay2017-isolated-restore-plan.json', import.meta.url), 'utf8'));
+  const scannerTaskStart = tf.indexOf('resource "aws_ecs_task_definition" "vay2017_metadata"');
+  const scannerTaskEnd = tf.indexOf('data "aws_iam_policy_document" "vay2017_state_machine_trust"', scannerTaskStart);
+  const scannerTaskDefinition = tf.slice(scannerTaskStart, scannerTaskEnd);
   assert.match(tf, /AssignPublicIp\s*=\s*"DISABLED"/);
   assert.match(tf, /resource "aws_route_table_association" "vay2017_runner_private"/);
   assert.match(tf, /route_table_ids\s*=\s*\[aws_route_table\.vay2017_runner_private\.id\]/);
@@ -141,7 +191,10 @@ test('infrastructure keeps execution fixed and network access private and narrow
   assert.match(tf, /resource "aws_vpc_security_group_egress_rule" "vay2017_runner_https"/);
   assert.match(tf, /resource "aws_vpc_security_group_egress_rule" "vay2017_runner_ecr_s3"/);
   assert.doesNotMatch(tf, /0\.0\.0\.0\/0|nat_gateway|\bpublic_ip\s*=\s*true|assign_public_ip\s*=\s*true/i);
-  assert.match(tf, /master_user_secret\[0\]\.secret_arn/);
+  assert.match(tf, /aws_secretsmanager_secret\.vay2017_reader_credentials\.arn}:username::/);
+  assert.match(tf, /aws_secretsmanager_secret\.vay2017_reader_credentials\.arn}:password::/);
+  assert.doesNotMatch(scannerTaskDefinition, /master_user_secret\[0\]\.secret_arn/);
+  assert.match(scannerTaskDefinition, /execution_role_arn\s*=\s*aws_iam_role\.vay2017_inventory_execution\.arn/);
   assert.match(tf, /VAY2017_DB_HOST"\s*,\s*value\s*=\s*aws_db_instance\.vay2017_isolated_restore\.address/);
   assert.match(tf, /VAY2017_DB_PORT"\s*,\s*value\s*=\s*tostring\(aws_db_instance\.vay2017_isolated_restore\.port\)/);
   assert.doesNotMatch(tf, /VAY2017_DB_HOST"\s*,\s*valueFrom|VAY2017_DB_PORT"\s*,\s*valueFrom/);
@@ -185,6 +238,8 @@ test('infrastructure keeps execution fixed and network access private and narrow
   assert.equal(attestation.sourceDatabaseId, 'vayada-database');
   assert.equal(attestation.sourceSnapshotId, identity.sourceSnapshotId);
   assert.match(runner, /restoreAttestationChecksum/);
+  assert.match(runner, /reader_function_checksum=.*provision-vay2017-metadata-reader\.mjs/);
+  assert.match(runner, /\.readerFunctionChecksum == \$reader_function_checksum/);
   assert.equal(attestation.restoreInstanceId, identity.restoreInstanceId);
   assert.equal(attestation.targetVpcCidr, '10.230.0.0/24');
   assert.doesNotMatch(runner, /aws\s+(rds\s+modify|ec2\s+authorize|iam\s+|ecs\s+run-task)/);

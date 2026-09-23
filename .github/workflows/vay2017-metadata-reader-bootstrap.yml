@@ -1,4 +1,4 @@
-name: VAY-2017 Metadata Inventory
+name: VAY-2017 Metadata Reader Bootstrap
 
 on:
   workflow_dispatch:
@@ -12,11 +12,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  inventory:
+  bootstrap:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: vay2017-metadata-preflight
-    timeout-minutes: 70
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
 
@@ -25,15 +25,7 @@ jobs:
           role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-vay2017-metadata
           aws-region: eu-west-1
 
-      - name: Run fixed metadata inventory
+      - name: Provision fixed metadata-only login
         env:
-          ARTIFACT_PATH: ${{ runner.temp }}/migration-inventory.json
           GITHUB_RUN_ID: ${{ github.run_id }}
-        run: bash scripts/run-vay2017-rehearsal-metadata.sh
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: vay2017-metadata-inventory-${{ github.run_id }}
-          path: ${{ runner.temp }}/migration-inventory.json
-          if-no-files-found: error
-          retention-days: 14
+        run: bash scripts/run-vay2017-metadata-reader-bootstrap.sh

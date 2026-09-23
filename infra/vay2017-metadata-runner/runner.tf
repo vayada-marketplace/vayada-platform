@@ -352,7 +352,7 @@ data "aws_iam_policy_document" "vay2017_task_execution" {
   }
 
   statement {
-    sid       = "ReadOnlyRestoredDatabaseMasterSecret"
+    sid       = "BootstrapOnlyReadRestoredDatabaseMasterSecret"
     actions   = ["secretsmanager:GetSecretValue"]
     resources = [aws_db_instance.vay2017_isolated_restore.master_user_secret[0].secret_arn]
   }
@@ -387,7 +387,7 @@ resource "aws_ecs_task_definition" "vay2017_metadata" {
   network_mode             = "awsvpc"
   cpu                      = "256"
   memory                   = "512"
-  execution_role_arn       = aws_iam_role.vay2017_task_execution.arn
+  execution_role_arn       = aws_iam_role.vay2017_inventory_execution.arn
   container_definitions = jsonencode([{
     name      = "metadata-runner"
     image     = "${local.vay2017_rehearsal_ecr_repository_url}@${local.vay2017_rehearsal_image_digest}"
@@ -402,12 +402,13 @@ resource "aws_ecs_task_definition" "vay2017_metadata" {
       { name = "VAY2017_RESTORE_ATTESTATION_CHECKSUM", value = filesha256("${path.module}/../../scripts/fixtures/vay2017-isolated-restore-plan.json") },
       { name = "VAY2017_IMAGE_DIGEST", value = local.vay2017_rehearsal_image_digest },
       { name = "VAY2017_SCANNER_SOURCE_CHECKSUM", value = filesha256("${path.module}/../../scripts/vay2017-rehearsal-metadata.mjs") },
+      { name = "VAY2017_READER_FUNCTION_CHECKSUM", value = filesha256("${path.module}/../../scripts/provision-vay2017-metadata-reader.mjs") },
       { name = "VAY2017_DB_HOST", value = aws_db_instance.vay2017_isolated_restore.address },
       { name = "VAY2017_DB_PORT", value = tostring(aws_db_instance.vay2017_isolated_restore.port) },
     ]
     secrets = [
-      { name = "VAY2017_DB_USER", valueFrom = "${aws_db_instance.vay2017_isolated_restore.master_user_secret[0].secret_arn}:username::" },
-      { name = "VAY2017_DB_PASSWORD", valueFrom = "${aws_db_instance.vay2017_isolated_restore.master_user_secret[0].secret_arn}:password::" },
+      { name = "VAY2017_DB_USER", valueFrom = "${aws_secretsmanager_secret.vay2017_reader_credentials.arn}:username::" },
+      { name = "VAY2017_DB_PASSWORD", valueFrom = "${aws_secretsmanager_secret.vay2017_reader_credentials.arn}:password::" },
     ]
     readonlyRootFilesystem = true
     privileged             = false

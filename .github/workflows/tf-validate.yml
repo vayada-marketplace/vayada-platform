@@ -94,6 +94,7 @@ on:
       - "scripts/test-vay2017-metadata-reader-provisioner.mjs"
       - "scripts/test-vay2017-metadata-reader-infra.mjs"
       - "scripts/run-vay2017-rehearsal-metadata.sh"
+      - "scripts/run-vay2017-metadata-reader-bootstrap.sh"
       - "scripts/check-vay2017-rehearsal-isolation.sh"
       - "scripts/fixtures/vay2017-restore-attestation.json"
       - "scripts/fixtures/vay2017-isolated-restore-plan.json"
@@ -107,6 +108,7 @@ on:
       - ".github/workflows/tf-plan.yml"
       - ".github/workflows/tf-validate.yml"
       - ".github/workflows/vay2017-metadata-inventory.yml"
+      - ".github/workflows/vay2017-metadata-reader-bootstrap.yml"
 
 permissions:
   contents: read
@@ -234,7 +236,9 @@ jobs:
           node --check scripts/provision-vay2017-metadata-reader.mjs
           node --test scripts/test-vay2017-metadata-reader-provisioner.mjs
           node --test scripts/test-vay2017-metadata-reader-infra.mjs
+          node --test scripts/test-vay2017-metadata-reader-bootstrap.mjs
           bash -n scripts/run-vay2017-rehearsal-metadata.sh
+          bash -n scripts/run-vay2017-metadata-reader-bootstrap.sh
           bash -n scripts/check-vay2017-rehearsal-isolation.sh
           jq empty scripts/fixtures/vay2017-restore-attestation.json
           jq empty scripts/fixtures/vay2017-isolated-restore-plan.json
