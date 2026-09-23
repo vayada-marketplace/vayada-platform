@@ -67,6 +67,14 @@ CREATE TABLE platform.dead_letter_events (id integer PRIMARY KEY, source_kind te
   webhook_event_id integer REFERENCES platform.external_webhook_events(id));
 CREATE TABLE booking.guest_bookings (id integer PRIMARY KEY);
 CREATE TABLE hotel_catalog.properties (id integer PRIMARY KEY);
+CREATE VIEW booking.pricing_runtime_effective_property_scopes
+  WITH (security_barrier = true) AS SELECT id AS property_id FROM booking.guest_bookings WHERE false;
+CREATE VIEW booking.pricing_runtime_effective_authority_scopes
+  WITH (security_barrier = true) AS SELECT id AS property_id FROM booking.guest_bookings WHERE false;
+REVOKE ALL ON booking.pricing_runtime_effective_property_scopes,
+  booking.pricing_runtime_effective_authority_scopes FROM PUBLIC;
+GRANT SELECT ON booking.pricing_runtime_effective_property_scopes,
+  booking.pricing_runtime_effective_authority_scopes TO PUBLIC;
 ALTER TABLE platform.external_webhook_events ENABLE ROW LEVEL SECURITY;
 CREATE POLICY identity_runtime_scope ON platform.external_webhook_events TO PUBLIC
   USING (current_user <> 'vayada_next_identity_runtime' OR provider = 'workos');
@@ -221,6 +229,25 @@ docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c "ALTER POLICY identity_runtime_pms_inbox_enqueue ON platform.jobs WITH CHECK (current_user = 'vayada_next_identity_runtime' AND queue_name = 'pms-inbox' AND job_type = 'pms.inbox.assignment.reconcile' AND resource_product = 'pms' AND resource_type = 'inbox_assignment')" >/dev/null
 
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'ALTER VIEW booking.pricing_runtime_effective_property_scopes SET (security_barrier=false)' >/dev/null
+expect_grant_failure identity_public_read_contract_unsafe
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'ALTER VIEW booking.pricing_runtime_effective_property_scopes SET (security_barrier=true); GRANT SELECT ON booking.pricing_runtime_effective_property_scopes TO vayada_next_identity_runtime' >/dev/null
+expect_grant_failure identity_public_read_contract_unsafe
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE SELECT ON booking.pricing_runtime_effective_property_scopes FROM vayada_next_identity_runtime' >/dev/null
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'GRANT SELECT ON booking.pricing_runtime_effective_authority_scopes TO vayada_next_identity_runtime WITH GRANT OPTION' >/dev/null
+expect_grant_failure identity_public_read_contract_unsafe
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE SELECT ON booking.pricing_runtime_effective_authority_scopes FROM vayada_next_identity_runtime' >/dev/null
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'GRANT SELECT (property_id) ON booking.pricing_runtime_effective_authority_scopes TO vayada_next_identity_runtime' >/dev/null
+expect_grant_failure identity_public_read_contract_unsafe
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE SELECT (property_id) ON booking.pricing_runtime_effective_authority_scopes FROM vayada_next_identity_runtime' >/dev/null
+
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c "CREATE POLICY finance_expense_worker_scope ON platform.jobs AS RESTRICTIVE TO PUBLIC USING (current_user <> 'vayada_next_finance_expense_worker')" >/dev/null
 run_grant | grep -F '"status":"PASS"' >/dev/null
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
@@ -238,6 +265,8 @@ UPDATE identity.staff_invitations SET provider = 'workos' WHERE id = 1;
 SELECT id FROM identity.staff_invitations WHERE id = 1 FOR UPDATE;
 UPDATE platform.external_webhook_events SET provider = 'workos' WHERE id = 1;
 SELECT id FROM hotel_catalog.properties WHERE id = 1;
+SELECT count(*) FROM booking.pricing_runtime_effective_property_scopes;
+SELECT count(*) FROM booking.pricing_runtime_effective_authority_scopes;
 INSERT INTO platform.jobs (id, queue_name, job_type, resource_product, resource_type)
   VALUES (1, 'pms-inbox', 'pms.inbox.assignment.reconcile', 'pms', 'inbox_assignment');
 SQL
