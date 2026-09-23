@@ -178,6 +178,10 @@ def configure_channex_staging(container, meals=False, worker_enabled="true", inv
 
 CHANNEX_WORKER_SECRET_NAME = "PMS_CHANNEX_MANAGEMENT_DATABASE_URL"
 CHANNEX_WORKER_SECRET_PARAMETER = "/vayada/prod/target-database-channex-management-worker-url"
+GENERAL_RUNTIME_SECRET_PARAMETERS = {
+    "/vayada/prod/target-database-runtime-url",
+    f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/vayada/prod/target-database-runtime-url",
+}
 
 
 def map_channex_worker_database(container):
@@ -189,7 +193,7 @@ def map_channex_worker_database(container):
     if CHANNEX_WORKER_SECRET_NAME in env:
         raise ValueError("Worker database URL must come only from the reviewed secret")
     general = [x for x in container.get("secrets", []) if x["name"] == "TARGET_DATABASE_URL"]
-    if general != [{"name": "TARGET_DATABASE_URL", "valueFrom": "/vayada/prod/target-database-runtime-url"}]:
+    if len(general) != 1 or general[0].get("valueFrom") not in GENERAL_RUNTIME_SECRET_PARAMETERS:
         raise ValueError("General API runtime mapping must remain unchanged")
     container["secrets"] = [x for x in container["secrets"] if x["name"] != CHANNEX_WORKER_SECRET_NAME]
     container["secrets"].append({"name": CHANNEX_WORKER_SECRET_NAME, "valueFrom": CHANNEX_WORKER_SECRET_PARAMETER})

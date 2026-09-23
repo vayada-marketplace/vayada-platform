@@ -26,9 +26,14 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
         return value
 
     def test_mapping_requires_paused_property_scope_and_preserves_general_role(self):
+        for parameter in canary.GENERAL_RUNTIME_SECRET_PARAMETERS:
+            with self.subTest(parameter=parameter):
+                value = self.container()
+                value["secrets"][0]["valueFrom"] = parameter
+                canary.map_channex_worker_database(value)
+                self.assertEqual(next(x for x in value["secrets"] if x["name"] == canary.CHANNEX_WORKER_SECRET_NAME)["valueFrom"], canary.CHANNEX_WORKER_SECRET_PARAMETER)
         value = self.container()
         canary.map_channex_worker_database(value)
-        self.assertEqual(next(x for x in value["secrets"] if x["name"] == canary.CHANNEX_WORKER_SECRET_NAME)["valueFrom"], canary.CHANNEX_WORKER_SECRET_PARAMETER)
         for key, bad in [("PMS_CHANNEX_WORKER_ENABLED","true"), ("CHANNEX_API_BASE_URL","https://app.channex.io"), ("PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID","other")]:
             changed = copy.deepcopy(value)
             next(x for x in changed["environment"] if x["name"] == key)["value"] = bad
