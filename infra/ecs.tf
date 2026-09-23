@@ -331,7 +331,8 @@ locals {
         { name = "AUTH_SUCCESS_URL", value = "https://next-admin.vayada.com/dashboard" },
         { name = "FINANCE_EXPENSE_WORKER_ENABLED", value = "false" },
         { name = "FINANCE_EXPENSE_WORKER_PROPERTY_ID", value = var.finance_expense_worker_property_id },
-        { name = "FINANCE_EXPORT_WORKER_ENABLED", value = "false" },
+        { name = "FINANCE_EXPORT_WORKER_ENABLED", value = "true" },
+        { name = "FINANCE_EXPORT_WORKER_EXPORT_ID", value = "f3429f38-b462-4453-b7f1-d901fc86ebfa" },
         { name = "FINANCE_EXPORT_WORKER_PROPERTY_ID", value = var.finance_export_worker_property_id },
         { name = "AUTH_LOGOUT_URL", value = "https://next-admin.vayada.com/login" },
         { name = "AUTH_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
@@ -566,6 +567,19 @@ resource "aws_ecs_task_definition" "services" {
     create_before_destroy = true
 
     precondition {
+      condition = (
+        each.key != "next-target-backend" ||
+        lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_ENABLED", "false") != "true" ||
+        (
+          lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_EXPORT_ID", "") == "f3429f38-b462-4453-b7f1-d901fc86ebfa" &&
+          lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_PROPERTY_ID", "") == "65f6b2fc-c783-4963-9d6b-a85f82319769" &&
+          lookup({ for secret in each.value.secrets : secret.name => secret.valueFrom }, "FINANCE_EXPORT_WORKER_DATABASE_URL", "") == "/vayada/prod/target-database-finance-export-worker-url"
+        )
+      )
+      error_message = "Enabled finance export worker must target only the reviewed export, property, and dedicated database secret."
+    }
+
+    precondition {
       condition     = each.key != "next-target-backend" || trimspace(var.channex_webhook_secret) != ""
       error_message = "Next review intake requires a non-empty CHANNEX_WEBHOOK_SECRET."
     }
@@ -670,6 +684,11 @@ resource "aws_ecs_service" "services" {
 
   lifecycle {
     ignore_changes = [task_definition]
+
+    precondition {
+      condition     = each.key != "next-target-backend" || try(each.value.desired_count, 1) == 1
+      error_message = "The next-api Financials export activation is limited to exactly one ECS task."
+    }
   }
 
   tags = contains(["staging-pms-backend", "next-target-backend"], each.key) ? {} : {
