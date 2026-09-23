@@ -6,6 +6,7 @@ import sys
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import Mock, patch
+from urllib.parse import urlsplit
 
 
 SCRIPT = pathlib.Path(__file__).with_name("restore-rds-admin-from-ssm.py")
@@ -38,13 +39,41 @@ def trusted_clients(stable=True):
         "Endpoint": {"Address": MODULE.HOST, "Port": 5432},
     }]}
     ecs = Mock()
-    ecs.describe_services.return_value = {"services": [{
+    old_service = {
         "status": "ACTIVE",
         "desiredCount": 1,
         "runningCount": 1 if stable else 0,
         "pendingCount": 0 if stable else 1,
-        "deployments": [{"status": "PRIMARY", "rolloutState": "COMPLETED" if stable else "IN_PROGRESS"}],
-    }]}
+        "taskDefinition": "arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-marketplace-backend:89",
+        "deployments": [{
+            "id": "ecs-svc/old",
+            "status": "PRIMARY",
+            "rolloutState": "COMPLETED" if stable else "IN_PROGRESS",
+            "taskDefinition": "arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-marketplace-backend:89",
+        }],
+    }
+    new_service = {
+        **old_service,
+        "runningCount": 1,
+        "pendingCount": 0,
+        "deployments": [{
+            "id": "ecs-svc/new",
+            "status": "PRIMARY",
+            "rolloutState": "COMPLETED",
+            "taskDefinition": old_service["taskDefinition"],
+        }],
+    }
+    ecs.describe_services.side_effect = lambda **_: {
+        "services": [new_service if ecs.update_service.called else old_service]
+    }
+    ecs.update_service.return_value = {"service": new_service}
+    ecs.describe_task_definition.return_value = {"taskDefinition": {"containerDefinitions": [{
+        "name": MODULE.SERVICE_CONTAINER,
+        "secrets": [{
+            "name": "DATABASE_URL",
+            "valueFrom": f"arn:aws:ssm:{MODULE.REGION}:{MODULE.ACCOUNT}:parameter{MODULE.PARAMETER}",
+        }],
+    }]}}
     return sts, ssm, rds, ecs
 
 
@@ -68,8 +97,14 @@ class RestoreRdsAdminTests(unittest.TestCase):
         self.assertIn('id = "arn:aws:iam::269416271598:policy/vayada-rds-admin-rotation"', iam)
 
     def test_validate_accepts_exact_resources(self):
-        url = MODULE.validate(*trusted_clients(), recovery=False)
+        url, consumer_parameter, consumer_url, task_definition, deployment_id = MODULE.validate(
+            *trusted_clients(), recovery=False
+        )
         self.assertEqual(url.hostname, MODULE.HOST)
+        self.assertEqual(consumer_parameter, MODULE.PARAMETER)
+        self.assertIs(consumer_url, url)
+        self.assertTrue(task_definition.endswith(":89"))
+        self.assertEqual(deployment_id, "ecs-svc/old")
 
     def test_validate_rejects_wrong_account_before_secret_read(self):
         sts, ssm, rds, ecs = trusted_clients()
@@ -79,12 +114,35 @@ class RestoreRdsAdminTests(unittest.TestCase):
         ssm.get_parameter.assert_not_called()
 
     def test_validate_allows_expected_instability_during_recovery(self):
-        url = MODULE.validate(*trusted_clients(stable=False), recovery=True)
+        url, *_ = MODULE.validate(*trusted_clients(stable=False), recovery=True)
         self.assertEqual(url.hostname, MODULE.HOST)
 
     def test_validate_rejects_instability_without_recovery_marker(self):
         with self.assertRaisesRegex(MODULE.RotationError, "rotation_failed_rds_readiness"):
             MODULE.validate(*trusted_clients(stable=False), recovery=False)
+
+    def test_validate_accepts_reviewed_legacy_consumer_parameter(self):
+        sts, ssm, rds, ecs = trusted_clients()
+        ssm.get_parameter.side_effect = lambda Name, WithDecryption: {"Parameter": {
+            "Name": Name,
+            "Type": "SecureString",
+            "Value": f"postgresql://{MODULE.MASTER_USER}:legacy@{MODULE.HOST}:5432/postgres?sslmode=require",
+        }}
+        ecs.describe_task_definition.return_value["taskDefinition"]["containerDefinitions"][0]["secrets"][0][
+            "valueFrom"
+        ] = f"arn:aws:ssm:{MODULE.REGION}:{MODULE.ACCOUNT}:parameter{MODULE.LEGACY_PARAMETER}"
+        url, consumer_parameter, consumer_url, _, _ = MODULE.validate(sts, ssm, rds, ecs, recovery=True)
+        self.assertEqual(consumer_parameter, MODULE.LEGACY_PARAMETER)
+        self.assertEqual(consumer_url.hostname, MODULE.HOST)
+        self.assertEqual(ssm.get_parameter.call_count, 2)
+
+    def test_validate_rejects_unreviewed_consumer_parameter(self):
+        sts, ssm, rds, ecs = trusted_clients()
+        ecs.describe_task_definition.return_value["taskDefinition"]["containerDefinitions"][0]["secrets"][0][
+            "valueFrom"
+        ] = "arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/other"
+        with self.assertRaisesRegex(MODULE.RotationError, "rotation_failed_service_mapping"):
+            MODULE.validate(sts, ssm, rds, ecs, recovery=True)
 
     def test_pending_metadata_requires_exact_tags(self):
         ssm = Mock()
@@ -107,26 +165,105 @@ class RestoreRdsAdminTests(unittest.TestCase):
             "Parameter": {"Name": MODULE.PENDING_PARAMETER, "Type": "SecureString", "Value": "pending-safe-password"}
         }
         rds.modify_db_instance.side_effect = RuntimeError("hidden SDK detail")
-        url = MODULE.validate(*trusted_clients(), recovery=False)
+        url, consumer_parameter, consumer_url, task_definition, deployment_id = MODULE.validate(
+            *trusted_clients(), recovery=False
+        )
         with self.assertRaisesRegex(MODULE.RotationError, "rotation_failed_rds_update"):
-            MODULE.rotate(ssm, rds, ecs, url, recovery=True)
+            MODULE.rotate(
+                ssm, rds, ecs, url, consumer_parameter, consumer_url,
+                task_definition, deployment_id, recovery=True,
+            )
         ssm.delete_parameter.assert_not_called()
 
     def test_rotate_updates_all_targets_then_removes_pending(self):
         _, ssm, rds, ecs = trusted_clients()
-        url = MODULE.validate(*trusted_clients(), recovery=False)
+        url, consumer_parameter, consumer_url, task_definition, deployment_id = MODULE.validate(
+            *trusted_clients(), recovery=False
+        )
         secret = "generated-safe-password"
         with patch.object(MODULE.secrets, "token_urlsafe", return_value=secret), patch.object(
             MODULE, "verify_database_health"
         ) as health:
-            MODULE.rotate(ssm, rds, ecs, url, recovery=False)
+            MODULE.rotate(
+                ssm, rds, ecs, url, consumer_parameter, consumer_url,
+                task_definition, deployment_id, recovery=False,
+            )
         self.assertEqual(rds.modify_db_instance.call_args.kwargs["MasterUserPassword"], secret)
         self.assertIn("generated-safe-password", ssm.put_parameter.call_args_list[-1].kwargs["Value"])
         ecs.update_service.assert_called_once_with(
-            cluster=MODULE.CLUSTER, service=MODULE.SERVICE, forceNewDeployment=True
+            cluster=MODULE.CLUSTER,
+            service=MODULE.SERVICE,
+            taskDefinition=task_definition,
+            forceNewDeployment=True,
         )
         health.assert_called_once_with()
         ssm.delete_parameter.assert_called_once_with(Name=MODULE.PENDING_PARAMETER)
+
+    def test_rotate_updates_reviewed_legacy_consumer_parameter(self):
+        _, ssm, rds, ecs = trusted_clients()
+        ssm.get_parameter.side_effect = lambda Name, WithDecryption: {"Parameter": {
+            "Name": Name,
+            "Type": "SecureString",
+            "Value": f"postgresql://{MODULE.MASTER_USER}:legacy@{MODULE.HOST}:5432/postgres?sslmode=require",
+        }}
+        url = MODULE.connection_url(ssm, MODULE.PARAMETER)
+        legacy_url = MODULE.connection_url(ssm, MODULE.LEGACY_PARAMETER)
+        with patch.object(MODULE, "load_or_create_pending", return_value="pending-safe-password"), patch.object(
+            MODULE, "verify_database_health"
+        ):
+            MODULE.rotate(
+                ssm, rds, ecs, url, MODULE.LEGACY_PARAMETER, legacy_url,
+                "arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-marketplace-backend:89",
+                "ecs-svc/old", recovery=True,
+            )
+        writes = [call.kwargs for call in ssm.put_parameter.call_args_list]
+        self.assertEqual([item["Name"] for item in writes], [MODULE.PARAMETER, MODULE.LEGACY_PARAMETER])
+        self.assertTrue(all("pending-safe-password" in item["Value"] for item in writes))
+
+    def test_legacy_consumer_write_failure_preserves_recovery_and_skips_restart(self):
+        _, ssm, rds, ecs = trusted_clients()
+        url = urlsplit(
+            f"postgresql://{MODULE.MASTER_USER}:legacy@{MODULE.HOST}:5432/postgres?sslmode=require"
+        )
+        ssm.put_parameter.side_effect = [None, RuntimeError("hidden SDK detail")]
+        with patch.object(MODULE, "load_or_create_pending", return_value="pending-safe-password"), self.assertRaisesRegex(
+            MODULE.RotationError, "rotation_failed_consumer_parameter_write"
+        ):
+            MODULE.rotate(
+                ssm, rds, ecs, url, MODULE.LEGACY_PARAMETER, url,
+                "arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-marketplace-backend:89",
+                "ecs-svc/old", recovery=True,
+            )
+        ecs.update_service.assert_not_called()
+        ssm.delete_parameter.assert_not_called()
+
+    def test_service_rollback_preserves_pending(self):
+        _, ssm, rds, ecs = trusted_clients()
+        url = urlsplit(
+            f"postgresql://{MODULE.MASTER_USER}:legacy@{MODULE.HOST}:5432/postgres?sslmode=require"
+        )
+        ecs.describe_services.side_effect = None
+        ecs.describe_services.return_value = {"services": [{
+            "status": "ACTIVE",
+            "desiredCount": 1,
+            "runningCount": 1,
+            "pendingCount": 0,
+            "deployments": [{
+                "id": "ecs-svc/old",
+                "status": "PRIMARY",
+                "rolloutState": "COMPLETED",
+                "taskDefinition": "arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-marketplace-backend:89",
+            }],
+        }]}
+        with patch.object(MODULE, "load_or_create_pending", return_value="pending-safe-password"), self.assertRaisesRegex(
+            MODULE.RotationError, "rotation_failed_service_replacement"
+        ):
+            MODULE.rotate(
+                ssm, rds, ecs, url, MODULE.PARAMETER, url,
+                "arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-marketplace-backend:89",
+                "ecs-svc/old", recovery=True,
+            )
+        ssm.delete_parameter.assert_not_called()
 
     def test_database_health_requires_database_connection(self):
         response = Mock()
@@ -138,11 +275,16 @@ class RestoreRdsAdminTests(unittest.TestCase):
 
     def test_database_health_failure_is_sanitized_and_preserves_pending(self):
         _, ssm, rds, ecs = trusted_clients()
-        url = MODULE.validate(*trusted_clients(), recovery=False)
+        url, consumer_parameter, consumer_url, task_definition, deployment_id = MODULE.validate(
+            *trusted_clients(), recovery=False
+        )
         with patch.object(MODULE, "load_or_create_pending", return_value="generated-safe-password"), patch.object(
             MODULE, "verify_database_health", side_effect=MODULE.RotationError("rotation_failed_database_health")
         ), self.assertRaisesRegex(MODULE.RotationError, "rotation_failed_database_health"):
-            MODULE.rotate(ssm, rds, ecs, url, recovery=False)
+            MODULE.rotate(
+                ssm, rds, ecs, url, consumer_parameter, consumer_url,
+                task_definition, deployment_id, recovery=False,
+            )
         ssm.delete_parameter.assert_not_called()
 
     def test_check_never_rotates_or_prints_password(self):
