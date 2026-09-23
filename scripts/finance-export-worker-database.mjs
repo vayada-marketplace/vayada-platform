@@ -4,6 +4,11 @@ import {
   financeExportWorkerPrivileges,
   FINANCE_EXPORT_WORKER_ROLE as role,
 } from "/app/apps/api/dist/jobs/financeExportWorkerBoundary.js";
+const policyConsumerFunctions = [
+  "platform.channex_management_worker_scope(text,text,uuid)",
+  "platform.tenant_scope_key(text,uuid,uuid)",
+  "platform.valid_tenant_scope(text,uuid,uuid)",
+];
 
 let client;
 try {
@@ -42,6 +47,9 @@ try {
   const propertyId = process.env.FINANCE_EXPORT_WORKER_PROPERTY_ID;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(propertyId ?? ""))
     throw new Error("finance_export_worker_property_required");
+  const exportId = process.env.FINANCE_EXPORT_WORKER_EXPORT_ID;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(exportId ?? ""))
+    throw new Error("finance_export_worker_export_required");
   await client.query("BEGIN");
   if (grant) {
     const names = Object.keys(financeExportWorkerPrivileges);
@@ -64,6 +72,11 @@ try {
       [propertyId],
     );
     await client.query(`GRANT USAGE ON SCHEMA platform,finance,hotel_catalog,pms TO ${role}`);
+    for (const functionName of policyConsumerFunctions) {
+      await client.query(`REVOKE EXECUTE ON FUNCTION ${functionName} FROM PUBLIC`);
+      await client.query(`REVOKE GRANT OPTION FOR EXECUTE ON FUNCTION ${functionName} FROM ${role}`);
+      await client.query(`GRANT EXECUTE ON FUNCTION ${functionName} TO ${role}`);
+    }
     for (const [table, privileges] of Object.entries(financeExportWorkerPrivileges))
       for (const [kind, columns] of Object.entries(privileges))
         await client.query(
@@ -74,7 +87,45 @@ try {
     if (login.current_user !== role || login.session_user !== role)
       throw new Error("finance_export_worker_login_mismatch");
   }
-  await assertFinanceExportWorkerBoundary(client, { propertyId });
+  const consumerAccess = await client.query(
+    `WITH required_functions(name) AS (SELECT unnest($1::text[]))
+     SELECT required_functions.name AS function
+     FROM required_functions
+     LEFT JOIN pg_proc procedure ON procedure.oid=to_regprocedure(required_functions.name)
+     LEFT JOIN pg_roles account ON account.rolname=$2
+     WHERE procedure.oid IS NULL OR procedure.prosecdef OR account.oid IS NULL
+       OR EXISTS (
+         SELECT 1 FROM aclexplode(COALESCE(procedure.proacl,acldefault('f',procedure.proowner))) acl
+         WHERE acl.grantee=0 AND acl.privilege_type='EXECUTE')
+       OR NOT EXISTS (
+       SELECT 1 FROM aclexplode(COALESCE(procedure.proacl,acldefault('f',procedure.proowner))) acl
+       WHERE acl.grantee=account.oid AND acl.privilege_type='EXECUTE' AND NOT acl.is_grantable)
+       OR EXISTS (
+         SELECT 1 FROM aclexplode(COALESCE(procedure.proacl,acldefault('f',procedure.proowner))) acl
+         WHERE acl.grantee=account.oid AND acl.privilege_type='EXECUTE' AND acl.is_grantable)`,
+    [policyConsumerFunctions, role],
+  );
+  if (consumerAccess.rowCount)
+    throw new Error("finance_export_worker_policy_consumer_function_access_missing");
+  const directFunctionAccess = await client.query(
+    `SELECT procedure.oid::regprocedure::text AS function, acl.is_grantable AS delegate
+     FROM pg_proc procedure
+     JOIN pg_namespace namespace ON namespace.oid=procedure.pronamespace
+     CROSS JOIN LATERAL aclexplode(COALESCE(procedure.proacl,acldefault('f',procedure.proowner))) acl
+     JOIN pg_roles account ON account.oid=acl.grantee
+     WHERE account.rolname=$1 AND acl.privilege_type='EXECUTE'
+       AND namespace.nspname NOT LIKE 'pg_%' AND namespace.nspname<>'information_schema'
+     ORDER BY function`,
+    [role],
+  );
+  if (
+    directFunctionAccess.rows.length !== policyConsumerFunctions.length ||
+    directFunctionAccess.rows.some(
+      (row) => row.delegate || !policyConsumerFunctions.includes(row.function),
+    )
+  )
+    throw new Error("finance_export_worker_function_scope_too_broad");
+  await assertFinanceExportWorkerBoundary(client, { propertyId, exportId });
   await client.query("COMMIT");
   console.log(JSON.stringify({ status: "PASS", role, mode: grant ? "grant" : "preflight" }));
 } catch (error) {
