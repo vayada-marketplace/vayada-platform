@@ -296,7 +296,9 @@ shared-table RLS migration from app PR #2530 must be deployed first. The
 grant runner refuses missing RLS or unrelated effective privileges and must
 run only from a reviewed private-network migration-owner task with verified
 RDS TLS. The identity credential may enqueue a PMS inbox reconciliation job
-but may not read or update that PMS worker's rows. The dedicated parameter is
+but may not read or update that PMS worker's rows. It may read only
+`hotel_catalog.properties` outside the identity and shared platform tables so
+staff access can be restricted to owned properties. The dedicated parameter is
 mapped to `AUTH_DATABASE_URL` only after the role, grants, restricted-role
 integration tests, and deployed-role canary pass.
 
