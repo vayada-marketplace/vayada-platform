@@ -2,20 +2,20 @@ import pg from "pg";
 import { randomUUID } from "node:crypto";
 
 const scope = process.env.VAYADA_DB_PROVISION_SCOPE ?? "";
-const worker = {
-  finance_expense: {
+const worker = new Map([
+  ["finance_expense", {
     role: "vayada_next_finance_expense_worker",
     secret: "FINANCE_EXPENSE_WORKER_DATABASE_URL",
-  },
-  finance_export: {
+  }],
+  ["finance_export", {
     role: "vayada_next_finance_export_worker",
     secret: "FINANCE_EXPORT_WORKER_DATABASE_URL",
-  },
-  channex_management: {
+  }],
+  ["channex_management", {
     role: "vayada_next_channex_management_worker",
     secret: "PMS_CHANNEX_MANAGEMENT_DATABASE_URL",
-  },
-}[scope];
+  }],
+]).get(scope);
 const role = worker?.role ?? "vayada_next_identity_runtime";
 const expectedHost = "vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com";
 let client;

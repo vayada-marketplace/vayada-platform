@@ -125,6 +125,10 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('var.finance_export_worker_secret_mapped ? [', ecs)
         self.assertIn('/vayada/prod/target-database-finance-export-worker-url', ecs)
 
+        provisioner = (ROOT / 'scripts/provision-target-database-identity-runtime.mjs').read_text()
+        self.assertIn('new Map([', provisioner)
+        self.assertIn(']).get(scope)', provisioner)
+
     def test_affiliate_read_grant_reuses_pinned_ca_and_fits_override_budget(self) -> None:
         self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-affiliate-read"'), 3)
 
