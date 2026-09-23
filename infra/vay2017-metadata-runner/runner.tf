@@ -1,4 +1,6 @@
 locals {
+  vay2017_rehearsal_region             = "eu-west-1"
+  vay2017_rehearsal_account_id         = "269416271598"
   vay2017_rehearsal_vpc_id             = "vpc-055e8074dc3b2422a"
   vay2017_rehearsal_db_instance_id     = "vay2017-legacy-rehearsal-20260921"
   vay2017_rehearsal_snapshot_id        = "vay2017-legacy-source-freeze-20260920"
@@ -14,10 +16,10 @@ locals {
   vay2017_rehearsal_state_machine_name = "vay2017-metadata-inventory"
   vay2017_rehearsal_log_group_name     = "/aws/ecs/vay2017-metadata-runner"
   vay2017_rehearsal_github_role_name   = "vayada-github-actions-vay2017-metadata"
-  vay2017_rehearsal_ecr_repository_arn = "arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/vayada-next-api"
-  vay2017_rehearsal_ecr_repository_url = "${var.aws_account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/vayada-next-api"
+  vay2017_rehearsal_ecr_repository_arn = "arn:aws:ecr:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:repository/vayada-next-api"
+  vay2017_rehearsal_ecr_repository_url = "${local.vay2017_rehearsal_account_id}.dkr.ecr.${local.vay2017_rehearsal_region}.amazonaws.com/vayada-next-api"
   vay2017_rehearsal_s3_prefix_list_id  = "pl-6da54004"
-  vay2017_rehearsal_attestation        = jsondecode(file("${path.module}/../scripts/fixtures/vay2017-restore-attestation.json"))
+  vay2017_rehearsal_attestation        = jsondecode(file("${path.module}/../../scripts/fixtures/vay2017-restore-attestation.json"))
   vay2017_rehearsal_endpoint_names = toset([
     "ecr.api",
     "ecr.dkr",
@@ -44,8 +46,8 @@ resource "aws_subnet" "vay2017_rehearsal_private" {
     }
     precondition {
       condition = (
-        local.vay2017_rehearsal_attestation.accountId == var.aws_account_id &&
-        local.vay2017_rehearsal_attestation.region == var.aws_region &&
+        local.vay2017_rehearsal_attestation.accountId == local.vay2017_rehearsal_account_id &&
+        local.vay2017_rehearsal_attestation.region == local.vay2017_rehearsal_region &&
         local.vay2017_rehearsal_attestation.restoreInstanceId == local.vay2017_rehearsal_db_instance_id &&
         local.vay2017_rehearsal_attestation.restoreInstanceResourceId == local.vay2017_rehearsal_db_resource_id &&
         local.vay2017_rehearsal_attestation.restoreInstanceArn == local.vay2017_rehearsal_db_arn &&
@@ -159,7 +161,7 @@ resource "aws_vpc_endpoint" "vay2017_interface" {
   for_each = local.vay2017_rehearsal_endpoint_names
 
   vpc_id              = local.vay2017_rehearsal_vpc_id
-  service_name        = "com.amazonaws.eu-west-1.${each.key}"
+  service_name        = "com.amazonaws.${local.vay2017_rehearsal_region}.${each.key}"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   subnet_ids          = [aws_subnet.vay2017_rehearsal_private.id]
@@ -173,7 +175,7 @@ resource "aws_vpc_endpoint" "vay2017_interface" {
 
 resource "aws_vpc_endpoint" "vay2017_ecr_s3" {
   vpc_id            = local.vay2017_rehearsal_vpc_id
-  service_name      = "com.amazonaws.eu-west-1.s3"
+  service_name      = "com.amazonaws.${local.vay2017_rehearsal_region}.s3"
   vpc_endpoint_type = "Gateway"
   route_table_ids   = [aws_route_table.vay2017_rehearsal_private.id]
   policy = jsonencode({
@@ -210,8 +212,8 @@ resource "aws_iam_role" "vay2017_task_execution" {
       Principal = { Service = "ecs-tasks.amazonaws.com" }
       Action    = "sts:AssumeRole"
       Condition = {
-        StringEquals = { "aws:SourceAccount" = var.aws_account_id }
-        ArnLike      = { "aws:SourceArn" = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:*" }
+        StringEquals = { "aws:SourceAccount" = local.vay2017_rehearsal_account_id }
+        ArnLike      = { "aws:SourceArn" = "arn:aws:ecs:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:*" }
       }
     }]
   })
@@ -278,7 +280,7 @@ resource "aws_ecs_task_definition" "vay2017_metadata" {
     name      = "metadata-runner"
     image     = "${local.vay2017_rehearsal_ecr_repository_url}@${local.vay2017_rehearsal_image_digest}"
     essential = true
-    command   = ["node", "--input-type=module", "-e", file("${path.module}/../scripts/vay2017-rehearsal-metadata.mjs")]
+    command   = ["node", "--input-type=module", "-e", file("${path.module}/../../scripts/vay2017-rehearsal-metadata.mjs")]
     environment = [
       { name = "VAY2017_RUN_MAIN", value = "1" },
       { name = "VAY2017_RESTORE_INSTANCE_ID", value = local.vay2017_rehearsal_db_instance_id },
@@ -287,9 +289,9 @@ resource "aws_ecs_task_definition" "vay2017_metadata" {
       { name = "VAY2017_RESTORE_EVENT_TIME", value = local.vay2017_rehearsal_restore_event_time },
       { name = "VAY2017_RESTORE_RESOURCE_ID", value = local.vay2017_rehearsal_db_resource_id },
       { name = "VAY2017_RESTORE_INSTANCE_ARN", value = local.vay2017_rehearsal_db_arn },
-      { name = "VAY2017_RESTORE_ATTESTATION_CHECKSUM", value = filesha256("${path.module}/../scripts/fixtures/vay2017-restore-attestation.json") },
+      { name = "VAY2017_RESTORE_ATTESTATION_CHECKSUM", value = filesha256("${path.module}/../../scripts/fixtures/vay2017-restore-attestation.json") },
       { name = "VAY2017_IMAGE_DIGEST", value = local.vay2017_rehearsal_image_digest },
-      { name = "VAY2017_SCANNER_SOURCE_CHECKSUM", value = filesha256("${path.module}/../scripts/vay2017-rehearsal-metadata.mjs") },
+      { name = "VAY2017_SCANNER_SOURCE_CHECKSUM", value = filesha256("${path.module}/../../scripts/vay2017-rehearsal-metadata.mjs") },
     ]
     secrets = [
       { name = "VAY2017_DB_HOST", valueFrom = "${local.vay2017_rehearsal_attestation.masterUserSecretArn}:host::" },
@@ -303,7 +305,7 @@ resource "aws_ecs_task_definition" "vay2017_metadata" {
       logDriver = "awslogs"
       options = {
         "awslogs-group"         = aws_cloudwatch_log_group.vay2017_metadata.name
-        "awslogs-region"        = var.aws_region
+        "awslogs-region"        = local.vay2017_rehearsal_region
         "awslogs-stream-prefix" = "vay2017-metadata"
       }
     }
@@ -324,12 +326,12 @@ data "aws_iam_policy_document" "vay2017_state_machine_trust" {
     condition {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
-      values   = [var.aws_account_id]
+      values   = [local.vay2017_rehearsal_account_id]
     }
     condition {
       test     = "ArnLike"
       variable = "aws:SourceArn"
-      values   = ["arn:aws:states:${var.aws_region}:${var.aws_account_id}:stateMachine:${local.vay2017_rehearsal_state_machine_name}"]
+      values   = ["arn:aws:states:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:stateMachine:${local.vay2017_rehearsal_state_machine_name}"]
     }
   }
 }
@@ -368,7 +370,7 @@ data "aws_iam_policy_document" "vay2017_state_machine" {
   statement {
     sid       = "ObserveAndStopOnlyEcsTasks"
     actions   = ["ecs:DescribeTasks", "ecs:StopTask"]
-    resources = ["arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task/${local.vay2017_rehearsal_cluster_name}/*"]
+    resources = ["arn:aws:ecs:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:task/${local.vay2017_rehearsal_cluster_name}/*"]
     condition {
       test     = "ArnEquals"
       variable = "ecs:cluster"
@@ -439,7 +441,7 @@ data "aws_iam_policy_document" "vay2017_github_trust" {
     actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {
       type        = "Federated"
-      identifiers = ["arn:aws:iam::${var.aws_account_id}:oidc-provider/token.actions.githubusercontent.com"]
+      identifiers = ["arn:aws:iam::${local.vay2017_rehearsal_account_id}:oidc-provider/token.actions.githubusercontent.com"]
     }
     condition {
       test     = "StringEquals"
@@ -476,7 +478,7 @@ data "aws_iam_policy_document" "vay2017_github_inventory" {
   statement {
     sid       = "ReadFixedMetadataInventoryExecution"
     actions   = ["states:DescribeExecution"]
-    resources = ["arn:aws:states:${var.aws_region}:${var.aws_account_id}:execution:${local.vay2017_rehearsal_state_machine_name}:*"]
+    resources = ["arn:aws:states:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:execution:${local.vay2017_rehearsal_state_machine_name}:*"]
   }
   statement {
     sid       = "ReadOnlySanitizedInventoryLogs"

@@ -116,7 +116,9 @@ test('runner contains no row-value query or caller-controlled SQL', async () => 
 });
 
 test('infrastructure keeps execution fixed and network access private and narrow', async () => {
-  const tf = await readFile(new URL('../infra/vay2017_rehearsal_metadata_runner.tf', import.meta.url), 'utf8');
+  const tf = await readFile(new URL('../infra/vay2017-metadata-runner/runner.tf', import.meta.url), 'utf8');
+  const backend = await readFile(new URL('../infra/vay2017-metadata-runner/main.tf', import.meta.url), 'utf8');
+  const lane = await readFile(new URL('../docs/vay2017-metadata-infrastructure-lane.md', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/vay2017-metadata-inventory.yml', import.meta.url), 'utf8');
   const runner = await readFile(new URL('./run-vay2017-rehearsal-metadata.sh', import.meta.url), 'utf8');
   const attestation = JSON.parse(await readFile(new URL('./fixtures/vay2017-restore-attestation.json', import.meta.url), 'utf8'));
@@ -160,4 +162,11 @@ test('infrastructure keeps execution fixed and network access private and narrow
   assert.equal(attestation.restoreInstanceResourceId, identity.restoreResourceId);
   assert.equal(attestation.restoreInstanceArn, identity.restoreInstanceArn);
   assert.doesNotMatch(runner, /aws\s+(rds\s+modify|ec2\s+authorize|iam\s+|ecs\s+run-task)/);
+  assert.match(backend, /key\s*=\s*"vay2017\/metadata-runner\/terraform\.tfstate"/);
+  assert.doesNotMatch(backend, /key\s*=\s*"platform\/terraform\.tfstate"/);
+  assert.match(backend, /allowed_account_ids\s*=\s*\[local\.vay2017_rehearsal_account_id\]/);
+  assert.match(tf, /vay2017_rehearsal_account_id\s*=\s*"269416271598"/);
+  assert.doesNotMatch(tf, /var\.aws_account_id/);
+  assert.match(lane, /platform state address list\s+contains no `aws_\*` resource/i);
+  assert.match(lane, /zero deletes or replacements/i);
 });

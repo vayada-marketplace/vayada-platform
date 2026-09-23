@@ -4,7 +4,7 @@ This is an isolated, read-only inventory of the restored VAY-2017 rehearsal data
 
 ## Before each inventory
 
-1. Confirm the required infrastructure PR is merged and applied, and that the dedicated `vay2017-metadata-preflight` GitHub environment is restricted to `main`, requires the designated owner approval, and has administrator bypass disabled. Per the owner's decision, the designated owner may approve runs they initiated. The current shared `next` environment has no protection rules and must not be used for this workflow. The VAY-2043 runner IAM roles currently need a separately reviewed provisioning path; do not broaden the generic platform-deploy role to make apply pass.
+1. Confirm the isolated infrastructure root in `infra/vay2017-metadata-runner` is applied from an independently reviewed saved plan as described in `docs/vay2017-metadata-infrastructure-lane.md`. Also confirm the dedicated `vay2017-metadata-preflight` GitHub environment is restricted to `main`, requires the designated owner approval, and has administrator bypass disabled. Per the owner's decision, the designated owner may approve runs they initiated. The current shared `next` environment has no protection rules and must not be used for this workflow. Do not broaden the generic platform-deploy role to make apply pass.
 2. From this repository, with an authorized, read-only operator AWS identity in the reviewed account, run:
 
    ```bash

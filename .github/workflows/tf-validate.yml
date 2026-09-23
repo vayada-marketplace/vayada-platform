@@ -248,3 +248,11 @@ jobs:
       - name: Terraform format check
         run: terraform fmt -check -recursive
         working-directory: infra
+
+      - name: Initialize isolated VAY-2043 Terraform root without backend
+        run: terraform init -backend=false
+        working-directory: infra/vay2017-metadata-runner
+
+      - name: Validate isolated VAY-2043 Terraform root
+        run: terraform validate
+        working-directory: infra/vay2017-metadata-runner
