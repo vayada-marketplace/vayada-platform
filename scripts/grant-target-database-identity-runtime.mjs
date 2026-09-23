@@ -146,8 +146,10 @@ try {
       const policies = await client.query(`
         SELECT policyname, cmd, permissive, roles, qual, with_check
           FROM pg_catalog.pg_policies
-         WHERE schemaname = 'platform' AND tablename = $1
+         WHERE schemaname = 'platform' AND tablename = $1 AND permissive = 'PERMISSIVE'
       `, [table.split(".")[1]]);
+      // Additional restrictive policies can only narrow these grants. Verify
+      // every permissive policy exactly; another worker must never add a bypass.
       const expected = expectedPolicies.get(table);
       if (policies.rowCount !== expected.size || policies.rows.some((policy) => {
         const key = `${policy.policyname}:${policy.cmd}`;

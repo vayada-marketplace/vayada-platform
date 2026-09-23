@@ -329,6 +329,8 @@ locals {
         { name = "WORKOS_JWKS_URL", value = var.workos_jwks_url },
         { name = "AUTH_CALLBACK_URL", value = "https://next-api.vayada.com/auth/workos/callback" },
         { name = "AUTH_SUCCESS_URL", value = "https://next-admin.vayada.com/dashboard" },
+        { name = "FINANCE_EXPENSE_WORKER_ENABLED", value = "false" },
+        { name = "FINANCE_EXPENSE_WORKER_PROPERTY_ID", value = var.finance_expense_worker_property_id },
         { name = "AUTH_LOGOUT_URL", value = "https://next-admin.vayada.com/login" },
         { name = "AUTH_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "AUTH_FIRST_PARTY_SURFACES", value = local.auth_first_party_surfaces },
@@ -365,7 +367,9 @@ locals {
         { name = "AUTH_LEGACY_BOOKING_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_AFFILIATE_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
-        ], local.resend_receipts_enabled ? [
+        ], var.finance_expense_worker_secret_mapped ? [
+        { name = "FINANCE_EXPENSE_WORKER_DATABASE_URL", valueFrom = "/vayada/prod/target-database-finance-expense-worker-url" },
+        ] : [], local.resend_receipts_enabled ? [
         { name = "RESEND_WEBHOOK_SECRET", valueFrom = "/vayada/prod/resend-webhook-secret" },
       ] : [])
     }

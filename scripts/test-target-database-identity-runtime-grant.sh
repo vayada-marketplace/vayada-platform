@@ -102,11 +102,14 @@ cp "${root}/scripts/provision-target-database-identity-runtime.mjs" "${work}/pro
 run_provision() {
   local force_failure="${1:-0}"
   local force_marker_mismatch="${2:-0}"
+  local provision_scope="${3:-}"
   docker run --rm --network "${network}" --volume "${modules}:/work" \
     --volume "${work}/provision.mjs:/work/provision.mjs:ro" --workdir /work \
     --env "TARGET_DATABASE_ADMIN_URL=postgresql://postgres:postgres@vayada-identity-grant-db:5432/postgres" \
     --env "IDENTITY_DATABASE_URL=postgresql://vayada_next_identity_runtime:identity@vayada-identity-grant-db:5432/postgres" \
     --env VAYADA_IDENTITY_PROVISION_LOCAL_FIXTURE=1 \
+    --env "VAYADA_DB_PROVISION_SCOPE=${provision_scope}" \
+    --env "FINANCE_EXPENSE_WORKER_DATABASE_URL=postgresql://vayada_next_finance_expense_worker:finance@vayada-identity-grant-db:5432/postgres" \
     --env "VAYADA_IDENTITY_PROVISION_FORCE_LOGIN_FAILURE=${force_failure}" \
     --env "VAYADA_IDENTITY_PROVISION_FORCE_MARKER_MISMATCH=${force_marker_mismatch}" \
     node:22-bookworm node provision.mjs
@@ -141,6 +144,10 @@ fi
 grep -F '"code":"identity_provision_cleanup_failed"' <<<"${output}" >/dev/null
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c 'REVOKE CONNECT ON DATABASE postgres FROM vayada_next_identity_runtime; DROP ROLE vayada_next_identity_runtime' >/dev/null
+# The same protected provisioner creates a separate Finance login, never an alias.
+run_provision 0 0 finance_expense | grep -F '"role":"vayada_next_finance_expense_worker"' >/dev/null
+docker exec "${database}" psql -U postgres -Atqc \
+  "SELECT rolcanlogin AND NOT (rolsuper OR rolinherit OR rolcreaterole OR rolcreatedb OR rolbypassrls OR rolreplication) FROM pg_roles WHERE rolname='vayada_next_finance_expense_worker'" | grep -Fx t >/dev/null
 run_provision | grep -F '"status":"PASS"' >/dev/null
 if output="$(run_provision 2>&1)"; then
   echo 'identity role provision unexpectedly allowed a duplicate' >&2
@@ -211,6 +218,8 @@ expect_grant_failure identity_shared_rls_policy_unexpected
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c "ALTER POLICY identity_runtime_pms_inbox_enqueue ON platform.jobs WITH CHECK (current_user = 'vayada_next_identity_runtime' AND queue_name = 'pms-inbox' AND job_type = 'pms.inbox.assignment.reconcile' AND resource_product = 'pms' AND resource_type = 'inbox_assignment')" >/dev/null
 
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c "CREATE POLICY finance_expense_worker_scope ON platform.jobs AS RESTRICTIVE TO PUBLIC USING (current_user <> 'vayada_next_finance_expense_worker')" >/dev/null
 run_grant | grep -F '"status":"PASS"' >/dev/null
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c "INSERT INTO identity.staff_invitations (id) VALUES (1)" >/dev/null
