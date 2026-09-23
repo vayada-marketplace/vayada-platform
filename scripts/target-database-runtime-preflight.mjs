@@ -183,8 +183,11 @@ try {
         AND relation.relkind IN ('r','p','v','m','f')
         AND relation.oid <> $1::regclass
         AND namespace.nspname <> 'vayada_migration_evidence'
-        AND format('%I.%I', namespace.nspname, relation.relname)
-            <> 'pms.inventory_coverage_validation_queue'
+        AND format('%I.%I', namespace.nspname, relation.relname) NOT IN (
+          'pms.inventory_coverage_validation_queue',
+          'platform.channex_management_worker_properties',
+          'platform.pricing_runtime_property_scopes'
+        )
         AND NOT has_table_privilege(current_user, relation.oid, 'SELECT')`,
     [receipt],
     "runtime_relation_read_missing",

@@ -85,6 +85,8 @@ CREATE TABLE booking.affiliate_click_admissions (id uuid PRIMARY KEY);
 CREATE TABLE booking.affiliate_original_booking_bindings (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_records (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_revocations (id uuid PRIMARY KEY);
+CREATE TABLE platform.channex_management_worker_properties (property_id uuid PRIMARY KEY);
+CREATE TABLE platform.pricing_runtime_property_scopes (database_login name PRIMARY KEY);
 CREATE TABLE pms.inventory_coverage_validation_queue (id uuid PRIMARY KEY);
 CREATE TABLE vayada_migration_evidence.database_attestations (id uuid PRIMARY KEY);
 CREATE TYPE app.hotel_state AS ENUM ('active', 'inactive');
