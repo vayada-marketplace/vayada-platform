@@ -1,7 +1,7 @@
 # Finance expense worker staged rollout (VAY-2044)
 
 The app contract is `engineering/finance-expense-worker-runtime-permissions.md`.
-The application owns migration 0411 and exports the exact table/column matrix
+The application owns migration 0412 and exports the exact table/column matrix
 and policy-digest preflight in `apps/api/dist/jobs/financeExpenseWorkerBoundary.js`.
 The platform runner imports that module from the running immutable app image;
 it must be present in the reviewed image before the grant/preflight modes run.
