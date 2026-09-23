@@ -114,7 +114,7 @@ try {
      CROSS JOIN LATERAL aclexplode(COALESCE(procedure.proacl,acldefault('f',procedure.proowner))) acl
      JOIN pg_roles account ON account.oid=acl.grantee
      WHERE account.rolname=$1 AND acl.privilege_type='EXECUTE'
-       AND namespace.nspname NOT LIKE 'pg_%' AND namespace.nspname<>'information_schema'
+       AND namespace.nspname !~ '^pg_' AND namespace.nspname<>'information_schema'
      ORDER BY function`,
     [role],
   );

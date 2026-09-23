@@ -133,6 +133,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('finance_export_worker_function_scope_too_broad', export_worker)
         self.assertIn("!policyConsumerFunctions.includes(row.function)", export_worker)
         self.assertIn('test(exportId ?? "")', export_worker)
+        self.assertIn('assertFinanceExportWorkerBoundary(client, { propertyId, exportId })', export_worker)
         ecs = (ROOT / 'infra/ecs.tf').read_text()
         self.assertIn('{ name = "FINANCE_EXPORT_WORKER_ENABLED", value = "true" }', ecs)
         self.assertIn('{ name = "FINANCE_EXPORT_WORKER_EXPORT_ID", value = "f3429f38-b462-4453-b7f1-d901fc86ebfa" }', ecs)
