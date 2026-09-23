@@ -85,6 +85,8 @@ database_group_json="$(aws ec2 describe-security-groups --region "$region" --gro
   --query 'SecurityGroups[0].{id:GroupId,vpc:VpcId,name:GroupName,ingress:IpPermissions[*].{protocol:IpProtocol,from:FromPort,to:ToPort,groups:UserIdGroupPairs[*].GroupId,cidrs:IpRanges[*].CidrIp},egress:IpPermissionsEgress}' --output json)"
 runner_group_json="$(aws ec2 describe-security-groups --region "$region" --group-ids "$runner_group" \
   --query 'SecurityGroups[0].{id:GroupId,vpc:VpcId,name:GroupName,ingress:IpPermissions[*].{protocol:IpProtocol,from:FromPort,to:ToPort,groups:UserIdGroupPairs[*].GroupId,cidrs:IpRanges[*].CidrIp},egress:IpPermissionsEgress[*].{protocol:IpProtocol,from:FromPort,to:ToPort,groups:UserIdGroupPairs[*].GroupId,cidrs:IpRanges[*].CidrIp,prefixes:PrefixListIds[*].PrefixListId}}' --output json)"
+runner_group_rules_json="$(aws ec2 describe-security-group-rules --region "$region" --filters "Name=group-id,Values=$runner_group" \
+  --query 'SecurityGroupRules[].{egress:IsEgress,protocol:IpProtocol,from:FromPort,to:ToPort,group:ReferencedGroupInfo.GroupId,cidr:CidrIpv4,ipv6:CidrIpv6,prefix:PrefixListId}' --output json)"
 endpoint_group_json="$(aws ec2 describe-security-groups --region "$region" --group-ids "$endpoint_group" \
   --query 'SecurityGroups[0].{id:GroupId,vpc:VpcId,name:GroupName,ingress:IpPermissions[*].{protocol:IpProtocol,from:FromPort,to:ToPort,groups:UserIdGroupPairs[*].GroupId,cidrs:IpRanges[*].CidrIp},egress:IpPermissionsEgress}' --output json)"
 prefix_list="$(aws ec2 describe-prefix-lists --region "$region" --filters Name=prefix-list-name,Values=com.amazonaws.eu-west-1.s3 --query 'PrefixLists[0].PrefixListId' --output text)"
@@ -93,8 +95,15 @@ jq -e --arg group "$database_group" --arg vpc "$vpc" --arg runner "$runner_group
   '.id == $group and .vpc == $vpc and .name == "vay2017-metadata-database" and .egress == [] and (.ingress | length == 1) and .ingress[0].protocol == "tcp" and .ingress[0].from == 5432 and .ingress[0].to == 5432 and .ingress[0].cidrs == [] and .ingress[0].groups == [$runner]' \
   <<<"$database_group_json" >/dev/null || { echo "The isolated DB group is not restricted to PostgreSQL from the runner group." >&2; exit 1; }
 jq -e --arg group "$runner_group" --arg endpoint "$endpoint_group" --arg database "$database_group" --arg prefix "$prefix_list" --arg vpc "$vpc" \
-  '.id == $group and .vpc == $vpc and .name == "vay2017-metadata-runner" and .ingress == [] and (.egress | length == 3) and ([.egress[] | select(.protocol == "tcp" and .from == 5432 and .to == 5432 and .groups == [$database] and .cidrs == [] and .prefixes == [])] | length == 1) and ([.egress[] | select(.protocol == "tcp" and .from == 443 and .to == 443 and .groups == [$endpoint] and .cidrs == [] and .prefixes == [])] | length == 1) and ([.egress[] | select(.protocol == "tcp" and .from == 443 and .to == 443 and .groups == [] and .cidrs == [] and .prefixes == [$prefix])] | length == 1)' \
-  <<<"$runner_group_json" >/dev/null || { echo "Runner security-group rules are broader or different from the reviewed three egress paths." >&2; exit 1; }
+  '.id == $group and .vpc == $vpc and .name == "vay2017-metadata-runner" and .ingress == []' \
+  <<<"$runner_group_json" >/dev/null || { echo "The runner security group identity or ingress rules differ from the reviewed configuration." >&2; exit 1; }
+jq -e --arg endpoint "$endpoint_group" --arg database "$database_group" --arg prefix "$prefix_list" '
+  length == 3 and
+  (all(.[]; .egress == true and .protocol == "tcp" and .cidr == null and .ipv6 == null)) and
+  ([.[] | select(.from == 5432 and .to == 5432 and .group == $database and .prefix == null)] | length == 1) and
+  ([.[] | select(.from == 443 and .to == 443 and .group == $endpoint and .prefix == null)] | length == 1) and
+  ([.[] | select(.from == 443 and .to == 443 and .group == null and .prefix == $prefix)] | length == 1)
+' <<<"$runner_group_rules_json" >/dev/null || { echo "Runner security-group rules are broader or different from the reviewed three egress paths." >&2; exit 1; }
 jq -e --arg group "$endpoint_group" --arg runner "$runner_group" --arg vpc "$vpc" \
   '.id == $group and .vpc == $vpc and .name == "vay2017-metadata-endpoints" and .egress == [] and (.ingress | length == 1) and .ingress[0].protocol == "tcp" and .ingress[0].from == 443 and .ingress[0].to == 443 and .ingress[0].groups == [$runner] and .ingress[0].cidrs == []' \
   <<<"$endpoint_group_json" >/dev/null || { echo "Endpoint security-group rules differ from the reviewed runner-only rule." >&2; exit 1; }
@@ -120,7 +129,7 @@ jq -e --arg prefix "$prefix_list" '
 ' <<<"$runner_route_table_json" >/dev/null || { echo "The runner subnet route table has an internet, NAT, or unexpected route." >&2; exit 1; }
 
 endpoints_json="$(aws ec2 describe-vpc-endpoints --region "$region" \
-  --filters "Name=vpc-id,Values=$vpc" "Name=tag:Purpose,Values=VAY-2043 isolated legacy metadata rehearsal" \
+  --filters "Name=vpc-id,Values=$vpc" \
   --query 'VpcEndpoints[*].{id:VpcEndpointId,state:State,type:VpcEndpointType,service:ServiceName,privateDns:PrivateDnsEnabled,subnets:SubnetIds,groups:Groups[*].GroupId,routeTables:RouteTableIds}' --output json)"
 jq -e --arg subnet "$endpoint_subnet" --arg group "$endpoint_group" --arg rt "$runner_route_table_id" '
   length == 5 and
