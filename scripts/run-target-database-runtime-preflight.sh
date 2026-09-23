@@ -135,7 +135,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-affiliate-read" || "${mode}" == *finance-expense-worker || "${mode}" == *channex-management-worker ]]; then
+  if [[ "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == *finance-expense-worker || "${mode}" == *channex-management-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -151,7 +151,7 @@ if [[ "${ca_required}" == true ]]; then
     }
   fi
   ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
-  if [[ ( "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-affiliate-read" ) && "${#ca_payload}" -gt 2100 ]]; then
+  if [[ ( "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--harden-cluster-database-acl" ) && "${#ca_payload}" -gt 2100 ]]; then
     echo "Pinned grant CA payload exceeds the reviewed ECS override budget." >&2; exit 1
   fi
 fi

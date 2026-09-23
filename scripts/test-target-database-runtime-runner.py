@@ -68,6 +68,12 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
         self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
 
+    def test_cluster_acl_hardener_pins_one_ca_and_fits_override_budget(self) -> None:
+        self.assertGreaterEqual(RUNNER.count('"${mode}" == "--harden-cluster-database-acl"'), 3)
+        hardener = (ROOT / 'scripts/harden-target-database-cluster-acl.mjs').read_bytes()
+        encoded = base64.b64encode(gzip.compress(hardener, compresslevel=9, mtime=0))
+        self.assertLessEqual(len(encoded) + 2100 + 1024, 8192)
+
     def test_expense_category_grant_reuses_pinned_ca_and_fits_override_budget(self) -> None:
         self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-expense-category-insert"'), 3)
         grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
