@@ -68,22 +68,3 @@
        - name: Check explicit confirmation
          env:
            CONFIRMATION: ${{ inputs.confirmation }}
---- a/.github/workflows/tf-plan.yml
-+++ b/.github/workflows/tf-plan.yml
-@@ -19,6 +19,7 @@
-
- jobs:
-   plan:
-+    if: github.event.pull_request.head.repo.full_name == github.repository
-     name: Plan
-     runs-on: ubuntu-latest
-
-@@ -29,7 +30,7 @@
-       - name: Configure AWS credentials
-         uses: aws-actions/configure-aws-credentials@v6
-         with:
--          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
-+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-plan
-           aws-region: ${{ env.AWS_REGION }}
-
-       - name: Setup Terraform
