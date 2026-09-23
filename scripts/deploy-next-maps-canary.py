@@ -286,7 +286,17 @@ def change_staging_worker(existing, definition, image_sha, state, meals, plan=Fa
     assert not (definition.keys() - TASK_FIELDS - {"taskDefinitionArn", "revision", "status", "requiresAttributes", "compatibilities", "registeredAt", "registeredBy", "deregisteredAt"}), "Unrecognized task settings require review"
     env = {e["name"]: e["value"] for e in container["environment"]}
     expected = {"environment": [], "secrets": []}
-    configure_channex_staging(expected, meals=meals, worker_enabled=staging_worker_value(definition), inventory=inventory, no_show=no_show)
+    # Workflow feature flags also preserve owned routes. Validate the deployed
+    # task from its own exact settings so an atomic resume can quiesce a
+    # producer and the subsequent pause can still preserve that route.
+    configure_channex_staging(
+        expected,
+        meals=env.get("PMS_CHANNEX_STAGING_MEALS_ENABLED") == "true",
+        worker_enabled=staging_worker_value(definition),
+        inventory=inventory,
+        no_show=env.get("PMS_CHANNEX_STAGING_NO_SHOW_ENABLED") == "true",
+        published_offers=env.get("PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED") == "true",
+    )
     for e in expected["environment"]:
         if e["name"] in {"PMS_CHANNEX_REVIEWS_MODE", "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE"} and e["name"] not in env:
             continue  # Older canaries default reviews to observe-only.

@@ -549,6 +549,36 @@ class WorkerStateChanges(unittest.TestCase):
             self.assertEqual(payload, expected)
             self.assertTrue(all(c.args[0] in ("ecs", "ecr") for c in calls.call_args_list))
 
+    def test_pause_accepts_preserved_route_after_resume_quiesces_meal_producer(self):
+        existing, definition = self.fixture("true", inventory=True)
+        container = definition["containerDefinitions"][0]
+        api["configure_channex_staging"](
+            container, meals=False, inventory=True,
+            published_offers=True, worker_enabled="true",
+        )
+        def aws(_service, operation, **_kwargs):
+            if operation == "describe-images":
+                return {"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]}
+            if operation == "register-task-definition":
+                return {"taskDefinition": {"taskDefinitionArn": "changed"}}
+            if operation == "update-service": return {}
+            if operation == "describe-services":
+                return {"services": [{"deployments": [{
+                    "status": "PRIMARY", "taskDefinition": "changed", "rolloutState": "COMPLETED",
+                }]}]}
+            raise AssertionError(operation)
+        calls = MagicMock(side_effect=aws)
+        fn = api["change_staging_worker"]
+        with patch.dict(fn.__globals__, {"aws": calls}):
+            fn(existing, definition, "next-" + "a" * 40, "paused", True, inventory=True)
+        payload = next(c.kwargs for c in calls.call_args_list if c.args[1] == "register-task-definition")
+        environment = {
+            e["name"]: e["value"]
+            for e in payload["containerDefinitions"][0]["environment"]
+        }
+        self.assertEqual(environment["PMS_CHANNEX_WORKER_ENABLED"], "false")
+        self.assertEqual(environment["PMS_CHANNEX_STAGING_MEALS_ENABLED"], "false")
+
     def test_old_canary_review_default_is_allowed_but_mutating_is_rejected(self):
         fn = api["change_staging_worker"]
         for field in ("PMS_CHANNEX_REVIEWS_MODE", "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE"):
@@ -589,12 +619,13 @@ class WorkerStateChanges(unittest.TestCase):
             if mutation == "duplicate": c["environment"].append({"name": "PMS_CHANNEX_WORKER_ENABLED", "value": "true"})
             if mutation == "image": c["image"] = "other@sha256:" + "c" * 64
             if mutation == "inflight": existing[0]["deployments"][0]["rolloutState"] = "IN_PROGRESS"
+            if mutation == "meals": next(e for e in c["environment"] if e["name"] == "PMS_CHANNEX_STAGING_MEALS_ENABLED")["value"] = "unexpected"
             if mutation == "globalduplicate": c["environment"].insert(0, {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "true"})
             if mutation == "unknown": definition["newTaskSetting"] = "preserve-or-reject"
             calls = MagicMock(return_value={"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]})
             with self.subTest(mutation=mutation), patch.dict(fn.__globals__, {"aws": calls}):
                 with self.assertRaises((ValueError, AssertionError)):
-                    fn(existing, definition, "next-" + "a" * 40, "paused", mutation != "meals")
+                    fn(existing, definition, "next-" + "a" * 40, "paused", True)
             self.assertTrue(all(c.args[1] == "describe-images" for c in calls.call_args_list))
 
     def test_failed_rollout_restores_previous_definition(self):
