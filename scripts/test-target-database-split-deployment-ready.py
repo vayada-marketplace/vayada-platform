@@ -161,6 +161,28 @@ class DeploymentReadinessTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_rejects_disabled_finance_export_worker_without_first_rollback_mapping(self) -> None:
+        base_secrets = {
+            "TARGET_DATABASE_URL": RUNTIME,
+            "AUTH_DATABASE_URL": IDENTITY,
+            "TARGET_DATABASE_MIGRATION_URL": OWNER,
+            "FINANCE_EXPORT_WORKER_DATABASE_URL": FINANCE_EXPORT,
+        }
+        base_environment = [
+            {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"},
+            {"name": "FINANCE_EXPORT_WORKER_PROPERTY_ID", "value": FINANCE_EXPORT_PROPERTY_ID},
+        ]
+        self.assertNotEqual(run(
+            f"{REPOSITORY}@{DIGEST}",
+            {name: value for name, value in base_secrets.items() if name != "FINANCE_EXPORT_WORKER_DATABASE_URL"},
+            environment=base_environment,
+        ).returncode, 0)
+        self.assertNotEqual(run(
+            f"{REPOSITORY}@{DIGEST}",
+            base_secrets,
+            environment=base_environment[:1],
+        ).returncode, 0)
+
     def test_accepts_only_exact_enabled_finance_export_scope(self) -> None:
         secrets = {
             "TARGET_DATABASE_URL": RUNTIME,

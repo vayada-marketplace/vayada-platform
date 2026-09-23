@@ -140,15 +140,18 @@ def main() -> None:
     if finance_value is not None and finance_value != FINANCE_EXPENSE_PARAMETER:
         fail("finance expense worker database secret mapping is unexpected")
     export_value = secrets.get("FINANCE_EXPORT_WORKER_DATABASE_URL")
-    if export_value is not None and export_value != FINANCE_EXPORT_PARAMETER:
-        fail("finance export worker database secret mapping is unexpected")
-    if export_value is not None and environment.get(
-        "FINANCE_EXPORT_WORKER_PROPERTY_ID"
-    ) != FINANCE_EXPORT_PROPERTY_ID:
-        fail("finance export worker property scope is unexpected")
     export_enabled = environment.get("FINANCE_EXPORT_WORKER_ENABLED")
+    export_property = environment.get("FINANCE_EXPORT_WORKER_PROPERTY_ID")
     export_id = environment.get("FINANCE_EXPORT_WORKER_EXPORT_ID")
-    if export_value is not None and export_enabled not in {"false", "true"}:
+    export_configured = any(
+        value is not None
+        for value in (export_value, export_enabled, export_property, export_id)
+    )
+    if export_configured and export_value != FINANCE_EXPORT_PARAMETER:
+        fail("finance export worker database secret mapping is unexpected")
+    if export_configured and export_property != FINANCE_EXPORT_PROPERTY_ID:
+        fail("finance export worker property scope is unexpected")
+    if export_configured and export_enabled not in {"false", "true"}:
         fail("finance export worker enablement state is unexpected")
     if export_enabled == "true":
         if export_value != FINANCE_EXPORT_PARAMETER:
