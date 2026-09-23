@@ -33,6 +33,9 @@ on:
       - "scripts/finance-expense-worker-database.mjs"
       - "scripts/grant-target-database-identity-runtime.mjs"
       - "scripts/provision-target-database-identity-runtime.mjs"
+      - "scripts/inspect-target-database-cluster-acl.mjs"
+      - "scripts/harden-target-database-cluster-acl.mjs"
+      - "scripts/test-target-database-cluster-acl.sh"
       - "scripts/restore-rds-admin-from-ssm.py"
       - "scripts/test_restore_rds_admin_from_ssm.py"
       - "scripts/inspect-target-database-identity-role.mjs"
@@ -107,6 +110,20 @@ jobs:
       - name: Verify scoped identity grants and denials
         run: bash scripts/test-target-database-identity-runtime-grant.sh "${{ matrix.postgres }}"
 
+  target-database-cluster-acl:
+    name: Cluster database ACL (PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        postgres: ["16", "17"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify sibling database isolation
+        run: bash scripts/test-target-database-cluster-acl.sh "${{ matrix.postgres }}"
+
   target-database-runtime-preflight:
     name: Runtime database preflight (PostgreSQL ${{ matrix.postgres }})
     runs-on: ubuntu-latest
@@ -179,9 +196,12 @@ jobs:
           node --check scripts/finance-expense-worker-database.mjs
           node --check scripts/grant-target-database-identity-runtime.mjs
           node --check scripts/provision-target-database-identity-runtime.mjs
+          node --check scripts/inspect-target-database-cluster-acl.mjs
+          node --check scripts/harden-target-database-cluster-acl.mjs
           python3 -m unittest scripts/test_restore_rds_admin_from_ssm.py
           node --check scripts/inspect-target-database-identity-role.mjs
           bash -n scripts/test-target-database-identity-runtime-grant.sh
+          bash -n scripts/test-target-database-cluster-acl.sh
           python3 scripts/test-target-database-identity-secret.py
           python3 scripts/test-target-database-runtime-preflight.py
           python3 scripts/test-target-database-runtime-runner.py

@@ -68,7 +68,7 @@ case "${mode}" in
       fi
     fi
     ;;
-  --provision-identity-role|--grant-identity-runtime|--inspect-identity-role)
+  --provision-identity-role|--grant-identity-runtime|--inspect-identity-role|--inspect-cluster-database-acl|--harden-cluster-database-acl)
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
     ca_required=true
     secret_name="TARGET_DATABASE_MIGRATION_URL"
@@ -80,6 +80,14 @@ case "${mode}" in
       secret_parameter="/vayada/prod/db-marketplace-url"
       extra_secret_name="IDENTITY_DATABASE_URL"
       extra_secret_parameter="/vayada/prod/target-database-identity-runtime-url"
+    elif [[ "${mode}" == "--inspect-cluster-database-acl" || "${mode}" == "--harden-cluster-database-acl" ]]; then
+      if [[ "${mode}" == "--inspect-cluster-database-acl" ]]; then
+        code_file="inspect-target-database-cluster-acl.mjs"
+      else
+        code_file="harden-target-database-cluster-acl.mjs"
+      fi
+      secret_name="TARGET_DATABASE_ADMIN_URL"
+      secret_parameter="/vayada/prod/db-marketplace-url"
     elif [[ "${mode}" == "--inspect-identity-role" ]]; then
       code_file="inspect-target-database-identity-role.mjs"
     else
