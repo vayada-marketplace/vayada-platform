@@ -15,8 +15,8 @@ have already been completed using these explicit steps:
 python3 scripts/create-target-database-identity-secret.py --finance-export --check
 python3 scripts/create-target-database-identity-secret.py --finance-export --create
 bash scripts/run-target-database-runtime-preflight.sh --provision-finance-export-worker
-bash scripts/run-target-database-runtime-preflight.sh --grant-finance-export-worker <reviewed-property-uuid>
-bash scripts/run-target-database-runtime-preflight.sh --preflight-finance-export-worker <reviewed-property-uuid>
+bash scripts/run-target-database-runtime-preflight.sh --grant-finance-export-worker <reviewed-property-uuid> <reviewed-export-uuid>
+bash scripts/run-target-database-runtime-preflight.sh --preflight-finance-export-worker <reviewed-property-uuid> <reviewed-export-uuid>
 bash scripts/run-target-database-runtime-preflight.sh preflight
 ```
 
