@@ -492,23 +492,31 @@ class WorkerStateChanges(unittest.TestCase):
                 fn(existing, definition, "next-" + "a" * 40, "running", True, inventory=True)
         self.assertEqual(calls.call_count, 1)
 
-    def test_published_offers_must_be_disabled_before_worker_resume(self):
+    def test_published_offers_remain_enabled_for_worker_claim(self):
         existing, definition = self.fixture("false", inventory=True)
         container = definition["containerDefinitions"][0]
-        api["configure_channex_staging"](container, meals=True, inventory=True,
-                                          worker_enabled="false", published_offers=True)
         fn = api["change_staging_worker"]
         calls = MagicMock(return_value={"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]})
         with patch.dict(fn.__globals__, {"aws": calls}):
-            with self.assertRaisesRegex(ValueError, "Disable scoped published offers"):
+            with self.assertRaisesRegex(ValueError, "Enable scoped published offers"):
                 fn(existing, definition, "next-" + "a" * 40, "running", True, plan=True, inventory=True)
-        api["configure_channex_staging"](container, meals=True, inventory=True, worker_enabled="false")
+        api["configure_channex_staging"](container, meals=True, inventory=True,
+                                          worker_enabled="false", published_offers=True)
         with patch.dict(fn.__globals__, {"aws": calls}):
             fn(existing, definition, "next-" + "a" * 40, "running", True, plan=True, inventory=True)
 
     def test_pause_resume_preserve_every_other_task_field_and_never_touch_routes(self):
-        for enabled, state, value in (("true", "paused", "false"), ("false", "running", "true")):
+        for enabled, state, value in (
+            ("true", "paused", "false"),
+            ("false", "running", "true"),
+            ("true", "running", "true"),
+        ):
             existing, definition = self.fixture(enabled, inventory=True, no_show=True)
+            if state == "running":
+                api["configure_channex_staging"](
+                    definition["containerDefinitions"][0], meals=True, inventory=True,
+                    no_show=True, published_offers=True, worker_enabled=enabled,
+                )
             before = json.loads(json.dumps(definition))
             def aws(aws_service, op, **kw):
                 if op == "describe-images": return {"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]}
@@ -523,7 +531,21 @@ class WorkerStateChanges(unittest.TestCase):
             self.assertEqual(definition, before)
             payload = next(c.kwargs for c in calls.call_args_list if c.args[1] == "register-task-definition")
             expected = {k: v for k, v in before.items() if k != "revision"}
-            next(e for e in expected["containerDefinitions"][0]["environment"] if e["name"] == "PMS_CHANNEX_WORKER_ENABLED")["value"] = value
+            expected_environment = expected["containerDefinitions"][0]["environment"]
+            next(e for e in expected_environment if e["name"] == "PMS_CHANNEX_WORKER_ENABLED")["value"] = value
+            if state == "running":
+                next(e for e in expected_environment if e["name"] == "PMS_CHANNEX_STAGING_MEALS_ENABLED")["value"] = "false"
+                expected["containerDefinitions"][0]["environment"] = [
+                    e for e in expected_environment
+                    if e["name"] != "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"
+                ]
+                final_environment = {
+                    e["name"]: e["value"]
+                    for e in expected["containerDefinitions"][0]["environment"]
+                }
+                self.assertEqual(final_environment["PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED"], "true")
+                self.assertEqual(final_environment["PMS_CHANNEX_PROVISIONING_MODE"], "mutating")
+                self.assertEqual(final_environment["PMS_CHANNEX_ARI_SYNC_MODE"], "mutating")
             self.assertEqual(payload, expected)
             self.assertTrue(all(c.args[0] in ("ecs", "ecr") for c in calls.call_args_list))
 

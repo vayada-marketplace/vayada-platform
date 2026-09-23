@@ -301,16 +301,31 @@ def change_staging_worker(existing, definition, image_sha, state, meals, plan=Fa
     assert container["image"] == f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}", "Pause/resume must retain the deployed image"
     if state == "running" and env.get("PMS_ROOM_CLOSURE_ENABLED") == "true":
         raise ValueError("Disable room closure before resuming the staging worker")
-    if state == "running" and env.get("PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED") == "true":
-        raise ValueError("Disable scoped published offers before resuming the staging worker")
+    if state == "running" and env.get("PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED") != "true":
+        raise ValueError("Enable scoped published offers before resuming the staging worker")
     value = "false" if state == "paused" else "true"
-    summary = {"workerState": state, "previousTaskDefinition": service["taskDefinition"], "imageDigest": digest, "routesUnchanged": True}
-    if plan or staging_worker_value(definition) == value:
-        print(json.dumps({**summary, "plan": plan, "unchanged": staging_worker_value(definition) == value}))
+    summary = {"workerState": state, "previousTaskDefinition": service["taskDefinition"], "imageDigest": digest, "routesUnchanged": True,
+               "auxiliaryProducersQuiesced": state == "running"}
+    unchanged = staging_worker_value(definition) == value and (
+        state == "paused" or (
+            env.get("PMS_CHANNEX_STAGING_MEALS_ENABLED") == "false"
+            and env.get("PMS_CHANNEX_STAGING_NO_SHOW_ENABLED") != "true"
+        )
+    )
+    if plan or unchanged:
+        print(json.dumps({**summary, "plan": plan, "unchanged": unchanged}))
         return
     payload = copy.deepcopy({k: v for k, v in definition.items() if k in TASK_FIELDS})
     target = next(c for c in payload["containerDefinitions"] if c["name"] == "vayada-next-api")
     next(e for e in target["environment"] if e["name"] == "PMS_CHANNEX_WORKER_ENABLED")["value"] = value
+    if state == "running":
+        # Saved-offer provisioning must remain enabled so the dedicated worker
+        # can claim it. Quiesce unrelated meal/no-show producers atomically.
+        next(e for e in target["environment"] if e["name"] == "PMS_CHANNEX_STAGING_MEALS_ENABLED")["value"] = "false"
+        target["environment"] = [
+            e for e in target["environment"]
+            if e["name"] != "PMS_CHANNEX_STAGING_NO_SHOW_ENABLED"
+        ]
     task = aws("ecs", "register-task-definition", **payload)["taskDefinition"]["taskDefinitionArn"]
     try:
         aws("ecs", "update-service", cluster=CLUSTER, service=SERVICE, taskDefinition=task)
@@ -447,15 +462,15 @@ def main():
             raise ValueError("Existing staging inventory requires --channex-staging-inventory to preserve configuration")
         has_published_offers = any(e["name"] == "PMS_CHANNEX_STAGING_PUBLISHED_OFFERS_ENABLED" and e["value"] == "true" for e in container.get("environment", []))
     published_offers = args.channex_staging_published_offers or (has_published_offers and not args.disable_channex_staging_published_offers)
-    if published_offers and (not args.channex_staging or not args.channex_staging_inventory or args.channex_worker_state != "preserve"):
-        raise ValueError("Preserving published offers requires scoped staging inventory and worker state preserve")
+    if published_offers and (not args.channex_staging or not args.channex_staging_inventory):
+        raise ValueError("Preserving published offers requires scoped staging inventory")
     if mapped_worker_database:
         require_paused_closure_service(existing, staging_definition, "Worker database mapping")
         if not args.image_digest and not args.remove:
             raise ValueError("Worker database mapping requires the reviewed image digest")
     if args.room_closure:
         require_paused_closure_service(existing, staging_definition)
-    if published_offers or args.disable_channex_staging_published_offers:
+    if (published_offers or args.disable_channex_staging_published_offers) and args.channex_worker_state != "paused":
         require_paused_closure_service(existing, staging_definition, "Published offers")
     if args.channex_worker_state != "preserve":
         if not staging_definition:
