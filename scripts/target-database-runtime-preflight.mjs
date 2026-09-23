@@ -187,6 +187,7 @@ try {
         AND format('%I.%I', namespace.nspname, relation.relname) NOT IN (
           'pms.inventory_coverage_validation_queue',
           'platform.channex_management_worker_properties',
+          'platform.finance_export_worker_properties',
           'platform.finance_expense_worker_properties',
           'platform.pricing_runtime_property_scopes'
         )
@@ -194,12 +195,15 @@ try {
     [receipt],
     "runtime_relation_read_missing",
   );
-  // The owner-managed Finance allowlist is never part of the API read surface.
+  // Owner-managed Finance allowlists are never part of the API read surface.
   await requireNoMissing(
     client,
     `SELECT relation.oid
        FROM pg_class AS relation
-      WHERE relation.oid = to_regclass('platform.finance_expense_worker_properties')
+      WHERE relation.oid IN (
+              to_regclass('platform.finance_expense_worker_properties'),
+              to_regclass('platform.finance_export_worker_properties')
+            )
         AND has_any_column_privilege(current_user, relation.oid, 'SELECT')`,
     [],
     "runtime_finance_worker_scope_read_forbidden",
