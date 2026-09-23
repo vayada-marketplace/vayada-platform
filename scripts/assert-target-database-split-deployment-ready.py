@@ -10,6 +10,8 @@ OWNER_PARAMETER = "/vayada/prod/target-database-url"
 RUNTIME_PARAMETER = "/vayada/prod/target-database-runtime-url"
 IDENTITY_PARAMETER = "/vayada/prod/target-database-identity-runtime-url"
 FINANCE_EXPENSE_PARAMETER = "/vayada/prod/target-database-finance-expense-worker-url"
+FINANCE_EXPORT_PARAMETER = "/vayada/prod/target-database-finance-export-worker-url"
+FINANCE_EXPORT_PROPERTY_ID = "65f6b2fc-c783-4963-9d6b-a85f82319769"
 PARAMETER_ARN = re.compile(
     r"^arn:aws:ssm:eu-west-1:269416271598:parameter(?P<name>/vayada/prod/[^/]+)$"
 )
@@ -84,6 +86,9 @@ def main() -> None:
     }
     if protected_names.intersection(environment_names):
         fail("database credentials must not be supplied as plaintext environment variables")
+    environment = {
+        item["name"]: str(item.get("value", "")) for item in environment_entries
+    }
     for item in environment_entries:
         name = item["name"].strip().lower()
         value = str(item.get("value", "")).strip().lower()
@@ -112,7 +117,10 @@ def main() -> None:
     secrets = {
         item["name"]: parameter_name(item.get("valueFrom")) for item in secret_entries
     }
-    reviewed_database_secrets = protected_names | {"FINANCE_EXPENSE_WORKER_DATABASE_URL"}
+    reviewed_database_secrets = protected_names | {
+        "FINANCE_EXPENSE_WORKER_DATABASE_URL",
+        "FINANCE_EXPORT_WORKER_DATABASE_URL",
+    }
     for name, value in secrets.items():
         normalized_name = name.strip().lower()
         normalized_value = (value or "").strip().lower()
@@ -130,6 +138,13 @@ def main() -> None:
     finance_value = secrets.get("FINANCE_EXPENSE_WORKER_DATABASE_URL")
     if finance_value is not None and finance_value != FINANCE_EXPENSE_PARAMETER:
         fail("finance expense worker database secret mapping is unexpected")
+    export_value = secrets.get("FINANCE_EXPORT_WORKER_DATABASE_URL")
+    if export_value is not None and export_value != FINANCE_EXPORT_PARAMETER:
+        fail("finance export worker database secret mapping is unexpected")
+    if export_value is not None and environment.get(
+        "FINANCE_EXPORT_WORKER_PROPERTY_ID"
+    ) != FINANCE_EXPORT_PROPERTY_ID:
+        fail("finance export worker property scope is unexpected")
     owner_refs = {name for name, value in secrets.items() if value == OWNER_PARAMETER}
     runtime_refs = {name for name, value in secrets.items() if value == RUNTIME_PARAMETER}
     identity_refs = {name for name, value in secrets.items() if value == IDENTITY_PARAMETER}

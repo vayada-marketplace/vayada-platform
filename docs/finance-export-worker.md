@@ -6,9 +6,10 @@ and policy-digest preflight in
 `apps/api/dist/jobs/financeExportWorkerBoundary.js`. The platform runner imports
 that module from the reviewed immutable app image.
 
-Nothing in this change provisions a role, maps a secret by default, or enables
-Financials. After the app migration and image are reviewed, the bounded rollout
-uses these explicit steps:
+This mapping-only stage maps the dedicated export-worker secret and reviewed
+property by default, while `FINANCE_EXPORT_WORKER_ENABLED` remains hardcoded to
+`false`. It assumes the role, secret, grant, and preflights have already been
+completed using these explicit steps:
 
 ```sh
 python3 scripts/create-target-database-identity-secret.py --finance-export --check
@@ -25,11 +26,13 @@ The absent-only SSM secret is
 Channex worker, API runtime, identity runtime, or migration owner. The one-shot
 grant refuses drift or a different existing property scope.
 
-Review Terraform with `finance_export_worker_secret_mapped=true` and the same
-`finance_export_worker_property_id`; the ECS task still sets
+Apply Terraform with the reviewed default property UUID; the ECS task still sets
 `FINANCE_EXPORT_WORKER_ENABLED=false`. Verify the exact source SHA, image digest,
 task-definition revision, secret mapping, worker preflight, and unchanged general
-API runtime preflight before the separately reviewed enablement revision.
+API runtime preflight before the separately reviewed enablement revision. To roll
+back this stage, set `finance_export_worker_secret_mapped=false` and
+`finance_export_worker_property_id=""`, then apply while the worker remains
+disabled.
 
 During the exclusive VAY-1138 window, enable one task only for existing export
 `f3429f38-b462-4453-b7f1-d901fc86ebfa`. Do not enqueue another export. Rollback
