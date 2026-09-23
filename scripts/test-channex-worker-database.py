@@ -83,6 +83,13 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
             encoded = base64.b64encode(gzip.compress((ROOT / 'scripts' / filename).read_bytes(), compresslevel=9, mtime=0))
             self.assertLessEqual(len(encoded)+2100+1400,8192)
 
+    def test_grant_runner_replaces_public_function_execute_with_direct_role_grants(self):
+        runner = (ROOT / "scripts/channex-management-worker-database.mjs").read_text()
+        self.assertIn("channexManagementWorkerFunctions", runner)
+        self.assertIn("channex_worker_function_owner_required", runner)
+        self.assertIn("REVOKE EXECUTE ON FUNCTION", runner)
+        self.assertIn("GRANT EXECUTE ON FUNCTION", runner)
+
 
 if __name__ == "__main__":
     unittest.main()

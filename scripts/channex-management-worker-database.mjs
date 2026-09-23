@@ -1,5 +1,5 @@
 import pg from "pg";
-import { assertChannexManagementWorkerBoundary } from "/app/apps/api/dist/jobs/channexManagementWorkerBoundary.js";
+import { assertChannexManagementWorkerBoundary, channexManagementWorkerFunctions } from "/app/apps/api/dist/jobs/channexManagementWorkerBoundary.js";
 
 import { channexManagementWorkerPrivileges, CHANNEX_MANAGEMENT_WORKER_ROLE as role } from "/app/apps/api/dist/jobs/channexManagementWorkerPrivileges.js";
 
@@ -25,6 +25,12 @@ try {
     const names = Object.keys(channexManagementWorkerPrivileges);
     const owned = (await client.query("SELECT count(*)::int AS count FROM pg_class WHERE oid=ANY($1::regclass[]) AND relowner=(SELECT oid FROM pg_roles WHERE rolname=current_user)",[names])).rows[0];
     if (owned.count !== names.length) throw new Error("channex_worker_table_owner_required");
+    const ownedFunctions = (await client.query("SELECT count(*)::int AS count FROM pg_proc WHERE oid=ANY($1::regprocedure[]) AND proowner=(SELECT oid FROM pg_roles WHERE rolname=current_user)",[channexManagementWorkerFunctions])).rows[0];
+    if (ownedFunctions.count !== channexManagementWorkerFunctions.length) throw new Error("channex_worker_function_owner_required");
+    for (const functionName of channexManagementWorkerFunctions) {
+      await client.query(`REVOKE EXECUTE ON FUNCTION ${functionName} FROM PUBLIC`);
+      await client.query(`GRANT EXECUTE ON FUNCTION ${functionName} TO ${role}`);
+    }
     await assertChannexManagementWorkerBoundary(client,{allowMissingGrants:true});
     await client.query("LOCK TABLE platform.channex_management_worker_properties IN EXCLUSIVE MODE");
     const scope = (await client.query("SELECT property_id::text FROM platform.channex_management_worker_properties")).rows;
