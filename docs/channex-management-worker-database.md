@@ -2,8 +2,8 @@
 
 This adds a reviewed preparation path; no credential, grant, mapping, or worker
 activation is applied by merging. Keep the scoped canary and ARI scheduler paused.
-The app image must contain migrations0407/0408, the exact worker matrix, boundary
-preflight, and startup gate. Coordinate migration0409 with Finance worker work.
+The app image must contain migrations0407/0408/0410, the exact worker matrix,
+boundary preflight, and startup gate. Migration0409 remains owned by Finance.
 
 The fixed non-owner login is `vayada_next_channex_management_worker`; its SSM
 SecureString is `/vayada/prod/target-database-channex-management-worker-url`.
@@ -39,13 +39,13 @@ deployments. The deployment verifies the image can load the worker modules,
 then attests actual ECS secret references, property/staging/pause configuration,
 and every running task's immutable image digest before switching routes.
 Mapping does not enable the worker. Existing published-offer resume guards stay
-in place pending resolution of the availability correlation blocker.
+in place until the exact image containing migration0410 is deployed and verified.
 
 Local evidence: PG16/17 exact-role app tests cover creation, closed ARI,
 activation, sync availability receipt/reconciliation, scheduler, retry/dead-letter,
 and denied unrelated writes. The unchanged general API preflight passes with
 its own role and no worker grants. Platform tests use mocks and a compiled local
 image probe; no AWS calls, deployed secret verification or provider writes were
-performed. Migration0320 currently rejects a provision job that needs fresh
-availability with23514, `Active room mapping and correlated sync job required`.
-Record/fix that blocker separately before scheduling an exclusive provider smoke.
+performed. Migration0410 admits provision availability only when the locked
+published-offer room exactly matches the active mapping; deploy and preflight
+that reviewed revision before scheduling an exclusive provider smoke.
