@@ -31,13 +31,17 @@ docker run --detach --rm \
   --env POSTGRES_PASSWORD=postgres \
   "postgres:${postgres_version}" >/dev/null
 
-for _ in {1..30}; do
-  if docker exec "${database_container}" pg_isready -U postgres >/dev/null 2>&1; then
-    break
+ready_checks=0
+for _ in {1..60}; do
+  if docker exec "${database_container}" psql -U postgres -Atqc "SELECT 1" >/dev/null 2>&1; then
+    ready_checks=$((ready_checks + 1))
+    [[ "${ready_checks}" -ge 2 ]] && break
+  else
+    ready_checks=0
   fi
   sleep 1
 done
-docker exec "${database_container}" pg_isready -U postgres >/dev/null
+[[ "${ready_checks}" -ge 2 ]] || { echo "PostgreSQL did not become stably ready" >&2; exit 1; }
 
 docker exec -i "${database_container}" psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
 CREATE ROLE legacy_owner LOGIN PASSWORD 'owner';
