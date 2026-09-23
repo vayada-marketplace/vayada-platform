@@ -1,6 +1,8 @@
 # Staged platform writer admission (VAY-2029)
 
-This foundation is **dormant**: the checked-in `infra/platform_writer_boundary.auto.tfvars.json` has bootstrap and enforcement false and no revocation cutoff. Merging it does not install a fence, create roles, change workflow credentials/environments, or enable coordinated deployment. Live changes require exact reviewed approval and a clean Terraform plan.
+This revision selects **bootstrap only**: `bootstrap_plan_role: true`, `enforce_trust: false`, `revoke_before: null`. Applying it creates the plan role, its inline read policy, the boundary metadata policy and its attachment to the mutation role. It does not install the old-writer fence, change workflow credentials/environments, or enable coordinated deployment.
+
+**Do not merge this bootstrap selector before the authorized operator applies the exact reviewed clean plan.** A merge triggers ordinary Terraform Apply, whose identity cannot bootstrap these IAM resources. First review the PR plan; then prepare and approve the matching operator plan with current inputs, apply it, verify readiness, and merge the durable selector promptly under a writer pause. Do not run an older ordinary Apply configuration between bootstrap and that merge. The merge-triggered Apply also performs SES writes and ECS roll-forwards after Terraform; the writer pause and exact approval must account for that full workflow even if Terraform is then a no-op. Live changes require exact reviewed approval; no apply is authorized by preparation of this PR.
 
 ## Boundary
 
