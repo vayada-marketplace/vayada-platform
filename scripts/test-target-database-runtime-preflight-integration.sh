@@ -87,6 +87,7 @@ CREATE TABLE booking.affiliate_original_booking_bindings (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_records (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_revocations (id uuid PRIMARY KEY);
 CREATE TABLE platform.channex_management_worker_properties (property_id uuid PRIMARY KEY);
+CREATE TABLE platform.finance_expense_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.pricing_runtime_property_scopes (database_login name PRIMARY KEY);
 CREATE TABLE pms.inventory_coverage_validation_queue (id uuid PRIMARY KEY);
 CREATE TABLE vayada_migration_evidence.database_attestations (id uuid PRIMARY KEY);
@@ -453,6 +454,16 @@ if [[ "${postgres_version}" == "17" ]]; then
     "REVOKE MAINTAIN ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
 fi
 
+run_preflight | grep -F '"status":"PASS"' >/dev/null
+
+# Finance worker scope remains private even when a table or column grant leaks.
+for privilege in 'SELECT' 'SELECT (property_id)'; do
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT ${privilege} ON platform.finance_expense_worker_properties TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_finance_worker_scope_read_forbidden
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE ${privilege} ON platform.finance_expense_worker_properties FROM vayada_next_api_runtime" >/dev/null
+done
 run_preflight | grep -F '"status":"PASS"' >/dev/null
 
 docker exec "${database_container}" psql -U postgres -c \
