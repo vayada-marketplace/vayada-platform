@@ -36,6 +36,7 @@ REVOKE CONNECT, CREATE, TEMPORARY ON DATABASE identity_sibling FROM PUBLIC;
 CREATE SCHEMA identity AUTHORIZATION legacy_owner;
 CREATE SCHEMA platform AUTHORIZATION legacy_owner;
 CREATE SCHEMA booking AUTHORIZATION legacy_owner;
+CREATE SCHEMA hotel_catalog AUTHORIZATION legacy_owner;
 SET ROLE legacy_owner;
 DO $fixture$
 DECLARE name text;
@@ -65,6 +66,7 @@ CREATE TABLE platform.dead_letter_events (id integer PRIMARY KEY, source_kind te
   resource_product text NOT NULL, resource_type text NOT NULL,
   webhook_event_id integer REFERENCES platform.external_webhook_events(id));
 CREATE TABLE booking.guest_bookings (id integer PRIMARY KEY);
+CREATE TABLE hotel_catalog.properties (id integer PRIMARY KEY);
 ALTER TABLE platform.external_webhook_events ENABLE ROW LEVEL SECURITY;
 CREATE POLICY identity_runtime_scope ON platform.external_webhook_events TO PUBLIC
   USING (current_user <> 'vayada_next_identity_runtime' OR provider = 'workos');
@@ -227,12 +229,15 @@ docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c "INSERT INTO platform.external_webhook_events (id, provider) VALUES (1, 'workos'), (2, 'stripe')" >/dev/null
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c 'INSERT INTO booking.guest_bookings (id) VALUES (1)' >/dev/null
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'INSERT INTO hotel_catalog.properties (id) VALUES (1)' >/dev/null
 
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 SET ROLE vayada_next_identity_runtime;
 UPDATE identity.staff_invitations SET provider = 'workos' WHERE id = 1;
 SELECT id FROM identity.staff_invitations WHERE id = 1 FOR UPDATE;
 UPDATE platform.external_webhook_events SET provider = 'workos' WHERE id = 1;
+SELECT id FROM hotel_catalog.properties WHERE id = 1;
 INSERT INTO platform.jobs (id, queue_name, job_type, resource_product, resource_type)
   VALUES (1, 'pms-inbox', 'pms.inbox.assignment.reconcile', 'pms', 'inbox_assignment');
 SQL
@@ -244,6 +249,11 @@ fi
 if docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c 'SET ROLE vayada_next_identity_runtime; UPDATE booking.guest_bookings SET id = 2 WHERE id = 1' >/dev/null 2>&1; then
   echo 'booking write unexpectedly allowed' >&2
+  exit 1
+fi
+if docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'SET ROLE vayada_next_identity_runtime; UPDATE hotel_catalog.properties SET id = 2 WHERE id = 1' >/dev/null 2>&1; then
+  echo 'hotel catalog write unexpectedly allowed' >&2
   exit 1
 fi
 if docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \

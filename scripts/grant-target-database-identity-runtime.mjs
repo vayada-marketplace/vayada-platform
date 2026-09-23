@@ -4,6 +4,7 @@ import pg from "pg";
 // LOGIN role must exist before this owner-only grant runner is invoked.
 const role = "vayada_next_identity_runtime";
 const privileges = new Map([
+  ["hotel_catalog.properties", "SELECT"],
   ["identity.users", "SELECT, INSERT, UPDATE"],
   ["identity.external_identities", "SELECT, INSERT, UPDATE"],
   ["identity.organizations", "SELECT, INSERT, UPDATE"],
@@ -208,7 +209,7 @@ try {
   if (sequenceExcess.rowCount) throw new Error("identity_role_existing_sequence_privilege");
 
   await client.query("BEGIN");
-  await client.query("GRANT USAGE ON SCHEMA identity, platform TO vayada_next_identity_runtime");
+  await client.query("GRANT USAGE ON SCHEMA hotel_catalog, identity, platform TO vayada_next_identity_runtime");
   for (const [table, grants] of privileges) {
     await client.query(`GRANT ${grants} ON ${table} TO vayada_next_identity_runtime`);
   }
