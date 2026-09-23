@@ -73,24 +73,19 @@ export async function collectMetadata(connect, identity, now = new Date().toISOS
   const {
     restoreInstanceId,
     sourceSnapshotId,
-    restoreEventId,
-    restoreEventTime,
     restoreResourceId,
     restoreInstanceArn,
     restoreAttestationChecksum,
     imageDigest,
     scannerSourceChecksum,
   } = identity;
-  if (!/^vay2017-legacy-rehearsal-20260921$/.test(restoreInstanceId)) {
+  if (restoreInstanceId !== 'vay2017-metadata-rehearsal-isolated-20260923') {
     throw new Error('restore_identity_invalid');
   }
   if (!/^vay2017-legacy-source-freeze-20260920$/.test(sourceSnapshotId)) {
     throw new Error('snapshot_identity_invalid');
   }
-  if (restoreEventId !== '6c80019b-26bd-460c-8750-5a950bf48441' || restoreEventTime !== '2026-09-20T16:19:33Z') {
-    throw new Error('restore_attestation_invalid');
-  }
-  if (restoreResourceId !== 'db-MHCPB2UKUGKW6FLKDBQC4RQWJQ' || restoreInstanceArn !== 'arn:aws:rds:eu-west-1:269416271598:db:vay2017-legacy-rehearsal-20260921') {
+  if (!/^db-[A-Z0-9]+$/.test(restoreResourceId) || restoreInstanceArn !== `arn:aws:rds:eu-west-1:269416271598:db:${restoreInstanceId}`) {
     throw new Error('restore_resource_identity_invalid');
   }
   if (!/^sha256:[a-f0-9]{64}$/.test(imageDigest)) {
@@ -183,8 +178,6 @@ export async function collectMetadata(connect, identity, now = new Date().toISOS
     collectedAt: now,
     sourceSnapshotId,
     restoreInstanceId,
-    restoreEventId,
-    restoreEventTime,
     restoreResourceId,
     restoreInstanceArn,
     restoreAttestationChecksum,
@@ -206,8 +199,6 @@ async function main() {
     'VAY2017_DB_PASSWORD',
     'VAY2017_RESTORE_INSTANCE_ID',
     'VAY2017_SOURCE_SNAPSHOT_ID',
-    'VAY2017_RESTORE_EVENT_ID',
-    'VAY2017_RESTORE_EVENT_TIME',
     'VAY2017_RESTORE_RESOURCE_ID',
     'VAY2017_RESTORE_INSTANCE_ARN',
     'VAY2017_RESTORE_ATTESTATION_CHECKSUM',
@@ -240,8 +231,6 @@ async function main() {
     const artifact = await collectMetadata(connect, {
       restoreInstanceId: process.env.VAY2017_RESTORE_INSTANCE_ID,
       sourceSnapshotId: process.env.VAY2017_SOURCE_SNAPSHOT_ID,
-      restoreEventId: process.env.VAY2017_RESTORE_EVENT_ID,
-      restoreEventTime: process.env.VAY2017_RESTORE_EVENT_TIME,
       restoreResourceId: process.env.VAY2017_RESTORE_RESOURCE_ID,
       restoreInstanceArn: process.env.VAY2017_RESTORE_INSTANCE_ARN,
       restoreAttestationChecksum: process.env.VAY2017_RESTORE_ATTESTATION_CHECKSUM,

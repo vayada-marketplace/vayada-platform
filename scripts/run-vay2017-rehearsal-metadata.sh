@@ -5,14 +5,11 @@ readonly region="eu-west-1"
 readonly account="269416271598"
 readonly machine_arn="arn:aws:states:eu-west-1:269416271598:stateMachine:vay2017-metadata-inventory"
 readonly snapshot="vay2017-legacy-source-freeze-20260920"
-readonly restore="vay2017-legacy-rehearsal-20260921"
-readonly restore_event_id="6c80019b-26bd-460c-8750-5a950bf48441"
-readonly restore_event_time="2026-09-20T16:19:33Z"
-readonly restore_resource_id="db-MHCPB2UKUGKW6FLKDBQC4RQWJQ"
-readonly restore_instance_arn="arn:aws:rds:eu-west-1:269416271598:db:vay2017-legacy-rehearsal-20260921"
+readonly restore="vay2017-metadata-rehearsal-isolated-20260923"
+readonly restore_instance_arn="arn:aws:rds:eu-west-1:269416271598:db:vay2017-metadata-rehearsal-isolated-20260923"
 readonly image_digest="sha256:a6f1001b1713e5f86e52cf757b3e67c794ec936639273dc041cedc7b95ea7b3c"
 readonly script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly attestation_file="$script_dir/fixtures/vay2017-restore-attestation.json"
+readonly attestation_file="$script_dir/fixtures/vay2017-isolated-restore-plan.json"
 readonly attestation_checksum="$(shasum -a 256 "$attestation_file" | awk '{print $1}')"
 readonly scanner_source_checksum="$(shasum -a 256 "$(dirname "$0")/vay2017-rehearsal-metadata.mjs" | awk '{print $1}')"
 readonly artifact_path="${ARTIFACT_PATH:-migration-inventory.json}"
@@ -77,14 +74,11 @@ done
 }
 artifact_json="${artifact_line#VAY2017_METADATA_ARTIFACT=}"
 jq -e --arg snapshot "$snapshot" --arg restore "$restore" --arg digest "$image_digest" --arg source_checksum "$scanner_source_checksum" \
-  --arg event_id "$restore_event_id" --arg event_time "$restore_event_time" --arg resource_id "$restore_resource_id" \
   --arg instance_arn "$restore_instance_arn" --arg attestation_checksum "$attestation_checksum" '
   .artifactVersion == 1 and
   .sourceSnapshotId == $snapshot and
   .restoreInstanceId == $restore and
-  .restoreEventId == $event_id and
-  .restoreEventTime == $event_time and
-  .restoreResourceId == $resource_id and
+  (.restoreResourceId | test("^db-[A-Z0-9]+$")) and
   .restoreInstanceArn == $instance_arn and
   .restoreAttestationChecksum == $attestation_checksum and
   .imageDigest == $digest and
@@ -94,7 +88,7 @@ jq -e --arg snapshot "$snapshot" --arg restore "$restore" --arg digest "$image_d
   .databases as $databases |
   ($databases | type == "array") and
   (([$databases[].tables[].rowCount | select(type == "string" and test("^[0-9]+$"))] | length) == ([$databases[].tables[]] | length)) and
-  (keys | sort == ["artifactVersion","collectedAt","databases","imageDigest","queryChecksum","queryVersion","restoreAttestationChecksum","restoreEventId","restoreEventTime","restoreInstanceArn","restoreInstanceId","restoreResourceId","rowCountSemantics","scannerSourceChecksum","schemaFingerprint","sourceSnapshotId"])
+  (keys | sort == ["artifactVersion","collectedAt","databases","imageDigest","queryChecksum","queryVersion","restoreAttestationChecksum","restoreInstanceArn","restoreInstanceId","restoreResourceId","rowCountSemantics","scannerSourceChecksum","schemaFingerprint","sourceSnapshotId"])
 ' <<<"$artifact_json" >/dev/null || {
   echo "The metadata artifact failed identity or content validation." >&2
   exit 1

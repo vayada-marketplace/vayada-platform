@@ -1,0 +1,16 @@
+{
+  "attestationVersion": 1,
+  "accountId": "269416271598",
+  "region": "eu-west-1",
+  "sourceDatabaseId": "vayada-database",
+  "sourceSnapshotId": "vay2017-legacy-source-freeze-20260920",
+  "restoreInstanceId": "vay2017-metadata-rehearsal-isolated-20260923",
+  "restoreEngine": "postgres",
+  "restoreEngineVersion": "17.9",
+  "restoreStorageEncrypted": true,
+  "restorePubliclyAccessible": false,
+  "restoreAvailabilityZone": "eu-west-1a",
+  "targetVpcCidr": "10.230.0.0/24",
+  "credentialManagement": "RDS-managed AWS Secrets Manager master credential",
+  "verificationMethod": "Dedicated VPC restore from the immutable source snapshot; verify the created RDS resource identity before running the inventory."
+}

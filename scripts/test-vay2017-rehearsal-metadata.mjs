@@ -12,12 +12,10 @@ import {
 } from './vay2017-rehearsal-metadata.mjs';
 
 const identity = {
-  restoreInstanceId: 'vay2017-legacy-rehearsal-20260921',
+  restoreInstanceId: 'vay2017-metadata-rehearsal-isolated-20260923',
   sourceSnapshotId: 'vay2017-legacy-source-freeze-20260920',
-  restoreEventId: '6c80019b-26bd-460c-8750-5a950bf48441',
-  restoreEventTime: '2026-09-20T16:19:33Z',
-  restoreResourceId: 'db-MHCPB2UKUGKW6FLKDBQC4RQWJQ',
-  restoreInstanceArn: 'arn:aws:rds:eu-west-1:269416271598:db:vay2017-legacy-rehearsal-20260921',
+  restoreResourceId: 'db-NEWISOLATEDRESTORE123456',
+  restoreInstanceArn: 'arn:aws:rds:eu-west-1:269416271598:db:vay2017-metadata-rehearsal-isolated-20260923',
   restoreAttestationChecksum: 'c'.repeat(64),
   imageDigest: `sha256:${'a'.repeat(64)}`,
   scannerSourceChecksum: 'b'.repeat(64),
@@ -75,8 +73,6 @@ test('metadata collection inventories every database and empty schema with exact
   assert.match(artifact.rowCountSemantics, /exact COUNT\(\*\)/);
   assert.equal(artifact.imageDigest, identity.imageDigest);
   assert.equal(artifact.scannerSourceChecksum, identity.scannerSourceChecksum);
-  assert.equal(artifact.restoreEventId, identity.restoreEventId);
-  assert.equal(artifact.restoreEventTime, identity.restoreEventTime);
   assert.equal(artifact.restoreResourceId, identity.restoreResourceId);
   assert.equal(artifact.restoreInstanceArn, identity.restoreInstanceArn);
   assert.equal(artifact.restoreAttestationChecksum, identity.restoreAttestationChecksum);
@@ -91,7 +87,6 @@ test('wrong restore, snapshot, and image identities fail before queries', async 
   for (const change of [
     { restoreInstanceId: 'vayada-database' },
     { sourceSnapshotId: 'another-snapshot' },
-    { restoreEventId: 'unverified-event' },
     { imageDigest: 'sha256:latest' },
   ]) {
     const calls = [];
@@ -121,24 +116,32 @@ test('infrastructure keeps execution fixed and network access private and narrow
   const lane = await readFile(new URL('../docs/vay2017-metadata-infrastructure-lane.md', import.meta.url), 'utf8');
   const workflow = await readFile(new URL('../.github/workflows/vay2017-metadata-inventory.yml', import.meta.url), 'utf8');
   const runner = await readFile(new URL('./run-vay2017-rehearsal-metadata.sh', import.meta.url), 'utf8');
-  const attestation = JSON.parse(await readFile(new URL('./fixtures/vay2017-restore-attestation.json', import.meta.url), 'utf8'));
+  const attestation = JSON.parse(await readFile(new URL('./fixtures/vay2017-isolated-restore-plan.json', import.meta.url), 'utf8'));
   assert.match(tf, /AssignPublicIp\s*=\s*"DISABLED"/);
-  assert.match(tf, /resource "aws_route_table_association" "vay2017_rehearsal_private"/);
-  assert.match(tf, /route_table_ids\s*=\s*\[aws_route_table\.vay2017_rehearsal_private\.id\]/);
+  assert.match(tf, /resource "aws_route_table_association" "vay2017_runner_private"/);
+  assert.match(tf, /route_table_ids\s*=\s*\[aws_route_table\.vay2017_runner_private\.id\]/);
+  assert.match(tf, /resource "aws_db_instance" "vay2017_isolated_restore"/);
+  assert.match(tf, /snapshot_identifier\s*=\s*local\.vay2017_rehearsal_snapshot_id/);
+  assert.match(tf, /manage_master_user_password\s*=\s*true/);
+  assert.match(tf, /lifecycle\s*\{\s*prevent_destroy\s*=\s*true/s);
+  assert.match(tf, /db_subnet_group_name\s*=\s*aws_db_subnet_group\.vay2017_isolated_restore\.name/);
+  assert.match(tf, /vpc_security_group_ids\s*=\s*\[aws_security_group\.vay2017_rehearsal_database\.id\]/);
+  assert.doesNotMatch(tf, /vay2017-legacy-rehearsal-20260921/);
   assert.match(tf, /resource "aws_vpc_endpoint" "vay2017_interface"/);
   assert.match(tf, /resource "aws_vpc_security_group_egress_rule" "vay2017_runner_postgres"/);
   assert.match(tf, /resource "aws_vpc_security_group_egress_rule" "vay2017_runner_https"/);
   assert.match(tf, /resource "aws_vpc_security_group_egress_rule" "vay2017_runner_ecr_s3"/);
   assert.doesNotMatch(tf, /0\.0\.0\.0\/0|nat_gateway|\bpublic_ip\s*=\s*true|assign_public_ip\s*=\s*true/i);
-  assert.match(tf, /masterUserSecretArn/);
+  assert.match(tf, /master_user_secret\[0\]\.secret_arn/);
   assert.match(tf, /"secretsmanager:GetSecretValue"/);
   assert.doesNotMatch(tf, /ec2:Describe|rds:Describe|ecr:DescribeImages/);
   assert.doesNotMatch(tf, /data "aws_(vpc|db_instance|db_snapshot|ecr_repository|prefix_list)"/);
-  assert.match(tf, /vay2017-legacy-rehearsal-20260921/);
+  assert.match(tf, /vay2017-metadata-rehearsal-isolated-20260923/);
   assert.match(tf, /vay2017-legacy-source-freeze-20260920/);
-  assert.match(tf, /6c80019b-26bd-460c-8750-5a950bf48441/);
-  assert.match(tf, /filesha256\([\s\S]*vay2017-restore-attestation\.json/);
-  assert.doesNotMatch(tf, /cloudtrail:LookupEvents/);
+  assert.match(tf, /filesha256\([\s\S]*vay2017-isolated-restore-plan\.json/);
+  assert.doesNotMatch(tf, /aws_vpc_peering_connection|aws_route\s+"|vay2017_rehearsal_source_vpc/);
+  assert.match(tf, /10\.230\.0\.0\/24/);
+  assert.doesNotMatch(tf, /0\.0\.0\.0\/0|nat_gateway|publicly_accessible\s*=\s*true/i);
   assert.doesNotMatch(tf, /target-database-url|target-database-runtime-url|db-marketplace-url|vayada-database\.c7eiqkoq4as4/);
   assert.match(tf, /ResultSelector[\s\S]*taskArn\.\$[\s\S]*ResultPath/);
   assert.doesNotMatch(tf, /Overrides|commandOverrides|ecs:RunTask.*\*/i);
@@ -153,14 +156,15 @@ test('infrastructure keeps execution fixed and network access private and narrow
   const isolation = await readFile(new URL('./check-vay2017-rehearsal-isolation.sh', import.meta.url), 'utf8');
   assert.match(isolation, /describe-vpc-attribute/);
   assert.match(isolation, /describe-images/);
-  assert.equal(attestation.eventName, 'RestoreDBInstanceFromDBSnapshot');
-  assert.match(runner, /restoreAttestationChecksum/);
-  assert.equal(attestation.eventId, identity.restoreEventId);
-  assert.equal(attestation.eventTime, identity.restoreEventTime);
+  assert.match(isolation, /describe-internet-gateways/);
+  assert.match(isolation, /describe-nat-gateways/);
+  assert.match(isolation, /describe-vpc-peering-connections/);
+  assert.match(isolation, /restore still uses a shared or unexpected security group/);
+  assert.equal(attestation.sourceDatabaseId, 'vayada-database');
   assert.equal(attestation.sourceSnapshotId, identity.sourceSnapshotId);
+  assert.match(runner, /restoreAttestationChecksum/);
   assert.equal(attestation.restoreInstanceId, identity.restoreInstanceId);
-  assert.equal(attestation.restoreInstanceResourceId, identity.restoreResourceId);
-  assert.equal(attestation.restoreInstanceArn, identity.restoreInstanceArn);
+  assert.equal(attestation.targetVpcCidr, '10.230.0.0/24');
   assert.doesNotMatch(runner, /aws\s+(rds\s+modify|ec2\s+authorize|iam\s+|ecs\s+run-task)/);
   assert.match(backend, /key\s*=\s*"vay2017\/metadata-runner\/terraform\.tfstate"/);
   assert.doesNotMatch(backend, /key\s*=\s*"platform\/terraform\.tfstate"/);
