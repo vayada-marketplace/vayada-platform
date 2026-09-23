@@ -449,7 +449,7 @@ data "aws_iam_policy_document" "vay2017_github_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:vayada-marketplace/vayada-platform:environment:next"]
+      values   = ["repo:vayada-marketplace/vayada-platform:environment:vay2017-metadata-preflight"]
     }
   }
 }

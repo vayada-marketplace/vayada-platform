@@ -141,6 +141,8 @@ test('infrastructure keeps execution fixed and network access private and narrow
   assert.match(tf, /ResultSelector[\s\S]*taskArn\.\$[\s\S]*ResultPath/);
   assert.doesNotMatch(tf, /Overrides|commandOverrides|ecs:RunTask.*\*/i);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /environment: vay2017-metadata-preflight/);
+  assert.match(tf, /repo:vayada-marketplace\/vayada-platform:environment:vay2017-metadata-preflight/);
   assert.match(workflow, /role\/vayada-github-actions-vay2017-metadata/);
   assert.doesNotMatch(workflow, /vayada-github-actions-platform-deploy/);
   assert.doesNotMatch(workflow, /inputs:|workflow_call:/);

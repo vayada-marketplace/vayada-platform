@@ -15,7 +15,7 @@ jobs:
   inventory:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: next
+    environment: vay2017-metadata-preflight
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
