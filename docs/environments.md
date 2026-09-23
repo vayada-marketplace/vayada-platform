@@ -254,7 +254,7 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/cloudflare-api-token`   | platform Terraform                 |
 | `/vayada/prod/target-database-url`    | `next-api` startup migrations      |
 | `/vayada/prod/target-database-runtime-url` | `next-api` runtime            |
-| `/vayada/prod/target-database-identity-runtime-url` | future `AUTH_DATABASE_URL` (not yet created or mapped) |
+| `/vayada/prod/target-database-identity-runtime-url` | `next-api` `AUTH_DATABASE_URL` |
 | `/vayada/prod/workos-api-key`         | `next-api`                         |
 | `/vayada/prod/workos-client-id`       | `next-api`                         |
 | `/vayada/prod/workos-webhook-secret`  | `next-api`                         |
@@ -267,7 +267,7 @@ environment as:
 | Backend env var | SSM parameter or Terraform variable |
 | --- | --- |
 | `TARGET_DATABASE_URL` | `/vayada/prod/target-database-runtime-url` |
-| `AUTH_DATABASE_URL` | `/vayada/prod/target-database-runtime-url` |
+| `AUTH_DATABASE_URL` | `/vayada/prod/target-database-identity-runtime-url` |
 | `TARGET_DATABASE_MIGRATION_URL` | `/vayada/prod/target-database-url` |
 | `WORKOS_CLIENT_ID` | `/vayada/prod/workos-client-id` |
 | `WORKOS_WEBHOOK_SECRET` | `/vayada/prod/workos-webhook-secret` |
@@ -296,10 +296,9 @@ shared-table RLS migration from app PR #2530 must be deployed first. The
 grant runner refuses missing RLS or unrelated effective privileges and must
 run only from a reviewed private-network migration-owner task with verified
 RDS TLS. The identity credential may enqueue a PMS inbox reconciliation job
-but may not read or update that PMS worker's rows. Do not map the new parameter
-to `AUTH_DATABASE_URL` until the role,
-grants, restricted-role integration tests, and deployed-role canary pass; the
-current ECS mapping above remains unchanged by this grant contract.
+but may not read or update that PMS worker's rows. The dedicated parameter is
+mapped to `AUTH_DATABASE_URL` only after the role, grants, restricted-role
+integration tests, and deployed-role canary pass.
 
 After the #2530 migration is confirmed on an exact deployed next-api image,
 use `python3 scripts/create-target-database-identity-secret.py --check` to
@@ -327,9 +326,9 @@ The identity grant runner pins the current `rds-ca-rsa2048-g1` root from the
 verified regional bundle to fit ECS overrides; recheck the RDS CA before use
 after any certificate rotation.
 The role-creation step refuses an existing role and does not rotate passwords.
-A failed step leaves the SSM parameter unmapped and requires inspection rather
-than a blind retry. Restricted-role canary and a separate reviewed Terraform
-mapping change are still required before live `AUTH_DATABASE_URL` cutover.
+A failed step requires inspection rather than a blind retry. The restricted-role
+canary and reviewed Terraform mapping change are required before live
+`AUTH_DATABASE_URL` cutover.
 `--inspect-identity-role` is a read-only owner-credential diagnostic for role
 existence, role-creation ability, and database CONNECT grant authority; it
 does not provision or grant anything.
