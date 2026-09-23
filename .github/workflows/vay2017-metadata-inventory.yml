@@ -1,0 +1,39 @@
+name: VAY-2017 Metadata Inventory
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: vay2017-metadata-inventory
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: next
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-vay2017-metadata
+          aws-region: eu-west-1
+
+      - name: Verify rehearsal isolation and collect schema metadata
+        env:
+          ARTIFACT_PATH: ${{ runner.temp }}/migration-inventory.json
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: bash scripts/run-vay2017-rehearsal-metadata.sh
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: vay2017-metadata-inventory-${{ github.run_id }}
+          path: ${{ runner.temp }}/migration-inventory.json
+          if-no-files-found: error
+          retention-days: 14
