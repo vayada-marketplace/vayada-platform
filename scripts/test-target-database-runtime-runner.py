@@ -98,6 +98,25 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('var.finance_expense_worker_secret_mapped ? [', ecs)
         self.assertIn('{ name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-runtime-url" }', ecs)
 
+    def test_export_modes_use_distinct_scope_secret_and_disabled_mapping(self) -> None:
+        self.assertIn('--provision-finance-export-worker|--grant-finance-export-worker|--preflight-finance-export-worker)', RUNNER)
+        self.assertIn('export_property="$2"', RUNNER)
+        self.assertIn('provision_scope="finance_export"', RUNNER)
+        self.assertIn('secret_parameter="/vayada/prod/target-database-finance-export-worker-url"', RUNNER)
+        for filename in ('finance-export-worker-database.mjs', 'provision-target-database-identity-runtime.mjs'):
+            encoded = base64.b64encode(gzip.compress((ROOT / 'scripts' / filename).read_bytes(), compresslevel=9, mtime=0))
+            self.assertLessEqual(len(encoded) + 2100 + 1400, 8192)
+        ecs = (ROOT / 'infra/ecs.tf').read_text()
+        self.assertIn('{ name = "FINANCE_EXPORT_WORKER_ENABLED", value = "false" }', ecs)
+        self.assertIn('var.finance_export_worker_secret_mapped ? [', ecs)
+        self.assertIn('/vayada/prod/target-database-finance-export-worker-url', ecs)
+
+    def test_affiliate_read_grant_reuses_pinned_ca_and_fits_override_budget(self) -> None:
+        self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-affiliate-read"'), 3)
+        grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
+        encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
+        self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
+
     def test_cleanup_is_scoped_to_dedicated_cluster_and_log_group(self) -> None:
         self.assertIn('cluster="vayada-target-database-runtime-preflight"', RUNNER)
         self.assertIn(

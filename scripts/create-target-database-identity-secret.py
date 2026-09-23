@@ -13,12 +13,20 @@ ACCOUNT = "269416271598"
 HOST = "vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com"
 OWNER_PARAMETER = "/vayada/prod/target-database-url"
 FINANCE = "--finance-expense" in sys.argv
+EXPORT = "--finance-export" in sys.argv
 CHANNEX = "--channex-management" in sys.argv
-IDENTITY_PARAMETER = ("/vayada/prod/target-database-channex-management-worker-url" if CHANNEX else
-                      "/vayada/prod/target-database-finance-expense-worker-url" if FINANCE
-                      else "/vayada/prod/target-database-identity-runtime-url")
-ROLE = ("vayada_next_channex_management_worker" if CHANNEX else
-        "vayada_next_finance_expense_worker" if FINANCE else "vayada_next_identity_runtime")
+IDENTITY_PARAMETER = (
+    "/vayada/prod/target-database-channex-management-worker-url" if CHANNEX else
+    "/vayada/prod/target-database-finance-expense-worker-url" if FINANCE else
+    "/vayada/prod/target-database-finance-export-worker-url" if EXPORT else
+    "/vayada/prod/target-database-identity-runtime-url"
+)
+ROLE = (
+    "vayada_next_channex_management_worker" if CHANNEX else
+    "vayada_next_finance_expense_worker" if FINANCE else
+    "vayada_next_finance_export_worker" if EXPORT else
+    "vayada_next_identity_runtime"
+)
 
 
 def aws(*args):
@@ -43,9 +51,9 @@ def put_identity_parameter(parameter):
 
 
 def main():
-    if FINANCE and CHANNEX:
+    if sum((FINANCE, EXPORT, CHANNEX)) > 1:
         raise RuntimeError("conflicting_secret_scope")
-    mode = [arg for arg in sys.argv[1:] if arg not in ("--finance-expense", "--channex-management")]
+    mode = [arg for arg in sys.argv[1:] if arg not in ("--finance-expense", "--finance-export", "--channex-management")]
     if mode not in (["--check"], ["--create"]):
         raise RuntimeError("expected_check_or_create")
     if aws("sts", "get-caller-identity")["Account"] != ACCOUNT:
@@ -54,7 +62,7 @@ def main():
     url = urlsplit(owner["Parameter"]["Value"])
     if (url.scheme != "postgresql" or url.hostname != HOST or url.port != 5432 or
             url.query != "sslmode=require" or not url.path or url.fragment or
-            ((FINANCE or CHANNEX) and url.path != "/vayada_target_prod")):
+            ((FINANCE or EXPORT or CHANNEX) and url.path != "/vayada_target_prod")):
         raise RuntimeError("owner_database_url_untrusted")
     existing = aws("ssm", "describe-parameters", "--parameter-filters",
                    f"Key=Name,Option=Equals,Values={IDENTITY_PARAMETER}")
@@ -74,7 +82,12 @@ def main():
         "Tags": [
             {"Key": "Project", "Value": "vayada"},
             {"Key": "Environment", "Value": "production"},
-            {"Key": "Purpose", "Value": "VAY-2041-channex-management" if CHANNEX else "VAY-2044-finance-expense" if FINANCE else "VAY-2038-identity-runtime"},
+            {"Key": "Purpose", "Value": (
+                "VAY-2041-channex-management" if CHANNEX else
+                "VAY-2044-finance-expense" if FINANCE else
+                "VAY-2045-finance-export" if EXPORT else
+                "VAY-2038-identity-runtime"
+            )},
         ],
     })
     print(json.dumps({"status": "PASS", "mode": "create", "parameter": IDENTITY_PARAMETER}))
