@@ -12,6 +12,7 @@ readonly script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly attestation_file="$script_dir/fixtures/vay2017-isolated-restore-plan.json"
 readonly attestation_checksum="$(shasum -a 256 "$attestation_file" | awk '{print $1}')"
 readonly scanner_source_checksum="$(shasum -a 256 "$(dirname "$0")/vay2017-rehearsal-metadata.mjs" | awk '{print $1}')"
+readonly reader_function_checksum="$(shasum -a 256 "$(dirname "$0")/provision-vay2017-metadata-reader.mjs" | awk '{print $1}')"
 readonly artifact_path="${ARTIFACT_PATH:-migration-inventory.json}"
 
 for tool in aws jq shasum awk; do
@@ -84,8 +85,9 @@ done
 }
 artifact_json="${artifact_line#VAY2017_METADATA_ARTIFACT=}"
 jq -e --arg snapshot "$snapshot" --arg restore "$restore" --arg digest "$image_digest" --arg source_checksum "$scanner_source_checksum" \
+  --arg reader_function_checksum "$reader_function_checksum" \
   --arg instance_arn "$restore_instance_arn" --arg attestation_checksum "$attestation_checksum" '
-  .artifactVersion == 1 and
+  .artifactVersion == 2 and
   .sourceSnapshotId == $snapshot and
   .restoreInstanceId == $restore and
   (.restoreResourceId | test("^db-[A-Z0-9]+$")) and
@@ -93,12 +95,14 @@ jq -e --arg snapshot "$snapshot" --arg restore "$restore" --arg digest "$image_d
   .restoreAttestationChecksum == $attestation_checksum and
   .imageDigest == $digest and
   .scannerSourceChecksum == $source_checksum and
+  .readerFunctionChecksum == $reader_function_checksum and
+  .queryVersion == "v2" and
   (.queryChecksum | test("^[a-f0-9]{64}$")) and
   (.schemaFingerprint | test("^[a-f0-9]{64}$")) and
   .databases as $databases |
   ($databases | type == "array") and
   (([$databases[].tables[].rowCount | select(type == "string" and test("^[0-9]+$"))] | length) == ([$databases[].tables[]] | length)) and
-  (keys | sort == ["artifactVersion","collectedAt","databases","imageDigest","queryChecksum","queryVersion","restoreAttestationChecksum","restoreInstanceArn","restoreInstanceId","restoreResourceId","rowCountSemantics","scannerSourceChecksum","schemaFingerprint","sourceSnapshotId"])
+  (keys | sort == ["artifactVersion","collectedAt","databases","imageDigest","queryChecksum","queryVersion","readerFunctionChecksum","restoreAttestationChecksum","restoreInstanceArn","restoreInstanceId","restoreResourceId","rowCountSemantics","scannerSourceChecksum","schemaFingerprint","sourceSnapshotId"])
 ' <<<"$artifact_json" >/dev/null || {
   echo "The metadata artifact failed identity or content validation." >&2
   exit 1

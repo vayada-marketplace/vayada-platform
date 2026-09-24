@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export const QUERY_VERSION = 'v1';
+export const QUERY_VERSION = 'v2';
 
 export const DATABASES_SQL = `
 SELECT datname AS database_name
@@ -12,12 +12,14 @@ ORDER BY datname
 export const SCHEMAS_SQL = `
 SELECT nspname AS schema_name
 FROM pg_catalog.pg_namespace
-WHERE nspname <> 'information_schema' AND nspname !~ '^pg_'
+WHERE nspname <> 'information_schema'
+  AND nspname <> 'vay2017_metadata'
+  AND nspname !~ '^pg_'
 ORDER BY nspname
 `;
 
-// This query reads structural catalogs only. Exact row counts are collected
-// separately with read-only COUNT(*) queries over catalog-discovered tables.
+// This query reads structural catalogs only. Exact counts come from a fixed
+// definer function that exposes aggregates without granting table SELECT.
 export const INVENTORY_SQL = `
 SELECT
   n.nspname AS schema_name,
@@ -40,14 +42,14 @@ LEFT JOIN LATERAL (
 ) AS pk ON true
 WHERE c.relkind IN ('r', 'p')
   AND n.nspname <> 'information_schema'
+  AND n.nspname <> 'vay2017_metadata'
   AND n.nspname !~ '^pg_'
 ORDER BY n.nspname, c.relname, a.attnum
 `;
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
-export const quoteIdentifier = (value) => `"${String(value).replaceAll('"', '""')}"`;
-export const rowCountSql = (schema, table) => (
-  `SELECT count(*)::text AS row_count FROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)}`
+export const rowCountSql = () => (
+  'SELECT vay2017_metadata.count_table_rows($1, $2) AS row_count'
 );
 
 const INTERNAL_ERROR_CODES = new Set([
@@ -59,6 +61,7 @@ const INTERNAL_ERROR_CODES = new Set([
   'scanner_source_checksum_invalid',
   'restore_attestation_checksum_invalid',
   'row_count_invalid',
+  'unsupported_metadata_relation',
 ]);
 
 const NODE_CONNECTION_ERROR_CODES = new Set([
@@ -77,6 +80,8 @@ const NODE_CONNECTION_ERROR_CODES = new Set([
   'DEPTH_ZERO_SELF_SIGNED_CERT',
   'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
 ]);
+const SAFE_ERROR_NAMES = new Set(['Error', 'TypeError', 'RangeError', 'DatabaseError', 'AggregateError']);
+const SAFE_PHASES = new Set(['database-connect', 'database-discovery', 'schema-inventory', 'row-count']);
 
 async function beginReadOnly(client) {
   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
@@ -90,14 +95,27 @@ async function rollbackQuietly(client) {
   await client.query('ROLLBACK').catch(() => {});
 }
 
+async function inPhase(phase, operation) {
+  try {
+    return await operation();
+  } catch (cause) {
+    const error = new Error('metadata_read_failed', { cause });
+    error.metadataPhase = phase;
+    throw error;
+  }
+}
+
 export function sanitizeError(error) {
-  const driverCode = typeof error?.code === 'string' ? error.code : '';
+  const cause = error?.cause ?? error;
+  const driverCode = typeof cause?.code === 'string' ? cause.code : '';
   const code = /^[A-Z0-9]{5}$/.test(driverCode) || NODE_CONNECTION_ERROR_CODES.has(driverCode)
     ? driverCode
-    : typeof error?.message === 'string' && INTERNAL_ERROR_CODES.has(error.message)
-      ? error.message
+    : typeof cause?.message === 'string' && INTERNAL_ERROR_CODES.has(cause.message)
+      ? cause.message
       : 'UNKNOWN';
-  return { status: 'FAIL', stage: 'metadata-read', code };
+  const errorClass = SAFE_ERROR_NAMES.has(cause?.name) ? cause.name : 'Other';
+  const stage = SAFE_PHASES.has(error?.metadataPhase) ? error.metadataPhase : 'metadata-read';
+  return { status: 'FAIL', stage, code, errorClass };
 }
 
 export async function collectMetadata(connect, identity, now = new Date().toISOString()) {
@@ -109,6 +127,7 @@ export async function collectMetadata(connect, identity, now = new Date().toISOS
     restoreAttestationChecksum,
     imageDigest,
     scannerSourceChecksum,
+    readerFunctionChecksum,
   } = identity;
   if (restoreInstanceId !== 'vay2017-metadata-rehearsal-isolated-20260923') {
     throw new Error('restore_identity_invalid');
@@ -125,17 +144,22 @@ export async function collectMetadata(connect, identity, now = new Date().toISOS
   if (!/^[a-f0-9]{64}$/.test(scannerSourceChecksum)) {
     throw new Error('scanner_source_checksum_invalid');
   }
+  if (!/^[a-f0-9]{64}$/.test(readerFunctionChecksum)) {
+    throw new Error('reader_function_checksum_invalid');
+  }
   if (!/^[a-f0-9]{64}$/.test(restoreAttestationChecksum)) {
     throw new Error('restore_attestation_checksum_invalid');
   }
 
-  const discoveryClient = await connect('postgres');
+  const discoveryClient = await inPhase('database-connect', () => connect('postgres'));
   let databaseNames;
   try {
-    await beginReadOnly(discoveryClient);
-    const result = await discoveryClient.query(DATABASES_SQL);
-    databaseNames = result.rows.map((row) => row.database_name);
-    await discoveryClient.query('COMMIT');
+    await inPhase('database-discovery', async () => {
+      await beginReadOnly(discoveryClient);
+      const result = await discoveryClient.query(DATABASES_SQL);
+      databaseNames = result.rows.map((row) => row.database_name);
+      await discoveryClient.query('COMMIT');
+    });
   } catch (error) {
     await rollbackQuietly(discoveryClient);
     throw error;
@@ -145,11 +169,15 @@ export async function collectMetadata(connect, identity, now = new Date().toISOS
 
   const databases = [];
   for (const databaseName of databaseNames) {
-    const client = await connect(databaseName);
+    const client = await inPhase('database-connect', () => connect(databaseName));
     try {
-      await beginReadOnly(client);
-      const schemaResult = await client.query(SCHEMAS_SQL);
-      const tableResult = await client.query(INVENTORY_SQL);
+      const { schemaResult, tableResult } = await inPhase('schema-inventory', async () => {
+        await beginReadOnly(client);
+        return {
+          schemaResult: await client.query(SCHEMAS_SQL),
+          tableResult: await client.query(INVENTORY_SQL),
+        };
+      });
       const tables = [];
       for (const row of tableResult.rows) {
         let table = tables.at(-1);
@@ -183,7 +211,9 @@ export async function collectMetadata(connect, identity, now = new Date().toISOS
         await client.query("SET LOCAL statement_timeout = '15min'");
       }
       for (const table of tables) {
-        const countResult = await client.query(rowCountSql(table.schema, table.name));
+        const countResult = await inPhase('row-count', () => client.query(
+          rowCountSql(), [table.schema, table.name],
+        ));
         table.rowCount = countResult.rows[0]?.row_count ?? null;
         if (table.rowCount === null || !/^\d+$/.test(table.rowCount)) {
           throw new Error('row_count_invalid');
@@ -208,7 +238,7 @@ export async function collectMetadata(connect, identity, now = new Date().toISOS
     })),
   }));
   return {
-    artifactVersion: 1,
+    artifactVersion: 2,
     collectedAt: now,
     sourceSnapshotId,
     restoreInstanceId,
@@ -217,10 +247,11 @@ export async function collectMetadata(connect, identity, now = new Date().toISOS
     restoreAttestationChecksum,
     imageDigest,
     scannerSourceChecksum,
+    readerFunctionChecksum,
     queryVersion: QUERY_VERSION,
-    queryChecksum: sha256(`${DATABASES_SQL}\n${SCHEMAS_SQL}\n${INVENTORY_SQL}\nSELECT count(*)::text FROM <quoted-catalog-identifier>`),
+    queryChecksum: sha256(`${DATABASES_SQL}\n${SCHEMAS_SQL}\n${INVENTORY_SQL}\n${rowCountSql()}\n${readerFunctionChecksum}`),
     schemaFingerprint: sha256(JSON.stringify(schemaShape)),
-    rowCountSemantics: 'exact COUNT(*) under read-only repeatable-read transactions',
+    rowCountSemantics: 'exact COUNT(*) from the fixed count-only function under read-only repeatable-read transactions',
     databases,
   };
 }
@@ -238,6 +269,7 @@ async function main() {
     'VAY2017_RESTORE_ATTESTATION_CHECKSUM',
     'VAY2017_IMAGE_DIGEST',
     'VAY2017_SCANNER_SOURCE_CHECKSUM',
+    'VAY2017_READER_FUNCTION_CHECKSUM',
   ];
   if (required.some((key) => !process.env[key])) {
     console.error(JSON.stringify({ status: 'FAIL', stage: 'configuration', code: 'required_value_missing' }));
@@ -256,7 +288,7 @@ async function main() {
       ssl: { rejectUnauthorized: true },
       connectionTimeoutMillis: 10_000,
       statement_timeout: 30_000,
-      application_name: 'vay2017-metadata-runner-v1',
+      application_name: 'vay2017-metadata-runner-v2',
     });
     await client.connect();
     return client;
@@ -270,6 +302,7 @@ async function main() {
       restoreAttestationChecksum: process.env.VAY2017_RESTORE_ATTESTATION_CHECKSUM,
       imageDigest: process.env.VAY2017_IMAGE_DIGEST,
       scannerSourceChecksum: process.env.VAY2017_SCANNER_SOURCE_CHECKSUM,
+      readerFunctionChecksum: process.env.VAY2017_READER_FUNCTION_CHECKSUM,
     });
     console.log(`VAY2017_METADATA_ARTIFACT=${JSON.stringify(artifact)}`);
   } catch (error) {
