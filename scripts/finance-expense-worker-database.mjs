@@ -19,7 +19,14 @@ try {
   const propertyId = process.env.FINANCE_EXPENSE_WORKER_PROPERTY_ID;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(propertyId??"")) throw new Error("finance_worker_property_required");
   await client.query("BEGIN");
+  // The shared queue has a PUBLIC restrictive Channex policy. PostgreSQL checks
+  // EXECUTE on its invoker helper even when this login takes the non-Channex arm.
+  const channexScope = (await client.query(`SELECT p.oid,p.prosecdef,p.provolatile,p.proowner=(SELECT oid FROM pg_roles WHERE rolname=current_user) AS owned
+    FROM pg_proc p WHERE p.oid=to_regprocedure('platform.channex_management_worker_scope(text,text,uuid)')`)).rows[0];
+  if (!channexScope || channexScope.prosecdef || channexScope.provolatile !== "s")
+    throw new Error("finance_worker_shared_policy_helper_unsafe");
   if (grant) {
+    if (!channexScope.owned) throw new Error("finance_worker_shared_policy_helper_owner_required");
     const names = Object.keys(financeExpenseWorkerPrivileges);
     const owned = (await client.query("SELECT count(*)::int AS count FROM pg_class WHERE oid=ANY($1::regclass[]) AND relowner=(SELECT oid FROM pg_roles WHERE rolname=current_user)",[names])).rows[0];
     if (owned.count !== names.length) throw new Error("finance_worker_table_owner_required");
@@ -32,10 +39,13 @@ try {
     for (const [table,privileges] of Object.entries(financeExpenseWorkerPrivileges))
       for (const [kind,columns] of Object.entries(privileges))
         await client.query(`GRANT ${kind}${columns===true?"":`(${columns.join(",")})`} ON ${table} TO ${role}`);
+    await client.query(`GRANT EXECUTE ON FUNCTION platform.channex_management_worker_scope(text,text,uuid) TO ${role}`);
   } else {
     const login = (await client.query("SELECT current_user,session_user")).rows[0];
     if (login.current_user !== role || login.session_user !== role) throw new Error("finance_worker_login_mismatch");
   }
+  if (!(await client.query("SELECT has_function_privilege($1,$2::oid,'EXECUTE') AS allowed",[role,channexScope.oid])).rows[0]?.allowed)
+    throw new Error("finance_worker_shared_policy_helper_grant_missing");
   await assertFinanceExpenseWorkerBoundary(client,{propertyId});
   await client.query("COMMIT");
   console.log(JSON.stringify({status:"PASS",role,mode:grant?"grant":"preflight"}));
