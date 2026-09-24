@@ -139,7 +139,11 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertNotIn('{ name = "FINANCE_EXPORT_WORKER_EXPORT_ID",', ecs)
         self.assertIn('var.finance_export_worker_secret_mapped ? [', ecs)
         self.assertIn('/vayada/prod/target-database-finance-export-worker-url', ecs)
-        self.assertIn('Finance export first rollback must be disabled without an export ID while preserving the reviewed property and dedicated database secret.', ecs)
+        export_config = (ROOT / 'infra' / 'finance_export_worker.tf').read_text()
+        self.assertIn('variable "finance_export_worker_secret_mapped"', export_config)
+        self.assertIn('default     = false', export_config)
+        self.assertIn('default     = ""', export_config)
+        self.assertIn('Finance export final rollback must be disabled with no export ID, property scope, or database secret mapping.', ecs)
         self.assertIn('The next-api Financials export activation is limited to exactly one ECS task.', ecs)
 
         provisioner = (ROOT / 'scripts/provision-target-database-identity-runtime.mjs').read_text()

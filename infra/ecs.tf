@@ -571,11 +571,11 @@ resource "aws_ecs_task_definition" "services" {
         (
           lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_ENABLED", "") == "false" &&
           lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_EXPORT_ID", "") == "" &&
-          lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_PROPERTY_ID", "") == "65f6b2fc-c783-4963-9d6b-a85f82319769" &&
-          lookup({ for secret in each.value.secrets : secret.name => secret.valueFrom }, "FINANCE_EXPORT_WORKER_DATABASE_URL", "") == "/vayada/prod/target-database-finance-export-worker-url"
+          lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_PROPERTY_ID", "") == "" &&
+          lookup({ for secret in each.value.secrets : secret.name => secret.valueFrom }, "FINANCE_EXPORT_WORKER_DATABASE_URL", "") == ""
         )
       )
-      error_message = "Finance export first rollback must be disabled without an export ID while preserving the reviewed property and dedicated database secret."
+      error_message = "Finance export final rollback must be disabled with no export ID, property scope, or database secret mapping."
     }
 
     precondition {

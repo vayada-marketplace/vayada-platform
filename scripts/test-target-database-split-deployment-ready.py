@@ -161,7 +161,22 @@ class DeploymentReadinessTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_rejects_disabled_finance_export_worker_without_first_rollback_mapping(self) -> None:
+    def test_accepts_final_disabled_unmapped_finance_export_worker(self) -> None:
+        result = run(
+            f"{REPOSITORY}@{DIGEST}",
+            {
+                "TARGET_DATABASE_URL": RUNTIME,
+                "AUTH_DATABASE_URL": IDENTITY,
+                "TARGET_DATABASE_MIGRATION_URL": OWNER,
+            },
+            environment=[
+                {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"},
+                {"name": "FINANCE_EXPORT_WORKER_PROPERTY_ID", "value": ""},
+            ],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rejects_partial_disabled_finance_export_worker_mapping(self) -> None:
         base_secrets = {
             "TARGET_DATABASE_URL": RUNTIME,
             "AUTH_DATABASE_URL": IDENTITY,
@@ -181,6 +196,24 @@ class DeploymentReadinessTest(unittest.TestCase):
             f"{REPOSITORY}@{DIGEST}",
             base_secrets,
             environment=base_environment[:1],
+        ).returncode, 0)
+        self.assertNotEqual(run(
+            f"{REPOSITORY}@{DIGEST}",
+            {
+                **{name: value for name, value in base_secrets.items() if name != "FINANCE_EXPORT_WORKER_DATABASE_URL"},
+                "FINANCE_EXPORT_WORKER_DATABASE_URL": "arn:aws:ssm:us-east-1:269416271598:parameter/vayada/prod/target-database-finance-export-worker-url",
+            },
+            environment=[
+                {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"},
+                {"name": "FINANCE_EXPORT_WORKER_PROPERTY_ID", "value": ""},
+            ],
+        ).returncode, 0)
+        self.assertNotEqual(run(
+            f"{REPOSITORY}@{DIGEST}",
+            {
+                **{name: value for name, value in base_secrets.items() if name != "FINANCE_EXPORT_WORKER_DATABASE_URL"},
+                "FINANCE_EXPORT_WORKER_DATABASE_URL": "malformed-secret-reference",
+            },
         ).returncode, 0)
 
     def test_accepts_only_exact_enabled_finance_export_scope(self) -> None:
