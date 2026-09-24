@@ -10,6 +10,9 @@ OWNER_PARAMETER = "/vayada/prod/target-database-url"
 RUNTIME_PARAMETER = "/vayada/prod/target-database-runtime-url"
 IDENTITY_PARAMETER = "/vayada/prod/target-database-identity-runtime-url"
 FINANCE_EXPENSE_PARAMETER = "/vayada/prod/target-database-finance-expense-worker-url"
+FINANCE_EXPORT_PARAMETER = "/vayada/prod/target-database-finance-export-worker-url"
+FINANCE_EXPORT_PROPERTY_ID = "65f6b2fc-c783-4963-9d6b-a85f82319769"
+FINANCE_EXPORT_ID = "f3429f38-b462-4453-b7f1-d901fc86ebfa"
 PARAMETER_ARN = re.compile(
     r"^arn:aws:ssm:eu-west-1:269416271598:parameter(?P<name>/vayada/prod/[^/]+)$"
 )
@@ -56,9 +59,9 @@ def main() -> None:
     if len(primary) != 1 or primary[0].get("rolloutState") != "COMPLETED":
         fail("next-api service does not have one completed PRIMARY deployment")
     desired = service.get("desiredCount")
-    if not isinstance(desired, int) or desired < 1:
-        fail("next-api service must desire at least one task")
-    if service.get("runningCount") != desired or service.get("pendingCount") != 0:
+    if desired != 1:
+        fail("next-api service must desire exactly one task")
+    if service.get("runningCount") != 1 or service.get("pendingCount") != 0:
         fail("next-api service is not stable")
 
     task = task_document.get("taskDefinition", task_document)
@@ -84,6 +87,9 @@ def main() -> None:
     }
     if protected_names.intersection(environment_names):
         fail("database credentials must not be supplied as plaintext environment variables")
+    environment = {
+        item["name"]: str(item.get("value", "")) for item in environment_entries
+    }
     for item in environment_entries:
         name = item["name"].strip().lower()
         value = str(item.get("value", "")).strip().lower()
@@ -112,7 +118,10 @@ def main() -> None:
     secrets = {
         item["name"]: parameter_name(item.get("valueFrom")) for item in secret_entries
     }
-    reviewed_database_secrets = protected_names | {"FINANCE_EXPENSE_WORKER_DATABASE_URL"}
+    reviewed_database_secrets = protected_names | {
+        "FINANCE_EXPENSE_WORKER_DATABASE_URL",
+        "FINANCE_EXPORT_WORKER_DATABASE_URL",
+    }
     for name, value in secrets.items():
         normalized_name = name.strip().lower()
         normalized_value = (value or "").strip().lower()
@@ -130,6 +139,36 @@ def main() -> None:
     finance_value = secrets.get("FINANCE_EXPENSE_WORKER_DATABASE_URL")
     if finance_value is not None and finance_value != FINANCE_EXPENSE_PARAMETER:
         fail("finance expense worker database secret mapping is unexpected")
+    export_secret_present = "FINANCE_EXPORT_WORKER_DATABASE_URL" in secrets
+    export_value = secrets.get("FINANCE_EXPORT_WORKER_DATABASE_URL")
+    export_enabled = environment.get("FINANCE_EXPORT_WORKER_ENABLED")
+    export_property = environment.get("FINANCE_EXPORT_WORKER_PROPERTY_ID")
+    export_id = environment.get("FINANCE_EXPORT_WORKER_EXPORT_ID")
+    export_configured = export_secret_present or any(
+        value is not None
+        for value in (export_enabled, export_property, export_id)
+    )
+    if export_configured and export_enabled not in {"false", "true"}:
+        fail("finance export worker enablement state is unexpected")
+    if export_enabled == "true":
+        if export_value != FINANCE_EXPORT_PARAMETER:
+            fail("enabled finance export worker lacks its dedicated database secret")
+        if export_property != FINANCE_EXPORT_PROPERTY_ID:
+            fail("enabled finance export worker property scope is unexpected")
+        if export_id != FINANCE_EXPORT_ID:
+            fail("enabled finance export worker export scope is unexpected")
+    elif export_enabled == "false":
+        if export_id is not None:
+            fail("disabled finance export worker unexpectedly carries an export scope")
+        disabled_mapped = (
+            export_value == FINANCE_EXPORT_PARAMETER
+            and export_property == FINANCE_EXPORT_PROPERTY_ID
+        )
+        disabled_unmapped = (
+            not export_secret_present and export_property in {None, ""}
+        )
+        if not (disabled_mapped or disabled_unmapped):
+            fail("disabled finance export worker has a partial or unexpected mapping")
     owner_refs = {name for name, value in secrets.items() if value == OWNER_PARAMETER}
     runtime_refs = {name for name, value in secrets.items() if value == RUNTIME_PARAMETER}
     identity_refs = {name for name, value in secrets.items() if value == IDENTITY_PARAMETER}
@@ -183,8 +222,8 @@ def main() -> None:
         and DIGEST.fullmatch(item.get("imageDigest", ""))
     }
     running_tasks = tasks_document.get("tasks", [])
-    if tasks_document.get("failures") or len(running_tasks) != desired:
-        fail("could not inspect every running next-api task")
+    if tasks_document.get("failures") or len(running_tasks) != 1:
+        fail("expected exactly one inspected running next-api task")
     running_digests = []
     for running_task in running_tasks:
         if running_task.get("lastStatus") != "RUNNING":

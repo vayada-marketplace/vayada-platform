@@ -1,4 +1,4 @@
-# VAY-2045: mapping is a separate reviewed rollout after SSM/login/grants exist.
+# VAY-2045: terminal verification complete; keep the dedicated mapping absent.
 variable "finance_export_worker_secret_mapped" {
   type        = bool
   default     = false

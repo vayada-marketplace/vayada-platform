@@ -566,6 +566,19 @@ resource "aws_ecs_task_definition" "services" {
     create_before_destroy = true
 
     precondition {
+      condition = (
+        each.key != "next-target-backend" ||
+        (
+          lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_ENABLED", "") == "false" &&
+          lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_EXPORT_ID", "") == "" &&
+          lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_PROPERTY_ID", "") == "" &&
+          lookup({ for secret in each.value.secrets : secret.name => secret.valueFrom }, "FINANCE_EXPORT_WORKER_DATABASE_URL", "") == ""
+        )
+      )
+      error_message = "Finance export final rollback must be disabled with no export ID, property scope, or database secret mapping."
+    }
+
+    precondition {
       condition     = each.key != "next-target-backend" || trimspace(var.channex_webhook_secret) != ""
       error_message = "Next review intake requires a non-empty CHANNEX_WEBHOOK_SECRET."
     }
@@ -670,6 +683,11 @@ resource "aws_ecs_service" "services" {
 
   lifecycle {
     ignore_changes = [task_definition]
+
+    precondition {
+      condition     = each.key != "next-target-backend" || try(each.value.desired_count, 1) == 1
+      error_message = "The next-api Financials export activation is limited to exactly one ECS task."
+    }
   }
 
   tags = contains(["staging-pms-backend", "next-target-backend"], each.key) ? {} : {

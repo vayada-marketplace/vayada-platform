@@ -6,16 +6,17 @@ and policy-digest preflight in
 `apps/api/dist/jobs/financeExportWorkerBoundary.js`. The platform runner imports
 that module from the reviewed immutable app image.
 
-Nothing in this change provisions a role, maps a secret by default, or enables
-Financials. After the app migration and image are reviewed, the bounded rollout
-uses these explicit steps:
+This final rollback stage keeps `FINANCE_EXPORT_WORKER_ENABLED=false`, removes
+`FINANCE_EXPORT_WORKER_EXPORT_ID`, clears the property scope, and unmaps the
+dedicated export-worker secret. The completed rollout used these provisioning
+and preflight steps:
 
 ```sh
 python3 scripts/create-target-database-identity-secret.py --finance-export --check
 python3 scripts/create-target-database-identity-secret.py --finance-export --create
 bash scripts/run-target-database-runtime-preflight.sh --provision-finance-export-worker
-bash scripts/run-target-database-runtime-preflight.sh --grant-finance-export-worker <reviewed-property-uuid>
-bash scripts/run-target-database-runtime-preflight.sh --preflight-finance-export-worker <reviewed-property-uuid>
+bash scripts/run-target-database-runtime-preflight.sh --grant-finance-export-worker <reviewed-property-uuid> <reviewed-export-uuid>
+bash scripts/run-target-database-runtime-preflight.sh --preflight-finance-export-worker <reviewed-property-uuid> <reviewed-export-uuid>
 bash scripts/run-target-database-runtime-preflight.sh preflight
 ```
 
@@ -25,14 +26,20 @@ The absent-only SSM secret is
 Channex worker, API runtime, identity runtime, or migration owner. The one-shot
 grant refuses drift or a different existing property scope.
 
-Review Terraform with `finance_export_worker_secret_mapped=true` and the same
-`finance_export_worker_property_id`; the ECS task still sets
-`FINANCE_EXPORT_WORKER_ENABLED=false`. Verify the exact source SHA, image digest,
-task-definition revision, secret mapping, worker preflight, and unchanged general
-API runtime preflight before the separately reviewed enablement revision.
+Before applying this stage, verify the approved export is terminal and the live
+runtime is the exact reviewed first rollback: disabled, no export ID, with the
+reviewed property and dedicated secret still mapped. This apply must only clear
+the property and remove that secret mapping; it must keep the worker disabled.
 
-During the exclusive VAY-1138 window, enable one task only for existing export
-`f3429f38-b462-4453-b7f1-d901fc86ebfa`. Do not enqueue another export. Rollback
-first disables the worker and then removes its secret mapping; preserve the job,
-audit, and artifact rows. No Financials activation, payment, reservation,
-backfill, or shared-fixture mutation is authorized here.
+During the exclusive VAY-1138 window, one task processed only existing export
+`f3429f38-b462-4453-b7f1-d901fc86ebfa`; no replacement export may be enqueued.
+The first rollback disabled the worker and removed its export scope. This
+reviewed final apply sets
+`finance_export_worker_secret_mapped=false` and
+`finance_export_worker_property_id=""`. Preserve the job, audit, and artifact
+rows. No Financials activation, payment, reservation, backfill, or shared-fixture
+mutation is authorized here.
+
+The deployment readiness guard accepts the exact disabled/mapped transition
+state and the final disabled/unmapped state, while rejecting partial mappings or
+any enabled worker without the exact reviewed export ID, property, and secret.
