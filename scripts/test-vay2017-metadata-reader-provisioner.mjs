@@ -24,6 +24,7 @@ test('role is restricted and only the PG16+ admin-only creator edge is tolerated
 
 test('database receives a SCRAM verifier; Secrets Manager receives the generated password', () => {
   assert.match(source, /PASSWORD %L/); assert.match(source, /provisionRole\(discoveryClient, passwordVerifier/);
+  assert.match(source, /pg_catalog\.format\([^\n]+\$1::text, \$2::text\)/);
   const password = 'known-random-password'; const verifier = scramVerifier(password, Buffer.from('0123456789abcdef'));
   assert.match(verifier, /^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+=*\$[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*$/);
   assert.doesNotMatch(verifier, new RegExp(password));
