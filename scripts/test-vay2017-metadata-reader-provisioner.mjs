@@ -20,6 +20,10 @@ test('database receives a SCRAM verifier; Secrets Manager receives the generated
   assert.match(source, /SecretString: JSON\.stringify\(\{ username: reader, password \}\)/);
 });
 
+test('bootstrap source has no relative imports when run with Node -e', () => {
+  assert.doesNotMatch(source, /\bfrom\s+['"]\.\//);
+});
+
 test('count helper is fixed, definer-owned, and cannot expose row values', () => {
   for (const pattern of [/SECURITY DEFINER[\s\S]*SET search_path = pg_catalog, pg_temp[\s\S]*SET row_security = off/, /pg_catalog\.format\('SELECT count\(\*\)::text FROM %I\.%I'/, /c\.relkind IN \('r', 'p'\)/, /p\.proargtypes\[0\] = 'pg_catalog\.text'::pg_catalog\.regtype::oid/, /p\.proargtypes\[1\] = 'pg_catalog\.text'::pg_catalog\.regtype::oid/, /REVOKE TEMPORARY ON DATABASE .* FROM PUBLIC/, /REVOKE CONNECT ON DATABASE .* FROM PUBLIC/]) assert.match(source, pattern);
 });
