@@ -30,7 +30,11 @@ const internalCodes = new Set([
   'restore_identity_invalid', 'database_endpoint_invalid', 'reader_privilege_check_failed',
   'function_owner_lacks_select', 'database_ca_invalid',
 ]);
-const phases = new Set(['configuration', 'database-connect', 'database-discovery', 'reader-provision', 'reader-secret']);
+const phases = new Set([
+  'configuration', 'database-connect', 'database-discovery', 'reader-role-discovery',
+  'database-defaults', 'template-access', 'existing-reader-check',
+  'reader-role-credential', 'count-helper', 'reader-secret',
+]);
 function safeFailure(phase, cause) {
   const driverCode = typeof cause?.code === 'string' ? cause.code : '';
   const code = safePgCodes.has(driverCode) || safeNetworkCodes.has(driverCode)
@@ -40,7 +44,7 @@ function safeFailure(phase, cause) {
       : 'UNKNOWN';
   const names = new Set(['Error', 'TypeError', 'RangeError', 'DatabaseError', 'AggregateError', 'AccessDeniedException', 'InvalidRequestException']);
   const errorClass = names.has(cause?.name) ? cause.name : 'Other';
-  return { status: 'FAIL', stage: phases.has(phase) ? phase : 'reader-provision', code, errorClass };
+  return { status: 'FAIL', stage: phases.has(phase) ? phase : 'reader-role-discovery', code, errorClass };
 }
 function trustedRdsCa() {
   try {
@@ -339,7 +343,7 @@ async function main() {
     phase = 'database-discovery';
     const databases = await inventoryDatabases(discoveryClient);
     const templateDatabases = await inventoryTemplateDatabases(discoveryClient);
-    phase = 'reader-provision';
+    phase = 'reader-role-discovery';
     const existingRole = await discoveryClient.query(
       'SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1', [reader],
     );
@@ -348,18 +352,24 @@ async function main() {
       if (databaseName !== 'postgres') {
         client = adminClient(databaseName, ca);
         clients.push(client);
+        phase = 'database-connect';
         await client.connect();
         databaseClients.set(databaseName, client);
       }
+      phase = 'database-defaults';
       await hardenDatabaseDefaults(client, databaseName, existingRole.rowCount > 0);
     }
+    phase = 'template-access';
     await denyTemplateDatabaseAccess(discoveryClient, templateDatabases, existingRole.rowCount > 0);
+    phase = 'existing-reader-check';
     if (existingRole.rowCount > 0) {
       for (const databaseName of databases) {
         await readerPrivilegeCheck(databaseClients.get(databaseName));
       }
     }
+    phase = 'reader-role-credential';
     await provisionRole(discoveryClient, passwordVerifier, existingRole.rowCount > 0);
+    phase = 'count-helper';
     for (const databaseName of databases) {
       await provisionDatabase(databaseClients.get(databaseName), databaseName);
     }
