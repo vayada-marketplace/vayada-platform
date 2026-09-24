@@ -18,6 +18,9 @@ locals {
   vay2017_rehearsal_state_machine_name = "vay2017-metadata-inventory"
   vay2017_rehearsal_log_group_name     = "/aws/ecs/vay2017-metadata-runner"
   vay2017_rehearsal_github_role_name   = "vayada-github-actions-vay2017-metadata"
+  vay2017_rehearsal_bootstrap_sm_name  = "vay2017-metadata-reader-bootstrap"
+  vay2017_rehearsal_bootstrap_family   = "vay2017-metadata-reader-bootstrap"
+  vay2017_rehearsal_reader_secret_name = "vay2017/metadata-reader/vay2017-metadata-rehearsal-isolated-20260923"
   vay2017_rehearsal_ecr_repository_arn = "arn:aws:ecr:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:repository/vayada-next-api"
   vay2017_rehearsal_ecr_repository_url = "${local.vay2017_rehearsal_account_id}.dkr.ecr.${local.vay2017_rehearsal_region}.amazonaws.com/vayada-next-api"
   vay2017_rehearsal_s3_prefix_list_id  = "pl-6da54004"
@@ -438,7 +441,10 @@ data "aws_iam_policy_document" "vay2017_state_machine_trust" {
     condition {
       test     = "ArnLike"
       variable = "aws:SourceArn"
-      values   = ["arn:aws:states:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:stateMachine:${local.vay2017_rehearsal_state_machine_name}"]
+      values = [
+        "arn:aws:states:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:stateMachine:${local.vay2017_rehearsal_state_machine_name}",
+        "arn:aws:states:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:stateMachine:${local.vay2017_rehearsal_bootstrap_sm_name}",
+      ]
     }
   }
 }
@@ -453,9 +459,12 @@ resource "aws_iam_role" "vay2017_state_machine" {
 
 data "aws_iam_policy_document" "vay2017_state_machine" {
   statement {
-    sid       = "RunOnlyFixedMetadataTask"
-    actions   = ["ecs:RunTask"]
-    resources = [aws_ecs_task_definition.vay2017_metadata.arn]
+    sid     = "RunOnlyFixedMetadataTask"
+    actions = ["ecs:RunTask"]
+    resources = [
+      aws_ecs_task_definition.vay2017_metadata.arn,
+      aws_ecs_task_definition.vay2017_reader_bootstrap.arn,
+    ]
     condition {
       test     = "ArnEquals"
       variable = "ecs:cluster"
@@ -464,9 +473,12 @@ data "aws_iam_policy_document" "vay2017_state_machine" {
   }
 
   statement {
-    sid       = "PassOnlyFixedTaskExecutionRole"
-    actions   = ["iam:PassRole"]
-    resources = [aws_iam_role.vay2017_task_execution.arn]
+    sid     = "PassOnlyFixedTaskExecutionRole"
+    actions = ["iam:PassRole"]
+    resources = [
+      aws_iam_role.vay2017_task_execution.arn,
+      aws_iam_role.vay2017_bootstrap_task.arn,
+    ]
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
@@ -587,14 +599,20 @@ resource "aws_iam_role" "vay2017_github_inventory" {
 
 data "aws_iam_policy_document" "vay2017_github_inventory" {
   statement {
-    sid       = "StartFixedMetadataInventory"
-    actions   = ["states:StartExecution"]
-    resources = [aws_sfn_state_machine.vay2017_metadata.arn]
+    sid     = "StartFixedMetadataInventory"
+    actions = ["states:StartExecution"]
+    resources = [
+      aws_sfn_state_machine.vay2017_metadata.arn,
+      aws_sfn_state_machine.vay2017_reader_bootstrap.arn,
+    ]
   }
   statement {
-    sid       = "ReadFixedMetadataInventoryExecution"
-    actions   = ["states:DescribeExecution"]
-    resources = ["arn:aws:states:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:execution:${local.vay2017_rehearsal_state_machine_name}:*"]
+    sid     = "ReadFixedMetadataInventoryExecution"
+    actions = ["states:DescribeExecution"]
+    resources = [
+      "arn:aws:states:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:execution:${local.vay2017_rehearsal_state_machine_name}:*",
+      "arn:aws:states:${local.vay2017_rehearsal_region}:${local.vay2017_rehearsal_account_id}:execution:${local.vay2017_rehearsal_bootstrap_sm_name}:*",
+    ]
   }
   statement {
     sid       = "ReadOnlySanitizedInventoryLogs"
