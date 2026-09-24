@@ -21,10 +21,11 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn("del(.taskRoleArn)", RUNNER)
 
     def test_audit_grant_uses_only_the_owner_secret_in_explicit_mode(self) -> None:
-        self.assertIn('--grant-product-audit-insert|--grant-affiliate-read|--grant-platform-runtime-read|--grant-domain-events-append|--grant-jobs-insert|--grant-expense-category-insert|--grant-expense-insert|--grant-recurring-expense-insert)', RUNNER)
+        self.assertIn('--grant-product-audit-insert|--grant-affiliate-read|--grant-platform-runtime-read|--grant-property-profile-lock|--grant-domain-events-append|--grant-jobs-insert|--grant-expense-category-insert|--grant-expense-insert|--grant-recurring-expense-insert)', RUNNER)
         self.assertIn('grant_scope="audit_insert"', RUNNER)
         self.assertIn('grant_scope="affiliate_read"', RUNNER)
         self.assertIn('grant_scope="platform_runtime_read"', RUNNER)
+        self.assertIn('grant_scope="property_profile_lock"', RUNNER)
         self.assertIn('grant_scope="domain_events_append"', RUNNER)
         self.assertIn('grant_scope="jobs_insert"', RUNNER)
         self.assertIn('grant_scope="expense_category_insert"', RUNNER)
@@ -96,6 +97,14 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('platform_runtime_scope_too_broad', GRANT)
         self.assertIn('SELECT WITH GRANT OPTION', GRANT)
         self.assertIn('VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE', GRANT)
+        grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
+        encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
+        self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
+
+    def test_property_profile_lock_grant_is_column_scoped_and_fits_override_budget(self) -> None:
+        self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-property-profile-lock"'), 3)
+        self.assertIn('GRANT UPDATE (id) ON ${table} TO vayada_next_api_runtime', GRANT)
+        self.assertIn('property_profile_runtime_lock_scope_too_broad', GRANT)
         grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
         encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
         self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)

@@ -289,6 +289,66 @@ async function grantPlatformRuntimeRead(client, supportsMaintain, localFixture) 
   console.log(JSON.stringify({ status: "PASS", grant: "platform_runtime_tables:SELECT" }));
 }
 
+async function grantPropertyProfileLock(client, supportsMaintain) {
+  const table = "hotel_catalog.properties";
+  const ownership = await client.query(`
+    SELECT current_user = pg_catalog.pg_get_userbyid(relation.relowner) AS is_table_owner
+      FROM pg_catalog.pg_class AS relation
+     WHERE relation.oid = pg_catalog.to_regclass($1)
+       AND relation.relkind IN ('r', 'p')
+  `, [table]);
+  if (ownership.rowCount !== 1 || !ownership.rows[0].is_table_owner)
+    throw new Error("property_profile_table_owner_required");
+  const prohibitedTablePrivileges = [
+    "INSERT", "UPDATE", "DELETE", "TRUNCATE", "TRIGGER", "REFERENCES",
+    ...(supportsMaintain ? ["MAINTAIN"] : []),
+  ];
+  const checkScope = async () => client.query(`
+    SELECT 'table:' || privilege.name AS violation
+      FROM unnest($2::text[]) AS privilege(name)
+     WHERE pg_catalog.has_table_privilege('vayada_next_api_runtime', $1, privilege.name)
+    UNION ALL
+    SELECT attribute.attname || ':' || privilege.name
+      FROM pg_catalog.pg_attribute AS attribute
+      CROSS JOIN (VALUES ('UPDATE'), ('REFERENCES')) AS privilege(name)
+     WHERE attribute.attrelid = pg_catalog.to_regclass($1)
+       AND attribute.attnum > 0 AND NOT attribute.attisdropped
+       AND NOT (attribute.attname = 'id' AND privilege.name = 'UPDATE')
+       AND pg_catalog.has_column_privilege(
+         'vayada_next_api_runtime', attribute.attrelid, attribute.attname, privilege.name
+       )
+    UNION ALL
+    SELECT 'id:UPDATE WITH GRANT OPTION'
+     WHERE pg_catalog.has_column_privilege(
+       'vayada_next_api_runtime', $1, 'id', 'UPDATE WITH GRANT OPTION'
+     )
+  `, [table, prohibitedTablePrivileges]);
+  if ((await checkScope()).rowCount !== 0)
+    throw new Error("property_profile_runtime_lock_scope_too_broad");
+  await client.query("BEGIN");
+  try {
+    await client.query("SET LOCAL lock_timeout = '2s'");
+    await client.query(`LOCK TABLE ${table} IN ACCESS EXCLUSIVE MODE`);
+    if ((await checkScope()).rowCount !== 0)
+      throw new Error("property_profile_runtime_lock_scope_too_broad");
+    await client.query(`GRANT UPDATE (id) ON ${table} TO vayada_next_api_runtime`);
+    const granted = await client.query(`
+      SELECT pg_catalog.has_column_privilege(
+        'vayada_next_api_runtime', $1, 'id', 'UPDATE'
+      ) AS can_lock
+    `, [table]);
+    if (!granted.rows[0].can_lock)
+      throw new Error("property_profile_runtime_lock_missing");
+    if ((await checkScope()).rowCount !== 0)
+      throw new Error("property_profile_runtime_lock_scope_too_broad");
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+  console.log(JSON.stringify({ status: "PASS", grant: `${table}:UPDATE(id)` }));
+}
+
 let client;
 try {
   const connectionString = process.env.TARGET_DATABASE_MIGRATION_URL;
@@ -327,7 +387,7 @@ try {
   );
   const supportsMaintain = version.rows[0].value >= 170000;
   const scope = process.env.VAYADA_DB_GRANT_SCOPE ?? "audit_insert";
-  if (!["audit_insert", "affiliate_read", "platform_runtime_read", "domain_events_append", "jobs_insert", "expense_category_insert", "expense_insert", "recurring_expense_insert"].includes(scope))
+  if (!["audit_insert", "affiliate_read", "platform_runtime_read", "property_profile_lock", "domain_events_append", "jobs_insert", "expense_category_insert", "expense_insert", "recurring_expense_insert"].includes(scope))
     throw new Error("unknown_grant_scope");
   const role = await client.query(
     "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vayada_next_api_runtime'",
@@ -337,6 +397,8 @@ try {
     await grantAffiliateRead(client, supportsMaintain);
   } else if (scope === "platform_runtime_read") {
     await grantPlatformRuntimeRead(client, supportsMaintain, localFixture);
+  } else if (scope === "property_profile_lock") {
+    await grantPropertyProfileLock(client, supportsMaintain);
   } else if (scope === "domain_events_append") {
     await grantDomainEventAppend(client, supportsMaintain);
   } else if (scope === "jobs_insert") {
@@ -386,6 +448,9 @@ try {
     "platform_runtime_scope_too_broad",
     "platform_runtime_select_missing",
     "platform_runtime_forced_post_grant_failure",
+    "property_profile_table_owner_required",
+    "property_profile_runtime_lock_scope_too_broad",
+    "property_profile_runtime_lock_missing",
     "domain_events_table_owner_required",
     "domain_events_runtime_write_scope_too_broad",
     "domain_events_runtime_grant_missing",
