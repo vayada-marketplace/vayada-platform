@@ -1,0 +1,70 @@
+name: Verify one Financials Dashboard export
+
+on:
+  workflow_dispatch:
+    inputs:
+      export_id:
+        description: "New export UUID from the single approved POST"
+        required: true
+      dispatched_at:
+        description: "Original POST dispatch UTC timestamp, millisecond ISO format"
+        required: true
+      image_digest:
+        description: "Reviewed currently serving image digest containing the one-shot entry point"
+        required: true
+      source_sha:
+        description: "Full attested source revision"
+        required: true
+      expected_task:
+        description: "Exact healthy API task definition ARN, both workers off/unmapped"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-finance-export
+          aws-region: eu-west-1
+      - name: Check request deadline before any preflight task
+        env:
+          EXPORT_ID: ${{ inputs.export_id }}
+          DISPATCHED_AT: ${{ inputs.dispatched_at }}
+        run: |
+          python3 - <<'PY'
+          import runpy, os
+          runner = runpy.run_path('scripts/run-finance-export-once.py')
+          runner['deadline_for'](os.environ['EXPORT_ID'], os.environ['DISPATCHED_AT'], runner['utcnow']())
+          PY
+      - name: Verify dedicated and general database boundaries
+        env:
+          EXPORT_ID: ${{ inputs.export_id }}
+        run: |
+          bash scripts/run-target-database-runtime-preflight.sh --preflight-finance-export-worker 65f6b2fc-c783-4963-9d6b-a85f82319769 "$EXPORT_ID"
+          bash scripts/run-target-database-runtime-preflight.sh preflight
+      - name: Run once and verify task cleanup
+        env:
+          EXPORT_ID: ${{ inputs.export_id }}
+          DISPATCHED_AT: ${{ inputs.dispatched_at }}
+          DIGEST: ${{ inputs.image_digest }}
+          SOURCE: ${{ inputs.source_sha }}
+          EXPECTED_TASK: ${{ inputs.expected_task }}
+        run: |
+          python3 scripts/run-finance-export-once.py \
+            --export-id "$EXPORT_ID" --dispatched-at "$DISPATCHED_AT" \
+            --digest "$DIGEST" --source "$SOURCE" --expected-task "$EXPECTED_TASK"
+      # Never automatically re-run on failure. A lost runner/timeout keeps the
+      # exclusive window held until ECS and artifact state are reconciled.
