@@ -51,6 +51,9 @@ on:
       - "scripts/next-api-split-compatible-images.txt"
       - "scripts/assert-next-api-split-compatible-image.py"
       - "scripts/test-next-api-split-compatible-image.py"
+      - "scripts/run-finance-export-once.py"
+      - "scripts/test-finance-export-once.py"
+      - ".github/workflows/finance-export-once.yml"
       - "scripts/assert-terraform-protected-resources.sh"
       - "scripts/test-marketplace-communication-unsubscribe-keys.mjs"
       - "scripts/test-finance-folio-kms-plan-guard.sh"
@@ -227,6 +230,7 @@ jobs:
           python3 scripts/test-channex-worker-database.py
           python3 scripts/test-pause-next-api-channex-worker.py
           python3 scripts/test-next-api-split-compatible-image.py
+          python3 scripts/test-finance-export-once.py
           bash scripts/test-finance-folio-kms-plan-guard.sh
           bash -n scripts/guard-finance-folio-kms-plan.sh
           bash scripts/test-finance-folio-kms-phase-guard.sh
