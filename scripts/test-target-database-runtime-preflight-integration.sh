@@ -57,9 +57,10 @@ CREATE SCHEMA booking AUTHORIZATION legacy_owner;
 CREATE SCHEMA finance AUTHORIZATION legacy_owner;
 CREATE SCHEMA pms AUTHORIZATION legacy_owner;
 CREATE SCHEMA marketplace AUTHORIZATION legacy_owner;
+CREATE SCHEMA hotel_catalog AUTHORIZATION legacy_owner;
 CREATE SCHEMA vayada_migration_evidence AUTHORIZATION legacy_owner;
-REVOKE ALL ON SCHEMA platform, app, booking, finance, pms, marketplace, vayada_migration_evidence FROM PUBLIC;
-GRANT USAGE ON SCHEMA platform, app, booking, finance, pms, marketplace, vayada_migration_evidence
+REVOKE ALL ON SCHEMA platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence FROM PUBLIC;
+GRANT USAGE ON SCHEMA platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence
   TO vayada_next_api_runtime;
 
 SET ROLE legacy_owner;
@@ -82,6 +83,7 @@ CREATE TABLE pms.channel_connections (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_links (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_agreement_lifecycle_events (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_click_occurrences (id uuid PRIMARY KEY);
+CREATE TABLE hotel_catalog.properties (id uuid PRIMARY KEY, profile_revision integer NOT NULL DEFAULT 1);
 CREATE TABLE booking.affiliate_click_contexts (id uuid PRIMARY KEY);
 CREATE TABLE booking.affiliate_click_admissions (id uuid PRIMARY KEY);
 CREATE TABLE booking.affiliate_original_booking_bindings (id uuid PRIMARY KEY);
@@ -115,6 +117,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON platform.idempotency_keys
 GRANT SELECT ON platform.product_audit_events
   TO vayada_next_api_runtime;
 GRANT SELECT ON platform.jobs TO vayada_next_api_runtime;
+GRANT SELECT ON hotel_catalog.properties TO vayada_next_api_runtime;
 GRANT SELECT ON platform.legacy_owner_approval_records,
   platform.legacy_owner_approval_revocations TO vayada_next_api_runtime;
 GRANT EXECUTE ON FUNCTION app.hotel_count() TO vayada_next_api_runtime;
@@ -382,6 +385,31 @@ if platform_read_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1
 fi
 grep -F '"code":"platform_runtime_table_owner_required"' <<<"${platform_read_non_owner_output}" >/dev/null
 run_grant legacy_owner owner 1 platform_runtime_read | grep -F '"grant":"platform_runtime_tables:SELECT"' >/dev/null
+
+if property_lock_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 property_profile_lock 2>&1)"; then
+  echo "non-owner property-profile lock grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"property_profile_table_owner_required"' <<<"${property_lock_non_owner_output}" >/dev/null
+run_grant legacy_owner owner 1 property_profile_lock | grep -F '"grant":"hotel_catalog.properties:UPDATE(id)"' >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "BEGIN; SELECT id FROM hotel_catalog.properties FOR SHARE; ROLLBACK" >/dev/null
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "UPDATE hotel_catalog.properties SET profile_revision=profile_revision WHERE false" >/dev/null 2>&1; then
+  echo "runtime role unexpectedly updated property profile data" >&2
+  exit 1
+fi
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (profile_revision) ON hotel_catalog.properties TO vayada_next_api_runtime" >/dev/null
+if property_lock_broad_output="$(run_grant legacy_owner owner 1 property_profile_lock 2>&1)"; then
+  echo "property-profile lock grant unexpectedly passed with broader column write" >&2
+  exit 1
+fi
+grep -F '"code":"property_profile_runtime_lock_scope_too_broad"' <<<"${property_lock_broad_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (profile_revision) ON hotel_catalog.properties FROM vayada_next_api_runtime" >/dev/null
 docker exec -e PGPASSWORD=runtime "${database_container}" \
   psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
   -c "SELECT count(*) FROM platform.pricing_runtime_property_scopes" >/dev/null

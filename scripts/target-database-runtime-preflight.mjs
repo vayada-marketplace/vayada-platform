@@ -18,6 +18,9 @@ const stagedRelationPrivileges = {
   "platform.domain_events": ["INSERT"],
   "platform.jobs": ["INSERT"],
 };
+const requiredColumnPrivileges = {
+  "hotel_catalog.properties": { UPDATE: ["id"] },
+};
 const protectedRelations = [
   "platform.channex_adoption_approval_records",
   "platform.channex_adoption_approval_revocations",
@@ -222,6 +225,32 @@ try {
   );
   await requireNoMissing(
     client,
+    `SELECT requirement.relation, privilege.name, column_name.name
+       FROM jsonb_each($1::jsonb) AS requirement(relation, privileges)
+       CROSS JOIN LATERAL jsonb_each(requirement.privileges) AS privilege(name, columns)
+       CROSS JOIN LATERAL jsonb_array_elements_text(privilege.columns) AS column_name(name)
+       LEFT JOIN pg_class AS relation ON relation.oid = to_regclass(requirement.relation)
+      WHERE relation.oid IS NULL OR NOT has_column_privilege(
+        current_user, relation.oid, column_name.name, privilege.name
+      )`,
+    [JSON.stringify(requiredColumnPrivileges)],
+    "runtime_column_access_missing",
+  );
+  await requireNoMissing(
+    client,
+    `SELECT requirement.relation, privilege.name, column_name.name
+       FROM jsonb_each($1::jsonb) AS requirement(relation, privileges)
+       CROSS JOIN LATERAL jsonb_each(requirement.privileges) AS privilege(name, columns)
+       CROSS JOIN LATERAL jsonb_array_elements_text(privilege.columns) AS column_name(name)
+       LEFT JOIN pg_class AS relation ON relation.oid = to_regclass(requirement.relation)
+      WHERE relation.oid IS NOT NULL AND has_column_privilege(
+        current_user, relation.oid, column_name.name, privilege.name || ' WITH GRANT OPTION'
+      )`,
+    [JSON.stringify(requiredColumnPrivileges)],
+    "runtime_column_grant_option_forbidden",
+  );
+  await requireNoMissing(
+    client,
     `SELECT namespace.nspname, relation.relname, privilege.name
        FROM pg_class AS relation
        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
@@ -298,6 +327,11 @@ try {
          FROM jsonb_each($1::jsonb) AS requirement(relation, privileges)
          CROSS JOIN LATERAL jsonb_array_elements_text(requirement.privileges) AS privilege(name)
         WHERE privilege.name IN ('INSERT','UPDATE','REFERENCES')
+     ), allowed_columns AS (
+       SELECT requirement.relation, privilege.name, column_name.name AS column_name
+         FROM jsonb_each($3::jsonb) AS requirement(relation, privileges)
+         CROSS JOIN LATERAL jsonb_each(requirement.privileges) AS privilege(name, columns)
+         CROSS JOIN LATERAL jsonb_array_elements_text(privilege.columns) AS column_name(name)
      )
      SELECT namespace.nspname, relation.relname, attribute.attname, privilege.name
        FROM pg_class AS relation
@@ -314,8 +348,15 @@ try {
           SELECT 1 FROM allowed
            WHERE allowed.relation = format('%I.%I', namespace.nspname, relation.relname)
              AND allowed.name = privilege.name
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM allowed_columns
+           WHERE allowed_columns.relation = format('%I.%I', namespace.nspname, relation.relname)
+             AND allowed_columns.name = privilege.name
+             AND allowed_columns.column_name = attribute.attname
         )`,
-    [JSON.stringify({ ...requiredRelationPrivileges, ...stagedRelationPrivileges }), receipt],
+    [JSON.stringify({ ...requiredRelationPrivileges, ...stagedRelationPrivileges }), receipt,
+      JSON.stringify(requiredColumnPrivileges)],
     "runtime_unapproved_relation_column_write_forbidden",
   );
   await requireNoMissing(
