@@ -164,34 +164,16 @@ resource "aws_route_table_association" "vay2017_database_b" {
   route_table_id = aws_route_table.vay2017_database_private.id
 }
 
+# Keep all rules standalone: inline rules conflict with aws_vpc_security_group_*_rule.
+# The AWS provider removes its default allow-all egress rule on SG creation when
+# no inline egress is configured; the fresh isolation check enforces that remains true.
 resource "aws_security_group" "vay2017_rehearsal_runner" {
   name        = "vay2017-metadata-runner"
   description = "VAY-2043 runner: only rehearsal PostgreSQL, AWS endpoints, and ECR S3 layers"
   vpc_id      = aws_vpc.vay2017_runner.id
-  egress      = []
 
   tags = {
     Name    = "vay2017-metadata-runner"
-    Purpose = "VAY-2043 isolated legacy metadata rehearsal"
-  }
-}
-
-resource "aws_security_group" "vay2017_rehearsal_endpoints" {
-  name        = "vay2017-metadata-endpoints"
-  description = "HTTPS from the VAY-2043 one-off metadata runner only"
-  vpc_id      = aws_vpc.vay2017_runner.id
-  egress      = []
-
-  ingress {
-    description     = "Runner to AWS interface endpoints"
-    protocol        = "tcp"
-    from_port       = 443
-    to_port         = 443
-    security_groups = [aws_security_group.vay2017_rehearsal_runner.id]
-  }
-
-  tags = {
-    Name    = "vay2017-metadata-endpoints"
     Purpose = "VAY-2043 isolated legacy metadata rehearsal"
   }
 }
@@ -223,19 +205,39 @@ resource "aws_vpc_security_group_egress_rule" "vay2017_runner_ecr_s3" {
   prefix_list_id    = local.vay2017_rehearsal_s3_prefix_list_id
 }
 
+resource "aws_vpc_security_group_ingress_rule" "vay2017_endpoints_https" {
+  security_group_id            = aws_security_group.vay2017_rehearsal_endpoints.id
+  description                  = "Runner to AWS interface endpoints"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.vay2017_rehearsal_runner.id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "vay2017_database_postgres" {
+  security_group_id            = aws_security_group.vay2017_rehearsal_database.id
+  description                  = "PostgreSQL from the fixed metadata runner security group only"
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  referenced_security_group_id = aws_security_group.vay2017_rehearsal_runner.id
+}
+
+resource "aws_security_group" "vay2017_rehearsal_endpoints" {
+  name        = "vay2017-metadata-endpoints"
+  description = "HTTPS from the VAY-2043 one-off metadata runner only"
+  vpc_id      = aws_vpc.vay2017_runner.id
+
+  tags = {
+    Name    = "vay2017-metadata-endpoints"
+    Purpose = "VAY-2043 isolated legacy metadata rehearsal"
+  }
+}
+
 resource "aws_security_group" "vay2017_rehearsal_database" {
   name        = "vay2017-metadata-database"
   description = "Dedicated access group for the VAY-2017 restored rehearsal database"
   vpc_id      = aws_vpc.vay2017_runner.id
-  egress      = []
-
-  ingress {
-    description     = "PostgreSQL from the fixed metadata runner security group only"
-    protocol        = "tcp"
-    from_port       = 5432
-    to_port         = 5432
-    security_groups = [aws_security_group.vay2017_rehearsal_runner.id]
-  }
 
   tags = {
     Name    = "vay2017-metadata-database"
