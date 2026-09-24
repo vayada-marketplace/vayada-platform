@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { SecretsManagerClient, PutSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import pg from 'pg';
+import { scramVerifier } from './vay2017-pg-scram.mjs';
 
 const { Client } = pg;
 const reader = 'vay2017_metadata_reader';
@@ -102,11 +103,17 @@ async function inventoryTemplateDatabases(client) {
 
 async function readerPrivilegeCheck(client) {
   const result = await client.query(`
+    -- PG16+ adds this exact immutable admin-only membership when the CREATEROLE user creates a role.
     SELECT EXISTS (
       SELECT 1 FROM pg_catalog.pg_auth_members AS m
       JOIN pg_catalog.pg_roles AS member_role ON member_role.oid = m.member
       JOIN pg_catalog.pg_roles AS granted_role ON granted_role.oid = m.roleid
-      WHERE member_role.rolname = $1 OR granted_role.rolname = $1
+      WHERE (member_role.rolname = $1 OR granted_role.rolname = $1)
+        AND NOT (
+          granted_role.rolname = $1 AND member_role.rolname = CURRENT_USER
+          AND m.grantor = 10::oid AND m.admin_option
+          AND NOT m.set_option AND NOT m.inherit_option
+        )
     ) AS has_memberships,
     EXISTS (
       SELECT 1 FROM pg_catalog.pg_roles AS r
@@ -203,11 +210,11 @@ async function readerPrivilegeCheck(client) {
   }
 }
 
-async function provisionRole(client, password, exists) {
+async function provisionRole(client, passwordVerifier, exists) {
   const verb = exists ? 'ALTER ROLE' : 'CREATE ROLE';
   const command = await client.query(
     `SELECT pg_catalog.format('${verb} %I LOGIN PASSWORD %L NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2', $1, $2) AS sql`,
-    [reader, password],
+    [reader, passwordVerifier],
   );
   await client.query(command.rows[0].sql);
 }
@@ -307,6 +314,7 @@ async function main() {
   try {
     assertConfiguration();
     const password = randomBytes(36).toString('base64url');
+    const passwordVerifier = scramVerifier(password);
     phase = 'database-connect';
     const discoveryClient = adminClient('postgres');
     clients.push(discoveryClient);
@@ -335,7 +343,7 @@ async function main() {
         await readerPrivilegeCheck(databaseClients.get(databaseName));
       }
     }
-    await provisionRole(discoveryClient, password, existingRole.rowCount > 0);
+    await provisionRole(discoveryClient, passwordVerifier, existingRole.rowCount > 0);
     for (const databaseName of databases) {
       await provisionDatabase(databaseClients.get(databaseName), databaseName);
     }

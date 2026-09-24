@@ -90,6 +90,7 @@ on:
       - "scripts/vay2017-rehearsal-metadata.mjs"
       - "scripts/test-vay2017-rehearsal-metadata.mjs"
       - "scripts/provision-vay2017-metadata-reader.mjs"
+      - "scripts/vay2017-pg-scram.mjs"
       - "scripts/test-vay2017-metadata-reader-provisioner.mjs"
       - "scripts/run-vay2017-rehearsal-metadata.sh"
       - "scripts/check-vay2017-rehearsal-isolation.sh"
@@ -230,6 +231,7 @@ jobs:
           node --check scripts/vay2017-rehearsal-metadata.mjs
           node --test scripts/test-vay2017-rehearsal-metadata.mjs
           node --check scripts/provision-vay2017-metadata-reader.mjs
+          node --check scripts/vay2017-pg-scram.mjs
           node --test scripts/test-vay2017-metadata-reader-provisioner.mjs
           bash -n scripts/run-vay2017-rehearsal-metadata.sh
           bash -n scripts/check-vay2017-rehearsal-isolation.sh
