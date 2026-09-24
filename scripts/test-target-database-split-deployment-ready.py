@@ -12,6 +12,7 @@ OWNER = "/vayada/prod/target-database-url"
 RUNTIME = "/vayada/prod/target-database-runtime-url"
 IDENTITY = "/vayada/prod/target-database-identity-runtime-url"
 FINANCE_EXPENSE = "/vayada/prod/target-database-finance-expense-worker-url"
+FINANCE_EXPENSE_PROPERTY_ID = "65f6b2fc-c783-4963-9d6b-a85f82319769"
 FINANCE_EXPORT = "/vayada/prod/target-database-finance-export-worker-url"
 FINANCE_EXPORT_PROPERTY_ID = "65f6b2fc-c783-4963-9d6b-a85f82319769"
 RELEASE = "8c2cdef397522740c9fe7803efc2ed36d637bac5"
@@ -124,10 +125,6 @@ class DeploymentReadinessTest(unittest.TestCase):
             run(f"{REPOSITORY}@{DIGEST}", secrets, reviewed_digest=None).returncode,
             0,
         )
-        self.assertEqual(run(f"{REPOSITORY}@{DIGEST}", {
-            **secrets,
-            "FINANCE_EXPENSE_WORKER_DATABASE_URL": FINANCE_EXPENSE,
-        }).returncode, 0)
         self.assertNotEqual(run(f"{REPOSITORY}:next-latest", secrets).returncode, 0)
 
     def test_accepts_identity_split_only_with_pinned_running_digest(self) -> None:
@@ -141,6 +138,48 @@ class DeploymentReadinessTest(unittest.TestCase):
             run(f"{REPOSITORY}@{DIGEST}", secrets, reviewed_digest=None).returncode,
             0,
         )
+
+    def test_accepts_exact_disabled_finance_expense_mapping(self) -> None:
+        result = run(
+            f"{REPOSITORY}@{DIGEST}",
+            {
+                "TARGET_DATABASE_URL": RUNTIME,
+                "AUTH_DATABASE_URL": IDENTITY,
+                "TARGET_DATABASE_MIGRATION_URL": OWNER,
+                "FINANCE_EXPENSE_WORKER_DATABASE_URL": FINANCE_EXPENSE,
+            },
+            environment=[
+                {"name": "FINANCE_EXPENSE_WORKER_ENABLED", "value": "false"},
+                {"name": "FINANCE_EXPENSE_WORKER_PROPERTY_ID", "value": FINANCE_EXPENSE_PROPERTY_ID},
+            ],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rejects_enabled_partial_or_wrong_finance_expense_mapping(self) -> None:
+        base = {
+            "TARGET_DATABASE_URL": RUNTIME,
+            "AUTH_DATABASE_URL": IDENTITY,
+            "TARGET_DATABASE_MIGRATION_URL": OWNER,
+        }
+        cases = [
+            (FINANCE_EXPENSE, FINANCE_EXPENSE_PROPERTY_ID, "true"),
+            (FINANCE_EXPENSE, "00000000-0000-4000-8000-000000000000", "false"),
+            (OWNER, FINANCE_EXPENSE_PROPERTY_ID, "false"),
+            (None, FINANCE_EXPENSE_PROPERTY_ID, "false"),
+            (FINANCE_EXPENSE, "", "false"),
+        ]
+        for secret, property_id, enabled in cases:
+            with self.subTest(secret=secret, property_id=property_id, enabled=enabled):
+                secrets = dict(base)
+                if secret is not None:
+                    secrets["FINANCE_EXPENSE_WORKER_DATABASE_URL"] = secret
+                environment = [
+                    {"name": "FINANCE_EXPENSE_WORKER_ENABLED", "value": enabled},
+                    {"name": "FINANCE_EXPENSE_WORKER_PROPERTY_ID", "value": property_id},
+                ]
+                self.assertNotEqual(run(
+                    f"{REPOSITORY}@{DIGEST}", secrets, environment=environment,
+                ).returncode, 0)
 
     def test_accepts_exact_finance_export_worker_mapping_and_scope(self) -> None:
         result = run(

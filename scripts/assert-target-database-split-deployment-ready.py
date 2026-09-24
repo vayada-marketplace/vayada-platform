@@ -10,6 +10,7 @@ OWNER_PARAMETER = "/vayada/prod/target-database-url"
 RUNTIME_PARAMETER = "/vayada/prod/target-database-runtime-url"
 IDENTITY_PARAMETER = "/vayada/prod/target-database-identity-runtime-url"
 FINANCE_EXPENSE_PARAMETER = "/vayada/prod/target-database-finance-expense-worker-url"
+FINANCE_EXPENSE_PROPERTY_ID = "65f6b2fc-c783-4963-9d6b-a85f82319769"
 FINANCE_EXPORT_PARAMETER = "/vayada/prod/target-database-finance-export-worker-url"
 FINANCE_EXPORT_PROPERTY_ID = "65f6b2fc-c783-4963-9d6b-a85f82319769"
 FINANCE_EXPORT_ID = "f3429f38-b462-4453-b7f1-d901fc86ebfa"
@@ -136,9 +137,25 @@ def main() -> None:
         )
         if database_like and name not in reviewed_database_secrets:
             fail("unreviewed database secret mapping is forbidden")
-    finance_value = secrets.get("FINANCE_EXPENSE_WORKER_DATABASE_URL")
-    if finance_value is not None and finance_value != FINANCE_EXPENSE_PARAMETER:
-        fail("finance expense worker database secret mapping is unexpected")
+    expense_secret_present = "FINANCE_EXPENSE_WORKER_DATABASE_URL" in secrets
+    expense_value = secrets.get("FINANCE_EXPENSE_WORKER_DATABASE_URL")
+    expense_enabled = environment.get("FINANCE_EXPENSE_WORKER_ENABLED")
+    expense_property = environment.get("FINANCE_EXPENSE_WORKER_PROPERTY_ID")
+    expense_configured = expense_secret_present or any(
+        value is not None for value in (expense_enabled, expense_property)
+    )
+    if expense_configured:
+        if expense_enabled != "false":
+            fail("finance expense worker must remain disabled during the bounded test")
+        expense_mapped = (
+            expense_value == FINANCE_EXPENSE_PARAMETER
+            and expense_property == FINANCE_EXPENSE_PROPERTY_ID
+        )
+        expense_unmapped = (
+            not expense_secret_present and expense_property in {None, ""}
+        )
+        if not (expense_mapped or expense_unmapped):
+            fail("finance expense worker has a partial or unexpected mapping")
     export_secret_present = "FINANCE_EXPORT_WORKER_DATABASE_URL" in secrets
     export_value = secrets.get("FINANCE_EXPORT_WORKER_DATABASE_URL")
     export_enabled = environment.get("FINANCE_EXPORT_WORKER_ENABLED")

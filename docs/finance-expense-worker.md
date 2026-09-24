@@ -7,9 +7,10 @@ The platform runner imports that module from the running immutable app image;
 it must be present in the reviewed image before the grant/preflight modes run.
 The general API runtime preflight is unchanged.
 
-Nothing in this PR runs provisioning, maps a secret by default, or enables a
-worker. Financials remains inactive. These commands are staged for a separately
-approved rollout, not authorization to execute them now:
+This bounded-test stage maps the dedicated expense-worker secret and reviewed
+property by default. `FINANCE_EXPENSE_WORKER_ENABLED` remains hardcoded to
+`false`, so the background loop stays off and Financials remains inactive. The
+role, secret, grant, and preflights must pass before applying this mapping:
 
 ```sh
 python3 scripts/create-target-database-identity-secret.py --finance-expense --check
@@ -30,13 +31,14 @@ task receives the migration credential. Neither reaches the long-lived worker.
 The grant transaction refuses drift and any different existing property scope;
 it can add only the explicitly supplied property to the owner-managed allowlist.
 
-After both preflights pass, review Terraform with
-`finance_expense_worker_secret_mapped=true` and the same
-`finance_expense_worker_property_id`. Apply only through normal reviewed
-platform deployment. The task environment still has
+After both preflights pass, apply the reviewed Terraform defaults through the
+normal platform deployment. The task environment still has
 `FINANCE_EXPENSE_WORKER_ENABLED=false`. Verify the actual ECS task secret mapping,
 immutable app digest and source SHA; an independently supplied URL is insufficient.
 Do not reuse Channex's worker credential or property permissions.
+To unmap after the bounded test, set `finance_expense_worker_secret_mapped=false`
+and `finance_expense_worker_property_id=""` in a separate reviewed rollback while
+the worker remains disabled.
 
 VAY-1138 owns the exclusive bounded test-window approval and any subsequent
 reviewed enablement. The app checks role/session identity, effective table and
