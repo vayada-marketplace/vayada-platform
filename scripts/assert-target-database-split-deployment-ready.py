@@ -139,27 +139,36 @@ def main() -> None:
     finance_value = secrets.get("FINANCE_EXPENSE_WORKER_DATABASE_URL")
     if finance_value is not None and finance_value != FINANCE_EXPENSE_PARAMETER:
         fail("finance expense worker database secret mapping is unexpected")
+    export_secret_present = "FINANCE_EXPORT_WORKER_DATABASE_URL" in secrets
     export_value = secrets.get("FINANCE_EXPORT_WORKER_DATABASE_URL")
     export_enabled = environment.get("FINANCE_EXPORT_WORKER_ENABLED")
     export_property = environment.get("FINANCE_EXPORT_WORKER_PROPERTY_ID")
     export_id = environment.get("FINANCE_EXPORT_WORKER_EXPORT_ID")
-    export_configured = any(
+    export_configured = export_secret_present or any(
         value is not None
-        for value in (export_value, export_enabled, export_property, export_id)
+        for value in (export_enabled, export_property, export_id)
     )
-    if export_configured and export_value != FINANCE_EXPORT_PARAMETER:
-        fail("finance export worker database secret mapping is unexpected")
-    if export_configured and export_property != FINANCE_EXPORT_PROPERTY_ID:
-        fail("finance export worker property scope is unexpected")
     if export_configured and export_enabled not in {"false", "true"}:
         fail("finance export worker enablement state is unexpected")
     if export_enabled == "true":
         if export_value != FINANCE_EXPORT_PARAMETER:
             fail("enabled finance export worker lacks its dedicated database secret")
+        if export_property != FINANCE_EXPORT_PROPERTY_ID:
+            fail("enabled finance export worker property scope is unexpected")
         if export_id != FINANCE_EXPORT_ID:
             fail("enabled finance export worker export scope is unexpected")
-    elif export_id is not None:
-        fail("disabled finance export worker unexpectedly carries an export scope")
+    elif export_enabled == "false":
+        if export_id is not None:
+            fail("disabled finance export worker unexpectedly carries an export scope")
+        disabled_mapped = (
+            export_value == FINANCE_EXPORT_PARAMETER
+            and export_property == FINANCE_EXPORT_PROPERTY_ID
+        )
+        disabled_unmapped = (
+            not export_secret_present and export_property in {None, ""}
+        )
+        if not (disabled_mapped or disabled_unmapped):
+            fail("disabled finance export worker has a partial or unexpected mapping")
     owner_refs = {name for name, value in secrets.items() if value == OWNER_PARAMETER}
     runtime_refs = {name for name, value in secrets.items() if value == RUNTIME_PARAMETER}
     identity_refs = {name for name, value in secrets.items() if value == IDENTITY_PARAMETER}
