@@ -7,10 +7,11 @@ The platform runner imports that module from the running immutable app image;
 it must be present in the reviewed image before the grant/preflight modes run.
 The general API runtime preflight is unchanged.
 
-This bounded-test stage maps the dedicated expense-worker secret and reviewed
-property by default. `FINANCE_EXPENSE_WORKER_ENABLED` remains hardcoded to
-`false`, so the background loop stays off and Financials remains inactive. The
-role, secret, grant, and preflights must pass before applying this mapping:
+The bounded test completed with one generated expense and a no-op repeat cycle.
+The default task definition now leaves the dedicated worker secret unmapped and
+the property ID blank. `FINANCE_EXPENSE_WORKER_ENABLED` remains hardcoded to
+`false`, so the background loop stays off. For a future reviewed mapping, the
+role, secret, grant, and preflights must pass before applying it:
 
 ```sh
 python3 scripts/create-target-database-identity-secret.py --finance-expense --check
@@ -31,14 +32,14 @@ task receives the migration credential. Neither reaches the long-lived worker.
 The grant transaction refuses drift and any different existing property scope;
 it can add only the explicitly supplied property to the owner-managed allowlist.
 
-After both preflights pass, apply the reviewed Terraform defaults through the
-normal platform deployment. The task environment still has
+After both preflights pass, apply a separately reviewed Terraform mapping through
+the normal platform deployment. The task environment still has
 `FINANCE_EXPENSE_WORKER_ENABLED=false`. Verify the actual ECS task secret mapping,
 immutable app digest and source SHA; an independently supplied URL is insufficient.
 Do not reuse Channex's worker credential or property permissions.
-To unmap after the bounded test, set `finance_expense_worker_secret_mapped=false`
-and `finance_expense_worker_property_id=""` in a separate reviewed rollback while
-the worker remains disabled.
+The bounded-test mapping was removed by restoring the safe Terraform defaults:
+`finance_expense_worker_secret_mapped=false` and
+`finance_expense_worker_property_id=""`.
 
 VAY-1138 owns the exclusive bounded test-window approval and any subsequent
 reviewed enablement. The app checks role/session identity, effective table and
