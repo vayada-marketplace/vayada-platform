@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict';
+import { X509Certificate } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { scramVerifier } from './vay2017-pg-scram.mjs';
 const source = await readFile(new URL('./provision-vay2017-metadata-reader.mjs', import.meta.url), 'utf8');
+const rdsCa = await readFile(new URL('../rehearsal/rds-ca-rsa2048-g1.pem', import.meta.url), 'utf8');
 
 test('bootstrap is fixed and never logs credentials', () => {
   for (const pattern of [/vay2017-metadata-rehearsal-isolated-20260923/, /vay2017-legacy-source-freeze-20260920/, /!\/\^10\\\.230\\\.0\\\./, /randomBytes\(36\)/, /PutSecretValueCommand/, /console\.(?:log|error)\s*\([\s\S]{0,120}?(?:password|SecretString)/i]) pattern instanceof RegExp && pattern.source.startsWith('console') ? assert.doesNotMatch(source, pattern) : assert.match(source, pattern);
+});
+
+test('bootstrap pins the regional RDS root and verifies endpoint identity', () => {
+  assert.equal(new X509Certificate(rdsCa).fingerprint256, '6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86');
+  assert.match(source, /VAY2017_RDS_CA_BUNDLE_GZIP/);
+  assert.match(source, /function adminClient\(database, ca\)[\s\S]*ca,[\s\S]*rejectUnauthorized:\s*true[\s\S]*servername:\s*process\.env\.VAY2017_DB_HOST/);
+  assert.match(source, /SELF_SIGNED_CERT_IN_CHAIN/);
+  assert.match(source, /database_ca_invalid/);
 });
 
 test('role is restricted and only the PG16+ admin-only creator edge is tolerated', () => {

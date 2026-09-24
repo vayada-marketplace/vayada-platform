@@ -29,6 +29,8 @@ test('master credential is supplied only to the fixed private bootstrap task', (
   assert.match(readerTf, /aws_sfn_state_machine" "vay2017_reader_bootstrap"/);
   assert.match(runnerTf, /vay2017_reader_bootstrap\.arn/);
   assert.match(runnerTf, /vay2017_bootstrap_task\.arn/);
+  assert.match(readerTf, /VAY2017_RDS_CA_BUNDLE_GZIP[\s\S]*base64gzip\(file\([\s\S]*rds-ca-rsa2048-g1\.pem/);
+  assert.match(runnerTf, /VAY2017_RDS_CA_BUNDLE_GZIP[\s\S]*base64gzip\(file\([\s\S]*rds-ca-rsa2048-g1\.pem/);
 });
 
 test('VPC security groups use standalone resources for all rules', () => {

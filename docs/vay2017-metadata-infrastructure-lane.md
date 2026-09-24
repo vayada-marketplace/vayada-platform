@@ -46,6 +46,8 @@ Before apply, independently review the complete saved plan and require:
   dedicated AWS endpoint group, and S3 image-layer traffic;
 - the database security group admits TCP 5432 only from the runner security
   group and has no egress rules;
+- both tasks carry the fingerprint-pinned eu-west-1 RDS RSA2048 G1 root CA for
+  hostname-verified TLS; review this pin before any RDS CA rotation;
 - the task image remains pinned by digest; only the isolated one-time bootstrap
   task execution role can read the new restore's RDS-managed master secret;
 - the separate inventory task execution role can read only the dedicated
