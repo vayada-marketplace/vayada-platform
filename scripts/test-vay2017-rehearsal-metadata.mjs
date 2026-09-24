@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { X509Certificate } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
@@ -119,6 +120,7 @@ test('sanitized errors preserve only known internal, PostgreSQL, and connection 
   assert.equal(sanitizeError(new Error('row_count_invalid')).code, 'row_count_invalid');
   assert.equal(sanitizeError({ code: '23505', message: 'duplicate key details' }).code, '23505');
   assert.equal(sanitizeError({ code: 'ERR_TLS_CERT_ALTNAME_INVALID' }).code, 'ERR_TLS_CERT_ALTNAME_INVALID');
+  assert.equal(sanitizeError({ code: 'SELF_SIGNED_CERT_IN_CHAIN' }).code, 'SELF_SIGNED_CERT_IN_CHAIN');
   assert.equal(sanitizeError({ code: 'password-is-secret', message: 'password-is-secret' }).code, 'UNKNOWN');
   const phaseError = Object.assign(new Error('metadata_read_failed', {
     cause: Object.assign(new Error('password=secret host=db.private'), { code: '42501' }),
@@ -164,6 +166,13 @@ test('runner contains no row-value query or caller-controlled SQL', async () => 
   assert.match(source, /transaction_timeout|statement_timeout/);
   assert.match(source, /SET LOCAL statement_timeout = '15min'/);
   assert.match(source, /rejectUnauthorized:\s*true/);
+  assert.match(source, /VAY2017_RDS_CA_BUNDLE_GZIP/);
+  assert.match(source, /ca:\s*caBundle,[\s\S]*rejectUnauthorized:\s*true[\s\S]*servername:\s*process\.env\.VAY2017_DB_HOST/);
+});
+
+test('scanner trusts only the pinned regional RDS root', async () => {
+  const pem = await readFile(new URL('../rehearsal/rds-ca-rsa2048-g1.pem', import.meta.url), 'utf8');
+  assert.equal(new X509Certificate(pem).fingerprint256, '6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86');
 });
 
 test('infrastructure keeps execution fixed and network access private and narrow', async () => {

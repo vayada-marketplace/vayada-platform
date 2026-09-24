@@ -1,5 +1,6 @@
-import { createHash, createHmac, pbkdf2Sync, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, pbkdf2Sync, randomBytes, randomUUID, X509Certificate } from 'node:crypto';
 import { SecretsManagerClient, PutSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+import { gunzipSync } from 'node:zlib';
 import pg from 'pg';
 
 const { Client } = pg;
@@ -15,16 +16,19 @@ const helperSchema = 'vay2017_metadata';
 const helperFunction = 'count_table_rows';
 const snapshotId = 'vay2017-legacy-source-freeze-20260920';
 const restoreId = 'vay2017-metadata-rehearsal-isolated-20260923';
+const rdsCaFingerprint = '6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86';
 const safeNetworkCodes = new Set([
   'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH',
   'ENETUNREACH', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'EPIPE',
   'ERR_TLS_CERT_ALTNAME_INVALID', 'ERR_TLS_HANDSHAKE_TIMEOUT',
-  'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
 ]);
 const safePgCodes = new Set(['22023', '42501', '28P01', '3D000', '25006', '42704', '42P01']);
 const internalCodes = new Set([
   'restore_identity_invalid', 'database_endpoint_invalid', 'reader_privilege_check_failed',
-  'function_owner_lacks_select',
+  'function_owner_lacks_select', 'database_ca_invalid',
 ]);
 const phases = new Set(['configuration', 'database-connect', 'database-discovery', 'reader-provision', 'reader-secret']);
 function safeFailure(phase, cause) {
@@ -37,6 +41,15 @@ function safeFailure(phase, cause) {
   const names = new Set(['Error', 'TypeError', 'RangeError', 'DatabaseError', 'AggregateError', 'AccessDeniedException', 'InvalidRequestException']);
   const errorClass = names.has(cause?.name) ? cause.name : 'Other';
   return { status: 'FAIL', stage: phases.has(phase) ? phase : 'reader-provision', code, errorClass };
+}
+function trustedRdsCa() {
+  try {
+    const pem = gunzipSync(Buffer.from(process.env.VAY2017_RDS_CA_BUNDLE_GZIP ?? '', 'base64')).toString('utf8');
+    if (new X509Certificate(pem).fingerprint256 !== rdsCaFingerprint) throw new Error();
+    return pem;
+  } catch {
+    throw new Error('database_ca_invalid');
+  }
 }
 function assertConfiguration() {
   const required = [
@@ -56,15 +69,20 @@ function assertConfiguration() {
   ) {
     throw new Error('restore_identity_invalid');
   }
+  return trustedRdsCa();
 }
-function adminClient(database) {
+function adminClient(database, ca) {
   return new Client({
     host: process.env.VAY2017_DB_HOST,
     port: Number(process.env.VAY2017_DB_PORT),
     database,
     user: process.env.VAY2017_DB_USER,
     password: process.env.VAY2017_DB_PASSWORD,
-    ssl: { rejectUnauthorized: true },
+    ssl: {
+      ca,
+      rejectUnauthorized: true,
+      servername: process.env.VAY2017_DB_HOST,
+    },
     connectionTimeoutMillis: 10_000,
     statement_timeout: 30_000,
     application_name: 'vay2017-metadata-bootstrap-v1',
@@ -310,11 +328,11 @@ async function main() {
   let phase = 'configuration';
   const clients = [];
   try {
-    assertConfiguration();
+    const ca = assertConfiguration();
     const password = randomBytes(36).toString('base64url');
     const passwordVerifier = scramVerifier(password);
     phase = 'database-connect';
-    const discoveryClient = adminClient('postgres');
+    const discoveryClient = adminClient('postgres', ca);
     clients.push(discoveryClient);
     await discoveryClient.connect();
     const databaseClients = new Map([['postgres', discoveryClient]]);
@@ -328,7 +346,7 @@ async function main() {
     for (const databaseName of databases) {
       let client = discoveryClient;
       if (databaseName !== 'postgres') {
-        client = adminClient(databaseName);
+        client = adminClient(databaseName, ca);
         clients.push(client);
         await client.connect();
         databaseClients.set(databaseName, client);
