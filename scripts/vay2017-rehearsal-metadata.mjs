@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { createHash, X509Certificate } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 
 export const QUERY_VERSION = 'v2';
 
@@ -62,7 +63,9 @@ const INTERNAL_ERROR_CODES = new Set([
   'restore_attestation_checksum_invalid',
   'row_count_invalid',
   'unsupported_metadata_relation',
+  'database_ca_invalid',
 ]);
+const RDS_CA_FINGERPRINT = '6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86';
 
 const NODE_CONNECTION_ERROR_CODES = new Set([
   'ECONNABORTED',
@@ -78,10 +81,23 @@ const NODE_CONNECTION_ERROR_CODES = new Set([
   'ERR_TLS_HANDSHAKE_TIMEOUT',
   'CERT_HAS_EXPIRED',
   'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
   'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
 ]);
 const SAFE_ERROR_NAMES = new Set(['Error', 'TypeError', 'RangeError', 'DatabaseError', 'AggregateError']);
 const SAFE_PHASES = new Set(['database-connect', 'database-discovery', 'schema-inventory', 'row-count']);
+
+function trustedRdsCa() {
+  try {
+    const pem = gunzipSync(Buffer.from(process.env.VAY2017_RDS_CA_BUNDLE_GZIP ?? '', 'base64')).toString('utf8');
+    if (new X509Certificate(pem).fingerprint256 !== RDS_CA_FINGERPRINT) throw new Error();
+    return pem;
+  } catch {
+    throw new Error('database_ca_invalid');
+  }
+}
 
 async function beginReadOnly(client) {
   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
@@ -276,6 +292,14 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+  let caBundle;
+  try {
+    caBundle = trustedRdsCa();
+  } catch {
+    console.error(JSON.stringify({ status: 'FAIL', stage: 'configuration', code: 'database_ca_invalid' }));
+    process.exitCode = 1;
+    return;
+  }
 
   const { default: pg } = await import('pg');
   const connect = async (databaseName) => {
@@ -285,7 +309,11 @@ async function main() {
       database: databaseName,
       user: process.env.VAY2017_DB_USER,
       password: process.env.VAY2017_DB_PASSWORD,
-      ssl: { rejectUnauthorized: true },
+      ssl: {
+        ca: caBundle,
+        rejectUnauthorized: true,
+        servername: process.env.VAY2017_DB_HOST,
+      },
       connectionTimeoutMillis: 10_000,
       statement_timeout: 30_000,
       application_name: 'vay2017-metadata-runner-v2',

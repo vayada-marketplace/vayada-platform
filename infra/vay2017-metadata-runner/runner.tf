@@ -405,6 +405,7 @@ resource "aws_ecs_task_definition" "vay2017_metadata" {
       { name = "VAY2017_IMAGE_DIGEST", value = local.vay2017_rehearsal_image_digest },
       { name = "VAY2017_SCANNER_SOURCE_CHECKSUM", value = filesha256("${path.module}/../../scripts/vay2017-rehearsal-metadata.mjs") },
       { name = "VAY2017_READER_FUNCTION_CHECKSUM", value = filesha256("${path.module}/../../scripts/provision-vay2017-metadata-reader.mjs") },
+      { name = "VAY2017_RDS_CA_BUNDLE_GZIP", value = base64gzip(file("${path.module}/../../rehearsal/rds-ca-rsa2048-g1.pem")) },
       { name = "VAY2017_DB_HOST", value = aws_db_instance.vay2017_isolated_restore.address },
       { name = "VAY2017_DB_PORT", value = tostring(aws_db_instance.vay2017_isolated_restore.port) },
     ]

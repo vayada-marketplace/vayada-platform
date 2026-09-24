@@ -121,6 +121,7 @@ resource "aws_ecs_task_definition" "vay2017_reader_bootstrap" {
       { name = "VAY2017_RESTORE_RESOURCE_ID", value = aws_db_instance.vay2017_isolated_restore.resource_id },
       { name = "VAY2017_RESTORE_INSTANCE_ARN", value = aws_db_instance.vay2017_isolated_restore.arn },
       { name = "VAY2017_RESTORE_ATTESTATION_CHECKSUM", value = filesha256("${path.module}/../../scripts/fixtures/vay2017-isolated-restore-plan.json") },
+      { name = "VAY2017_RDS_CA_BUNDLE_GZIP", value = base64gzip(file("${path.module}/../../rehearsal/rds-ca-rsa2048-g1.pem")) },
       { name = "VAY2017_DB_HOST", value = aws_db_instance.vay2017_isolated_restore.address },
       { name = "VAY2017_DB_PORT", value = tostring(aws_db_instance.vay2017_isolated_restore.port) },
       { name = "VAY2017_READER_SECRET_ARN", value = aws_secretsmanager_secret.vay2017_reader_credentials.arn },
