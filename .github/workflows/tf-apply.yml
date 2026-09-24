@@ -321,11 +321,11 @@ jobs:
           jq -e --arg property '65f6b2fc-c783-4963-9d6b-a85f82319769' \
             --arg secret 'arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-finance-expense-worker-url' '
             .enabled == "false" and
-            ((.property == $property and .secret == $secret) or (.property == "" and .secret == null))
+            ((.property == $property and .secret == $secret) or ((.property // "") == "" and .secret == null))
             ' <<<"${actual}" >/dev/null
           jq -e --arg image "${EXPECTED_IMAGE}" '.image == $image' <<<"${actual}" >/dev/null
           jq -e --argjson actual "${actual}" '
-            .enabled == $actual.enabled and .property == $actual.property and .secret == $actual.secret
+            .enabled == $actual.enabled and (.property // "") == ($actual.property // "") and .secret == $actual.secret
             ' <<<"${expected}" >/dev/null
           running_task="$(aws ecs list-tasks --cluster vayada-backend-cluster --service-name vayada-next-api-service --desired-status RUNNING --region "${AWS_REGION}" --query 'taskArns[0]' --output text)"
           test "${running_task}" != "None"
