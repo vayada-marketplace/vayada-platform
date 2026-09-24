@@ -77,8 +77,13 @@ Prepare and independently review an execution path before creating the export:
    no later than dispatch + 15 minutes, including request latency, queue delay
    and preflight. Clock uncertainty must shorten the budget or fail closed;
    server acceptedAt must never move the deadline later. An expired request must fail before claiming work.
-   Bound database and artifact operations; cancellation must stop writes, not
-   merely stop awaiting a promise. A stop request alone is not proof of stop.
+   Bound local database and artifact operations. The guarantee is one local
+   invocation, one eligible first attempt, and a POST-dispatch + 15 minute
+   admission deadline. An S3 or database operation already accepted remotely
+   may complete after local timeout. Treat any such outcome as ambiguous,
+   keep all processing off, and reconcile read-only before claiming success
+   or considering a separately authorized retry. A stop request alone is not
+   proof of stop.
 4. Restrict the task to the dedicated export login and reviewed property/ID;
    run dedicated and general preflights. Keep the expense worker off.
 5. Prepare rollback and disabled/unmapped cleanup before starting. Prove
@@ -88,7 +93,17 @@ Prepare and independently review an execution path before creating the export:
 These are acceptance requirements for the missing mechanism, not claims about
 the current implementation. Any new runner/workflow or changed worker behavior
 requires its own reviewed change and applicable deployment approval. Do not
-promise the 15-minute cap until bounded shutdown and side effects are proven.
+promise a hard remote side-effect cutoff at 15 minutes.
+
+Before a fresh POST, require final stacked PostgreSQL 16/17 and CLI checks,
+independent review, clean app merge composition, immutable image attestation
+and a deployment with workers disabled, a clean platform PR #247 apply,
+exact database and permissions preflights, reviewed fresh-ID execution and
+stop/deregister plans with both service workers disabled and unmapped, and
+explicit exclusive property-window approval. Complete these gates before
+requesting that approval. The base branch filter does not run full CI for an
+app PR stacked on another topic branch; retarget it to main after its
+predecessor merges and pass the final checks.
 
 ## Proposed request and evidence contract
 
