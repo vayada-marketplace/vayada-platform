@@ -233,7 +233,7 @@ async function readerPrivilegeCheck(client) {
 async function provisionRole(client, passwordVerifier, exists) {
   const verb = exists ? 'ALTER ROLE' : 'CREATE ROLE';
   const command = await client.query(
-    `SELECT pg_catalog.format('${verb} %I LOGIN PASSWORD %L NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2', $1, $2) AS sql`,
+    `SELECT pg_catalog.format('${verb} %I LOGIN PASSWORD %L NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2', $1::text, $2::text) AS sql`,
     [reader, passwordVerifier],
   );
   await client.query(command.rows[0].sql);
