@@ -1,9 +1,15 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, pbkdf2Sync, randomBytes, randomUUID } from 'node:crypto';
 import { SecretsManagerClient, PutSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import pg from 'pg';
-import { scramVerifier } from './vay2017-pg-scram.mjs';
 
 const { Client } = pg;
+function scramVerifier(password, salt = randomBytes(16)) {
+  const saltedPassword = pbkdf2Sync(password, salt, 4096, 32, 'sha256');
+  const clientKey = createHmac('sha256', saltedPassword).update('Client Key').digest();
+  const storedKey = createHash('sha256').update(clientKey).digest('base64');
+  const serverKey = createHmac('sha256', saltedPassword).update('Server Key').digest('base64');
+  return `SCRAM-SHA-256$4096:${salt.toString('base64')}$${storedKey}:${serverKey}`;
+}
 const reader = 'vay2017_metadata_reader';
 const helperSchema = 'vay2017_metadata';
 const helperFunction = 'count_table_rows';
