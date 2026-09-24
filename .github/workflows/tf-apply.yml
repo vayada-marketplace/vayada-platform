@@ -296,6 +296,45 @@ jobs:
           cluster: vayada-backend-cluster
           wait-for-service-stability: true
 
+      - name: Verify Finance expense worker state
+        if: steps.next_api_task.outputs.deploy_required == 'true'
+        env:
+          EXPECTED_IMAGE: ${{ steps.next_api_task.outputs.current_image }}
+        run: |
+          set -euo pipefail
+          service="$(aws ecs describe-services --cluster vayada-backend-cluster --services vayada-next-api-service --region "${AWS_REGION}" --query 'services[0]' --output json)"
+          jq -e '.desiredCount == 1 and .runningCount == 1 and .pendingCount == 0 and ([.deployments[] | select(.status == "PRIMARY" and .rolloutState == "COMPLETED")] | length == 1)' <<<"${service}" >/dev/null
+          task_definition="$(jq -r '.taskDefinition' <<<"${service}")"
+          definition="$(aws ecs describe-task-definition --task-definition "${task_definition}" --region "${AWS_REGION}" --query taskDefinition --output json)"
+          worker_state='
+            [.containerDefinitions[] | select(.name == "vayada-next-api")] as $containers
+            | if ($containers | length) != 1 then error("expected one next-api container") else
+                $containers[0] | {
+                  image,
+                  enabled: ([.environment[]? | select(.name == "FINANCE_EXPENSE_WORKER_ENABLED") | .value] | first),
+                  property: ([.environment[]? | select(.name == "FINANCE_EXPENSE_WORKER_PROPERTY_ID") | .value] | first),
+                  secret: ([.secrets[]? | select(.name == "FINANCE_EXPENSE_WORKER_DATABASE_URL") | .valueFrom] | first)
+                }
+              end'
+          expected="$(jq -c "${worker_state}" next-api-task-definition.json)"
+          actual="$(jq -c "${worker_state}" <<<"${definition}")"
+          jq -e --arg property '65f6b2fc-c783-4963-9d6b-a85f82319769' \
+            --arg secret 'arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-finance-expense-worker-url' '
+            .enabled == "false" and
+            ((.property == $property and .secret == $secret) or (.property == "" and .secret == null))
+            ' <<<"${actual}" >/dev/null
+          jq -e --arg image "${EXPECTED_IMAGE}" '.image == $image' <<<"${actual}" >/dev/null
+          jq -e --argjson actual "${actual}" '
+            .enabled == $actual.enabled and .property == $actual.property and .secret == $actual.secret
+            ' <<<"${expected}" >/dev/null
+          running_task="$(aws ecs list-tasks --cluster vayada-backend-cluster --service-name vayada-next-api-service --desired-status RUNNING --region "${AWS_REGION}" --query 'taskArns[0]' --output text)"
+          test "${running_task}" != "None"
+          running="$(aws ecs describe-tasks --cluster vayada-backend-cluster --tasks "${running_task}" --region "${AWS_REGION}" --query 'tasks[0]' --output json)"
+          jq -e --arg task_definition "${task_definition}" --arg digest "${EXPECTED_IMAGE##*@}" '
+            .taskDefinitionArn == $task_definition and .lastStatus == "RUNNING"
+            and ([.containers[] | select(.name == "vayada-next-api" and .lastStatus == "RUNNING" and .imageDigest == $digest)] | length) == 1
+            ' <<<"${running}" >/dev/null
+
       - name: Roll forward auth gateway task definitions
         env:
           ECS_CLUSTER: vayada-backend-cluster
