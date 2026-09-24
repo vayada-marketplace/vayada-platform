@@ -115,12 +115,10 @@ resource "aws_iam_role_policy" "finance_export_controller" {
         Condition = { ArnEquals = { "ecs:cluster" = aws_ecs_cluster.target_database_runtime_preflight.arn } }
       },
       {
-        Effect = "Allow"
-        Action = "ecs:DeregisterTaskDefinition"
-        Resource = [
-          "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/vayada-finance-export-once:*",
-          "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/vayada-next-api-db-runtime-preflight:*"
-        ]
+        Effect    = "Allow"
+        Action    = "ecs:DeregisterTaskDefinition"
+        Resource  = "*"
+        Condition = { StringEquals = { "aws:RequestedRegion" = var.aws_region } }
       },
       {
         Effect = "Allow"
@@ -159,7 +157,7 @@ resource "aws_iam_policy" "finance_export_refresh" {
       },
       {
         Effect   = "Deny"
-        Action   = ["ecs:RegisterTaskDefinition", "ecs:RunTask", "ecs:StartTask", "ecs:DeregisterTaskDefinition", "ecs:DeleteTaskDefinitions"]
+        Action   = ["ecs:RegisterTaskDefinition", "ecs:RunTask", "ecs:StartTask", "ecs:DeleteTaskDefinitions"]
         Resource = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/vayada-finance-export-once:*"
       },
       {

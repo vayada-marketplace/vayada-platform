@@ -21,15 +21,25 @@ The workflow uses the dedicated `vayada-github-actions-finance-export` OIDC
 role and `platform-mutations-v2` environment, restricted to main in GitHub.
 Its IAM trust matches only that environment subject. Export tasks use a
 separate `vayada-finance-export-once` cluster; the existing shared role gets
-no finance PassRole, RunTask, deregistration or StopTask access. An attached boundary explicitly denies finance-family registration,
-execution, deregistration and indirect service deployment, finance task
+no new finance PassRole, RunTask or StopTask access. An attached boundary explicitly denies finance-family registration,
+execution and indirect service deployment, finance task
 stop/exec, and passing finance task roles. Existing non-finance callers retain
 their current permissions. This protects the new finance resources, not all
 possible finance side effects: the legacy shared role still has privileged
-SSM/S3 and preflight-family execution authority. It and existing operators
+SSM/S3, preflight-family execution and global task-definition cleanup authority. It and existing operators
 remain trusted. Full shared writer-boundary enforcement remains a separate
 coordinated-activation gate; do not claim global finance execution isolation.
 Do not migrate unrelated callers as part of this verification.
+
+AWS does not support resource scoping for `ecs:DeregisterTaskDefinition`.
+The dedicated controller therefore has this cleanup action on `*`, limited
+to eu-west-1; reviewed code restricts calls to recorded temporary task ARNs.
+The shared role already has an out-of-module wildcard deregistration policy;
+this change neither adds nor revokes that legacy authority. Family-specific
+denial is unsupported for this action. Verify the dedicated controller
+allow/region denial and record the retained shared-role access with IAM simulation. This unavoidable controller
+cleanup authority is broader than its family-scoped register/run access.
+See the [AWS ECS authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html).
 
 The new task role has no direct S3 permission. The app must assume
 `vayada-finance-export-once-writer` with a session policy restricting PutObject
