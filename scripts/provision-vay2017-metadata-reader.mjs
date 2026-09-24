@@ -21,7 +21,6 @@ const internalCodes = new Set([
   'function_owner_lacks_select',
 ]);
 const phases = new Set(['configuration', 'database-connect', 'database-discovery', 'reader-provision', 'reader-secret']);
-
 function safeFailure(phase, cause) {
   const driverCode = typeof cause?.code === 'string' ? cause.code : '';
   const code = safePgCodes.has(driverCode) || safeNetworkCodes.has(driverCode)
@@ -33,7 +32,6 @@ function safeFailure(phase, cause) {
   const errorClass = names.has(cause?.name) ? cause.name : 'Other';
   return { status: 'FAIL', stage: phases.has(phase) ? phase : 'reader-provision', code, errorClass };
 }
-
 function assertConfiguration() {
   const required = [
     'VAY2017_DB_HOST', 'VAY2017_DB_PORT', 'VAY2017_DB_USER', 'VAY2017_DB_PASSWORD',
@@ -53,7 +51,6 @@ function assertConfiguration() {
     throw new Error('restore_identity_invalid');
   }
 }
-
 function adminClient(database) {
   return new Client({
     host: process.env.VAY2017_DB_HOST,
@@ -67,11 +64,9 @@ function adminClient(database) {
     application_name: 'vay2017-metadata-bootstrap-v1',
   });
 }
-
 function safeIdentifier(value) {
   return `"${String(value).replaceAll('"', '""')}"`;
 }
-
 async function inventoryDatabases(client) {
   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   try {
@@ -90,7 +85,6 @@ async function inventoryDatabases(client) {
     throw error;
   }
 }
-
 async function inventoryTemplateDatabases(client) {
   const result = await client.query(`
     SELECT datname AS database_name
@@ -100,7 +94,6 @@ async function inventoryTemplateDatabases(client) {
   `);
   return result.rows.map((row) => row.database_name);
 }
-
 async function readerPrivilegeCheck(client) {
   const result = await client.query(`
     -- PG16+ adds this exact immutable admin-only membership when the CREATEROLE user creates a role.
@@ -209,7 +202,6 @@ async function readerPrivilegeCheck(client) {
     throw new Error('reader_privilege_check_failed');
   }
 }
-
 async function provisionRole(client, passwordVerifier, exists) {
   const verb = exists ? 'ALTER ROLE' : 'CREATE ROLE';
   const command = await client.query(
