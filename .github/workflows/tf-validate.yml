@@ -53,6 +53,7 @@ on:
       - "scripts/test-next-api-split-compatible-image.py"
       - "scripts/run-finance-export-once.py"
       - "scripts/test-finance-export-once.py"
+      - "scripts/assert-finance-export-bootstrap-plan.py"
       - ".github/workflows/finance-export-once.yml"
       - "scripts/assert-terraform-protected-resources.sh"
       - "scripts/test-marketplace-communication-unsubscribe-keys.mjs"
