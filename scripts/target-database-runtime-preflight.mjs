@@ -14,6 +14,7 @@ const requiredRelationPrivileges = {
 const stagedRelationPrivileges = {
   "finance.expense_categories": ["INSERT"],
   "finance.expenses": ["INSERT"],
+  "finance.recurring_expense_rules": ["INSERT"],
   "platform.domain_events": ["INSERT"],
   "platform.jobs": ["INSERT"],
 };

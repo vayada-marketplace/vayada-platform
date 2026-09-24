@@ -32,6 +32,7 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertIn('"platform.jobs": ["INSERT"]', CHECK)
         self.assertIn('"finance.expense_categories": ["INSERT"]', CHECK)
         self.assertIn('"finance.expenses": ["INSERT"]', CHECK)
+        self.assertIn('"finance.recurring_expense_rules": ["INSERT"]', CHECK)
         self.assertIn('code === "runtime_relation_read_missing"', CHECK)
         self.assertIn("'platform.channex_management_worker_properties'", CHECK)
         self.assertIn("'platform.pricing_runtime_property_scopes'", CHECK)

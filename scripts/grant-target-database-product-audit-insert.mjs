@@ -327,7 +327,7 @@ try {
   );
   const supportsMaintain = version.rows[0].value >= 170000;
   const scope = process.env.VAYADA_DB_GRANT_SCOPE ?? "audit_insert";
-  if (!["audit_insert", "affiliate_read", "platform_runtime_read", "domain_events_append", "jobs_insert", "expense_category_insert", "expense_insert"].includes(scope))
+  if (!["audit_insert", "affiliate_read", "platform_runtime_read", "domain_events_append", "jobs_insert", "expense_category_insert", "expense_insert", "recurring_expense_insert"].includes(scope))
     throw new Error("unknown_grant_scope");
   const role = await client.query(
     "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vayada_next_api_runtime'",
@@ -345,6 +345,8 @@ try {
     await grantFinanceInsert(client, supportsMaintain, "finance.expense_categories", "expense_categories");
   } else if (scope === "expense_insert") {
     await grantFinanceInsert(client, supportsMaintain, "finance.expenses", "expenses");
+  } else if (scope === "recurring_expense_insert") {
+    await grantFinanceInsert(client, supportsMaintain, "finance.recurring_expense_rules", "recurring_expense_rules");
   } else {
     const check = await client.query(`
       SELECT current_user = pg_catalog.pg_get_userbyid(table_info.relowner) AS is_table_owner
@@ -396,6 +398,9 @@ try {
     "expenses_table_owner_required",
     "expenses_runtime_write_scope_too_broad",
     "expenses_runtime_insert_missing",
+    "recurring_expense_rules_table_owner_required",
+    "recurring_expense_rules_runtime_write_scope_too_broad",
+    "recurring_expense_rules_runtime_insert_missing",
     "unknown_grant_scope",
   ]);
   const code = expected.has(error.message) ? error.message : error.code ?? "runtime_grant_failed";
