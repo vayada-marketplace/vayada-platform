@@ -30,13 +30,14 @@ concurrency:
 jobs:
   verify:
     if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-finance-export
           aws-region: eu-west-1
       - name: Check request deadline before any preflight task
         env:

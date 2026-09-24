@@ -32,7 +32,6 @@ data "aws_iam_policy_document" "target_database_preflight_deploy" {
     actions = ["ecs:RunTask"]
     resources = [
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/vayada-next-api-db-runtime-preflight:*",
-      "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/vayada-finance-export-once:*",
     ]
 
     condition {
@@ -49,7 +48,6 @@ data "aws_iam_policy_document" "target_database_preflight_deploy" {
     actions = ["ecs:DeregisterTaskDefinition"]
     resources = [
       "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/vayada-next-api-db-runtime-preflight:*",
-      "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/vayada-finance-export-once:*",
     ]
   }
 

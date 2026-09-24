@@ -65,7 +65,6 @@ data "aws_iam_policy_document" "github_actions_platform_deploy" {
       "arn:aws:iam::${var.aws_account_id}:role/ecsTaskExecutionRole",
       "arn:aws:iam::${var.aws_account_id}:role/ecsTaskRole",
       "arn:aws:iam::${var.aws_account_id}:role/vayada-next-api-media-task-role",
-      aws_iam_role.finance_export_once.arn,
     ]
 
     condition {

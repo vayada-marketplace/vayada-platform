@@ -17,6 +17,20 @@ region and application revision. It invokes the app-owned
 `apps/api/dist/jobs/runFinanceDashboardExportOnce.js`; it never starts the API
 server, migration launcher or polling timer. Service worker flags remain off.
 
+The workflow uses the dedicated `vayada-github-actions-finance-export` OIDC
+role and `platform-mutations-v2` environment, restricted to main in GitHub.
+Its IAM trust matches only that environment subject. Export tasks use a
+separate `vayada-finance-export-once` cluster; the existing shared role gets
+no finance PassRole, RunTask, deregistration or StopTask access. An attached boundary explicitly denies finance-family registration,
+execution, deregistration and indirect service deployment, finance task
+stop/exec, and passing finance task roles. Existing non-finance callers retain
+their current permissions. This protects the new finance resources, not all
+possible finance side effects: the legacy shared role still has privileged
+SSM/S3 and preflight-family execution authority. It and existing operators
+remain trusted. Full shared writer-boundary enforcement remains a separate
+coordinated-activation gate; do not claim global finance execution isolation.
+Do not migrate unrelated callers as part of this verification.
+
 The new task role has no direct S3 permission. The app must assume
 `vayada-finance-export-once-writer` with a session policy restricting PutObject
 to the exact Dashboard CSV key and absolute deadline. The base writer permits
@@ -35,9 +49,14 @@ acceptance requires the protected readback below.
 
 Before any POST: complete app and platform review, test their combined path,
 merge/deploy the app entry point and attest its immutable image, review a clean
-Terraform plan for the two roles/policies and narrow RunTask/PassRole changes,
-apply only under the authorized infrastructure process, and verify the actual
-role permissions. The existing image does not contain this new entry point.
+Terraform plan for the isolated cluster, three roles/policies and refresh/boundary
+attachment. Bootstrap these resources with an authorized principal
+using a reviewed saved Terraform plan before merging: the shared apply role
+cannot create roles or update its own policy. It receives only read access
+to refresh the installed resources; future finance IAM changes require the
+same authorized bootstrap process. Never grant it finance role management
+or self-policy mutation. Verify the actual role permissions and main-only
+GitHub environment restriction before dispatch. The existing image does not contain this new entry point.
 No Terraform apply or workflow dispatch has been performed for this draft.
 
 ## Owners and baseline

@@ -11,7 +11,7 @@ import time
 
 ACCOUNT = "269416271598"
 REGION = "eu-west-1"
-CLUSTER = "vayada-target-database-runtime-preflight"
+CLUSTER = "vayada-finance-export-once"
 SERVICE_CLUSTER = "vayada-backend-cluster"
 SERVICE = "vayada-next-api-service"
 FAMILY = "vayada-finance-export-once"

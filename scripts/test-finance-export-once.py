@@ -40,6 +40,18 @@ def render(source):
     return r["task_definition"](source, EXPORT, DISPATCH, DIGEST, SOURCE, NOW)
 
 
+class BootstrapPlanTest(unittest.TestCase):
+    def test_only_exact_new_resources_can_be_bootstrapped(self):
+        guard = runpy.run_path(str(Path(__file__).with_name("assert-finance-export-bootstrap-plan.py")))
+        plan = {"resource_changes": [{"address": a, "change": {"actions": ["create"]}} for a in guard["EXPECTED"]]}
+        guard["validate"](plan)
+        for actions in (["update"], ["delete", "create"]):
+            altered = copy.deepcopy(plan); altered["resource_changes"][0]["change"]["actions"] = actions
+            with self.assertRaises(ValueError): guard["validate"](altered)
+        extra = copy.deepcopy(plan); extra["resource_changes"].append({"address": "aws_ecs_service.next_api", "change": {"actions": ["update"]}})
+        with self.assertRaises(ValueError): guard["validate"](extra)
+
+
 class ContractTest(unittest.TestCase):
     def test_task_copies_only_reviewed_permissions_and_configuration(self):
         result = render(baseline())
