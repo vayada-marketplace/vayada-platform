@@ -480,6 +480,7 @@ data "aws_iam_policy_document" "vay2017_state_machine" {
     sid     = "PassOnlyFixedTaskExecutionRole"
     actions = ["iam:PassRole"]
     resources = [
+      aws_iam_role.vay2017_inventory_execution.arn,
       aws_iam_role.vay2017_task_execution.arn,
       aws_iam_role.vay2017_bootstrap_task.arn,
     ]

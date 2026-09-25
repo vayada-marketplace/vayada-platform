@@ -41,6 +41,11 @@ test('ECS runTask.sync result selects the top-level task ARN for both fixed task
   }
 });
 
+test('state machine may pass only the fixed inventory and bootstrap task roles', () => {
+  assert.match(runnerTf, /sid\s*=\s*"PassOnlyFixedTaskExecutionRole"[\s\S]*?resources\s*=\s*\[\s*aws_iam_role\.vay2017_inventory_execution\.arn,\s*aws_iam_role\.vay2017_task_execution\.arn,\s*aws_iam_role\.vay2017_bootstrap_task\.arn,?\s*\]/);
+  assert.match(runnerTf, /variable\s*=\s*"iam:PassedToService"\s*values\s*=\s*\["ecs-tasks.amazonaws.com"\]/);
+});
+
 test('VPC security groups use standalone resources for all rules', () => {
   assert.doesNotMatch(runnerTf, /^\s+(?:ingress|egress)\s*(?:\{|=)/m);
   const rules = [
