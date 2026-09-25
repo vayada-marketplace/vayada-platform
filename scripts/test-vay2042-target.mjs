@@ -33,7 +33,17 @@ test('fresh target bootstrap with a non-superuser administrator', async (t) => {
     await client.query('REVOKE CREATE ON SCHEMA public FROM PUBLIC');
     await client.query("CREATE TABLE public.retained(id int PRIMARY KEY, value text); INSERT INTO public.retained VALUES(1,'synthetic-only')");
   }
-  const connect = (database) => open(database, 'fixture_bootstrap', 'fixture-admin');
+  let active = 0;
+  let peak = 0;
+  const connect = async (database) => {
+    assert.ok(active < 2, 'bootstrap must keep at most the control session and one temporary client');
+    const client = await open(database, 'fixture_bootstrap', 'fixture-admin');
+    peak = Math.max(peak, ++active);
+    const end = client.end.bind(client);
+    client.end = async () => { try { await end(); } finally { active -= 1; } };
+    return client;
+  };
+  t.afterEach(() => assert.equal(active, 0, 'bootstrap must close all its clients after success or failure'));
   let persisted;
   const persistCredential = async (value) => {
     assert.deepEqual(await roleState(), [{ rolcanlogin: false }]);
@@ -136,8 +146,17 @@ test('fresh target bootstrap with a non-superuser administrator', async (t) => {
     await assert.rejects(provisionTarget({ connect, persistCredential }), /target_writer_exists_inspect_prior_attempt/);
     await discard();
   });
+  await t.test('rechecks the target identity after reopening for the final boundary', async () => {
+    let targetConnections = 0;
+    const swapped = (database) => connect(database === target && ++targetConnections === 2 ? 'vayada_target_prod' : database);
+    await assert.rejects(provisionTarget({ connect: swapped, persistCredential }), /target_database_connection_mismatch/);
+    assert.deepEqual(await roleState(), [{ rolcanlogin: false }]);
+    assert.equal(persisted, undefined);
+    await discard();
+  });
   await t.test('allows target migrations but rejects source and attestation mutation', async () => {
     assert.deepEqual(await provisionTarget({ connect, persistCredential }), { status: 'OK', scope: 'isolated-fresh-target', bound: false });
+    assert.equal(peak, 2);
     const role = (await root.query('SELECT * FROM pg_authid WHERE rolname=$1', [writer])).rows[0];
     assert.ok(role.rolpassword.startsWith('SCRAM-SHA-256$'));
     assert.ok(role.rolvaliduntil > new Date());

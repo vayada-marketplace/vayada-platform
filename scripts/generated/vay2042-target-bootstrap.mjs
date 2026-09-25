@@ -202,9 +202,19 @@ async function verifyAttestor(client) {
   requireTrue(result.rows[0]?.valid === true, "target_attestor_untrusted");
 }
 async function provisionTarget({ connect, persistCredential, now = () => Date.now() }) {
-  const clients = /* @__PURE__ */ new Map();
   const control = await connect("postgres");
-  clients.set("postgres", control);
+  const withDatabase = async (database, action) => {
+    const client = database === "postgres" ? control : await connect(database);
+    try {
+      requireTrue(
+        (await client.query("SELECT current_database() AS name")).rows[0]?.name === database,
+        "target_database_connection_mismatch"
+      );
+      return await action(client);
+    } finally {
+      if (client !== control) await client.end();
+    }
+  };
   let locked = false;
   try {
     locked = (await control.query("SELECT pg_try_advisory_lock(204220260925) AS locked")).rows[0]?.locked === true;
@@ -220,13 +230,8 @@ async function provisionTarget({ connect, persistCredential, now = () => Date.no
     const databases = (await control.query(`SELECT datname FROM pg_database
       WHERE datallowconn AND NOT datistemplate AND datname <> 'rdsadmin' ORDER BY datname`)).rows.map((r) => r.datname);
     requireTrue(JSON.stringify(databases) === JSON.stringify(vay2042_source_reader_default.databases), "restore_database_inventory_changed");
-    for (const database of databases) {
-      if (database !== "postgres") clients.set(database, await connect(database));
-      requireTrue(
-        (await clients.get(database).query("SELECT current_database() AS name")).rows[0]?.name === database,
-        "target_database_connection_mismatch"
-      );
-    }
+    for (const database of databases) await withDatabase(database, async () => {
+    });
     const password = randomBytes2(36).toString("base64url");
     await control.query("BEGIN");
     try {
@@ -244,54 +249,55 @@ async function provisionTarget({ connect, persistCredential, now = () => Date.no
       await control.query("ROLLBACK");
       throw error;
     }
-    for (const client of clients.values()) await verifyOldDatabase(client);
+    for (const database of databases) await withDatabase(database, verifyOldDatabase);
     await control.query(`CREATE DATABASE ${ident(target)} TEMPLATE template0 ALLOW_CONNECTIONS false`);
     await control.query(`REVOKE ALL ON DATABASE ${ident(target)} FROM PUBLIC`);
     await control.query(`ALTER DATABASE ${ident(target)} ALLOW_CONNECTIONS true`);
-    const fresh = await connect(target);
-    clients.set(target, fresh);
-    requireTrue((await fresh.query("SELECT current_database() AS name")).rows[0]?.name === target, "target_database_connection_mismatch");
-    requireTrue((await fresh.query(`SELECT 1 FROM pg_namespace WHERE nspname <> 'public'
-      AND nspname <> 'information_schema' AND nspname !~ '^pg_'
-      UNION ALL SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public'
-      UNION ALL SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-      WHERE n.nspname='public'
-      UNION ALL SELECT 1 FROM pg_default_acl`)).rowCount === 0, "target_template_not_clean");
-    await fresh.query("BEGIN");
-    try {
-      await fresh.query("REVOKE ALL ON SCHEMA public FROM PUBLIC");
-      await fresh.query(`GRANT CONNECT, CREATE ON DATABASE ${ident(target)} TO ${ident(writer)}`);
-      await fresh.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${ident(writer)}`);
-      await fresh.query(`CREATE SCHEMA vayada_migration_evidence AUTHORIZATION ${ident(attestor)}`);
-      await fresh.query(`SET LOCAL ROLE ${ident(attestor)}`);
-      await fresh.query(`REVOKE ALL ON SCHEMA vayada_migration_evidence FROM PUBLIC;
-        CREATE TABLE vayada_migration_evidence.database_attestations (
-          attestation_key text PRIMARY KEY, attestation_value text NOT NULL,
-          attested_at timestamptz NOT NULL DEFAULT now());
-        REVOKE ALL ON vayada_migration_evidence.database_attestations FROM PUBLIC;
-        GRANT USAGE ON SCHEMA vayada_migration_evidence TO ${ident(writer)};
-        GRANT SELECT ON vayada_migration_evidence.database_attestations TO ${ident(writer)}`);
-      await fresh.query("COMMIT");
-    } catch (error) {
-      await fresh.query("ROLLBACK");
-      throw error;
-    }
-    for (const database of databases) await verifyOldDatabase(clients.get(database));
-    await verifyAttestor(fresh);
-    const boundary = (await fresh.query(`SELECT
-      NOT pg_has_role($1, $2, 'MEMBER')
-      AND NOT has_schema_privilege($1, n.oid, 'CREATE')
-      AND has_table_privilege($1, c.oid, 'SELECT')
-      AND NOT has_table_privilege($1, c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
-      AND NOT has_any_column_privilege($1, c.oid, 'INSERT,UPDATE,REFERENCES')
-      AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname=$2) AND n.nspowner=c.relowner
-      AND has_database_privilege($1, current_database(), 'CONNECT')
-      AND has_database_privilege($1, current_database(), 'CREATE')
-      AND NOT has_database_privilege($1, current_database(), 'TEMP') AS valid
-      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='vayada_migration_evidence' AND c.relname='database_attestations'`, [writer, attestor])).rows[0];
-    requireTrue(boundary?.valid === true, "target_evidence_boundary_mismatch");
+    await withDatabase(target, async (fresh) => {
+      requireTrue((await fresh.query(`SELECT 1 FROM pg_namespace WHERE nspname <> 'public'
+        AND nspname <> 'information_schema' AND nspname !~ '^pg_'
+        UNION ALL SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public'
+        UNION ALL SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+        WHERE n.nspname='public'
+        UNION ALL SELECT 1 FROM pg_default_acl`)).rowCount === 0, "target_template_not_clean");
+      await fresh.query("BEGIN");
+      try {
+        await fresh.query("REVOKE ALL ON SCHEMA public FROM PUBLIC");
+        await fresh.query(`GRANT CONNECT, CREATE ON DATABASE ${ident(target)} TO ${ident(writer)}`);
+        await fresh.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${ident(writer)}`);
+        await fresh.query(`CREATE SCHEMA vayada_migration_evidence AUTHORIZATION ${ident(attestor)}`);
+        await fresh.query(`SET LOCAL ROLE ${ident(attestor)}`);
+        await fresh.query(`REVOKE ALL ON SCHEMA vayada_migration_evidence FROM PUBLIC;
+          CREATE TABLE vayada_migration_evidence.database_attestations (
+            attestation_key text PRIMARY KEY, attestation_value text NOT NULL,
+            attested_at timestamptz NOT NULL DEFAULT now());
+          REVOKE ALL ON vayada_migration_evidence.database_attestations FROM PUBLIC;
+          GRANT USAGE ON SCHEMA vayada_migration_evidence TO ${ident(writer)};
+          GRANT SELECT ON vayada_migration_evidence.database_attestations TO ${ident(writer)}`);
+        await fresh.query("COMMIT");
+      } catch (error) {
+        await fresh.query("ROLLBACK");
+        throw error;
+      }
+    });
+    for (const database of databases) await withDatabase(database, verifyOldDatabase);
+    await withDatabase(target, async (fresh) => {
+      await verifyAttestor(fresh);
+      const boundary = (await fresh.query(`SELECT
+        NOT pg_has_role($1, $2, 'MEMBER')
+        AND NOT has_schema_privilege($1, n.oid, 'CREATE')
+        AND has_table_privilege($1, c.oid, 'SELECT')
+        AND NOT has_table_privilege($1, c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+        AND NOT has_any_column_privilege($1, c.oid, 'INSERT,UPDATE,REFERENCES')
+        AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname=$2) AND n.nspowner=c.relowner
+        AND has_database_privilege($1, current_database(), 'CONNECT')
+        AND has_database_privilege($1, current_database(), 'CREATE')
+        AND NOT has_database_privilege($1, current_database(), 'TEMP') AS valid
+        FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='vayada_migration_evidence' AND c.relname='database_attestations'`, [writer, attestor])).rows[0];
+      requireTrue(boundary?.valid === true, "target_evidence_boundary_mismatch");
+    });
     await persistCredential({ username: writer, password, database: target });
     try {
       await control.query(`ALTER ROLE ${ident(writer)} LOGIN`);
@@ -302,8 +308,8 @@ async function provisionTarget({ connect, persistCredential, now = () => Date.no
   } finally {
     if (locked) await control.query("SELECT pg_advisory_unlock(204220260925)").catch(() => {
     });
-    await Promise.all([...clients.values()].map((client) => client.end().catch(() => {
-    })));
+    await control.end().catch(() => {
+    });
   }
 }
 
