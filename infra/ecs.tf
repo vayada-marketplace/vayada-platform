@@ -331,7 +331,8 @@ locals {
         { name = "AUTH_SUCCESS_URL", value = "https://next-admin.vayada.com/dashboard" },
         { name = "FINANCE_EXPENSE_WORKER_ENABLED", value = "false" },
         { name = "FINANCE_EXPENSE_WORKER_PROPERTY_ID", value = var.finance_expense_worker_property_id },
-        { name = "FINANCE_EXPORT_WORKER_ENABLED", value = "false" },
+        { name = "FINANCE_EXPORT_WORKER_ENABLED", value = tostring(var.finance_export_worker_enabled) },
+        { name = "FINANCE_EXPORT_WORKER_ACCEPTED_AFTER", value = var.finance_export_worker_accepted_after },
         { name = "FINANCE_EXPORT_WORKER_PROPERTY_ID", value = var.finance_export_worker_property_id },
         { name = "AUTH_LOGOUT_URL", value = "https://next-admin.vayada.com/login" },
         { name = "AUTH_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
@@ -371,7 +372,7 @@ locals {
         { name = "AUTH_LEGACY_AFFILIATE_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         ], var.finance_expense_worker_secret_mapped ? [
         { name = "FINANCE_EXPENSE_WORKER_DATABASE_URL", valueFrom = "/vayada/prod/target-database-finance-expense-worker-url" },
-        ] : [], var.finance_export_worker_secret_mapped ? [
+        ] : [], (var.finance_export_worker_secret_mapped || var.finance_export_worker_enabled) ? [
         { name = "FINANCE_EXPORT_WORKER_DATABASE_URL", valueFrom = "/vayada/prod/target-database-finance-export-worker-url" },
         ] : [], local.resend_receipts_enabled ? [
         { name = "RESEND_WEBHOOK_SECRET", valueFrom = "/vayada/prod/resend-webhook-secret" },
@@ -523,7 +524,7 @@ resource "aws_ecs_task_definition" "services" {
   task_role_arn            = try(each.value.task_role_arn, data.aws_iam_role.ecs_task.arn)
 
   container_definitions = jsonencode([
-    {
+    merge({
       name      = each.value.name
       image     = "${var.aws_account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${local.ecr_repo_map[each.key]}:${startswith(each.key, "next-") ? "next-latest" : "latest"}"
       essential = true
@@ -536,10 +537,13 @@ resource "aws_ecs_task_definition" "services" {
         }
       ]
 
-      environment = contains(local.auth_gateway_enabled_services, each.key) ? concat([
+      environment = concat(contains(local.auth_gateway_enabled_services, each.key) ? concat([
         { name = local.auth_gateway_public_origin_environment_name, value = local.auth_gateway_contracts[each.key].public_origin },
         { name = local.auth_gateway_upstream_origin_environment_name, value = local.auth_gateway_contracts[each.key].upstream_origin },
-      ], each.value.environment) : each.value.environment
+        ], each.value.environment) : each.value.environment, each.key == "next-target-backend" && var.finance_export_worker_enabled ? [
+        { name = "NODE_EXTRA_CA_CERTS", value = "/tmp/finance-export-rds-ca.pem" },
+        { name = "FINANCE_EXPORT_RDS_CA", value = file("${path.module}/../rehearsal/rds-ca-rsa2048-g1.pem") },
+      ] : [])
       secrets = length(each.value.secrets) > 0 ? [
         for s in each.value.secrets : {
           name      = s.name
@@ -555,7 +559,9 @@ resource "aws_ecs_task_definition" "services" {
           "awslogs-stream-prefix" = "ecs"
         }
       }
-    }
+      }, each.key == "next-target-backend" && var.finance_export_worker_enabled ? {
+      command = ["sh", "-c", "umask 077; printf '%s' \"$FINANCE_EXPORT_RDS_CA\" > \"$NODE_EXTRA_CA_CERTS\" && exec ./scripts/start-next-api.sh"]
+    } : {})
   ])
 
   tags = contains(["staging-pms-backend", "next-target-backend"], each.key) ? {} : {
@@ -566,16 +572,18 @@ resource "aws_ecs_task_definition" "services" {
     create_before_destroy = true
 
     precondition {
-      condition = (
-        each.key != "next-target-backend" ||
-        (
-          lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_ENABLED", "") == "false" &&
-          lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_EXPORT_ID", "") == "" &&
-          lookup({ for entry in each.value.environment : entry.name => entry.value }, "FINANCE_EXPORT_WORKER_PROPERTY_ID", "") == "" &&
-          lookup({ for secret in each.value.secrets : secret.name => secret.valueFrom }, "FINANCE_EXPORT_WORKER_DATABASE_URL", "") == ""
+      condition = each.key != "next-target-backend" || (
+        var.finance_export_worker_enabled ? (
+          var.finance_export_worker_property_id == "" &&
+          var.finance_export_worker_accepted_after != "" &&
+          filesha256("${path.module}/../rehearsal/rds-ca-rsa2048-g1.pem") == "f5c5f92ae025987c76dc49bdb1ace8556fdf332b4788d719a923bc274779d869"
+          ) : (
+          var.finance_export_worker_accepted_after == "" &&
+          var.finance_export_worker_property_id == "" &&
+          !var.finance_export_worker_secret_mapped
         )
       )
-      error_message = "Finance export final rollback must be disabled with no export ID, property scope, or database secret mapping."
+      error_message = "Ongoing exports require a fixed cutoff, no exact-property scope and the pinned RDS CA; disabled exports must be unmapped."
     }
 
     precondition {
