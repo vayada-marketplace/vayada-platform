@@ -5,6 +5,12 @@ remain historical and must not be overwritten to look current.
 
 ## Current evidence
 
+- `final-candidate-publication.json`: exact fresh candidate selected for production;
+- `production-activation.json`: hold resumes, six-service activation, duplicate
+  no-op, stale-event fence, deployed identities, and restored workflow states;
+- `production-smoke.json`: bounded production release and browser smoke;
+- `matched-measurements.json`: measured backend-only/cutover/no-op samples and
+  explicit sample gaps;
 - `candidate-publication.json`: exact non-production candidate publication;
 - `hosted-rehearsal.json`: isolated recovery and lock rehearsal;
 - `affected-input-rehearsal.json`: dependency-selection rehearsal;
@@ -13,26 +19,26 @@ remain historical and must not be overwritten to look current.
 - `iam-bootstrap-plan.json` and `iam-managed-policy-plan.json`: historical,
   consumed IAM plans; never reuse them.
 
-The current pause-window snapshot, holds, exact candidate, and installed writer
-boundary are recorded in `../../coordinated-release-activation.md`.
+The historical pause-window snapshot, hold reconciliation, activated candidate,
+and installed writer boundary are recorded in
+`../../coordinated-release-activation.md`.
 
 ## Acceptance map
 
 | Acceptance criterion | Evidence | State |
 | --- | --- | --- |
-| AC1 runbook/cutover inventory | activation runbook, candidate publication | Prepared; refresh immediately before mutation |
-| AC2 integrated recovery | hosted and affected-input rehearsals plus targeted test suites | Partial; final combined scenario matrix/rerun evidence still required |
-| AC3 independent review | PR #274 review; final combined review still required | Partial |
-| AC4 exact approval | approval must name artifact/hashes and operations | Missing |
-| AC5 stale writer fencing | PRs #262/#265/#272 and runs in activation runbook | Satisfied |
-| AC6 coordinated activation | production activation record | Missing |
-| AC7 real release/product smoke | production activation and smoke records | Missing |
-| AC8 result accounting/recovery | hosted rehearsal | Satisfied for rehearsal |
-| AC9 matched measurements | backend-only/shared-package/burst evidence | Missing |
-| AC10 affected-only/reuse/overlap | affected-input + hosted rehearsal; production proof pending | Partial |
+| AC1 runbook/cutover inventory | activation runbook, final candidate, preflight snapshots | Satisfied |
+| AC2 integrated recovery | hosted and affected-input rehearsals plus targeted suites | Satisfied |
+| AC3 independent review | PRs #274/#275/#276 and independent image review | Satisfied |
+| AC4 exact approval | approval named artifact `10867296213` and four broad operational steps, but did not restate both hashes/revision/full sub-action tuple | Partial |
+| AC5 stale writer fencing | PRs #262/#265/#272 plus run `36161462488` | Satisfied |
+| AC6 coordinated activation | `production-activation.json` | Satisfied |
+| AC7 real release/product smoke | activation smokes and browser canary `36161297153` | Partial; authenticated business-data reads remain and Finance product impact is unknown |
+| AC8 result accounting/recovery | hosted rehearsal plus post-activation preflights `36161738886`/`36161818636` | Partial; `next-target-backend` task `1162` needs reviewed least-privilege reads on four exact Finance relations and a passing runtime preflight |
+| AC9 matched measurements | `matched-measurements.json` | Partial; shared-package and merge-burst samples remain |
+| AC10 affected-only/reuse/overlap | one API build/five reused plus 1.33-second frontend start spread | Satisfied |
 | AC11 safe system rollback | activation runbook + hosted rehearsal | Prepared; production path unexercised |
-| AC12 final exact evidence | final activation/smoke/measurement records | Missing |
+| AC12 final exact evidence | final activation/smoke/measurement records | Satisfied with limitations stated |
 
-After an approved activation, add immutable `production-activation.json`,
-`production-smoke.json`, and `matched-measurements.json` records. Keep VAY-2029
-In Progress until those records and explicit human acceptance exist.
+Keep VAY-2029 In Progress until the four partial acceptance rows are closed and
+the human explicitly accepts the result.

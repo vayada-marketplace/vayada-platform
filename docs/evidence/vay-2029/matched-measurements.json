@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-25T16:35:45Z",
+  "definitions": {
+    "mergeToLive": "application main merge timestamp to last required successful service smoke",
+    "queue": "receiver run creation to first production-lock job start",
+    "rollout": "first production service operation start to last required successful service smoke"
+  },
+  "backendOnlyRelease": {
+    "sampleCount": 1,
+    "sourceSha": "f2f02832f8db0e02859871becb6210a811639842",
+    "mergedAt": "2026-09-25T13:23:02Z",
+    "lastRequiredServiceSmokeAt": "2026-09-25T16:25:48.774813Z",
+    "mergeToLiveSeconds": 10966.774813,
+    "imagesBuilt": 1,
+    "imagesReused": 5,
+    "affectedServices": ["next-target-backend"]
+  },
+  "activationWindow": {
+    "apiResumeFirstOperationAt": "2026-09-25T16:10:20.990490Z",
+    "lastRequiredServiceSmokeAt": "2026-09-25T16:25:48.774813Z",
+    "rolloutSeconds": 927.784323,
+    "activationRunCreatedAt": "2026-09-25T16:20:53Z",
+    "activationPrepareStartedAt": "2026-09-25T16:20:58Z",
+    "activationQueueSeconds": 5,
+    "parallelFrontendOperations": {
+      "next-marketplace-frontend": {"startedAt": "2026-09-25T16:22:40.429335Z", "completedAt": "2026-09-25T16:25:28.616485Z"},
+      "next-pms-frontend": {"startedAt": "2026-09-25T16:22:40.628560Z", "completedAt": "2026-09-25T16:25:33.237595Z"},
+      "next-marketplace-admin": {"startedAt": "2026-09-25T16:22:41.209364Z", "completedAt": "2026-09-25T16:25:46.508644Z"},
+      "next-booking-admin": {"startedAt": "2026-09-25T16:22:41.761519Z", "completedAt": "2026-09-25T16:25:48.774813Z"}
+    },
+    "parallelFrontendFirstStartAt": "2026-09-25T16:22:40.429335Z",
+    "parallelFrontendLastStartAt": "2026-09-25T16:22:41.761519Z",
+    "parallelFrontendStartSpreadSeconds": 1.332184,
+    "actualEcsMutations": 6,
+    "failedServices": 0,
+    "rolledBackServices": 0,
+    "initialHeldServices": 2,
+    "remainingHeldServices": 0
+  },
+  "duplicateReplay": {
+    "sampleCount": 1,
+    "actualEcsMutations": 0,
+    "successfulServices": 6
+  },
+  "historicalContext": {
+    "mergedPullRequests": 815,
+    "legacyWorkflowStarts": 2338,
+    "note": "Historical workflow starts include canceled and unsuccessful work and are not a matched control for ECS mutations."
+  },
+  "insufficientSamples": {
+    "postActivationFinanceRuntimePreflight": "blocked on SELECT access to four exact relations for next-target-backend task vayada-next-api:1162",
+    "postActivationSharedPackageRelease": "missing",
+    "postActivationThreeOrMoreMergeBurst": "missing",
+    "queueMedian": "not reported; fewer than 3 matched post-activation samples",
+    "queueP90": "not reported; fewer than 10 matched post-activation samples",
+    "reductionPercentage": "not reported; no matched control window"
+  },
+  "rawSources": {
+    "operationIntervals": "SSM operation records for release-36160171047-1",
+    "mutationEvents": "production-activation.json CloudTrail event IDs and observation window",
+    "workflowTiming": "GitHub Actions runs named in production-activation.json"
+  }
+}
