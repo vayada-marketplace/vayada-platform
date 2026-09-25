@@ -76,3 +76,15 @@ preflights, a clean Terraform plan and service health verification still apply.
 Rollback sets the enabled flag to false and clears the cutoff, property scope,
 and secret-mapped flag. Preserve all request, attempt, audit and artifact rows.
 The expense worker and other release switches are independent of this setting.
+
+
+## All-hotel activation on 2026-09-25
+
+`infra/finance_export_ongoing.auto.tfvars.json` fixes the acceptance cutoff at
+`2026-09-25T05:01:48.721Z`. Retain this timestamp across restarts and deployments.
+The reviewed API source is `f38ac1efdbd3eae46d538857e43bbe74d31c7aa1`.
+Existing jobs before the cutoff stay untouched; live CSV download verification
+is explicitly waived. Deployment of an older image while ongoing exports are
+enabled is rejected by the split-image guard. Add future compatible images to
+the ongoing compatibility list only after review. For rollback, disable/unmap
+exports first while retaining this image, the migration and job/artifact evidence.

@@ -398,14 +398,14 @@ jobs:
             --image-ids "imageDigest=${DEPLOY_DIGEST}" \
             --region "${AWS_REGION}" > deploy-next-api-image.json
           python3 scripts/assert-next-api-split-compatible-image.py \
-            "${SERVICE}" "${ECR_REPOSITORY}" "${DEPLOY_DIGEST}" deploy-next-api-image.json
+            "${SERVICE}" "${ECR_REPOSITORY}" "${DEPLOY_DIGEST}" deploy-next-api-image.json task-definition.json
           if [ "${ROLLBACK_AVAILABLE}" = "true" ]; then
             aws ecr describe-images \
               --repository-name "${ECR_REPOSITORY}" \
               --image-ids "imageDigest=${ROLLBACK_DIGEST}" \
               --region "${AWS_REGION}" > rollback-next-api-image.json
             python3 scripts/assert-next-api-split-compatible-image.py \
-              "${SERVICE}" "${ECR_REPOSITORY}" "${ROLLBACK_DIGEST}" rollback-next-api-image.json
+              "${SERVICE}" "${ECR_REPOSITORY}" "${ROLLBACK_DIGEST}" rollback-next-api-image.json task-definition.json
           fi
 
       - name: Render task definition with SHA-pinned image
