@@ -48,8 +48,14 @@
     "legacyWorkflowStarts": 2338,
     "note": "Historical workflow starts include canceled and unsuccessful work and are not a matched control for ECS mutations."
   },
+  "verifiedFollowUps": {
+    "postActivationFinanceRuntimePreflight": {
+      "observedAt": "2026-09-25T17:15:28Z",
+      "status": "passed",
+      "evidence": "finance-runtime-grant.json"
+    }
+  },
   "insufficientSamples": {
-    "postActivationFinanceRuntimePreflight": "blocked on SELECT access to four exact relations for next-target-backend task vayada-next-api:1162",
     "postActivationSharedPackageRelease": "missing",
     "postActivationThreeOrMoreMergeBurst": "missing",
     "queueMedian": "not reported; fewer than 3 matched post-activation samples",
