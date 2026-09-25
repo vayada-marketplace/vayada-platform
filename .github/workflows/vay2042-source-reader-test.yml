@@ -1,0 +1,36 @@
+name: Isolated source reader tests
+on:
+  pull_request:
+    paths:
+      - scripts/provision-vay2042-source-reader.mjs
+      - scripts/test-vay2042-source-reader.mjs
+      - scripts/fixtures/vay2042-source-reader.json
+      - scripts/vay2017-pg-scram.mjs
+      - .github/workflows/vay2042-source-reader-test.yml
+permissions:
+  contents: read
+jobs:
+  source-reader:
+    strategy:
+      matrix:
+        postgres: ['16', '17']
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: fixture
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: npm install --prefix "$RUNNER_TEMP/vay2042-test" --no-audit --no-fund pg@8.16.3
+      - run: node --test scripts/test-vay2042-source-reader.mjs
+        env:
+          VAY2042_TEST_DATABASE_URL: postgresql://postgres:fixture@127.0.0.1:5432/postgres
+          VAY2042_TEST_PG_MODULE: ${{ runner.temp }}/vay2042-test/node_modules/pg/lib/index.js
