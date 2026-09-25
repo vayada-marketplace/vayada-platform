@@ -96,6 +96,7 @@ on:
       - "scripts/test-migration-rehearsal-browser.mjs"
       - "scripts/vay2017-rehearsal-metadata.mjs"
       - "scripts/test-vay2017-rehearsal-metadata.mjs"
+      - "scripts/test-vay2042-source-catalog.mjs"
       - "scripts/provision-vay2017-metadata-reader.mjs"
       - "scripts/vay2017-pg-scram.mjs"
       - "scripts/test-vay2017-metadata-reader-provisioner.mjs"
@@ -249,6 +250,7 @@ jobs:
           node scripts/test-marketplace-communication-unsubscribe-keys.mjs
           node --check scripts/vay2017-rehearsal-metadata.mjs
           node --test scripts/test-vay2017-rehearsal-metadata.mjs
+          node --test scripts/test-vay2042-source-catalog.mjs
           node --check scripts/provision-vay2017-metadata-reader.mjs
           node --test scripts/test-vay2017-metadata-reader-provisioner.mjs
           node --test scripts/test-vay2017-metadata-reader-infra.mjs

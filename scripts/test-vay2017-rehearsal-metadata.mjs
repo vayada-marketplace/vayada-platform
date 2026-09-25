@@ -262,8 +262,8 @@ test('infrastructure keeps execution fixed and network access private and narrow
   assert.equal(attestation.sourceDatabaseId, 'vayada-database');
   assert.equal(attestation.sourceSnapshotId, identity.sourceSnapshotId);
   assert.match(runner, /restoreAttestationChecksum/);
-  assert.match(runner, /reader_function_checksum=.*provision-vay2017-metadata-reader\.mjs/);
-  assert.match(runner, /\.readerFunctionChecksum == \$reader_function_checksum/);
+  assert.match(runner, /\.queryChecksum == \$query_checksum/);
+  assert.match(scannerTaskDefinition, /VAY2017_CATALOG_ONLY", value = "1"/);
   assert.equal(attestation.restoreInstanceId, identity.restoreInstanceId);
   assert.equal(attestation.targetVpcCidr, '10.230.0.0/24');
   assert.doesNotMatch(runner, /aws\s+(rds\s+modify|ec2\s+authorize|iam\s+|ecs\s+run-task)/);
