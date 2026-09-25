@@ -3,6 +3,9 @@ import base64
 import gzip
 from pathlib import Path
 import unittest
+import tempfile
+import subprocess
+import os
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -121,6 +124,41 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('{ name = "FINANCE_EXPENSE_WORKER_ENABLED", value = "false" }', ecs)
         self.assertIn('var.finance_expense_worker_secret_mapped ? [', ecs)
         self.assertIn('{ name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-runtime-url" }', ecs)
+
+    def test_planned_export_activation_fails_closed(self) -> None:
+        import runpy
+        import json
+        mode = runpy.run_path(str(ROOT / 'scripts/planned-finance-export-mode.py'))['mode']
+        def plan(containers):
+            return {"planned_values": {"root_module": {"resources": [{
+                "address": 'aws_ecs_task_definition.services["next-target-backend"]',
+                "values": {"container_definitions": json.dumps(containers)}
+            }]}}}
+        for enabled in ('true', 'false'):
+            self.assertEqual(mode(plan([{"name": "vayada-next-api", "environment": [
+                {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": enabled}
+            ]}])), enabled)
+        for invalid in ({}, plan([]), plan([{"name": "vayada-next-api", "environment": []}]),
+                        plan([{"name": "vayada-next-api", "environment": [
+                            {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "unknown"}]}])):
+            with self.assertRaises((KeyError, ValueError)):
+                mode(invalid)
+        unknown = plan([])
+        unknown['planned_values']['root_module']['resources'][0]['values']['container_definitions'] = None
+        with self.assertRaises(TypeError):
+            mode(unknown)
+
+    def test_ongoing_preflight_rejects_an_older_image_before_connecting(self) -> None:
+        source = (ROOT / 'scripts/finance-export-worker-database.mjs').read_text()
+        source = source.replace('import pg from "pg";', 'const pg = {};')
+        source = source.replace('import * as exportBoundary from "/app/apps/api/dist/jobs/financeExportWorkerBoundary.js";', 'const exportBoundary = {};')
+        with tempfile.TemporaryDirectory() as directory:
+            runner = Path(directory) / 'preflight.mjs'
+            runner.write_text(source)
+            result = subprocess.run(['node', str(runner)], capture_output=True, text=True,
+                                    env={**os.environ, 'FINANCE_EXPORT_WORKER_ONGOING': 'true'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('finance_export_worker_ongoing_image_unsupported', result.stderr)
 
     def test_export_modes_use_distinct_scope_secret_and_disabled_mapping(self) -> None:
         self.assertIn('--provision-finance-export-worker|--grant-finance-export-worker|--preflight-finance-export-worker|--preflight-finance-export-ongoing)', RUNNER)

@@ -1,9 +1,10 @@
 import pg from "pg";
-import {
+import * as exportBoundary from "/app/apps/api/dist/jobs/financeExportWorkerBoundary.js";
+const {
   assertFinanceExportWorkerBoundary,
   financeExportWorkerPrivileges,
-  FINANCE_EXPORT_WORKER_ROLE as role,
-} from "/app/apps/api/dist/jobs/financeExportWorkerBoundary.js";
+  FINANCE_EXPORT_WORKER_ROLE: role,
+} = exportBoundary;
 const policyConsumerFunctions = [
   "platform.channex_management_worker_scope(text,text,uuid)",
   "platform.tenant_scope_key(text,uuid,uuid)",
@@ -14,6 +15,8 @@ let client;
 try {
   const grant = process.env.VAYADA_DB_GRANT_SCOPE === "finance_export";
   const ongoing = process.env.FINANCE_EXPORT_WORKER_ONGOING === "true";
+  if (ongoing && exportBoundary.FINANCE_EXPORT_ONGOING_CONTRACT !== "finance-ongoing-exports.v1")
+    throw new Error("finance_export_worker_ongoing_image_unsupported");
   if (ongoing && grant) throw new Error("finance_export_worker_ongoing_grant_forbidden");
   const raw = grant
     ? process.env.TARGET_DATABASE_MIGRATION_URL
