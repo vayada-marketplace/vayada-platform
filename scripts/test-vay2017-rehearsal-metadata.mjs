@@ -217,7 +217,7 @@ test('infrastructure keeps execution fixed and network access private and narrow
   assert.match(tf, /10\.230\.0\.0\/24/);
   assert.doesNotMatch(tf, /0\.0\.0\.0\/0|nat_gateway|publicly_accessible\s*=\s*true/i);
   assert.doesNotMatch(tf, /target-database-url|target-database-runtime-url|db-marketplace-url|vayada-database\.c7eiqkoq4as4/);
-  assert.match(tf, /"taskArn\.\$"\s*=\s*"\$\.Tasks\[0\]\.TaskArn"/);
+  assert.match(tf, /"taskArn\.\$"\s*=\s*"\$\.TaskArn"/);
   assert.match(tf, /DescribeCompletedMetadataTask[\s\S]*aws-sdk:ecs:describeTasks[\s\S]*States\.Array\(\$\.result\.taskArn\)[\s\S]*"containerExitCode\.\$"\s*=\s*"\$\.Tasks\[0\]\.Containers\[0\]\.ExitCode"[\s\S]*"stopCode\.\$"\s*=\s*"\$\.Tasks\[0\]\.StopCode"[\s\S]*ResultPath\s*=\s*"\$\.completion"/);
   assert.match(tf, /TimeoutSeconds\s*=\s*3600/);
   assert.match(tf, /StepFunctionsGetEventsForECSTaskRule/);

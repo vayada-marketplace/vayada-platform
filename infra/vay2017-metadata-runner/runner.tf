@@ -541,7 +541,7 @@ resource "aws_sfn_state_machine" "vay2017_metadata" {
           }
         }
         ResultSelector = {
-          "taskArn.$" = "$.Tasks[0].TaskArn"
+          "taskArn.$" = "$.TaskArn"
         }
         ResultPath = "$.result"
         Next       = "DescribeCompletedMetadataTask"
