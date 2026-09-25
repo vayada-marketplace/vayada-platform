@@ -61,6 +61,10 @@ async function requireNoMissing(client, sql, parameters, code) {
     const relations = result.rows.map(({ nspname, relname }) => `${nspname}.${relname}`);
     throw new Error(`${code}:${result.rowCount}:${relations.join(",")}`);
   }
+  if (code === "runtime_security_definer_execute_forbidden" && result.rowCount > 0) {
+    const routines = result.rows.map(({ nspname, proname }) => `${nspname}.${proname}`);
+    throw new Error(`${code}:${result.rowCount}:${routines.join(",")}`);
+  }
   check(result.rowCount === 0, `${code}:${result.rowCount}`);
 }
 
@@ -189,6 +193,7 @@ try {
         AND relation.oid <> $1::regclass
         AND namespace.nspname <> 'vayada_migration_evidence'
         AND format('%I.%I', namespace.nspname, relation.relname) NOT IN (
+          'marketplace.affiliate_click_quota_windows',
           'pms.inventory_coverage_validation_queue',
           'platform.channex_management_worker_properties',
           'platform.finance_export_worker_properties',
@@ -198,6 +203,15 @@ try {
         AND NOT has_table_privilege(current_user, relation.oid, 'SELECT')`,
     [receipt],
     "runtime_relation_read_missing",
+  );
+  // Quota state is private to the guarded affiliate command, not the API login.
+  await requireNoMissing(
+    client,
+    `SELECT oid FROM pg_class
+      WHERE oid=to_regclass('marketplace.affiliate_click_quota_windows')
+        AND has_any_column_privilege(current_user, oid, 'SELECT')`,
+    [],
+    "runtime_affiliate_quota_read_forbidden",
   );
   // Owner-managed Finance allowlists are never part of the API read surface.
   await requireNoMissing(
