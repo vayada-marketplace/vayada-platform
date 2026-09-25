@@ -1,8 +1,16 @@
 # Staged platform writer admission (VAY-2029)
 
-This revision selects **transition-session revocation**: `bootstrap_plan_role: true`, `enforce_trust: true`, `revoke_before: 2026-09-25T08:08:47Z`. The plan role and boundary policy are already installed, all mutation-role callers use the main-only `platform-mutations-v2` environment, protected admission is proven, and a no-environment OIDC probe is rejected. Applying this stage denies AWS actions for mutation-role sessions issued before the reviewed cutoff. It does not enable coordinated deployment or clear release holds.
+The transition-session boundary is installed: `bootstrap_plan_role: true`,
+`enforce_trust: true`, `revoke_before: 2026-09-25T08:08:47Z`. All mutation-role
+callers use the main-only `platform-mutations-v2` environment. Protected
+admission is proven, a no-environment OIDC probe denied all 12 assume attempts,
+and a post-cutoff protected Terraform Apply completed with no changes. This
+boundary does not enable coordinated deployment or clear release holds.
 
-**Do not merge this selector without exact approval and a writer pause.** Drain writers, disable Terraform Apply, and verify the reviewed PR plan contains only the managed-policy update. The GitHub mutation role cannot make that update, so the authorized operator must install exactly the reviewed policy version while the durable selector PR remains open. After propagation, verify the cutoff denial and a new protected session, merge the selector, re-enable Terraform Apply, require its resulting run to be a no-op, then restore writers. Preparation of this PR does not authorize the operator update, merge, or apply.
+The installed evidence is platform PRs #262, #265, and #272; runs `36105639066`,
+`36109471264`, `36109998999`, and `36117487916`. The last run reports 0 added,
+0 changed, and 0 destroyed. The cutoff policy simulation explicitly denies
+`2026-09-25T08:08:46Z` and allows the cutoff instant and one second later.
 
 ## Boundary
 
@@ -31,6 +39,9 @@ At the initial read-only audit, `next` had zero environment secrets, zero variab
 
 Held manual recovery uses the reviewed migrated workflow and existing durable holds; keep desired-release, holds, checkpoint obligations and provenance. Old workflow revisions should fail authentication. Do not relax trust to make an old revision run. Automatic legacy delivery remains separately fenced and needs the authenticated generation/source/checkpoint protocol; installing this IAM boundary does not reopen it or authorize activation.
 
-The new cutoff's pre-cutoff denial and post-cutoff admission, product smoke, and coordinated activation remain unproven until the live stage runs. No old request is cancelled, rerun or queried by this procedure.
+The cutoff's pre-cutoff denial and post-cutoff admission are proven. Product
+smoke and coordinated activation remain unproven. The retained old queued
+requests are authentication-fenced; do not cancel, rerun, or treat them as
+release evidence.
 
 Sources: [AWS session revocation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_revoke-sessions.html), [GitHub OIDC with AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws).

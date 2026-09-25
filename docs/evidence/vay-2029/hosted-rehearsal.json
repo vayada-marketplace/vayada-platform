@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "environment": "isolated-non-production",
+  "runs": [
+    {"runId": 35522316014, "workflow": "Rehearse isolated coordinated recovery", "headSha": "f791a33b18192e9e476c361d2e11ef0ccd307ee0", "conclusion": "success", "url": "https://github.com/vayada-marketplace/vayada-platform/actions/runs/35522316014"},
+    {"runId": 35554854304, "workflow": "Rehearse deployment lock without mutations", "headSha": "11d6280ef3d683165227950f760cd2b61a327076", "conclusion": "success", "url": "https://github.com/vayada-marketplace/vayada-platform/actions/runs/35554854304"},
+    {"runId": 35554894620, "workflow": "Rehearse deployment lock without mutations", "headSha": "11d6280ef3d683165227950f760cd2b61a327076", "conclusion": "success", "url": "https://github.com/vayada-marketplace/vayada-platform/actions/runs/35554894620"}
+  ],
+  "scenarios": {
+    "apiFailureBlocksFrontends": "passed",
+    "independentFrontendOverlap": "passed",
+    "duplicateExactArtifactNoOp": "passed",
+    "frontendRollbackHoldResume": "passed",
+    "runnerInterruptionRecovery": "passed",
+    "ssmWriteDenialAndRecovery": "passed",
+    "sharedMutationLockSerialization": "passed",
+    "terraformOverlapWithProductionBatch": "pending-production-evidence"
+  },
+  "resultAccounting": {
+    "successfulFailedSkippedAndHeldSeparated": true,
+    "automaticRollbackRetainsHold": true,
+    "resumeClearsOnlyAfterVerification": true
+  },
+  "limitations": [
+    "The recovery fixture is isolated and synthetic; it is not production product smoke.",
+    "The lock rehearsal performs no production mutation and proves serialization of two holders of the shared concurrency group, not a real Terraform Apply contending with a full batch.",
+    "Static workflow inspection confirms Terraform Apply and coordinated deploy use the same production-ecs-mutations group.",
+    "Production activation, duplicate no-op proof, and matched performance measurements remain required."
+  ]
+}
