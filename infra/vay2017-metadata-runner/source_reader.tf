@@ -181,6 +181,8 @@ resource "aws_iam_role_policy" "vay2042_source_github" {
     Statement = [
       { Effect = "Allow", Action = "states:StartExecution", Resource = aws_sfn_state_machine.vay2042_source_reader.arn },
       { Effect = "Allow", Action = "states:DescribeExecution", Resource = "arn:aws:states:eu-west-1:269416271598:execution:${local.vay2042_source_name}:*" },
+      { Effect = "Allow", Action = "states:StartExecution", Resource = aws_sfn_state_machine.vay2042_target_bootstrap.arn },
+      { Effect = "Allow", Action = "states:DescribeExecution", Resource = "arn:aws:states:eu-west-1:269416271598:execution:${local.vay2042_target_name}:*" },
       { Effect = "Allow", Action = "logs:GetLogEvents", Resource = "${aws_cloudwatch_log_group.vay2042_source_reader.arn}:*" },
     ]
   })

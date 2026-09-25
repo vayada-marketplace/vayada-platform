@@ -17,6 +17,8 @@ Before any apply, independently review a fresh saved plan from
 and no production-root change. Use the isolated operator/state procedure in
 `vay2017-metadata-infrastructure-lane.md`; obtain explicit approval of that exact
 plan and the new secret/log costs. No automated apply or cleanup is provided.
+If installing the target successor together, use the nineteen-create combined
+plan gate in `vay2042-target-runner.md` instead; do not reuse a source-only plan.
 
 Before enabling IAM trust or dispatching, verify the **new** GitHub environment
 `vay2042-data-rehearsal` exists, permits only `main`, requires designated-owner

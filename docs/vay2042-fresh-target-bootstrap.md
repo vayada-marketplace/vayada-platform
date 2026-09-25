@@ -54,7 +54,7 @@ Generate the standalone ESM with esbuild **0.28.0** using
 with `--check` and `node --test scripts/test-vay2042-target-launcher.mjs`.
 The generated artifact bundles reviewed local code; only Node builtins, `pg` and
 the Secrets Manager SDK remain external. A separately reviewed target-specific
-task/execution role, empty secret, IAM and protected runner must verify live AWS
+task role, shared data execution role, empty secret, IAM and protected runner must verify live AWS
 restore/network/capacity and serialize with source bootstrap before execution.
 Environment assertions and synthetic launcher tests are not live AWS attestation.
 No resource application, bootstrap run, row extraction or proof binding is part
