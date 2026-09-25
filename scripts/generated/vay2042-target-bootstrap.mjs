@@ -424,7 +424,7 @@ async function bootstrap(env, { Client, SecretsManagerClient, DescribeSecretComm
         });
         try {
           await client.connect();
-          const { rows } = await client.query("SELECT inet_server_addr()::text AS address, current_database() AS database");
+          const { rows } = await client.query("SELECT host(inet_server_addr()) AS address, current_database() AS database");
           requireTrue2(
             rows.length === 1 && rows[0].database === database && /^10\.230\.0\.(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/.test(rows[0].address),
             "database_endpoint_invalid"

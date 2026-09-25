@@ -39,3 +39,21 @@ Require exit zero plus the exact sanitized completion record. On any failure,
 retain resources and inspect the NOLOGIN/indeterminate activation state; never
 retry blindly. The reader expires in 24 hours. Source snapshot/freeze evidence
 and fresh target/run binding remain separate reviewed steps before extraction.
+
+## Reviewed launcher repair after initial installation
+
+For the PostgreSQL host-address projection correction, a fresh saved plan may
+replace only the two `vay2042` task definitions and update their two orchestrator
+policies and two state-machine definitions to reference the new exact revisions.
+Require unchanged image, network, roles, permissions, secrets and database; the
+only authored task payload change is `inet_server_addr()::text` to
+`host(inet_server_addr())`. Independently review the complete plan and obtain
+explicit approval; the initial-install create-only plans must not be reused.
+
+Hold both dispatches until apply and effective bundle/revision/reference readback
+complete, because these six updates are not atomic. Require no running or
+unexplained prior executions and an empty source credential destination. Failed
+run `36111801240` is a known pre-provisioning endpoint-check failure; its retained
+evidence and reviewed control flow establish no provisioning SQL or credential
+write was reached. It needs no database cleanup. A corrected source run still
+requires normal protected approval, then success before fresh target preflight.

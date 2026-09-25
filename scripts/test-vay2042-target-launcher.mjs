@@ -37,7 +37,15 @@ function dependencies(overrides = {}) {
     constructor(config) { this.database = config.database; calls.push(['client', config]); }
     on(event, handler) { assert.equal(event, 'error'); handler(new Error('private-async-driver-error')); }
     async connect() { if (overrides.connectError) throw overrides.connectError; }
-    async query() { return { rows: [{ address: overrides.address ?? '10.230.0.35', database: overrides.database ?? this.database }] }; }
+    async query(sql) {
+      calls.push(sql);
+      const addresses = {
+        'SELECT inet_server_addr()::text AS address, current_database() AS database': '10.230.0.35/32',
+        'SELECT host(inet_server_addr()) AS address, current_database() AS database': '10.230.0.35',
+      };
+      assert.ok(Object.hasOwn(addresses, sql), `Unexpected query: ${sql}`);
+      return { rows: [{ address: overrides.address ?? addresses[sql], database: overrides.database ?? this.database }] };
+    }
     async end() { calls.push('end'); }
   }
   return { calls, Client, SecretsManagerClient, DescribeSecretCommand, PutSecretValueCommand,
@@ -74,6 +82,7 @@ test('allows exactly nine inspection databases plus fresh target and stores only
   assert.deepEqual(await bootstrap(env, deps), { status: 'OK', stage: 'complete', scope: 'isolated-fresh-target', bound: false });
   const configs = deps.calls.filter((call) => call[0] === 'client').map((call) => call[1]);
   assert.deepEqual(configs.map((config) => config.database), [...manifest.databases, target]);
+  assert.equal(deps.calls.filter((call) => call === 'SELECT host(inet_server_addr()) AS address, current_database() AS database').length, configs.length);
   for (const config of configs) assert.deepEqual(config.ssl, { ca, rejectUnauthorized: true, servername: env.VAY2042_DB_HOST });
   const command = deps.calls.find((call) => call instanceof deps.PutSecretValueCommand);
   assert.equal(command.input.SecretId, env.VAY2042_WRITER_SECRET_ARN);
@@ -88,6 +97,7 @@ test('refuses reused credentials, wrong databases, nonprivate servers and wrong 
     { destination: { ARN: 'different-secret', Name: secretName } },
     { destination: { ARN: env.VAY2042_WRITER_SECRET_ARN, Name: 'source-reader' } },
     { address: '10.230.1.35' }, { address: '10.230.0.256' }, { address: '127.0.0.1' },
+    { address: '10.230.0.35/32' }, { address: '::ffff:10.230.0.35' },
     { database: 'different-database' }, { databases: ['unreviewed_target'] },
     { credential: { ...credential, username: 'vay2042_source_reader_20260925' } },
     { credential: { ...credential, database: 'vayada_target_prod' } },
@@ -99,6 +109,16 @@ test('refuses reused credentials, wrong databases, nonprivate servers and wrong 
     if (overrides.destination || overrides.databases) assert.ok(!deps.calls.some((call) => call[0] === 'client'));
     else assert.ok(deps.calls.includes('end'));
   }
+});
+
+test('real provisioner cannot issue any provisioning query after endpoint rejection', async () => {
+  const deps = dependencies({ address: '10.230.0.35/32' });
+  assert.deepEqual(await bootstrap(env, { ...deps, provision: undefined }),
+    { status: 'FAIL', stage: 'database-connect', code: 'database_endpoint_invalid', errorClass: 'Error' });
+  assert.deepEqual(deps.calls.filter((call) => call[0] === 'client').map((call) => call[1].database), ['postgres']);
+  assert.deepEqual(deps.calls.filter((call) => typeof call === 'string'),
+    ['SELECT host(inet_server_addr()) AS address, current_database() AS database', 'end', 'destroy']);
+  assert.ok(!deps.calls.some((call) => call instanceof deps.PutSecretValueCommand));
 });
 
 test('sanitizes failures and preserves indeterminate activation; standalone bundle uses a distinct entry flag', async () => {
