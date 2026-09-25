@@ -184,9 +184,15 @@ async function verifyPrivileges(client, tables) {
   );
 }
 async function provisionSourceReader({ connect, persistCredential, now = () => Date.now() }) {
-  const clients = /* @__PURE__ */ new Map();
   const control = await connect("postgres");
-  clients.set("postgres", control);
+  const withDatabase = async (database, action) => {
+    const client = database === "postgres" ? control : await connect(database);
+    try {
+      return await action(client);
+    } finally {
+      if (client !== control) await client.end();
+    }
+  };
   const password = randomBytes2(36).toString("base64url");
   let locked = false;
   try {
@@ -200,14 +206,14 @@ async function provisionSourceReader({ connect, persistCredential, now = () => D
       "source_reader_exists_inspect_prior_attempt"
     );
     for (const database of databases) {
-      const client = database === "postgres" ? control : await connect(database);
-      clients.set(database, client);
-      const source = vay2042_source_reader_default.sources.find((s) => s.database === database);
-      if (!source) continue;
-      const tables = (await client.query(`SELECT n.nspname || '.' || c.relname AS name
-        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE ${applicationSchema} AND c.relkind IN ('r','p') ORDER BY 1`)).rows.map((r) => r.name);
-      requireTrue(JSON.stringify(tables) === JSON.stringify(source.tables), "source_table_inventory_changed");
+      await withDatabase(database, async (client) => {
+        const source = vay2042_source_reader_default.sources.find((s) => s.database === database);
+        if (!source) return;
+        const tables = (await client.query(`SELECT n.nspname || '.' || c.relname AS name
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE ${applicationSchema} AND c.relkind IN ('r','p') ORDER BY 1`)).rows.map((r) => r.name);
+        requireTrue(JSON.stringify(tables) === JSON.stringify(source.tables), "source_table_inventory_changed");
+      });
     }
     await control.query("BEGIN");
     try {
@@ -224,7 +230,7 @@ async function provisionSourceReader({ connect, persistCredential, now = () => D
       await control.query("ROLLBACK");
       throw error;
     }
-    for (const [database, client] of clients) {
+    for (const database of databases) await withDatabase(database, async (client) => {
       const source = vay2042_source_reader_default.sources.find((s) => s.database === database);
       await client.query("BEGIN");
       try {
@@ -242,10 +248,8 @@ async function provisionSourceReader({ connect, persistCredential, now = () => D
         await client.query("ROLLBACK");
         throw error;
       }
-    }
-    for (const [database, client] of clients) {
-      await verifyPrivileges(client, vay2042_source_reader_default.sources.find((s) => s.database === database)?.tables ?? []);
-    }
+    });
+    for (const database of databases) await withDatabase(database, (client) => verifyPrivileges(client, vay2042_source_reader_default.sources.find((s) => s.database === database)?.tables ?? []));
     await persistCredential({ username: reader, password });
     try {
       await control.query(`ALTER ROLE ${identifier(reader)} LOGIN`);
@@ -256,8 +260,8 @@ async function provisionSourceReader({ connect, persistCredential, now = () => D
   } finally {
     if (locked) await control.query("SELECT pg_advisory_unlock(204220260925)").catch(() => {
     });
-    await Promise.all([...clients.values()].map((client) => client.end().catch(() => {
-    })));
+    await control.end().catch(() => {
+    });
   }
 }
 

@@ -40,7 +40,17 @@ test('source bootstrap proves exact grants, denied writes, and safe partial fail
       await client.query(`INSERT INTO ${relation(table)} VALUES (1, 'synthetic-only')`);
     }
   }
-  const connect = (database) => open(database, 'fixture_bootstrap', 'fixture-admin');
+  let active = 0;
+  let peak = 0;
+  const connect = async (database) => {
+    assert.ok(active < 2, 'bootstrap must keep at most the control session and one temporary client');
+    const client = await open(database, 'fixture_bootstrap', 'fixture-admin');
+    peak = Math.max(peak, ++active);
+    const end = client.end.bind(client);
+    client.end = async () => { try { await end(); } finally { active -= 1; } };
+    return client;
+  };
+  t.afterEach(() => assert.equal(active, 0, 'bootstrap must close all its clients after success or failure'));
   let persisted;
   const persistCredential = async (value) => { persisted = value; };
   const roleState = async () => (await root.query('SELECT rolcanlogin FROM pg_roles WHERE rolname=$1', [reader])).rows;
@@ -111,6 +121,7 @@ test('source bootstrap proves exact grants, denied writes, and safe partial fail
   await t.test('publishes a verified, expiring reader and rejects writes even in READ WRITE', async () => {
     assert.deepEqual(await provisionSourceReader({ connect, persistCredential }),
       { status: 'OK', scope: 'isolated-source-reader', databases: 4, tables: 83 });
+    assert.equal(peak, 2);
     assert.equal(persisted.username, reader);
     assert.deepEqual(await roleState(), [{ rolcanlogin: true }]);
     const role = (await root.query('SELECT rolpassword, rolvaliduntil FROM pg_authid WHERE rolname=$1', [reader])).rows[0];
