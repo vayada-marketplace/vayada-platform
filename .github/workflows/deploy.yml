@@ -102,11 +102,16 @@ env:
 
 jobs:
   deploy:
+    environment: platform-mutations-v2
     if: (github.event.client_payload.service || inputs.service) != 'next-maps-canary' && (github.event.client_payload.service || inputs.service) != 'next-maps-canary-remove' && (github.event.client_payload.service || inputs.service) != 'next-maps-guest' && (github.event.client_payload.service || inputs.service) != 'next-maps-guest-remove' && (github.event.client_payload.service || inputs.service) != 'next-maps-frontends' && (github.event.client_payload.service || inputs.service) != 'next-maps-frontends-remove'
     name: Deploy ${{ github.event.client_payload.service || inputs.service }}
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require reviewed main workflow
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: test "$WORKFLOW_REF" = refs/heads/main
       - name: Checkout code
         uses: actions/checkout@v7
 
@@ -489,10 +494,14 @@ jobs:
           wait-for-service-stability: true
 
   maps-canary:
-    environment: next
+    environment: platform-mutations-v2
     if: github.event_name == 'workflow_dispatch' && (inputs.service == 'next-maps-canary' || inputs.service == 'next-maps-canary-remove' || inputs.service == 'next-maps-guest' || inputs.service == 'next-maps-guest-remove' || inputs.service == 'next-maps-frontends' || inputs.service == 'next-maps-frontends-remove')
     runs-on: ubuntu-latest
     steps:
+      - name: Require reviewed main workflow
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: test "$WORKFLOW_REF" = refs/heads/main
       - uses: actions/checkout@v7
       - name: Validate Channex worker state scope
         env:
