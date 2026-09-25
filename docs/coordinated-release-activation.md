@@ -4,8 +4,8 @@ Status: **ACTIVATED — final acceptance observation remains.** Coordinated batc
 ownership is live for all six services. Both retained holds were reconciled and
 cleared, the exact release and duplicate replay succeeded, the stale legacy
 event was rejected, and workflow availability was restored. Authenticated
-business-data reads, a four-relation Finance runtime read blocker, and matched
-shared-package and merge-burst samples remain before explicit human acceptance.
+business-data reads and matched shared-package and merge-burst samples remain
+before explicit human acceptance.
 
 Read with [the architecture](https://linear.app/vayadacom/document/coordinated-deployment-architecture-and-acceptance-plan-3f706981f863),
 [runtime controls](coordinated-releases.md), and the
@@ -20,6 +20,7 @@ Read with [the architecture](https://linear.app/vayadacom/document/coordinated-d
 | Transition-session cutoff | platform [#272](https://github.com/vayada-marketplace/vayada-platform/pull/272), head `4e89f9b4ebb83a43c0c3533ece99a5c96fda1460`, merge `9ac1e0852e16dba42da39db7bc539b4baf63df61` | Cutoff `2026-09-25T08:08:47Z`; post-cutoff Apply [36117487916](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36117487916) passed with 0 added, 0 changed, 0 destroyed |
 | Candidate API attestations | platform [#274](https://github.com/vayada-marketplace/vayada-platform/pull/274), head `e600571272c5db7c7877986e26939cba5a66c7b5`, merge `73b73bb3013ef849f24c608559681218f448274b` | Merged after green CI and clean independent/CodeRabbit review; still not deployment approval |
 | Fresh API attestation | platform [#276](https://github.com/vayada-marketplace/vayada-platform/pull/276), head `5da1da6373f876cdaa6277c3f75e4d6d5da9fe80`, merge `c5b3592942280eb4b61533fe6932d76135faa667` | Green CI/CodeRabbit; independent review proved identical launcher and 11 Finance export modules |
+| Finance runtime reads | platform [#280](https://github.com/vayada-marketplace/vayada-platform/pull/280), head `5d0e217329ccdaf4768ee1782b9500e6c05c51a4`, merge `108ac012a7404f4a1675df08e9a2e51c770a1edd` | Green PostgreSQL 16/17 integration and identity/ACL checks; independent review approved the exact four-relation transactional `SELECT` grant and rollback proof |
 
 The mutation role trust is limited to audience `sts.amazonaws.com` and subject
 `repo:vayada-marketplace/vayada-platform:environment:platform-mutations-v2`.
@@ -184,28 +185,35 @@ passed. Exact tasks, digests, results, smokes, operation intervals, and
 CloudTrail mutation events are recorded in the production evidence files;
 GitHub Actions, SSM, and CloudTrail remain the raw authoritative sources.
 
-Subsequent production-root runs `36161738886` and `36161818636` failed before
-Terraform Apply at the target-database readiness guard because four Finance
-runtime relations lacked read access. Apply was skipped, so these runs neither
-changed the activated release nor satisfy the remaining matched-release sample.
-The affected deployed service is `next-target-backend` at
-`vayada-next-api:1162`. Product impact remains unknown until authenticated
-Finance reads are exercised. Close this blocker only through a reviewed
-least-privilege `SELECT` grant for exactly these relations, followed by a
-passing target-runtime preflight and any separately approved subsequent Apply
-or release:
+Subsequent production-root runs `36161738886` and `36161818636` historically
+failed before Terraform Apply at the target-database readiness guard because
+four Finance runtime relations lacked read access. Apply was skipped, so those
+runs neither changed the activated release nor satisfy the remaining
+matched-release sample. The affected deployed service was
+`next-target-backend` at `vayada-next-api:1162`.
+
+The blocker was resolved through reviewed platform PR #280 at merge
+`108ac012a7404f4a1675df08e9a2e51c770a1edd`. The explicitly approved production
+command granted only `SELECT` on these relations:
 
 - `finance.affiliate_earning_reconciliation_revisions`;
 - `finance.affiliate_eligible_earning_revisions`;
 - `finance.affiliate_earning_allocations`;
 - `finance.affiliate_earning_allocation_items`.
 
-Remaining acceptance is deliberately narrow: resolve and verify the exact
-Finance runtime grant blocker above; record reusable-account authenticated
-business-data reads for Finance, PMS, Booking Admin, Marketplace, and Admin
-without writes; then observe a normal post-activation shared-package release
-and an at-least-three-merge burst. Current sample counts do not support median,
-p90, or a reduction percentage.
+Grant task definition `vayada-next-api-db-runtime-preflight:171` exited 0, and
+the immediately following read-only full runtime preflight using task definition
+`:172` exited 0. Both temporary task definitions are inactive, the preflight
+cluster is empty, and no Terraform Apply or release was run. Exact task and
+output evidence is in
+[`finance-runtime-grant.json`](evidence/vay-2029/finance-runtime-grant.json).
+Product impact remains unknown until authenticated Finance reads are exercised.
+
+Remaining acceptance is deliberately narrow: record reusable-account
+authenticated business-data reads for Finance, PMS, Booking Admin, Marketplace,
+and Admin without writes; then observe a normal post-activation shared-package
+release and an at-least-three-merge burst. Current sample counts do not support
+median, p90, or a reduction percentage.
 
 Keep VAY-2029 In Progress until the remaining observations and explicit human
 acceptance are complete.

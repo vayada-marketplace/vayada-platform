@@ -25,5 +25,13 @@
     "No reusable authenticated production fixture session was available to record in-app PMS, Booking Admin, Marketplace, or Admin business-data reads.",
     "Post-activation target-runtime preflight found missing SELECT access to four Finance relations for deployed next-target-backend task vayada-next-api:1162; Finance product impact is unknown until the exact grants and authenticated reads are verified.",
     "The production smoke proves health, public tenant behavior, authentication entry/denial contracts, and browser rendering; authenticated product-read evidence remains an acceptance follow-up."
-  ]
+  ],
+  "verifiedFollowUps": {
+    "financeRuntimeGrant": {
+      "observedAt": "2026-09-25T17:15:28Z",
+      "status": "passed",
+      "evidence": "finance-runtime-grant.json",
+      "limitation": "No reusable authenticated production fixture session was available to record in-app Finance, PMS, Booking Admin, Marketplace, or Admin business-data reads, so Finance product impact remains unknown."
+    }
+  }
 }

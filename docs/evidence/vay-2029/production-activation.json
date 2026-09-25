@@ -76,7 +76,28 @@
     "productImpact": "unknown-until-authenticated-finance-reads",
     "requiredAction": "review and apply least-privilege SELECT grants for exactly the four listed relations, then pass the target-runtime preflight before any separately approved Apply or release",
     "terraformApply": "skipped",
-    "releaseMutation": false
+    "releaseMutation": false,
+    "resolution": {
+      "status": "resolved",
+      "observedAt": "2026-09-25T17:15:28Z",
+      "evidence": "finance-runtime-grant.json",
+      "reviewedMergeSha": "108ac012a7404f4a1675df08e9a2e51c770a1edd",
+      "grantTaskDefinition": "vayada-next-api-db-runtime-preflight:171",
+      "grantOutput": {
+        "status": "PASS",
+        "grant": "finance_affiliate_tables:SELECT"
+      },
+      "readOnlyPreflightTaskDefinition": "vayada-next-api-db-runtime-preflight:172",
+      "readOnlyPreflightOutput": {
+        "status": "PASS",
+        "runtimeRole": "vayada_next_api_runtime",
+        "receiptOwnerSeparated": true,
+        "runtimePrivilegeMatrixChecked": true
+      },
+      "terraformApply": false,
+      "releaseMutation": false,
+      "productImpact": "unknown-until-authenticated-finance-reads"
+    }
   },
   "rawSources": {
     "operationIntervals": "SSM /vayada/prod/coordinated-deployments/v1/operations/release-36160171047-1/*",

@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-25T17:15:28Z",
+  "environment": "production",
+  "reviewedChange": {
+    "pullRequest": 280,
+    "mergeSha": "108ac012a7404f4a1675df08e9a2e51c770a1edd",
+    "command": "bash scripts/run-target-database-runtime-preflight.sh --grant-finance-affiliate-read"
+  },
+  "grant": {
+    "runtimeRole": "vayada_next_api_runtime",
+    "privilege": "SELECT",
+    "relations": [
+      "finance.affiliate_earning_reconciliation_revisions",
+      "finance.affiliate_eligible_earning_revisions",
+      "finance.affiliate_earning_allocations",
+      "finance.affiliate_earning_allocation_items"
+    ],
+    "safeguards": {
+      "ownerChecked": true,
+      "rejectsWritePrivileges": true,
+      "rejectsSelectWithGrantOption": true,
+      "singleTransaction": true,
+      "accessExclusiveLockTimeoutSeconds": 2,
+      "rollbackProofPostgreSQL": [
+        16,
+        17
+      ]
+    }
+  },
+  "grantTask": {
+    "taskArn": "arn:aws:ecs:eu-west-1:269416271598:task/vayada-target-database-runtime-preflight/f09a0af595c8483cb8a33eff00ddefaa",
+    "taskDefinition": "vayada-next-api-db-runtime-preflight:171",
+    "createdAt": "2026-09-25T17:12:02.928Z",
+    "startedAt": "2026-09-25T17:12:30.303Z",
+    "stoppedAt": "2026-09-25T17:12:53.822Z",
+    "exitCode": 0,
+    "output": {
+      "status": "PASS",
+      "grant": "finance_affiliate_tables:SELECT"
+    }
+  },
+  "readOnlyPreflightTask": {
+    "taskArn": "arn:aws:ecs:eu-west-1:269416271598:task/vayada-target-database-runtime-preflight/5a10d92f168a4aa08e57bf21cac7b188",
+    "taskDefinition": "vayada-next-api-db-runtime-preflight:172",
+    "createdAt": "2026-09-25T17:13:17.603Z",
+    "startedAt": "2026-09-25T17:13:48.476Z",
+    "stoppedAt": "2026-09-25T17:14:12.704Z",
+    "exitCode": 0,
+    "output": {
+      "status": "PASS",
+      "runtimeRole": "vayada_next_api_runtime",
+      "receiptOwnerSeparated": true,
+      "runtimePrivilegeMatrixChecked": true
+    }
+  },
+  "cleanup": {
+    "runningTasks": 0,
+    "taskDefinitions": {
+      "vayada-next-api-db-runtime-preflight:171": "INACTIVE",
+      "vayada-next-api-db-runtime-preflight:172": "INACTIVE"
+    }
+  },
+  "excludedActions": {
+    "terraformApply": false,
+    "release": false,
+    "reservations": false,
+    "payments": false
+  },
+  "limitations": [
+    "Authenticated Finance product reads were not exercised, so product impact remains unknown until those read-only flows are recorded."
+  ]
+}
