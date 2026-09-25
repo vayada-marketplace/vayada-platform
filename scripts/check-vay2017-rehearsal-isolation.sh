@@ -12,7 +12,7 @@ readonly database_subnet_a_cidr="10.230.0.32/28"
 readonly database_subnet_b_cidr="10.230.0.48/28"
 readonly script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly attestation_file="$script_dir/fixtures/vay2017-isolated-restore-plan.json"
-readonly image_digest="sha256:a6f1001b1713e5f86e52cf757b3e67c794ec936639273dc041cedc7b95ea7b3c"
+readonly image_digest="sha256:b9cbbeedcdb7a1530b32fdae31c00d75db0ae4c6d53143ca2acf26c0002e3b17"
 
 aws sts get-caller-identity --query Account --output text | grep -Fxq "$account" || {
   echo "Refusing: AWS account is not the reviewed rehearsal account." >&2

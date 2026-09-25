@@ -13,6 +13,7 @@ locals {
   vay2017_rehearsal_subnet_az          = "eu-west-1a"
   vay2017_rehearsal_second_subnet_az   = "eu-west-1b"
   vay2017_rehearsal_image_digest       = "sha256:a6f1001b1713e5f86e52cf757b3e67c794ec936639273dc041cedc7b95ea7b3c"
+  vay2042_catalog_image_digest         = "sha256:b9cbbeedcdb7a1530b32fdae31c00d75db0ae4c6d53143ca2acf26c0002e3b17"
   vay2017_rehearsal_cluster_name       = "vay2017-metadata-rehearsal"
   vay2017_rehearsal_task_family        = "vay2017-metadata-runner"
   vay2017_rehearsal_state_machine_name = "vay2017-metadata-inventory"
@@ -392,17 +393,18 @@ resource "aws_ecs_task_definition" "vay2017_metadata" {
   execution_role_arn       = aws_iam_role.vay2017_inventory_execution.arn
   container_definitions = jsonencode([{
     name      = "metadata-runner"
-    image     = "${local.vay2017_rehearsal_ecr_repository_url}@${local.vay2017_rehearsal_image_digest}"
+    image     = "${local.vay2017_rehearsal_ecr_repository_url}@${local.vay2042_catalog_image_digest}"
     essential = true
     command   = ["node", "--input-type=module", "-e", file("${path.module}/../../scripts/vay2017-rehearsal-metadata.mjs")]
     environment = [
       { name = "VAY2017_RUN_MAIN", value = "1" },
+      { name = "VAY2017_CATALOG_ONLY", value = "1" },
       { name = "VAY2017_RESTORE_INSTANCE_ID", value = local.vay2017_rehearsal_db_instance_id },
       { name = "VAY2017_SOURCE_SNAPSHOT_ID", value = local.vay2017_rehearsal_snapshot_id },
       { name = "VAY2017_RESTORE_RESOURCE_ID", value = aws_db_instance.vay2017_isolated_restore.resource_id },
       { name = "VAY2017_RESTORE_INSTANCE_ARN", value = aws_db_instance.vay2017_isolated_restore.arn },
       { name = "VAY2017_RESTORE_ATTESTATION_CHECKSUM", value = filesha256("${path.module}/../../scripts/fixtures/vay2017-isolated-restore-plan.json") },
-      { name = "VAY2017_IMAGE_DIGEST", value = local.vay2017_rehearsal_image_digest },
+      { name = "VAY2017_IMAGE_DIGEST", value = local.vay2042_catalog_image_digest },
       { name = "VAY2017_SCANNER_SOURCE_CHECKSUM", value = filesha256("${path.module}/../../scripts/vay2017-rehearsal-metadata.mjs") },
       { name = "VAY2017_READER_FUNCTION_CHECKSUM", value = filesha256("${path.module}/../../scripts/provision-vay2017-metadata-reader.mjs") },
       { name = "VAY2017_RDS_CA_BUNDLE_GZIP", value = base64gzip(file("${path.module}/../../rehearsal/rds-ca-rsa2048-g1.pem")) },

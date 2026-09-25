@@ -7,13 +7,13 @@ readonly machine_arn="arn:aws:states:eu-west-1:269416271598:stateMachine:vay2017
 readonly snapshot="vay2017-legacy-source-freeze-20260920"
 readonly restore="vay2017-metadata-rehearsal-isolated-20260923"
 readonly restore_instance_arn="arn:aws:rds:eu-west-1:269416271598:db:vay2017-metadata-rehearsal-isolated-20260923"
-readonly image_digest="sha256:a6f1001b1713e5f86e52cf757b3e67c794ec936639273dc041cedc7b95ea7b3c"
+readonly image_digest="sha256:b9cbbeedcdb7a1530b32fdae31c00d75db0ae4c6d53143ca2acf26c0002e3b17"
+readonly query_checksum="9707f57e277e424ca9f97610511fce3f4d3b9fc56722cc4957b2971dd0541f37"
 readonly script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly attestation_file="$script_dir/fixtures/vay2017-isolated-restore-plan.json"
 readonly attestation_checksum="$(shasum -a 256 "$attestation_file" | awk '{print $1}')"
 readonly scanner_source_checksum="$(shasum -a 256 "$(dirname "$0")/vay2017-rehearsal-metadata.mjs" | awk '{print $1}')"
-readonly reader_function_checksum="$(shasum -a 256 "$(dirname "$0")/provision-vay2017-metadata-reader.mjs" | awk '{print $1}')"
-readonly artifact_path="${ARTIFACT_PATH:-migration-inventory.json}"
+readonly artifact_path="${ARTIFACT_PATH:-source-catalog-fingerprints.json}"
 
 for tool in aws jq shasum awk; do
   command -v "$tool" >/dev/null || { echo "Required command unavailable: $tool" >&2; exit 1; }
@@ -96,28 +96,27 @@ done
 }
 artifact_json="${artifact_line#VAY2017_METADATA_ARTIFACT=}"
 jq -e --arg snapshot "$snapshot" --arg restore "$restore" --arg digest "$image_digest" --arg source_checksum "$scanner_source_checksum" \
-  --arg reader_function_checksum "$reader_function_checksum" \
+  --arg query_checksum "$query_checksum" \
   --arg instance_arn "$restore_instance_arn" --arg attestation_checksum "$attestation_checksum" '
-  .artifactVersion == 2 and
+  .artifactVersion == 3 and .scope == "isolated-source-catalog" and
   .sourceSnapshotId == $snapshot and
   .restoreInstanceId == $restore and
-  (.restoreResourceId | test("^db-[A-Z0-9]+$")) and
+  .restoreResourceId == "db-BB7GOFQ3BQTLTBG444I2Q75X6Y" and
   .restoreInstanceArn == $instance_arn and
   .restoreAttestationChecksum == $attestation_checksum and
   .imageDigest == $digest and
   .scannerSourceChecksum == $source_checksum and
-  .readerFunctionChecksum == $reader_function_checksum and
-  .queryVersion == "v2" and
-  (.queryChecksum | test("^[a-f0-9]{64}$")) and
-  (.schemaFingerprint | test("^[a-f0-9]{64}$")) and
+  .queryVersion == "source-catalog-v1" and .queryChecksum == $query_checksum and
+  (.collectedAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$")) and
   .databases as $databases |
   ($databases | type == "array") and
-  (([$databases[].tables[].rowCount | select(type == "string" and test("^[0-9]+$"))] | length) == ([$databases[].tables[]] | length)) and
-  (keys | sort == ["artifactVersion","collectedAt","databases","imageDigest","queryChecksum","queryVersion","readerFunctionChecksum","restoreAttestationChecksum","restoreInstanceArn","restoreInstanceId","restoreResourceId","rowCountSemantics","scannerSourceChecksum","schemaFingerprint","sourceSnapshotId"])
+  ([$databases[] | [.sourceDatabase, .name]] == [["auth","vayada_auth_db"],["booking","vayada_booking_db"],["marketplace","postgres"],["pms","vayada_pms_db"]]) and
+  all($databases[]; (keys == ["name","schemaFingerprint","sourceDatabase"]) and (.schemaFingerprint | type == "string" and test("^[a-f0-9]{32}$"))) and
+  (keys == ["artifactVersion","collectedAt","databases","imageDigest","queryChecksum","queryVersion","restoreAttestationChecksum","restoreInstanceArn","restoreInstanceId","restoreResourceId","scannerSourceChecksum","scope","sourceSnapshotId"])
 ' <<<"$artifact_json" >/dev/null || {
   echo "The metadata artifact failed identity or content validation." >&2
   exit 1
 }
 printf '%s\n' "$artifact_json" | jq -c . >"$artifact_path"
 chmod 600 "$artifact_path"
-echo "Verified sanitized VAY-2017 inventory artifact written to $artifact_path."
+echo "Verified sanitized source catalog fingerprints written to $artifact_path."
