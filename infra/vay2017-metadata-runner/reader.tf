@@ -173,7 +173,7 @@ resource "aws_sfn_state_machine" "vay2017_reader_bootstrap" {
           }
         }
         ResultSelector = {
-          "taskArn.$" = "$.Tasks[0].TaskArn"
+          "taskArn.$" = "$.TaskArn"
         }
         ResultPath = "$.result"
         Next       = "DescribeCompletedBootstrapTask"

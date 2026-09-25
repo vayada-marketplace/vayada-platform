@@ -33,6 +33,14 @@ test('master credential is supplied only to the fixed private bootstrap task', (
   assert.match(runnerTf, /VAY2017_RDS_CA_BUNDLE_GZIP[\s\S]*base64gzip\(file\([\s\S]*rds-ca-rsa2048-g1\.pem/);
 });
 
+test('ECS runTask.sync result selects the top-level task ARN for both fixed tasks', () => {
+  for (const tf of [readerTf, runnerTf]) {
+    assert.match(tf, /"taskArn\.\$"\s*=\s*"\$\.TaskArn"/);
+    assert.match(tf, /"Tasks\.\$"\s*=\s*"States\.Array\(\$\.result\.taskArn\)"/);
+    assert.doesNotMatch(tf, /"taskArn\.\$"\s*=\s*"\$\.Tasks\[0\]\.TaskArn"/);
+  }
+});
+
 test('VPC security groups use standalone resources for all rules', () => {
   assert.doesNotMatch(runnerTf, /^\s+(?:ingress|egress)\s*(?:\{|=)/m);
   const rules = [
