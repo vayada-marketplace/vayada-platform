@@ -20,6 +20,11 @@ OLD_EXPORT = "f3429f38-b462-4453-b7f1-d901fc86ebfa"
 ROLE = f"arn:aws:iam::{ACCOUNT}:role/vayada-finance-export-once"
 WRITER = ROLE + "-writer"
 SECRET = "/vayada/prod/target-database-finance-export-worker-url"
+CA_FILE = Path(__file__).resolve().parents[1] / "rehearsal/rds-ca-rsa2048-g1.pem"
+CA_SHA256 = "f5c5f92ae025987c76dc49bdb1ace8556fdf332b4788d719a923bc274779d869"
+CA_PATH = "/tmp/finance-export-rds-ca.pem"
+# Node reads NODE_EXTRA_CA_CERTS only at startup. exec preserves ECS stop signals.
+COMMAND = ["sh", "-c", 'umask 077; printf "%s" "$FINANCE_EXPORT_RDS_CA" > "$NODE_EXTRA_CA_CERTS" && exec node apps/api/dist/jobs/runFinanceDashboardExportOnce.js']
 IMAGE_PREFIX = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@"
 
 
@@ -61,6 +66,8 @@ def task_definition(source, export_id, dispatched_at, digest, revision, now):
     require(logs.get("logDriver") == "awslogs" and logs.get("options", {}).get("awslogs-group") == "/ecs/vayada-next-api", "log_configuration_drift")
     require(source.get("networkMode") == "awsvpc" and "FARGATE" in source.get("requiresCompatibilities", []), "task_network_drift")
     require(source.get("runtimePlatform", {}).get("cpuArchitecture", "X86_64") == "X86_64", "task_architecture_drift")
+    ca = CA_FILE.read_bytes()
+    require(hashlib.sha256(ca).hexdigest() == CA_SHA256, "rds_ca_drift")
     return {
         "family": FAMILY, "taskRoleArn": ROLE,
         "executionRoleArn": source["executionRoleArn"], "networkMode": "awsvpc",
@@ -68,11 +75,12 @@ def task_definition(source, export_id, dispatched_at, digest, revision, now):
         "runtimePlatform": {"cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX"},
         "containerDefinitions": [{
             "name": "vayada-next-api", "essential": True, "image": IMAGE_PREFIX + digest,
-            "command": ["node", "apps/api/dist/jobs/runFinanceDashboardExportOnce.js"],
+            "command": COMMAND,
             "stopTimeout": 30, "logConfiguration": logs,
             "secrets": [{"name": "FINANCE_EXPORT_WORKER_DATABASE_URL", "valueFrom": SECRET}],
             "environment": [{"name": key, "value": value} for key, value in {
                 "NODE_ENV": "production", "AWS_REGION": REGION, "APPLICATION_RELEASE": revision,
+                "NODE_EXTRA_CA_CERTS": CA_PATH, "FINANCE_EXPORT_RDS_CA": ca.decode("ascii"),
                 "FINANCE_EXPORT_WORKER_PROPERTY_ID": PROPERTY,
                 "FINANCE_EXPORT_WORKER_EXPORT_ID": export_id,
                 "FINANCE_EXPORT_DISPATCHED_AT": dispatched_at,
