@@ -1,8 +1,8 @@
 # Staged platform writer admission (VAY-2029)
 
-This revision selects **bootstrap only**: `bootstrap_plan_role: true`, `enforce_trust: false`, `revoke_before: null`. Applying it creates the plan role, its inline read policy, the boundary metadata policy and its attachment to the mutation role. It does not install the old-writer fence, change workflow credentials/environments, or enable coordinated deployment.
+This revision selects **trust enforcement without session revocation**: `bootstrap_plan_role: true`, `enforce_trust: true`, `revoke_before: null`. The plan role and boundary policy are already installed, and all mutation-role callers now use the main-only `platform-mutations-v2` environment. Applying this stage narrows new mutation-role sessions to that environment. It does not revoke existing sessions, enable coordinated deployment, or clear release holds.
 
-**Do not merge this bootstrap selector before the authorized operator applies the exact reviewed clean plan.** A merge triggers ordinary Terraform Apply, whose identity cannot bootstrap these IAM resources. First review the PR plan; then prepare and approve the matching operator plan with current inputs, apply it, verify readiness, and merge the durable selector promptly under a writer pause. Do not run an older ordinary Apply configuration between bootstrap and that merge. The merge-triggered Apply also performs SES writes and ECS roll-forwards after Terraform; the writer pause and exact approval must account for that full workflow even if Terraform is then a no-op. Live changes require exact reviewed approval; no apply is authorized by preparation of this PR.
+**Do not merge this selector without exact approval and a writer pause.** The merge-triggered Apply narrows live IAM trust and also performs the workflow's existing readiness, SES and conditional ECS roll-forward steps. Verify the reviewed plan contains only the expected trust-policy update before merge. After IAM propagation, prove protected main admission and old/no-environment rejection before selecting a separate session-revocation cutoff. Preparation of this PR does not authorize merge or apply.
 
 ## Boundary
 
