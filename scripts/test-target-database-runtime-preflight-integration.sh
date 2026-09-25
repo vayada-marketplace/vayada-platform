@@ -74,6 +74,10 @@ CREATE TABLE finance.payments (id uuid PRIMARY KEY);
 CREATE TABLE finance.expense_categories (id uuid PRIMARY KEY);
 CREATE TABLE finance.expenses (id uuid PRIMARY KEY);
 CREATE TABLE finance.recurring_expense_rules (id uuid PRIMARY KEY);
+CREATE TABLE finance.affiliate_earning_reconciliation_revisions (id uuid PRIMARY KEY);
+CREATE TABLE finance.affiliate_eligible_earning_revisions (id uuid PRIMARY KEY);
+CREATE TABLE finance.affiliate_earning_allocations (id uuid PRIMARY KEY);
+CREATE TABLE finance.affiliate_earning_allocation_items (id uuid PRIMARY KEY);
 CREATE TABLE platform.external_webhook_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.domain_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.idempotency_keys (id uuid PRIMARY KEY);
@@ -148,6 +152,7 @@ run_grant() {
     --env "VAYADA_AUDIT_GRANT_LOCAL_FIXTURE=${fixture_flag}" \
     --env "VAYADA_DB_GRANT_SCOPE=${grant_scope}" \
     --env "VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE=${VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE:-0}" \
+    --env "VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE=${VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE:-0}" \
     node:22-bookworm node grant.mjs
 }
 
@@ -215,6 +220,80 @@ if affiliate_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 aff
 fi
 grep -F '"code":"affiliate_table_owner_required"' <<<"${affiliate_non_owner_output}" >/dev/null
 run_grant legacy_owner owner 1 affiliate_read | grep -F '"grant":"affiliate_tables:SELECT"' >/dev/null
+
+if finance_missing_output="$(run_preflight 2>&1)"; then
+  echo "runtime preflight unexpectedly passed before Finance affiliate read grant" >&2
+  exit 1
+fi
+grep -F 'runtime_relation_read_missing' <<<"${finance_missing_output}" >/dev/null
+for table in \
+  finance.affiliate_earning_reconciliation_revisions \
+  finance.affiliate_eligible_earning_revisions \
+  finance.affiliate_earning_allocations \
+  finance.affiliate_earning_allocation_items; do
+  grep -F "${table}" <<<"${finance_missing_output}" >/dev/null
+done
+
+if finance_affiliate_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 finance_affiliate_read 2>&1)"; then
+  echo "non-owner Finance affiliate read grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"finance_affiliate_table_owner_required"' <<<"${finance_affiliate_non_owner_output}" >/dev/null
+run_grant legacy_owner owner 1 finance_affiliate_read | grep -F '"grant":"finance_affiliate_tables:SELECT"' >/dev/null
+for table in \
+  finance.affiliate_earning_reconciliation_revisions \
+  finance.affiliate_eligible_earning_revisions \
+  finance.affiliate_earning_allocations \
+  finance.affiliate_earning_allocation_items; do
+  docker exec -e PGPASSWORD=runtime "${database_container}" \
+    psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+    -c "SELECT count(*) FROM ${table}" >/dev/null
+done
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO finance.affiliate_earning_allocations(id) VALUES ('00000000-0000-0000-0000-000000000001')" \
+  >/dev/null 2>&1; then
+  echo "runtime role unexpectedly wrote a Finance affiliate allocation" >&2
+  exit 1
+fi
+
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE SELECT ON finance.affiliate_earning_reconciliation_revisions, finance.affiliate_eligible_earning_revisions, finance.affiliate_earning_allocations, finance.affiliate_earning_allocation_items FROM vayada_next_api_runtime" >/dev/null
+if finance_affiliate_rollback_output="$(
+  VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE=1 \
+    run_grant legacy_owner owner 1 finance_affiliate_read 2>&1
+)"; then
+  echo "forced post-grant Finance affiliate failure unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"finance_affiliate_forced_post_grant_failure"' <<<"${finance_affiliate_rollback_output}" >/dev/null
+for table in \
+  finance.affiliate_earning_reconciliation_revisions \
+  finance.affiliate_eligible_earning_revisions \
+  finance.affiliate_earning_allocations \
+  finance.affiliate_earning_allocation_items; do
+  docker exec "${database_container}" psql -U postgres -tAc \
+    "SELECT has_table_privilege('vayada_next_api_runtime', '${table}', 'SELECT')" | grep -Fx f >/dev/null
+done
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (id) ON finance.affiliate_earning_allocations TO vayada_next_api_runtime" >/dev/null
+if finance_affiliate_broad_output="$(run_grant legacy_owner owner 1 finance_affiliate_read 2>&1)"; then
+  echo "Finance affiliate read grant unexpectedly passed with write privilege" >&2
+  exit 1
+fi
+grep -F '"code":"finance_affiliate_runtime_scope_too_broad"' <<<"${finance_affiliate_broad_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (id) ON finance.affiliate_earning_allocations FROM vayada_next_api_runtime" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT SELECT ON finance.affiliate_earning_allocations TO vayada_next_api_runtime WITH GRANT OPTION" >/dev/null
+if finance_affiliate_grant_option_output="$(run_grant legacy_owner owner 1 finance_affiliate_read 2>&1)"; then
+  echo "Finance affiliate read grant unexpectedly passed with SELECT grant option" >&2
+  exit 1
+fi
+grep -F '"code":"finance_affiliate_runtime_scope_too_broad"' <<<"${finance_affiliate_grant_option_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE GRANT OPTION FOR SELECT ON finance.affiliate_earning_allocations FROM vayada_next_api_runtime" >/dev/null
+run_grant legacy_owner owner 1 finance_affiliate_read | grep -F '"grant":"finance_affiliate_tables:SELECT"' >/dev/null
 
 if jobs_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 jobs_insert 2>&1)"; then
   echo "non-owner jobs grant unexpectedly passed" >&2

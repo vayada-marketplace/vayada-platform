@@ -377,6 +377,20 @@ owner-only, verified-RDS-certificate task. It refuses pre-existing write
 privileges; affiliate write permissions require a separate review. Then rerun
 the runtime preflight before platform apply.
 
+When the runtime preflight reports missing reads for the four Finance affiliate
+earning projection relations, run
+`scripts/run-target-database-runtime-preflight.sh --grant-finance-affiliate-read`.
+The owner-checked task grants the API runtime role only `SELECT` on exactly:
+
+- `finance.affiliate_earning_reconciliation_revisions`;
+- `finance.affiliate_eligible_earning_revisions`;
+- `finance.affiliate_earning_allocations`;
+- `finance.affiliate_earning_allocation_items`.
+
+It refuses missing ownership, write privileges, or `SELECT WITH GRANT OPTION`
+and applies all four grants in one transaction. Rerun the runtime preflight
+before platform apply.
+
 When the runtime preflight reports missing reads for
 `platform.pricing_runtime_property_scopes` and
 `platform.channex_management_worker_properties`, run
