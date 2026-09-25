@@ -13,6 +13,8 @@ const policyConsumerFunctions = [
 let client;
 try {
   const grant = process.env.VAYADA_DB_GRANT_SCOPE === "finance_export";
+  const ongoing = process.env.FINANCE_EXPORT_WORKER_ONGOING === "true";
+  if (ongoing && grant) throw new Error("finance_export_worker_ongoing_grant_forbidden");
   const raw = grant
     ? process.env.TARGET_DATABASE_MIGRATION_URL
     : process.env.FINANCE_EXPORT_WORKER_DATABASE_URL;
@@ -45,10 +47,10 @@ try {
   await client.connect();
   await client.query("SET search_path TO pg_catalog");
   const propertyId = process.env.FINANCE_EXPORT_WORKER_PROPERTY_ID;
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(propertyId ?? ""))
+  if (!ongoing && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(propertyId ?? ""))
     throw new Error("finance_export_worker_property_required");
   const exportId = process.env.FINANCE_EXPORT_WORKER_EXPORT_ID;
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(exportId ?? ""))
+  if (!ongoing && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(exportId ?? ""))
     throw new Error("finance_export_worker_export_required");
   await client.query("BEGIN");
   if (grant) {
@@ -125,7 +127,7 @@ try {
     )
   )
     throw new Error("finance_export_worker_function_scope_too_broad");
-  await assertFinanceExportWorkerBoundary(client, { propertyId, exportId });
+  await assertFinanceExportWorkerBoundary(client, ongoing ? { ongoing: true } : { propertyId, exportId });
   await client.query("COMMIT");
   console.log(JSON.stringify({ status: "PASS", role, mode: grant ? "grant" : "preflight" }));
 } catch (error) {
