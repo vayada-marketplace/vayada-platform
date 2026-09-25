@@ -161,6 +161,16 @@ jobs:
           )" = /vayada/prod/target-database-identity-runtime-url
           bash scripts/run-target-database-runtime-preflight.sh
 
+      - name: Verify ongoing export readiness before activation
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra show -json tfplan > planned-export-runtime.json
+          export_enabled="$(python3 scripts/planned-finance-export-mode.py planned-export-runtime.json)"
+          if [ "$export_enabled" = "true" ]; then
+            bash scripts/run-target-database-runtime-preflight.sh --preflight-finance-export-ongoing
+          fi
+          rm planned-export-runtime.json
+
       - name: Terraform apply
         run: terraform apply -no-color tfplan
         working-directory: infra
@@ -334,6 +344,17 @@ jobs:
             .taskDefinitionArn == $task_definition and .lastStatus == "RUNNING"
             and ([.containers[] | select(.name == "vayada-next-api" and .lastStatus == "RUNNING" and .imageDigest == $digest)] | length) == 1
             ' <<<"${running}" >/dev/null
+
+      - name: Verify deployed Financials export configuration
+        if: steps.next_api_task.outputs.deploy_required == 'true'
+        run: |
+          set -euo pipefail
+          aws ecs describe-services --cluster vayada-backend-cluster --services vayada-next-api-service --region "${AWS_REGION}" > export-service.json
+          definition="$(jq -r '.services[0].taskDefinition' export-service.json)"
+          aws ecs describe-task-definition --task-definition "$definition" --region "${AWS_REGION}" > export-task.json
+          running="$(aws ecs list-tasks --cluster vayada-backend-cluster --service-name vayada-next-api-service --desired-status RUNNING --region "${AWS_REGION}" --query 'taskArns[0]' --output text)"
+          aws ecs describe-tasks --cluster vayada-backend-cluster --tasks "$running" --region "${AWS_REGION}" > export-running.json
+          python3 scripts/assert-target-database-split-deployment-ready.py export-service.json export-task.json reviewed-next-api-image.json export-running.json
 
       - name: Roll forward auth gateway task definitions
         env:
