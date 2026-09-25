@@ -10,13 +10,14 @@ and inline policy. It does not modify the production root or grant CI access.
 The destination is `vayada-rehearsal-vay2042-20260926-269416271598`. Its name
 does not attest an execution date, accepted release, or reserved run.
 
-This is preparation only. Before any apply, independently review the complete
+For the initial storage apply, independently review the complete
 saved plan from the reviewed release and obtain approval of that exact plan
 and ongoing S3/CloudFront usage costs. Require exactly ten creates, no updates,
 deletes, replacements, or imports, and unchanged existing resources. Keep all
 four previous rehearsal destinations and reservations untouched. This bucket
 has versioning, no automatic expiry, no force-destroy, and `prevent_destroy`;
 versioning is not permission to reuse deterministic media keys across runs.
+The endpoint-only follow-up has a separate plan gate below.
 
 After an authorized apply, read `vay2042_media` and bind the returned bucket,
 CDN, and task role together. Never substitute a production or retained tuple.
@@ -39,14 +40,25 @@ Any additional source prefixes require evidence and separate review.
 
 ## Separate blocked dependencies
 
-The existing S3 gateway endpoint permits ECR image layers only. Before media
-execution, a separate reviewed change must preserve that grant and add source
-`s3:GetObject` for the three exact prefixes above plus destination
-`s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` for this bucket's exact
-`public/media/*` and `private/media/*` paths, restricted to the media role.
-Do not add bucket listing, production writes, NAT, or internet routes. Update
-the metadata isolation checker with that separately reviewed policy boundary;
-this slice changes neither the endpoint nor metadata IAM.
+The endpoint preparation uses `media-s3-endpoint-policy.json` in the isolated
+root. It preserves the exact ECR image-layer grant and adds source
+`s3:GetObject` for the three prefixes above plus destination
+`s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` for this bucket's
+`public/media/*` and `private/media/*` paths, restricted by `aws:PrincipalArn`
+to the exact media role. No bucket listing, owner-reservation access,
+production writes, NAT, route, IAM, task, database or secret changes are included.
+
+Before an authorized apply, independently review a fresh saved plan: exactly
+one in-place policy update to `aws_vpc_endpoint.vay2017_ecr_s3`, no creates,
+deletes, replacements, imports or other changes. Preparing or merging this
+source does not apply the isolated root or authorize media execution.
+
+The isolation checker defaults to the exact deployed ECR-only policy; use
+`bash scripts/check-vay2017-rehearsal-isolation.sh --s3-ecr-only` before the
+endpoint change. After its separately approved apply, use `--s3-media` for
+metadata or media preflight. Both modes reject broader, missing or mixed grants;
+neither mode automatically accepts the other policy. The checker reads AWS
+metadata only. Keep metadata credentials, IAM and task bindings unchanged.
 
 The future guarded runner needs exact PassRole/task binding, separate scoped
 credential injection, a fresh immutable target/run/release binding, and a

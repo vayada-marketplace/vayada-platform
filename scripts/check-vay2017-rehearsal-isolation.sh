@@ -13,6 +13,13 @@ readonly database_subnet_b_cidr="10.230.0.48/28"
 readonly script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly attestation_file="$script_dir/fixtures/vay2017-isolated-restore-plan.json"
 readonly image_digest="sha256:b9cbbeedcdb7a1530b32fdae31c00d75db0ae4c6d53143ca2acf26c0002e3b17"
+readonly s3_policy_file="$script_dir/../infra/vay2017-metadata-runner/media-s3-endpoint-policy.json"
+[[ $# -le 1 ]] || { echo "Expected --s3-ecr-only (default) or --s3-media." >&2; exit 1; }
+case "${1:---s3-ecr-only}" in
+  --s3-ecr-only) readonly s3_policy_mode="ecr-only" ;;
+  --s3-media) readonly s3_policy_mode="media" ;;
+  *) echo "Expected --s3-ecr-only (default) or --s3-media." >&2; exit 1 ;;
+esac
 
 aws sts get-caller-identity --query Account --output text | grep -Fxq "$account" || {
   echo "Refusing: AWS account is not the reviewed rehearsal account." >&2
@@ -130,11 +137,23 @@ jq -e --arg prefix "$prefix_list" '
 
 endpoints_json="$(aws ec2 describe-vpc-endpoints --region "$region" \
   --filters "Name=vpc-id,Values=$vpc" \
-  --query 'VpcEndpoints[*].{id:VpcEndpointId,state:State,type:VpcEndpointType,service:ServiceName,privateDns:PrivateDnsEnabled,subnets:SubnetIds,groups:Groups[*].GroupId,routeTables:RouteTableIds}' --output json)"
+  --query 'VpcEndpoints[*].{id:VpcEndpointId,state:State,type:VpcEndpointType,service:ServiceName,privateDns:PrivateDnsEnabled,subnets:SubnetIds,groups:Groups[*].GroupId,routeTables:RouteTableIds,policy:PolicyDocument}' --output json)"
 jq -e --arg subnet "$endpoint_subnet" --arg group "$endpoint_group" --arg rt "$runner_route_table_id" '
   length == 5 and
   ([.[] | select(.type == "Interface" and .state == "available" and .privateDns == true and .subnets == [$subnet] and .groups == [$group] and (.service | IN("com.amazonaws.eu-west-1.ecr.api","com.amazonaws.eu-west-1.ecr.dkr","com.amazonaws.eu-west-1.logs","com.amazonaws.eu-west-1.secretsmanager")))] | length == 4) and
   ([.[] | select(.type == "Gateway" and .state == "available" and .service == "com.amazonaws.eu-west-1.s3" and .routeTables == [$rt])] | length == 1)
 ' <<<"$endpoints_json" >/dev/null || { echo "Private AWS endpoints are missing or attached outside the isolated VPC." >&2; exit 1; }
+
+s3_policy="$(jq -er '.[] | select(.type == "Gateway" and .service == "com.amazonaws.eu-west-1.s3") | .policy' <<<"$endpoints_json")"
+jq -e --arg mode "$s3_policy_mode" --slurpfile expected "$s3_policy_file" '
+  def normalize:
+    .Statement |= (map(del(.Sid)
+      | .Principal |= (if . == {"AWS":"*"} then "*" else . end)
+      | .Action |= (if type == "string" then [.] else . end | sort)
+      | .Resource |= (if type == "string" then [.] else . end | sort)
+    ) | sort_by(.Resource, .Action));
+  ($expected[0] | if $mode == "ecr-only" then .Statement = [.Statement[0]] else . end) as $contract |
+  normalize == ($contract | normalize)
+' <<<"$s3_policy" >/dev/null || { echo "S3 endpoint policy differs from the exact reviewed $s3_policy_mode policy." >&2; exit 1; }
 
 echo "Verified: the exact encrypted snapshot restore, isolated VPC, database, runner, private endpoints, and no-internet boundary match the reviewed VAY-2043 plan."
