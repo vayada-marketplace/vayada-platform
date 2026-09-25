@@ -24,9 +24,10 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn("del(.taskRoleArn)", RUNNER)
 
     def test_audit_grant_uses_only_the_owner_secret_in_explicit_mode(self) -> None:
-        self.assertIn('--grant-product-audit-insert|--grant-affiliate-read|--grant-platform-runtime-read|--grant-property-profile-lock|--grant-domain-events-append|--grant-jobs-insert|--grant-expense-category-insert|--grant-expense-insert|--grant-recurring-expense-insert)', RUNNER)
+        self.assertIn('--grant-product-audit-insert|--grant-affiliate-read|--grant-finance-affiliate-read|--grant-platform-runtime-read|--grant-property-profile-lock|--grant-domain-events-append|--grant-jobs-insert|--grant-expense-category-insert|--grant-expense-insert|--grant-recurring-expense-insert)', RUNNER)
         self.assertIn('grant_scope="audit_insert"', RUNNER)
         self.assertIn('grant_scope="affiliate_read"', RUNNER)
+        self.assertIn('grant_scope="finance_affiliate_read"', RUNNER)
         self.assertIn('grant_scope="platform_runtime_read"', RUNNER)
         self.assertIn('grant_scope="property_profile_lock"', RUNNER)
         self.assertIn('grant_scope="domain_events_append"', RUNNER)
@@ -116,6 +117,22 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
 
     def test_affiliate_read_grant_reuses_pinned_ca_and_fits_override_budget(self) -> None:
         self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-affiliate-read"'), 3)
+        grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
+        encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
+        self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
+
+    def test_finance_affiliate_read_grant_is_exact_and_fits_override_budget(self) -> None:
+        self.assertGreaterEqual(RUNNER.count('"${mode}" == "--grant-finance-affiliate-read"'), 3)
+        for table in (
+            "finance.affiliate_earning_reconciliation_revisions",
+            "finance.affiliate_eligible_earning_revisions",
+            "finance.affiliate_earning_allocations",
+            "finance.affiliate_earning_allocation_items",
+        ):
+            self.assertIn(f'"{table}"', GRANT)
+        self.assertIn('finance_affiliate_runtime_scope_too_broad', GRANT)
+        self.assertIn('VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE', GRANT)
+        self.assertIn('SELECT WITH GRANT OPTION', GRANT)
         grant_code = (ROOT / 'scripts/grant-target-database-product-audit-insert.mjs').read_bytes()
         encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
         self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
