@@ -83,6 +83,7 @@ CREATE TABLE pms.channel_connections (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_links (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_agreement_lifecycle_events (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_click_occurrences (id uuid PRIMARY KEY);
+CREATE TABLE marketplace.affiliate_click_quota_windows (link_id uuid PRIMARY KEY, consumed integer);
 CREATE TABLE hotel_catalog.properties (id uuid PRIMARY KEY, profile_revision integer NOT NULL DEFAULT 1);
 CREATE TABLE booking.affiliate_click_contexts (id uuid PRIMARY KEY);
 CREATE TABLE booking.affiliate_click_admissions (id uuid PRIMARY KEY);
@@ -513,6 +514,13 @@ if [[ "${postgres_version}" == "17" ]]; then
 fi
 
 run_preflight | grep -F '"status":"PASS"' >/dev/null
+for quota_read in 'SELECT' 'SELECT (link_id)'; do
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "GRANT ${quota_read} ON marketplace.affiliate_click_quota_windows TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_affiliate_quota_read_forbidden
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "REVOKE ${quota_read} ON marketplace.affiliate_click_quota_windows FROM vayada_next_api_runtime" >/dev/null
+done
 
 # Finance worker scopes remain private even when a table or column grant leaks.
 for table in finance_expense_worker_properties finance_export_worker_properties; do
