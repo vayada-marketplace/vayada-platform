@@ -51,6 +51,33 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn("aws ecs deregister-task-definition", RUNNER)
         self.assertIn("Runtime preflight task exceeded five minutes", RUNNER)
 
+    def test_financials_readiness_is_property_scoped_and_read_only(self) -> None:
+        source = (ROOT / 'scripts/financials-activation-readiness.mjs').read_text()
+        self.assertIn('--audit-financials-readiness)', RUNNER)
+        self.assertIn('financials_readiness_property="$2"', RUNNER)
+        self.assertIn('code_file="financials-activation-readiness.mjs"', RUNNER)
+        self.assertIn('secret_parameter="/vayada/prod/target-database-url"', RUNNER)
+        self.assertIn('FINANCIALS_READINESS_PROPERTY_ID', RUNNER)
+        self.assertIn('runFinancialsActivationReadiness', source)
+        self.assertIn('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', source)
+        self.assertIn('expectedModuleState: "inactive"', source)
+        self.assertIn('rejectUnauthorized: true', source)
+        self.assertIn('if (readiness.status === "blocked") process.exitCode = 2', source)
+        self.assertIn('select(.status == "BLOCKED" and .readiness.status == "blocked")', RUNNER)
+        self.assertIn('exit 2', RUNNER)
+        self.assertNotIn('INSERT INTO', source)
+        self.assertNotIn('UPDATE ', source)
+        self.assertNotIn('DELETE FROM', source)
+        encoded = base64.b64encode(gzip.compress(source.encode(), compresslevel=9, mtime=0))
+        self.assertLessEqual(len(encoded) + 2100 + 1400, 8192)
+        invalid = subprocess.run(
+            ['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+             '--audit-financials-readiness', 'not-a-uuid'],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(invalid.returncode, 2)
+        self.assertIn('requires one property UUID', invalid.stderr)
+
     def test_identity_modes_use_only_owner_and_dedicated_identity_secrets(self) -> None:
         self.assertIn('--provision-identity-role|--grant-identity-runtime|--inspect-identity-role|--inspect-cluster-database-acl|--harden-cluster-database-acl)', RUNNER)
         self.assertIn('code_file="provision-target-database-identity-runtime.mjs"', RUNNER)

@@ -21,6 +21,8 @@ export_ongoing="false"
 channex_property=""
 channex_image=""
 helper_file=""
+financials_readiness_property=""
+financials_readiness_image_digest=""
 case "${mode}" in
   preflight)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -28,6 +30,17 @@ case "${mode}" in
     secret_name="TARGET_DATABASE_URL"
     secret_parameter="/vayada/prod/target-database-runtime-url"
     family="vayada-next-api-db-runtime-preflight"
+    ;;
+  --audit-financials-readiness)
+    [[ "$#" -eq 2 && "$2" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || {
+      echo "Financials readiness audit requires one property UUID." >&2; exit 2;
+    }
+    ca_required=true
+    code_file="financials-activation-readiness.mjs"
+    secret_name="TARGET_DATABASE_URL"
+    secret_parameter="/vayada/prod/target-database-url"
+    family="vayada-next-api-db-runtime-preflight"
+    financials_readiness_property="$2"
     ;;
   --grant-product-audit-insert|--grant-affiliate-read|--grant-platform-runtime-read|--grant-property-profile-lock|--grant-domain-events-append|--grant-jobs-insert|--grant-expense-category-insert|--grant-expense-insert|--grant-recurring-expense-insert)
     ca_required=true
@@ -178,7 +191,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
+  if [[ "${mode}" == "--audit-financials-readiness" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -194,7 +207,7 @@ if [[ "${ca_required}" == true ]]; then
     }
   fi
   ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
-  if [[ ( "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" ) && "${#ca_payload}" -gt 2100 ]]; then
+  if [[ ( "${mode}" == "--audit-financials-readiness" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" ) && "${#ca_payload}" -gt 2100 ]]; then
     echo "Pinned grant CA payload exceeds the reviewed ECS override budget." >&2; exit 1
   fi
 fi
@@ -208,7 +221,7 @@ helper_payload=""
 if [[ -n "${helper_file}" ]]; then helper_payload="$(gzip -9 -c "${script_dir}/${helper_file}" | base64 | tr -d '\n')"; fi
 bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';if(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP)process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();if(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_HELPER)fs.writeFileSync('/app/channex-policy-consumer-roles.mjs',z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_HELPER,'base64')));fs.writeFileSync(p,z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));import(p).catch(()=>{console.error(JSON.stringify({status:'FAIL',code:'runtime_preflight_bootstrap_failed'}));process.exit(1)})"
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
-  --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" \
+  --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg financials_readiness_property "${financials_readiness_property}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
     environment:([{name:"VAYADA_DB_RUNTIME_PREFLIGHT_CODE",value:$code}] +
       (if $helper == "" then [] else [{name:"VAYADA_DB_RUNTIME_PREFLIGHT_HELPER",value:$helper}] end) +
@@ -219,13 +232,44 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $export_property == "" then [] else [{name:"FINANCE_EXPORT_WORKER_PROPERTY_ID",value:$export_property}] end) +
       (if $export_id == "" then [] else [{name:"FINANCE_EXPORT_WORKER_EXPORT_ID",value:$export_id}] end) +
       (if $export_ongoing == "true" then [{name:"FINANCE_EXPORT_WORKER_ONGOING",value:"true"}] else [] end) +
+      (if $financials_readiness_property == "" then [] else [{name:"FINANCIALS_READINESS_PROPERTY_ID",value:$financials_readiness_property}] end) +
       (if $channex_property == "" then [] else [{name:"PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID",value:$channex_property}] end))}]}')"
 [[ "${#overrides}" -le 8192 ]] || { echo "ECS command override exceeds the 8192-byte limit." >&2; exit 1; }
 
-current_task="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" \
-  --query 'services[0].taskDefinition' --output text)"
+if [[ "${mode}" == "--audit-financials-readiness" ]]; then
+  service_state="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" \
+    --query 'services[0].{taskDefinition:taskDefinition,desiredCount:desiredCount,runningCount:runningCount,pendingCount:pendingCount,deployments:deployments}' --output json)"
+  jq -e '.desiredCount == 1 and .runningCount == 1 and .pendingCount == 0 and
+    (.deployments | length) == 1 and .deployments[0].status == "PRIMARY" and
+    .deployments[0].rolloutState == "COMPLETED"' <<<"${service_state}" >/dev/null || {
+    echo "Financials readiness requires one stable serving API task." >&2; exit 1;
+  }
+  current_task="$(jq -r '.taskDefinition' <<<"${service_state}")"
+  running_tasks="$(aws ecs list-tasks --cluster "${service_cluster}" --service-name "${service}" \
+    --desired-status RUNNING --region "${region}" --query 'taskArns' --output json)"
+  [[ "$(jq 'length' <<<"${running_tasks}")" == "1" ]] || {
+    echo "Financials readiness requires one observed running API task." >&2; exit 1;
+  }
+  observed_task="$(aws ecs describe-tasks --cluster "${service_cluster}" --tasks "$(jq -r '.[0]' <<<"${running_tasks}")" \
+    --region "${region}" --query 'tasks[0].{taskDefinitionArn:taskDefinitionArn,lastStatus:lastStatus,containers:containers[].{name:name,image:image,imageDigest:imageDigest}}' --output json)"
+  financials_readiness_image_digest="$(jq -r '.containers[] | select(.name == "vayada-next-api") | .imageDigest' <<<"${observed_task}")"
+  [[ "$(jq -r '.taskDefinitionArn' <<<"${observed_task}")" == "${current_task}" &&
+     "$(jq -r '.lastStatus' <<<"${observed_task}")" == "RUNNING" &&
+     "${financials_readiness_image_digest}" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+    echo "Financials readiness serving image changed during inspection." >&2; exit 1;
+  }
+else
+  current_task="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" \
+    --query 'services[0].taskDefinition' --output text)"
+fi
 source_definition="$(aws ecs describe-task-definition --task-definition "${current_task}" --region "${region}" \
   --query taskDefinition --output json)"
+if [[ "${mode}" == "--audit-financials-readiness" ]]; then
+  source_image="$(jq -r '.containerDefinitions[] | select(.name == "vayada-next-api") | .image' <<<"${source_definition}")"
+  [[ "${source_image}" == *@"${financials_readiness_image_digest}" ]] || {
+    echo "Financials readiness task definition is not pinned to the observed image." >&2; exit 1;
+  }
+fi
 temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" \
   --arg secret_name "${secret_name}" --arg secret_parameter "${secret_parameter}" \
   --arg extra_secret_name "${extra_secret_name}" --arg extra_secret_parameter "${extra_secret_parameter}" --arg channex_image "${channex_image}" '
@@ -280,12 +324,19 @@ messages="[]"
 for _ in {1..10}; do
   messages="$(aws logs get-log-events --log-group-name /ecs/vayada-next-api --log-stream-name "${log_stream}" \
     --start-from-head --region "${region}" --query 'events[].message' --output json 2>/dev/null || echo '[]')"
-  jq -e 'any(.[]; fromjson? | .status == "PASS")' <<<"${messages}" >/dev/null && break
+  jq -e 'any(.[]; fromjson? | .status == "PASS" or .status == "BLOCKED")' <<<"${messages}" >/dev/null && break
   sleep 2
 done
 
 task="$(aws ecs describe-tasks --cluster "${cluster}" --tasks "${task_arn}" --region "${region}" \
   --query 'tasks[0].{exitCode:containers[0].exitCode,reason:stoppedReason}' --output json)"
+if [[ "${mode}" == "--audit-financials-readiness" && "$(jq -r '.exitCode' <<<"${task}")" == "2" ]]; then
+  blocked="$(jq -c '.[] | fromjson? | select(.status == "BLOCKED" and .readiness.status == "blocked")' <<<"${messages}")"
+  [[ -n "${blocked}" ]] || { echo "Financials readiness task exited without a blocked report." >&2; exit 1; }
+  jq -c --arg task_definition "${current_task}" --arg image_digest "${financials_readiness_image_digest}" \
+    '. + {sourceTaskDefinition:$task_definition,sourceImageDigest:$image_digest}' <<<"${blocked}"
+  exit 2
+fi
 [[ "$(jq -r '.exitCode' <<<"${task}")" == "0" ]] || {
   echo "Runtime preflight task failed: $(jq -r '.reason' <<<"${task}")" >&2
   jq -r '.[] | fromjson? | select(.status == "FAIL") | .code' <<<"${messages}" >&2
@@ -293,4 +344,8 @@ task="$(aws ecs describe-tasks --cluster "${cluster}" --tasks "${task_arn}" --re
 }
 result="$(jq -c '.[] | fromjson? | select(.status == "PASS")' <<<"${messages}")"
 [[ -n "${result}" ]] || { echo "Runtime preflight exited without reporting PASS." >&2; exit 1; }
+if [[ "${mode}" == "--audit-financials-readiness" ]]; then
+  result="$(jq -c --arg task_definition "${current_task}" --arg image_digest "${financials_readiness_image_digest}" \
+    '. + {sourceTaskDefinition:$task_definition,sourceImageDigest:$image_digest}' <<<"${result}")"
+fi
 printf '%s\n' "${result}"

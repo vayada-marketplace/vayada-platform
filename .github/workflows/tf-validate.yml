@@ -29,6 +29,7 @@ on:
       - "scripts/test-pause-next-api-channex-worker.py"
       - "scripts/run-target-database-runtime-preflight.sh"
       - "scripts/target-database-runtime-preflight.mjs"
+      - "scripts/financials-activation-readiness.mjs"
       - "scripts/grant-target-database-product-audit-insert.mjs"
       - "scripts/finance-expense-worker-database.mjs"
       - "scripts/finance-export-worker-database.mjs"
@@ -216,6 +217,7 @@ jobs:
           python3 scripts/test-target-database-split-deployment-ready.py
           bash -n scripts/run-target-database-runtime-preflight.sh
           node --check scripts/target-database-runtime-preflight.mjs
+          node --check scripts/financials-activation-readiness.mjs
           node --check scripts/grant-target-database-product-audit-insert.mjs
           node --check scripts/finance-expense-worker-database.mjs
           node --check scripts/finance-export-worker-database.mjs
