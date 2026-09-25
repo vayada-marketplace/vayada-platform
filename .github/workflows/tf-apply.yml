@@ -26,10 +26,15 @@ env:
 
 jobs:
   apply:
+    environment: platform-mutations-v2
     name: Apply
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require reviewed main workflow
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: test "$WORKFLOW_REF" = refs/heads/main
       - name: Checkout code
         uses: actions/checkout@v7
 

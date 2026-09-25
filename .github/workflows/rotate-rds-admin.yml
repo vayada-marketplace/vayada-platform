@@ -20,9 +20,14 @@ env:
 
 jobs:
   rotate:
+    environment: platform-mutations-v2
     name: Rotate protected administrator credential
     runs-on: ubuntu-latest
     steps:
+      - name: Require reviewed main workflow
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: test "$WORKFLOW_REF" = refs/heads/main
       - name: Check explicit confirmation
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
