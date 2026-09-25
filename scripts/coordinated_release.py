@@ -870,7 +870,7 @@ class Aws:
             fail(f"Registered task definition identity mismatch for {key}")
         return arn
 
-    def verify_api_split_image(self, key: str, digest: str) -> None:
+    def verify_api_split_image(self, key: str, digest: str, task_definition: dict[str, Any]) -> None:
         if key != "next-target-backend":
             return
         repository = self.config["services"][key]["ecrRepository"]
@@ -880,8 +880,10 @@ class Aws:
         with tempfile.TemporaryDirectory() as directory:
             document = Path(directory) / "image.json"
             document.write_text(json.dumps(details))
+            task_document = Path(directory) / "task.json"
+            task_document.write_text(json.dumps(task_definition))
             self.runner.run(sys.executable, str(ROOT / "scripts/assert-next-api-split-compatible-image.py"),
-                            key, repository, digest, str(document))
+                            key, repository, digest, str(document), str(task_document))
 
     def update_service(self, key: str, task_definition: str) -> None:
         physical = self.config["services"][key]
@@ -1602,8 +1604,8 @@ def reconcile_service_with_dependencies(
         fail(f"Unknown plan action for {key}")
     image = manifest["services"][key]
     aws.verify_image(key, image)
-    aws.verify_api_split_image(key, image["digest"])
     before = aws.service_snapshot(key)
+    aws.verify_api_split_image(key, image["digest"], before.get("taskDefinition", {}))
     if action == "verify" and before["digest"] != image["digest"]:
         fail(f"{key} changed after preparation; verify-only cannot mutate it")
     operation_id = require_id(plan["operationId"], "plan.operationId")
@@ -1619,7 +1621,11 @@ def reconcile_service_with_dependencies(
         recovering_mutation = rollback_task_definition != before["taskDefinitionArn"]
     if before["digest"] != image["digest"] or recovering_mutation:
         # Check the retained pre-mutation image as well, including interrupted retries.
-        aws.verify_api_split_image(key, rollback_image.rsplit("@", 1)[-1])
+        rollback_definition = before.get("taskDefinition", {})
+        if key == "next-target-backend" and rollback_task_definition != before["taskDefinitionArn"]:
+            rollback_definition = aws.json("ecs", "describe-task-definition",
+                                           "--task-definition", rollback_task_definition).get("taskDefinition", {})
+        aws.verify_api_split_image(key, rollback_image.rsplit("@", 1)[-1], rollback_definition)
     operation = {
         "schemaVersion": 1,
         "operationId": operation_id,

@@ -608,16 +608,32 @@ class PhysicalIdentityTests(unittest.TestCase):
                         (ROOT / "scripts/next-api-split-compatible-images.txt").read_text().splitlines()
                         if line.strip() and not line.startswith("#"))
         aws = release.Aws(release.CommandRunner(), self.config)
+        task = {"containerDefinitions": [{"name": "vayada-next-api", "environment": [
+            {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"}]}]}
         for digest, allowed in ((attested, True), ("sha256:" + "a" * 64, False)):
             with mock.patch.object(aws, "json", return_value={"imageDetails": [{"imageDigest": digest}]}):
                 if allowed:
-                    aws.verify_api_split_image("next-target-backend", digest)
+                    aws.verify_api_split_image("next-target-backend", digest, task)
                 else:
                     with self.assertRaisesRegex(release.ReleaseError, "no reviewed immutable"):
-                        aws.verify_api_split_image("next-target-backend", digest)
+                        aws.verify_api_split_image("next-target-backend", digest, task)
         with mock.patch.object(aws, "json") as ecr:
-            aws.verify_api_split_image("next-booking-admin", "not-an-api-digest")
+            aws.verify_api_split_image("next-booking-admin", "not-an-api-digest", {})
             ecr.assert_not_called()
+        task["containerDefinitions"][0]["environment"] = [
+            {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "true"},
+            {"name": "FINANCE_EXPORT_WORKER_ACCEPTED_AFTER", "value": "2026-09-25T05:00:00.000Z"},
+        ]
+        ongoing = next(line.split()[1] for line in
+                       (ROOT / "scripts/next-api-ongoing-export-compatible-images.txt").read_text().splitlines()
+                       if line.strip() and not line.startswith("#"))
+        for digest in (attested, ongoing):
+            with mock.patch.object(aws, "json", return_value={"imageDetails": [{"imageDigest": digest}]}):
+                if digest == ongoing:
+                    aws.verify_api_split_image("next-target-backend", digest, task)
+                else:
+                    with self.assertRaisesRegex(release.ReleaseError, "disable ongoing exports"):
+                        aws.verify_api_split_image("next-target-backend", digest, task)
 
 
 class ActivationTests(unittest.TestCase):
@@ -714,7 +730,11 @@ class ActivationTests(unittest.TestCase):
         for recovering, reject_desired in ((False, True), (False, False), (True, False)):
             with self.subTest(recovering=recovering, reject_desired=reject_desired):
                 aws = mock.Mock()
+                live_definition = {"activation": "live"}
+                rollback_definition = {"activation": "rollback"}
+                aws.json.return_value = {"taskDefinition": rollback_definition}
                 aws.service_snapshot.return_value = {
+                    "taskDefinition": live_definition,
                     "digest": desired if recovering else previous,
                     "taskDefinitionArn": "live-task", "image": "repository@" + previous}
                 pending = {"rollbackTaskDefinitionArn": "previous-task", "rollbackImage": "repository@" + previous} if recovering else None
@@ -729,7 +749,11 @@ class ActivationTests(unittest.TestCase):
                         with self.assertRaisesRegex(release.ReleaseError, "unattested"):
                             release.reconcile_service(args)
                         aws.verify_api_split_image.assert_has_calls(
-                            [mock.call(key, desired)] if reject_desired else [mock.call(key, desired), mock.call(key, previous)])
+                            [mock.call(key, desired, live_definition)] if reject_desired else [mock.call(key, desired, live_definition), mock.call(key, previous, rollback_definition if recovering else live_definition)])
+                        if recovering:
+                            aws.json.assert_called_once_with("ecs", "describe-task-definition", "--task-definition", "previous-task")
+                        else:
+                            aws.json.assert_not_called()
                         aws.put_parameter.assert_not_called()
                         aws.register_rendered_task.assert_not_called()
                         aws.update_service.assert_not_called()

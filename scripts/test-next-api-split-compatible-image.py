@@ -13,7 +13,7 @@ DIGEST = "sha256:b097e04a61d5bd3b5910bbf856f13849bddd7b66c5883a4e2e160e311737bfc
 VAY_2027_DIGEST = "sha256:3da7374232c46f29ee34ac1a8036f7b7abb1c0d4b6d10a1405552f12484b11a5"
 
 
-def run(service: str, repository: str, digest: str, tags: list[str], ongoing: bool | None = None, environment=None, secrets=None):
+def run(service: str, repository: str, digest: str, tags: list[str], ongoing: bool | None = False, environment=None, secrets=None):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "image.json"
         path.write_text(json.dumps({"imageDetails": [{
@@ -71,6 +71,11 @@ class CompatibleImageTest(unittest.TestCase):
             self.assertNotEqual(run("next-target-backend", "vayada-next-api", DIGEST, [], ongoing=True, environment=env).returncode, 0)
         self.assertNotEqual(run("next-target-backend", "vayada-next-api", DIGEST, [], ongoing=False,
             secrets=[{"name": "FINANCE_EXPORT_WORKER_ENABLED", "valueFrom": "/unknown"}]).returncode, 0)
+
+    def test_requires_task_definition(self) -> None:
+        result = run("next-target-backend", "vayada-next-api", DIGEST, [], ongoing=None)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("usage:", result.stderr)
 
     def test_skips_unrelated_service(self) -> None:
         self.assertEqual(run("pms-backend", "other", "tag", []).returncode, 0)
