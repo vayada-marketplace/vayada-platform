@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-25T16:35:45Z",
+  "environment": "production",
+  "manifestId": "vayada-release/v1/f2f02832f8db0e02859871becb6210a811639842/36141509208/1",
+  "publishedArtifactId": 10867296213,
+  "runs": {
+    "verify": {"runId": 36158862064, "conclusion": "success"},
+    "apiResume": {"runId": 36158940242, "conclusion": "success"},
+    "bookingWebResume": {"runId": 36159531984, "conclusion": "success"},
+    "activate": {"runId": 36160171047, "conclusion": "success"},
+    "duplicateNoOp": {"runId": 36160889150, "conclusion": "success"},
+    "staleLegacyFence": {"runId": 36161462488, "conclusion": "expected-failure-at-ownership-guard"}
+  },
+  "ownership": {
+    "mode": "batch",
+    "operationId": "release-36160171047-1",
+    "producerSwitch": true,
+    "desiredReleaseArtifactId": 10867296213
+  },
+  "holds": {
+    "next-target-backend": {"status": "cleared", "clearedByOperationId": "release-36158940242-1"},
+    "next-booking-frontend": {"status": "cleared", "clearedByOperationId": "release-36159531984-1"}
+  },
+  "services": {
+    "next-target-backend": {"taskDefinition": "vayada-next-api:1162", "digest": "sha256:1a7d9e4112445c2e83b867f6582cc118e0038ae73dede5047a9d3516a5586aaa", "result": "succeeded"},
+    "next-pms-frontend": {"taskDefinition": "vayada-next-pms-frontend:626", "digest": "sha256:55e8ed2aa3cb1fabb70188cdc0a33cf377e7107984f89c6ddfa3684dd0dcdbbd", "result": "succeeded"},
+    "next-booking-frontend": {"taskDefinition": "vayada-next-booking-frontend:428", "digest": "sha256:8b50032a57de17a937e565fb7af89ff236de78b19f7cf26850df527c15e772c6", "result": "succeeded"},
+    "next-booking-admin": {"taskDefinition": "vayada-next-booking-admin:552", "digest": "sha256:93fffdf28afb8dc8119a78ecff3f1561903b0b88ce7100d3750ed340244e4b5f", "result": "succeeded"},
+    "next-marketplace-frontend": {"taskDefinition": "vayada-next-marketplace-frontend:572", "digest": "sha256:43dd04c0c1a0b3ba2a87f46b6722e4db46b73a965984edf0e110088ec132601b", "result": "succeeded"},
+    "next-marketplace-admin": {"taskDefinition": "vayada-next-marketplace-admin:523", "digest": "sha256:a971831a03ab837a70b1243855affd2ff0630b118fca44de2a54e892982d7e94", "result": "succeeded"}
+  },
+  "operationIntervals": {
+    "next-target-backend": {"startedAt": "2026-09-25T16:22:13.977597Z", "completedAt": "2026-09-25T16:22:21.073225Z"},
+    "next-marketplace-frontend": {"startedAt": "2026-09-25T16:22:40.429335Z", "completedAt": "2026-09-25T16:25:28.616485Z"},
+    "next-pms-frontend": {"startedAt": "2026-09-25T16:22:40.628560Z", "completedAt": "2026-09-25T16:25:33.237595Z"},
+    "next-marketplace-admin": {"startedAt": "2026-09-25T16:22:41.209364Z", "completedAt": "2026-09-25T16:25:46.508644Z"},
+    "next-booking-admin": {"startedAt": "2026-09-25T16:22:41.761519Z", "completedAt": "2026-09-25T16:25:48.774813Z"},
+    "next-booking-frontend": {"startedAt": "2026-09-25T16:22:42.233424Z", "completedAt": "2026-09-25T16:22:50.939903Z"}
+  },
+  "mutationAccounting": {
+    "observationWindow": {"startedAt": "2026-09-25T16:08:00Z", "completedAt": "2026-09-25T16:34:30Z"},
+    "apiResumeUpdateServiceCalls": 1,
+    "bookingWebResumeUpdateServiceCalls": 1,
+    "activationUpdateServiceCalls": 4,
+    "duplicateReplayUpdateServiceCalls": 0,
+    "staleLegacyEventUpdateServiceCalls": 0,
+    "cloudTrailEvents": [
+      {"eventId": "f9f3e729-2b90-4f86-ade9-65571d63608a", "eventTime": "2026-09-25T16:10:29Z", "service": "vayada-next-api-service", "taskDefinition": "vayada-next-api:1162"},
+      {"eventId": "5bca6575-847f-4f1c-a8d8-30dcc3de1a9f", "eventTime": "2026-09-25T16:16:34Z", "service": "vayada-next-booking-frontend-service", "taskDefinition": "vayada-next-booking-frontend:428"},
+      {"eventId": "15ff047e-f191-4628-a257-fedd832b5879", "eventTime": "2026-09-25T16:22:48Z", "service": "vayada-next-marketplace-admin-service", "taskDefinition": "vayada-next-marketplace-admin:523"},
+      {"eventId": "da037c99-59b5-449b-a4bd-46de765f1542", "eventTime": "2026-09-25T16:22:48Z", "service": "vayada-next-marketplace-frontend-service", "taskDefinition": "vayada-next-marketplace-frontend:572"},
+      {"eventId": "03895407-baa1-4b15-a001-c6c3323606dd", "eventTime": "2026-09-25T16:22:49Z", "service": "vayada-next-pms-frontend-service", "taskDefinition": "vayada-next-pms-frontend:626"},
+      {"eventId": "fa5b5b90-4114-46b5-a1c9-32997712f67a", "eventTime": "2026-09-25T16:22:50Z", "service": "vayada-next-booking-admin-service", "taskDefinition": "vayada-next-booking-admin:552"}
+    ]
+  },
+  "workflowRestoration": {
+    "platformDeployAppService": "active",
+    "sixLegacyAppDeployWorkflows": "active-with-automatic-jobs-fenced-by-producer-switch",
+    "bookingPublicCanary": "active",
+    "coordinatedBuildPublishDeployControl": "active"
+  },
+  "postActivationCoordination": {
+    "observedAt": "2026-09-25T16:48:43Z",
+    "productionRootRuns": [36161738886, 36161818636],
+    "result": "failed-before-terraform-apply",
+    "blocker": "runtime_relation_read_missing:4",
+    "relations": [
+      "finance.affiliate_earning_reconciliation_revisions",
+      "finance.affiliate_eligible_earning_revisions",
+      "finance.affiliate_earning_allocations",
+      "finance.affiliate_earning_allocation_items"
+    ],
+    "affectedService": "next-target-backend",
+    "affectedTaskDefinition": "vayada-next-api:1162",
+    "productImpact": "unknown-until-authenticated-finance-reads",
+    "requiredAction": "review and apply least-privilege SELECT grants for exactly the four listed relations, then pass the target-runtime preflight before any separately approved Apply or release",
+    "terraformApply": "skipped",
+    "releaseMutation": false
+  },
+  "rawSources": {
+    "operationIntervals": "SSM /vayada/prod/coordinated-deployments/v1/operations/release-36160171047-1/*",
+    "mutationEvents": "CloudTrail EventName=UpdateService in the recorded observation window",
+    "workflowRuns": "GitHub Actions run IDs in this record"
+  }
+}

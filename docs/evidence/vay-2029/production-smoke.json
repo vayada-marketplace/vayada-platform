@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-25T16:35:45Z",
+  "activationRunId": 36160171047,
+  "duplicateRunId": 36160889150,
+  "bookingBrowserCanary": {
+    "runId": 36161297153,
+    "sourceSha": "f2f02832f8db0e02859871becb6210a811639842",
+    "conclusion": "success"
+  },
+  "checks": {
+    "apiHealth": "passed",
+    "pmsAuthGatewayMissingSessionAndWorkosRedirect": "passed",
+    "bookingAdminAuthGatewayMissingSessionAndWorkosRedirect": "passed",
+    "marketplaceWebAuthGatewayMissingSessionAndWorkosRedirect": "passed",
+    "platformAdminAuthGatewayMissingSessionAndWorkosRedirect": "passed",
+    "bookingTenantBuildHostProfileAndPage": "passed",
+    "bookingPlaywrightBrowserCanary": "passed"
+  },
+  "writesPerformed": {
+    "reservations": 0,
+    "payments": 0
+  },
+  "limitations": [
+    "No reusable authenticated production fixture session was available to record in-app PMS, Booking Admin, Marketplace, or Admin business-data reads.",
+    "Post-activation target-runtime preflight found missing SELECT access to four Finance relations for deployed next-target-backend task vayada-next-api:1162; Finance product impact is unknown until the exact grants and authenticated reads are verified.",
+    "The production smoke proves health, public tenant behavior, authentication entry/denial contracts, and browser rendering; authenticated product-read evidence remains an acceptance follow-up."
+  ]
+}
