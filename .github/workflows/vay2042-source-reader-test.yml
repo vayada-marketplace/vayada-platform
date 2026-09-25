@@ -10,6 +10,10 @@ on:
       - scripts/test-vay2042-source-reader-launcher.mjs
       - scripts/provision-vay2042-target.mjs
       - scripts/test-vay2042-target.mjs
+      - scripts/launch-vay2042-target.mjs
+      - scripts/build-vay2042-target.mjs
+      - scripts/generated/vay2042-target-bootstrap.mjs
+      - scripts/test-vay2042-target-launcher.mjs
       - scripts/fixtures/vay2042-source-reader.json
       - scripts/fixtures/vay2017-isolated-restore-plan.json
       - rehearsal/rds-ca-rsa2048-g1.pem
@@ -41,6 +45,9 @@ jobs:
           node-version: '24'
       - run: npm install --prefix "$RUNNER_TEMP/vay2042-test" --no-audit --no-fund pg@8.16.3 esbuild@0.28.0
       - run: node scripts/build-vay2042-source-reader.mjs --check && node --test scripts/test-vay2042-source-reader-launcher.mjs
+        env:
+          ESBUILD_BINARY: ${{ runner.temp }}/vay2042-test/node_modules/.bin/esbuild
+      - run: node scripts/build-vay2042-target.mjs --check && node --test scripts/test-vay2042-target-launcher.mjs
         env:
           ESBUILD_BINARY: ${{ runner.temp }}/vay2042-test/node_modules/.bin/esbuild
       - run: node --test scripts/test-vay2042-${{ matrix.scope }}.mjs
