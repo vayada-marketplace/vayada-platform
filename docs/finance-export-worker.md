@@ -48,7 +48,7 @@ invalid enabled-worker scope or secret mappings.
 ## Ongoing exports for every hotel
 
 The ongoing contract is `engineering/finance-ongoing-export-activation.md` in the
-app repository. Deploy the reviewed app image containing migration 0423 and the
+app repository. Deploy the reviewed app image containing migration 0424 and the
 ongoing worker before enabling this mode. The migration enrolls existing and
 future hotels; API authorization and restrictive worker RLS remain required.
 
