@@ -36,7 +36,15 @@ function dependencies(overrides = {}) {
     constructor(config) { this.database = config.database; calls.push(['client', config]); }
     on(event, handler) { assert.equal(event, 'error'); handler(new Error('private-async-driver-error')); }
     async connect() { if (overrides.connectError) throw overrides.connectError; }
-    async query(sql) { calls.push(sql); return { rows: [{ address: overrides.address ?? '10.230.0.35', database: overrides.database ?? this.database }] }; }
+    async query(sql) {
+      calls.push(sql);
+      const addresses = {
+        'SELECT inet_server_addr()::text AS address, current_database() AS database': '10.230.0.35/32',
+        'SELECT host(inet_server_addr()) AS address, current_database() AS database': '10.230.0.35',
+      };
+      assert.ok(Object.hasOwn(addresses, sql), `Unexpected query: ${sql}`);
+      return { rows: [{ address: overrides.address ?? addresses[sql], database: overrides.database ?? this.database }] };
+    }
     async end() { calls.push('end'); }
   }
   return { calls, Client, SecretsManagerClient, DescribeSecretCommand, PutSecretValueCommand,
@@ -71,6 +79,7 @@ test('writes only fixed generated credentials after private hostname-verified co
   const config = deps.calls.find((call) => call[0] === 'client')[1];
   assert.deepEqual(config.ssl, { ca, rejectUnauthorized: true, servername: env.VAY2042_DB_HOST });
   assert.equal(config.database, 'postgres');
+  assert.ok(deps.calls.includes('SELECT host(inet_server_addr()) AS address, current_database() AS database'));
   const command = deps.calls.find((call) => call instanceof deps.PutSecretValueCommand);
   assert.equal(command.input.SecretId, env.VAY2042_READER_SECRET_ARN);
   assert.deepEqual(JSON.parse(command.input.SecretString), { username: reader, password: 'p'.repeat(48) });
@@ -84,6 +93,7 @@ test('rejects occupied or different secret before connections and nonprivate ser
     { destination: { ARN: 'different-secret', Name: secretName } },
     { destination: { ARN: env.VAY2042_READER_SECRET_ARN, Name: 'metadata-reader' } },
     { address: '10.230.1.35' }, { address: '10.230.0.256' }, { address: '127.0.0.1' },
+    { address: '10.230.0.35/32' }, { address: '::ffff:10.230.0.35' },
     { database: 'different-database' },
     { credential: { username: 'vay2017_metadata_reader', password: 'p'.repeat(48) } },
   ]) {
@@ -93,6 +103,16 @@ test('rejects occupied or different secret before connections and nonprivate ser
     if (overrides.destination) assert.ok(!deps.calls.some((call) => call[0] === 'client'));
     else assert.ok(deps.calls.includes('end'));
   }
+});
+
+test('real provisioner cannot issue any provisioning query after endpoint rejection', async () => {
+  const deps = dependencies({ address: '10.230.0.35/32' });
+  assert.deepEqual(await bootstrap(env, { ...deps, provision: undefined }),
+    { status: 'FAIL', stage: 'database-connect', code: 'database_endpoint_invalid', errorClass: 'Error' });
+  assert.deepEqual(deps.calls.filter((call) => call[0] === 'client').map((call) => call[1].database), ['postgres']);
+  assert.deepEqual(deps.calls.filter((call) => typeof call === 'string'),
+    ['SELECT host(inet_server_addr()) AS address, current_database() AS database', 'end', 'destroy']);
+  assert.ok(!deps.calls.some((call) => call instanceof deps.PutSecretValueCommand));
 });
 
 test('errors expose only allowlisted stage/code/class, including credential-store failures', async () => {

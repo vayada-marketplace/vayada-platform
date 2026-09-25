@@ -37,3 +37,7 @@ On any failure or unknown final activation, retain resources and inspect the
 exact writer/database/secret state; never retry, drop or rotate blindly. The
 writer expires in 24 hours. Attestor-owned source evidence and fresh target/run
 binding remain separate reviewed prerequisites before any row extraction.
+
+For the host-address launcher correction after initial installation, use the
+narrow repair-plan gate in `vay2042-source-reader-runner.md`. Keep target dispatch
+held until the repaired source run succeeds and the target preflight is fresh.
