@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-25T13:09:36Z",
+  "prepareOnly": true,
+  "sourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af",
+  "producer": {"runId": 36134864409, "runAttempt": 1, "conclusion": "success"},
+  "publisher": {"runId": 36135194016, "runAttempt": 1, "conclusion": "success"},
+  "candidateArtifact": {
+    "id": 10863386229,
+    "name": "next-release-candidate-v1-36134864409-1",
+    "expiresAt": "2026-10-09T12:29:11Z"
+  },
+  "publishedArtifact": {
+    "id": 10863860900,
+    "name": "next-release-published-v1-b83cec1894c81b5f65fb8a871fdaa6e0e67335af-36134864409-1",
+    "expiresAt": "2026-12-24T12:29:17Z"
+  },
+  "manifestId": "vayada-release/v1/b83cec1894c81b5f65fb8a871fdaa6e0e67335af/36134864409/1",
+  "manifestSha256": "1c3c44019ec534d374c7447cae32053d01bcdfeaa1ed8bbefd94594b2a41820e",
+  "publishedRecordSha256": "4fd68c242053cd2da2af99e8a5e21275a622c599920980623dedb6aa896dddb8",
+  "barriers": [],
+  "services": {
+    "next-target-backend": {"ecrRepository": "vayada-next-api", "digest": "sha256:b9cbbeedcdb7a1530b32fdae31c00d75db0ae4c6d53143ca2acf26c0002e3b17", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"},
+    "next-pms-frontend": {"ecrRepository": "vayada-next-pms-frontend", "digest": "sha256:55e8ed2aa3cb1fabb70188cdc0a33cf377e7107984f89c6ddfa3684dd0dcdbbd", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"},
+    "next-booking-frontend": {"ecrRepository": "vayada-next-booking-frontend", "digest": "sha256:8b50032a57de17a937e565fb7af89ff236de78b19f7cf26850df527c15e772c6", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"},
+    "next-booking-admin": {"ecrRepository": "vayada-next-booking-admin-frontend", "digest": "sha256:93fffdf28afb8dc8119a78ecff3f1561903b0b88ce7100d3750ed340244e4b5f", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"},
+    "next-marketplace-frontend": {"ecrRepository": "vayada-next-marketplace-frontend", "digest": "sha256:43dd04c0c1a0b3ba2a87f46b6722e4db46b73a965984edf0e110088ec132601b", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"},
+    "next-marketplace-admin": {"ecrRepository": "vayada-next-admin-frontend", "digest": "sha256:a971831a03ab837a70b1243855affd2ff0630b118fca44de2a54e892982d7e94", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"}
+  },
+  "platformVerification": {
+    "status": "attestation-merged-platform-verification-pending",
+    "pullRequest": 274,
+    "headSha": "e600571272c5db7c7877986e26939cba5a66c7b5",
+    "mergeSha": "73b73bb3013ef849f24c608559681218f448274b"
+  },
+  "ecsMutationCount": 0,
+  "ssmMutationCount": 0,
+  "limitations": [
+    "This is publication evidence, not production activation evidence.",
+    "The platform must verify the artifact again from the reviewed merged revision before any resume or activation."
+  ]
+}
