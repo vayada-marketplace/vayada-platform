@@ -107,6 +107,7 @@ on:
       - ".github/workflows/vay2042-source-reader-bootstrap.yml"
       - "scripts/run-vay2042-target-bootstrap.sh"
       - "scripts/test-vay2042-target-runner.mjs"
+      - "scripts/test-vay2042-media-infra.mjs"
       - ".github/workflows/vay2042-target-bootstrap.yml"
       - "scripts/check-vay2017-rehearsal-isolation.sh"
       - "scripts/fixtures/vay2017-restore-attestation.json"
@@ -254,6 +255,7 @@ jobs:
           node --test scripts/test-vay2017-metadata-reader-bootstrap.mjs
           node --test scripts/test-vay2042-source-reader-runner.mjs
           node --test scripts/test-vay2042-target-runner.mjs
+          node --test scripts/test-vay2042-media-infra.mjs
           bash -n scripts/run-vay2017-rehearsal-metadata.sh
           bash -n scripts/run-vay2017-metadata-reader-bootstrap.sh
           bash -n scripts/check-vay2017-rehearsal-isolation.sh
