@@ -1,10 +1,10 @@
 # VAY-2029 activation record and runbook
 
-Status: **NOT READY FOR ACTIVATION.** The old writer boundary is installed and
-the exact prepare-only candidate is published. Activation remains blocked on
-merging its reviewed API attestations, reconciling both active holds, approving
-the exact artifact and hashes, and completing production smoke/evidence. This
-document is an operator record, not deployment approval.
+Status: **NOT READY FOR ACTIVATION.** The old writer boundary and reviewed API
+attestations are installed, and the exact prepare-only candidate is published.
+Activation remains blocked on reconciling both active holds, approving the exact
+artifact and hashes, and completing production smoke/evidence. This document is
+an operator record, not deployment approval.
 
 Read with [the architecture](https://linear.app/vayadacom/document/coordinated-deployment-architecture-and-acceptance-plan-3f706981f863),
 [runtime controls](coordinated-releases.md), and the
@@ -17,7 +17,7 @@ Read with [the architecture](https://linear.app/vayadacom/document/coordinated-d
 | Writer migration | platform [#262](https://github.com/vayada-marketplace/vayada-platform/pull/262), head `df2462b4a338991b4f1f34c54d8607045f30c729`, merge `3feb08591931d816d32eea300a6623a7ae9b0c29` | Apply [36105639066](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36105639066) succeeded with no infrastructure changes |
 | Protected OIDC trust | platform [#265](https://github.com/vayada-marketplace/vayada-platform/pull/265), head `a50087b146672ec049b6da7582490bedb006ce49`, merge `057cd77c95ec1cbbdfdc90947d25e75faffb2a59` | Protected admission [36109471264](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36109471264) passed; no-environment probe [36109998999](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36109998999) denied all 12 assume attempts |
 | Transition-session cutoff | platform [#272](https://github.com/vayada-marketplace/vayada-platform/pull/272), head `4e89f9b4ebb83a43c0c3533ece99a5c96fda1460`, merge `9ac1e0852e16dba42da39db7bc539b4baf63df61` | Cutoff `2026-09-25T08:08:47Z`; post-cutoff Apply [36117487916](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36117487916) passed with 0 added, 0 changed, 0 destroyed |
-| Candidate API attestations | platform [#274](https://github.com/vayada-marketplace/vayada-platform/pull/274), head `e600571272c5db7c7877986e26939cba5a66c7b5` | Open and green; not merged and not deployment approval |
+| Candidate API attestations | platform [#274](https://github.com/vayada-marketplace/vayada-platform/pull/274), head `e600571272c5db7c7877986e26939cba5a66c7b5`, merge `73b73bb3013ef849f24c608559681218f448274b` | Merged after green CI and clean independent/CodeRabbit review; still not deployment approval |
 
 The mutation role trust is limited to audience `sts.amazonaws.com` and subject
 `repo:vayada-marketplace/vayada-platform:environment:platform-mutations-v2`.
@@ -88,8 +88,9 @@ A failed resume keeps the hold active and stops activation.
 
 Stop if any item fails:
 
-1. PR #274 is merged after human approval and its exact head is present on the
-   reviewed platform main revision. Re-run targeted guard tests there.
+1. Confirm PR #274 merge `73b73bb3013ef849f24c608559681218f448274b`
+   remains an ancestor of the reviewed platform main revision. Re-run targeted
+   guard tests there.
 2. Reconfirm the artifact is non-expired and its manifest, record, producer,
    publisher, source ancestry, six ECR digests, and API attestations match this
    document exactly. Barriers must be empty.

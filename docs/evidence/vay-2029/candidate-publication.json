@@ -28,9 +28,10 @@
     "next-marketplace-admin": {"ecrRepository": "vayada-next-admin-frontend", "digest": "sha256:a971831a03ab837a70b1243855affd2ff0630b118fca44de2a54e892982d7e94", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"}
   },
   "platformVerification": {
-    "status": "pending-attestation-merge",
+    "status": "attestation-merged-platform-verification-pending",
     "pullRequest": 274,
-    "headSha": "e600571272c5db7c7877986e26939cba5a66c7b5"
+    "headSha": "e600571272c5db7c7877986e26939cba5a66c7b5",
+    "mergeSha": "73b73bb3013ef849f24c608559681218f448274b"
   },
   "ecsMutationCount": 0,
   "ssmMutationCount": 0,
