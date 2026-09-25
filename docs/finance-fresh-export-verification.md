@@ -162,3 +162,18 @@ predecessor merges and pass the final checks.
 
 No other Financials activation, five-tab export sweep, payment, reservation,
 backfill, or unrelated fixture mutation is included.
+
+## RDS certificate trust for the isolated CLI
+
+The one-shot container writes the existing checksum-pinned public RDS root to
+its temporary filesystem before starting Node with `NODE_EXTRA_CA_CERTS`.
+The shell then `exec`s the CLI so ECS stop signals reach the worker directly.
+Certificate and hostname verification remain enabled; the runner rejects a
+changed root certificate before registering a task.
+
+Run 36034750014 proved OIDC and both database preflights, but its worker failed
+before claiming the job because Node lacked this root (`SELF_SIGNED_CERT_IN_CHAIN`).
+Export `d5877463-0778-4b0e-a180-53f31ef8e453` was reconciled with zero attempts
+and no S3 object. Its original window expired: do not retry, reset or replay it.
+A separate read-only connection probe with the trusted root passed; that proves
+the connection repair, not a successful CSV export.

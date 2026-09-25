@@ -2,6 +2,9 @@ import copy
 import contextlib
 import io
 import json
+import os
+import subprocess
+import tempfile
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -58,10 +61,37 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(result["taskRoleArn"], r["ROLE"])
         container = result["containerDefinitions"][0]
         self.assertEqual(container["secrets"], [{"name": "FINANCE_EXPORT_WORKER_DATABASE_URL", "valueFrom": r["SECRET"]}])
-        self.assertEqual(container["command"], ["node", "apps/api/dist/jobs/runFinanceDashboardExportOnce.js"])
+        self.assertEqual(container["command"], r["COMMAND"])
+        env = {item["name"]: item["value"] for item in container["environment"]}
+        self.assertEqual(env["NODE_EXTRA_CA_CERTS"], r["CA_PATH"])
+        self.assertEqual(env["FINANCE_EXPORT_RDS_CA"], r["CA_FILE"].read_bytes().decode("ascii"))
+        self.assertNotIn("NODE_TLS_REJECT_UNAUTHORIZED", env)
         self.assertNotIn("healthCheck", container)
         self.assertNotIn("must-not", str(result))
         self.assertNotIn("FINANCE_EXPORT_WORKER_ENABLED", str(result))
+
+    def test_startup_writes_exact_ca_and_stops_if_write_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node = root / "node"
+            node.write_text('#!/bin/sh\ncat "$NODE_EXTRA_CA_CERTS" > "$PROOF"\nprintf "%s" "$1" > "$ARGS"\n')
+            node.chmod(0o700)
+            env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                   "NODE_EXTRA_CA_CERTS": str(root / "ca.pem"),
+                   "FINANCE_EXPORT_RDS_CA": r["CA_FILE"].read_bytes().decode("ascii"),
+                   "PROOF": str(root / "proof"), "ARGS": str(root / "args")}
+            subprocess.run(r["COMMAND"], env=env, check=True)
+            self.assertEqual((root / "proof").read_bytes(), r["CA_FILE"].read_bytes())
+            self.assertEqual((root / "args").read_text(), "apps/api/dist/jobs/runFinanceDashboardExportOnce.js")
+            (root / "proof").unlink()
+            env["NODE_EXTRA_CA_CERTS"] = str(root / "missing" / "ca.pem")
+            self.assertNotEqual(subprocess.run(r["COMMAND"], env=env, capture_output=True).returncode, 0)
+            self.assertFalse((root / "proof").exists())
+
+    def test_rejects_changed_certificate_before_task_registration(self):
+        with patch.object(Path, "read_bytes", return_value=b"untrusted certificate"):
+            with self.assertRaisesRegex(ValueError, "rds_ca_drift"):
+                render(baseline())
 
     def test_deadline_includes_queue_delay_and_rejects_future_time(self):
         check = r["deadline_for"]
