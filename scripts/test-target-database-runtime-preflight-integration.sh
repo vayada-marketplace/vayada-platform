@@ -90,6 +90,7 @@ CREATE TABLE booking.affiliate_click_admissions (id uuid PRIMARY KEY);
 CREATE TABLE booking.affiliate_original_booking_bindings (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_records (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_revocations (id uuid PRIMARY KEY);
+CREATE TABLE platform.identity_migration_provenance (id uuid PRIMARY KEY);
 CREATE TABLE platform.channex_management_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.finance_expense_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.finance_export_worker_properties (property_id uuid PRIMARY KEY);
@@ -521,6 +522,26 @@ for quota_read in 'SELECT' 'SELECT (link_id)'; do
   docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
     "REVOKE ${quota_read} ON marketplace.affiliate_click_quota_windows FROM vayada_next_api_runtime" >/dev/null
 done
+
+for privilege in 'SELECT' 'SELECT (id)'; do
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "GRANT ${privilege} ON platform.identity_migration_provenance TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_identity_migration_provenance_read_forbidden
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "REVOKE ${privilege} ON platform.identity_migration_provenance FROM vayada_next_api_runtime" >/dev/null
+done
+for privilege in 'INSERT' 'UPDATE (id)'; do
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "GRANT ${privilege} ON platform.identity_migration_provenance TO vayada_next_api_runtime" >/dev/null
+  if [[ "${privilege}" == 'INSERT' ]]; then
+    expect_failure runtime_protected_relation_write_forbidden
+  else
+    expect_failure runtime_protected_relation_column_write_forbidden
+  fi
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "REVOKE ${privilege} ON platform.identity_migration_provenance FROM vayada_next_api_runtime" >/dev/null
+done
+run_preflight | grep -F '"status":"PASS"' >/dev/null
 
 # Finance worker scopes remain private even when a table or column grant leaks.
 for table in finance_expense_worker_properties finance_export_worker_properties; do

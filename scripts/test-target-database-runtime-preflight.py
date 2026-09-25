@@ -59,6 +59,11 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertIn("connectionTimeoutMillis: 10_000", CHECK)
         self.assertIn("statement_timeout: 15_000", CHECK)
 
+    def test_migration_provenance_is_private_and_write_protected(self) -> None:
+        self.assertIn('"platform.identity_migration_provenance"', CHECK)
+        self.assertIn("'platform.identity_migration_provenance'", CHECK)
+        self.assertIn("runtime_identity_migration_provenance_read_forbidden", CHECK)
+
 
 if __name__ == "__main__":
     unittest.main()

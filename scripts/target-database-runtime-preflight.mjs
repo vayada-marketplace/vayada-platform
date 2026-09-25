@@ -22,6 +22,7 @@ const requiredColumnPrivileges = {
   "hotel_catalog.properties": { UPDATE: ["id"] },
 };
 const protectedRelations = [
+  "platform.identity_migration_provenance",
   "platform.channex_adoption_approval_records",
   "platform.channex_adoption_approval_revocations",
   "platform.channex_adoption_manifest_consumptions",
@@ -195,6 +196,7 @@ try {
         AND format('%I.%I', namespace.nspname, relation.relname) NOT IN (
           'marketplace.affiliate_click_quota_windows',
           'pms.inventory_coverage_validation_queue',
+          'platform.identity_migration_provenance',
           'platform.channex_management_worker_properties',
           'platform.finance_export_worker_properties',
           'platform.finance_expense_worker_properties',
@@ -203,6 +205,15 @@ try {
         AND NOT has_table_privilege(current_user, relation.oid, 'SELECT')`,
     [receipt],
     "runtime_relation_read_missing",
+  );
+  // Migration before/after evidence is private to the migration authority.
+  await requireNoMissing(
+    client,
+    `SELECT oid FROM pg_class
+      WHERE oid=to_regclass('platform.identity_migration_provenance')
+        AND has_any_column_privilege(current_user, oid, 'SELECT')`,
+    [],
+    "runtime_identity_migration_provenance_read_forbidden",
   );
   // Quota state is private to the guarded affiliate command, not the API login.
   await requireNoMissing(
