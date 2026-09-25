@@ -33,3 +33,41 @@ the exact restored RDS resource and private network, use fingerprint-pinned RDS
 TLS, expose no secret values/raw errors, and allow only the fixed bootstrap.
 No production network, credential, data, owner grant or provider change is part
 of either slice.
+
+## Source-reader launcher (deployment still separate)
+
+`scripts/launch-vay2042-source-reader.mjs` adapts the core to the existing pinned
+Node image, without modifying the metadata login, task, role, or secret. It
+requires `AWS_REGION=eu-west-1` and `VAY2042_` environment values for
+`RESTORE_INSTANCE_ID`, `RESTORE_RESOURCE_ID`, `RESTORE_INSTANCE_ARN`,
+`SOURCE_SNAPSHOT_ID`, `RESTORE_ATTESTATION_CHECKSUM`, `DB_HOST`, `DB_PORT`,
+`DB_USER`, `DB_PASSWORD`, `RDS_CA_BUNDLE_GZIP`, and `READER_SECRET_ARN`.
+Set `VAY2042_RUN_MAIN=1` only in the protected task. Identity values must match
+the committed manifest/restore attestation; each TLS connection checks the
+private server address and database before reaching the core.
+
+The new destination name is exactly
+`vay2042/source-reader/vay2017-metadata-rehearsal-isolated-20260923-20260925`.
+Pass its full ARN from the companion resource (the AWS six-character suffix is
+required). Task IAM needs `DescribeSecret` and `PutSecretValue` only on that
+exact ARN; the launcher refuses a deleted, renamed, or populated destination.
+The separate execution role supplies only this restore's managed admin secret.
+Environment assertions are not live AWS attestation: the protected deployment
+must independently verify resource `db-BB7GOFQ3BQTLTBG444I2Q75X6Y`, snapshot,
+private network, pinned image, and exact IAM before a separately approved run.
+
+Generate the committed standalone ESM using esbuild **0.28.0**:
+`ESBUILD_BINARY=/path/to/esbuild node scripts/build-vay2042-source-reader.mjs`.
+Use `--check` for reproducibility and run
+`node --test scripts/test-vay2042-source-reader-launcher.mjs`.
+The generated file bundles the core, SCRAM helper, and JSON manifest; only Node
+builtins, `pg`, and `@aws-sdk/client-secrets-manager` remain external for the
+existing image. Deploy it via `node --input-type=module -e <bundle>`; do not
+pass unbundled relative imports to `node -e`. No launcher/IAM deployment or
+cloud execution is authorized by these local checks.
+
+This launcher alone does not make extraction runnable. The existing extractor
+also requires attestor-owned snapshot/freeze evidence in each source database,
+validated by its `databaseAttestation.ts` contract. A separately reviewed binding
+must grant the reader SELECT on only that evidence table, bind the fresh target
+and immutable run proofs, and avoid business-table writes or invented old IDs.
