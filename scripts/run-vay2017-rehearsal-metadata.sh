@@ -75,7 +75,18 @@ artifact_line=""
 while (( SECONDS < deadline )); do
   events="$(aws logs get-log-events --region "$region" --log-group-name /aws/ecs/vay2017-metadata-runner \
     --log-stream-name "$log_stream" --start-from-head --query 'events[*].message' --output json 2>/dev/null || true)"
-  artifact_line="$(jq -r '[.[]? | select(startswith("VAY2017_METADATA_ARTIFACT="))][0] // empty' <<<"${events:-[]}")"
+  # CloudWatch splits messages above 256 KiB into consecutive events.
+  artifact_line="$(jq -r '
+    reduce .[] as $message (
+      {value: "", complete: false};
+      if .complete then .
+      elif ($message | startswith("VAY2017_METADATA_ARTIFACT=")) then .value = $message
+      elif .value != "" then .value += $message
+      else . end
+      | .complete = ((.value | ltrimstr("VAY2017_METADATA_ARTIFACT=") | fromjson? | type == "object") // false)
+    )
+    | select(.complete) | .value
+  ' <<<"${events:-[]}")"
   [[ -n "$artifact_line" ]] && break
   sleep 5
 done

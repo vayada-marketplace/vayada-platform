@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -175,6 +176,20 @@ test('scanner trusts only the pinned regional RDS root', async () => {
   assert.equal(new X509Certificate(pem).fingerprint256, '6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86');
 });
 
+test('runner reconstructs split CloudWatch artifacts despite unrelated log events', async () => {
+  const runner = await readFile(new URL('./run-vay2017-rehearsal-metadata.sh', import.meta.url), 'utf8');
+  const filter = runner.match(/artifact_line="\$\(jq -r '([\s\S]*?)' <<<"\$\{events:-\[\]\}"\)"/)?.[1];
+  assert.ok(filter);
+  const artifact = 'VAY2017_METADATA_ARTIFACT={"artifactVersion":2}';
+  const extract = (messages) => {
+    const result = spawnSync('jq', ['-r', filter], { input: JSON.stringify(messages), encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  assert.equal(extract(['warning', artifact.slice(0, 30), artifact.slice(30), 'done']), artifact);
+  assert.equal(extract(['warning', artifact.slice(0, 30)]), '');
+});
+
 test('infrastructure keeps execution fixed and network access private and narrow', async () => {
   const tf = await readFile(new URL('../infra/vay2017-metadata-runner/runner.tf', import.meta.url), 'utf8');
   const backend = await readFile(new URL('../infra/vay2017-metadata-runner/main.tf', import.meta.url), 'utf8');
@@ -228,7 +243,7 @@ test('infrastructure keeps execution fixed and network access private and narrow
   assert.match(workflow, /environment: vay2017-metadata-preflight/);
   assert.match(runner, /\.completion\.containerExitCode/);
   assert.match(runner, /\.completion\.stopCode/);
-  assert.doesNotMatch(runner, /fromjson/);
+  assert.doesNotMatch(runner, /fromjson[^\n]*execution_output/);
   assert.match(runner, /deadline=\$\(\(SECONDS \+ 3900\)\)/);
   assert.match(await readFile(new URL('../.github/workflows/vay2017-metadata-inventory.yml', import.meta.url), 'utf8'), /timeout-minutes:\s*70/);
   assert.match(tf, /repo:vayada-marketplace\/vayada-platform:environment:vay2017-metadata-preflight/);
