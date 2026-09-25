@@ -9,6 +9,8 @@ on:
       - scripts/generated/vay2042-source-reader-bootstrap.mjs
       - scripts/test-vay2042-source-reader-launcher.mjs
       - scripts/fixtures/vay2042-source-reader.json
+      - scripts/fixtures/vay2017-isolated-restore-plan.json
+      - rehearsal/rds-ca-rsa2048-g1.pem
       - scripts/vay2017-pg-scram.mjs
       - .github/workflows/vay2042-source-reader-test.yml
 permissions:
