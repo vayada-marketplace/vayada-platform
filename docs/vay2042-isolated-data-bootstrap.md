@@ -65,3 +65,9 @@ builtins, `pg`, and `@aws-sdk/client-secrets-manager` remain external for the
 existing image. Deploy it via `node --input-type=module -e <bundle>`; do not
 pass unbundled relative imports to `node -e`. No launcher/IAM deployment or
 cloud execution is authorized by these local checks.
+
+This launcher alone does not make extraction runnable. The existing extractor
+also requires attestor-owned snapshot/freeze evidence in each source database,
+validated by its `databaseAttestation.ts` contract. A separately reviewed binding
+must grant the reader SELECT on only that evidence table, bind the fresh target
+and immutable run proofs, and avoid business-table writes or invented old IDs.
