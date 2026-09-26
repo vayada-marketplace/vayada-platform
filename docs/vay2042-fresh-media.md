@@ -60,6 +60,18 @@ metadata or media preflight. Both modes reject broader, missing or mixed grants;
 neither mode automatically accepts the other policy. The checker reads AWS
 metadata only. Keep metadata credentials, IAM and task bindings unchanged.
 
+For the fresh bucket/role's separate read-only preflight, run
+`bash scripts/check-migration-rehearsal-media.sh --vay2042`. This reuses the
+existing bucket-control and IAM-simulation checker with this exact tuple. It
+checks encryption, versioning, public-access blocking, allowed source reads and
+destination media operations, denied source/other-run mutations, and denied
+reservation reads, object-version operations, listing and non-media authority.
+The four retained modes also reject mutation access to this fresh destination.
+It does not fetch an object or secret, copy photos, create a reservation, or
+change IAM. Simulated decisions are not actual CDN-serving/private-denial proof
+or a complete task/identity-policy attestation; retain the separate live smoke,
+exact task binding and `--s3-media` endpoint/isolation gates below.
+
 The future guarded runner needs exact PassRole/task binding, separate scoped
 credential injection, a fresh immutable target/run/release binding, and a
 reservation protocol before copying rows or media. No owner object is created

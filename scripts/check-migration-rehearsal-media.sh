@@ -22,7 +22,10 @@ case "${1:-retained}" in
     bucket="vayada-rehearsal-7200a43a-${account}"
     role="arn:aws:iam::${account}:role/vayada-rehearsal-7200a43a-media"
     owner_evidence=true ;;
-  *) echo 'Expected retained (default), --fixed-release, --midnight-release, or --inbox-release' >&2; exit 1 ;;
+  --vay2042)
+    bucket="vayada-rehearsal-vay2042-20260926-${account}"
+    role="arn:aws:iam::${account}:role/vayada-rehearsal-vay2042-20260926-media" ;;
+  *) echo 'Expected retained (default), --fixed-release, --midnight-release, --inbox-release, or --vay2042' >&2; exit 1 ;;
 esac
 [[ "$(aws sts get-caller-identity --query Account --output text)" == "$account" ]]
 aws s3api get-public-access-block --bucket "$bucket" --region "$region" --output json |
@@ -64,12 +67,24 @@ if [[ "$owner_evidence" == true ]]; then
     assert_decision allowed "arn:aws:s3:::${bucket}" s3:ListBucketVersions
   fi
 fi
+if [[ "${1:-}" == --vay2042 ]]; then
+  # This new role has no owner-reservation or object-version authority.
+  assert_decision implicitDeny "arn:aws:s3:::${bucket}/rehearsal-control/owner.json" \
+    s3:GetObject s3:GetObjectVersion
+  assert_decision implicitDeny "arn:aws:s3:::${bucket}" s3:ListBucketVersions
+  for prefix in public private; do
+    assert_decision implicitDeny "arn:aws:s3:::${bucket}/${prefix}/media/contract-check" \
+      s3:GetObjectVersion s3:DeleteObjectVersion
+  done
+  assert_decision explicitDeny '*' secretsmanager:GetSecretValue ssm:GetParameter iam:PassRole kms:Decrypt
+fi
 # Each run must also deny mutation of the other run's destination/reservation.
 for other in \
   "vayada-migration-rehearsal-media-${account}" \
   "vayada-rehearsal-2d1ef4ef-${account}" \
   "vayada-rehearsal-0118fd1f-${account}" \
-  "vayada-rehearsal-7200a43a-${account}"; do
+  "vayada-rehearsal-7200a43a-${account}" \
+  "vayada-rehearsal-vay2042-20260926-${account}"; do
   [[ "$other" != "$bucket" ]] || continue
   for key in public/media/contract-check private/media/contract-check rehearsal-control/owner.json; do
     assert_decision explicitDeny "arn:aws:s3:::${other}/${key}" s3:PutObject s3:DeleteObject s3:DeleteObjectVersion
