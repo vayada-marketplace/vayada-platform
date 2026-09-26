@@ -104,6 +104,32 @@ class ContractTests(unittest.TestCase):
             "idempotencyKey": self.record["idempotencyKey"],
         }
 
+    def compact_dispatch(self):
+        flat = self.dispatch()
+        return {
+            "schemaVersion": 2,
+            "publishedArtifactId": flat["publishedArtifactId"],
+            "release": {
+                "manifestId": flat["manifestId"],
+                "manifestSha256": flat["manifestSha256"],
+                "publishedRecordSha256": flat["publishedRecordSha256"],
+                "sourceSha": flat["sourceSha"],
+                "repository": flat["repository"],
+                "publishedArtifactName": flat["publishedArtifactName"],
+                "idempotencyKey": flat["idempotencyKey"],
+                "build": {
+                    "workflowName": flat["workflowName"],
+                    "workflowPath": flat["workflowPath"],
+                    "runId": flat["runId"],
+                    "runAttempt": flat["runAttempt"],
+                },
+                "publisher": {
+                    "runId": flat["publisherRunId"],
+                    "runAttempt": flat["publisherRunAttempt"],
+                },
+            },
+        }
+
     def build_run(self):
         build = self.manifest["build"]
         return {
@@ -161,6 +187,43 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(release.sha256_file(self.record_path), "96882677caea9450ba1f94c55e3996f32a30098fa90876697c97a73a57bbe16a")
         manifest, record = self.validate()
         self.assertEqual(manifest["manifestId"], record["manifestId"])
+
+    def test_compact_dispatch_envelope_validates_the_same_publication(self):
+        manifest, record = self.validate(dispatch=self.compact_dispatch())
+        self.assertEqual(manifest["manifestId"], record["manifestId"])
+
+    def test_compact_dispatch_rejects_unknown_or_missing_nested_fields(self):
+        for path, mutate, message in (
+            ("release", lambda value: value.update(extra="unexpected"), "dispatch.release fields"),
+            ("build", lambda value: value.pop("runAttempt"), "dispatch.release.build fields"),
+            ("publisher", lambda value: value.update(runAttempt="2"), "publisherRunAttempt"),
+        ):
+            with self.subTest(path=path):
+                dispatch = self.compact_dispatch()
+                target = dispatch["release"] if path == "release" else dispatch["release"][path]
+                mutate(target)
+                with self.assertRaisesRegex(release.ReleaseError, message):
+                    self.validate(dispatch=dispatch)
+
+        dispatch = self.compact_dispatch()
+        dispatch["unexpected"] = True
+        with self.assertRaisesRegex(release.ReleaseError, "dispatch fields"):
+            self.validate(dispatch=dispatch)
+
+        dispatch = self.compact_dispatch()
+        dispatch["schemaVersion"] = 3
+        with self.assertRaisesRegex(release.ReleaseError, "schemaVersion must be 1 or 2"):
+            self.validate(dispatch=dispatch)
+
+    def test_compact_dispatch_cannot_substitute_artifact_or_build_attempt(self):
+        dispatch = self.compact_dispatch()
+        dispatch["publishedArtifactId"] += 1
+        with self.assertRaisesRegex(release.ReleaseError, "Artifact metadata ID"):
+            self.validate(dispatch=dispatch)
+        dispatch = self.compact_dispatch()
+        dispatch["release"]["build"]["runAttempt"] += 1
+        with self.assertRaisesRegex(release.ReleaseError, "runAttempt"):
+            self.validate(dispatch=dispatch)
 
     def test_publication_verification_checks_real_contract_without_state_or_ecs_access(self):
         for order, bad_hash in (("ahead", False), ("diverged", False), ("ahead", True)):
@@ -779,6 +842,20 @@ class ActivationTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_dispatch_artifact_id_is_extracted_from_the_captured_envelope(self):
+        workflow = (ROOT / ".github/workflows/deploy-coordinated-release.yml").read_text()
+        self.assertIn("id: dispatch", workflow)
+        self.assertIn('artifact_id = payload.get("publishedArtifactId")', workflow)
+        self.assertIn("published_artifact_id={artifact_id}", workflow)
+        self.assertIn(
+            "EVENT_ARTIFACT_ID: ${{ steps.dispatch.outputs.published_artifact_id }}",
+            workflow,
+        )
+        self.assertNotIn(
+            "EVENT_ARTIFACT_ID: ${{ github.event.client_payload.publishedArtifactId }}",
+            workflow,
+        )
+
     def test_batch_lock_api_gate_parallel_frontends_and_independent_failures(self):
         workflow = (ROOT / ".github" / "workflows" / "deploy-coordinated-release.yml").read_text()
         self.assertIn("group: production-ecs-mutations", workflow)

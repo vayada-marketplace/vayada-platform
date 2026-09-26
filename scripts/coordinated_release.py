@@ -367,28 +367,82 @@ def validate_published_record(record: dict[str, Any], manifest: dict[str, Any], 
         fail("Published record expiration must be after publication")
 
 
-def validate_dispatch(dispatch: dict[str, Any], manifest: dict[str, Any], record: dict[str, Any]) -> None:
-    exact_keys(
-        dispatch,
+FLAT_DISPATCH_FIELDS = {
+    "schemaVersion",
+    "manifestId",
+    "manifestSha256",
+    "publishedRecordSha256",
+    "sourceSha",
+    "repository",
+    "workflowName",
+    "workflowPath",
+    "runId",
+    "runAttempt",
+    "publishedArtifactId",
+    "publishedArtifactName",
+    "publisherRunId",
+    "publisherRunAttempt",
+    "idempotencyKey",
+}
+
+
+def normalize_dispatch(dispatch: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(dispatch, dict):
+        fail("dispatch must be an object")
+    version = dispatch.get("schemaVersion")
+    if type(version) is int and version == 1:
+        return exact_keys(dispatch, FLAT_DISPATCH_FIELDS, "dispatch")
+    if type(version) is not int or version != 2:
+        fail("dispatch.schemaVersion must be 1 or 2")
+    envelope = exact_keys(
+        dispatch, {"schemaVersion", "publishedArtifactId", "release"}, "dispatch"
+    )
+    release = exact_keys(
+        envelope["release"],
         {
-            "schemaVersion",
             "manifestId",
             "manifestSha256",
             "publishedRecordSha256",
             "sourceSha",
             "repository",
-            "workflowName",
-            "workflowPath",
-            "runId",
-            "runAttempt",
-            "publishedArtifactId",
             "publishedArtifactName",
-            "publisherRunId",
-            "publisherRunAttempt",
             "idempotencyKey",
+            "build",
+            "publisher",
         },
-        "dispatch",
+        "dispatch.release",
     )
+    build = exact_keys(
+        release["build"],
+        {"workflowName", "workflowPath", "runId", "runAttempt"},
+        "dispatch.release.build",
+    )
+    publisher = exact_keys(
+        release["publisher"], {"runId", "runAttempt"}, "dispatch.release.publisher"
+    )
+    return {
+        "schemaVersion": 1,
+        "manifestId": release["manifestId"],
+        "manifestSha256": release["manifestSha256"],
+        "publishedRecordSha256": release["publishedRecordSha256"],
+        "sourceSha": release["sourceSha"],
+        "repository": release["repository"],
+        "workflowName": build["workflowName"],
+        "workflowPath": build["workflowPath"],
+        "runId": build["runId"],
+        "runAttempt": build["runAttempt"],
+        "publishedArtifactId": envelope["publishedArtifactId"],
+        "publishedArtifactName": release["publishedArtifactName"],
+        "publisherRunId": publisher["runId"],
+        "publisherRunAttempt": publisher["runAttempt"],
+        "idempotencyKey": release["idempotencyKey"],
+    }
+
+
+def validate_dispatch(
+    dispatch: dict[str, Any], manifest: dict[str, Any], record: dict[str, Any]
+) -> dict[str, Any]:
+    dispatch = normalize_dispatch(dispatch)
     build = manifest["build"]
     expected = {
         "schemaVersion": 1,
@@ -412,6 +466,7 @@ def validate_dispatch(dispatch: dict[str, Any], manifest: dict[str, Any], record
     for field in ("manifestSha256", "publishedRecordSha256"):
         if not re.fullmatch(r"[0-9a-f]{64}", str(dispatch[field])):
             fail(f"dispatch.{field} is invalid")
+    return dispatch
 
 
 def validate_run(
@@ -463,7 +518,7 @@ def validate_publication(
     record = read_json(record_path)
     validate_manifest(manifest, config)
     validate_published_record(record, manifest, config)
-    validate_dispatch(dispatch, manifest, record)
+    dispatch = validate_dispatch(dispatch, manifest, record)
     manifest_hash = sha256_file(manifest_path)
     record_hash = sha256_file(record_path)
     if manifest_hash != dispatch["manifestSha256"] or manifest_hash != record["manifestSha256"]:

@@ -72,21 +72,28 @@ jobs:
           role-duration-seconds: 7200
 
       - name: Capture dispatch envelope
+        id: dispatch
         if: github.event_name == 'repository_dispatch'
         env:
           DISPATCH_JSON: ${{ toJSON(github.event.client_payload) }}
         run: |
           python3 - <<'PY'
           import json, os
+          payload = json.loads(os.environ["DISPATCH_JSON"])
+          artifact_id = payload.get("publishedArtifactId")
+          if isinstance(artifact_id, bool) or not isinstance(artifact_id, int) or artifact_id < 1:
+              raise SystemExit("publishedArtifactId must be a positive integer")
           with open("dispatch.json", "w", encoding="utf-8") as handle:
-              json.dump(json.loads(os.environ["DISPATCH_JSON"]), handle, separators=(",", ":"))
+              json.dump(payload, handle, separators=(",", ":"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"published_artifact_id={artifact_id}", file=output)
           PY
 
       - name: Validate publication, ancestry, state, barriers and live targets
         env:
           COORDINATED_RELEASE_READ_TOKEN: ${{ secrets.COORDINATED_RELEASE_READ_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
-          EVENT_ARTIFACT_ID: ${{ github.event.client_payload.publishedArtifactId }}
+          EVENT_ARTIFACT_ID: ${{ steps.dispatch.outputs.published_artifact_id }}
           INPUT_ARTIFACT_ID: ${{ inputs.published_artifact_id }}
           INPUT_MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
           INPUT_RECORD_SHA256: ${{ inputs.published_record_sha256 }}
