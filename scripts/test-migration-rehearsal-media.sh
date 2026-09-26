@@ -44,7 +44,9 @@ aws() {
       fi
       [[ "$role" == "$expected_role" ]] || return 1
       decision=explicitDeny
-      if [[ "${MOCK_VAY2042:-false}" == true && "$resource" == "arn:aws:s3:::${bucket}/rehearsal-control/owner.json" && "${actions[0]}" == s3:GetObject ]]; then
+      if [[ "${MOCK_VAY2042_CROSS_WRITE:-false}" == true && "$resource" == arn:aws:s3:::vayada-rehearsal-vay2042-20260926-269416271598/* ]]; then
+        decision=allowed
+      elif [[ "${MOCK_VAY2042:-false}" == true && "$resource" == "arn:aws:s3:::${bucket}/rehearsal-control/owner.json" && "${actions[0]}" == s3:GetObject ]]; then
         decision=implicitDeny
         [[ "${MOCK_OWNER_READ_ALLOWED:-false}" != true ]] || decision=allowed
       elif [[ "${MOCK_VAY2042:-false}" == true && "${actions[0]}" == s3:ListBucketVersions ]]; then
@@ -98,6 +100,8 @@ fi
 if [[ "$mode" == --vay2042 ]]; then
   faults+=(MOCK_OWNER_READ_ALLOWED=true MOCK_VERSION_LIST_ALLOWED=true \
     MOCK_VERSION_ACCESS_ALLOWED=true MOCK_BUCKET_LIST_ALLOWED=true)
+else
+  faults+=(MOCK_VAY2042_CROSS_WRITE=true)
 fi
 for fault in "${faults[@]}"; do
   if env "$fault" bash "$check" "$mode" >/dev/null 2>&1; then
@@ -108,4 +112,4 @@ done
 if bash "$check" --unknown >/dev/null 2>&1 || bash "$check" retained extra >/dev/null 2>&1; then
   echo 'Isolation check accepted an unknown boundary' >&2; exit 1
 fi
-echo 'All five rehearsal media boundaries: valid fixtures, forty-six unsafe cases, and unknown-boundary refusals passed.'
+echo 'All five rehearsal media boundaries: valid fixtures, fifty unsafe cases, and unknown-boundary refusals passed.'

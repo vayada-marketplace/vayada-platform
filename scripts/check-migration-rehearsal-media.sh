@@ -83,7 +83,8 @@ for other in \
   "vayada-migration-rehearsal-media-${account}" \
   "vayada-rehearsal-2d1ef4ef-${account}" \
   "vayada-rehearsal-0118fd1f-${account}" \
-  "vayada-rehearsal-7200a43a-${account}"; do
+  "vayada-rehearsal-7200a43a-${account}" \
+  "vayada-rehearsal-vay2042-20260926-${account}"; do
   [[ "$other" != "$bucket" ]] || continue
   for key in public/media/contract-check private/media/contract-check rehearsal-control/owner.json; do
     assert_decision explicitDeny "arn:aws:s3:::${other}/${key}" s3:PutObject s3:DeleteObject s3:DeleteObjectVersion

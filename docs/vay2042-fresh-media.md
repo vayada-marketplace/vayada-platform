@@ -66,6 +66,7 @@ existing bucket-control and IAM-simulation checker with this exact tuple. It
 checks encryption, versioning, public-access blocking, allowed source reads and
 destination media operations, denied source/other-run mutations, and denied
 reservation reads, object-version operations, listing and non-media authority.
+The four retained modes also reject mutation access to this fresh destination.
 It does not fetch an object or secret, copy photos, create a reservation, or
 change IAM. Simulated decisions are not actual CDN-serving/private-denial proof
 or a complete task/identity-policy attestation; retain the separate live smoke,
