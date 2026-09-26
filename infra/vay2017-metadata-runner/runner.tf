@@ -293,15 +293,7 @@ resource "aws_vpc_endpoint" "vay2017_ecr_s3" {
   service_name      = "com.amazonaws.${local.vay2017_rehearsal_region}.s3"
   vpc_endpoint_type = "Gateway"
   route_table_ids   = [aws_route_table.vay2017_runner_private.id]
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = "*"
-      Action    = "s3:GetObject"
-      Resource  = "arn:aws:s3:::prod-eu-west-1-starport-layer-bucket/*"
-    }]
-  })
+  policy            = file("${path.module}/media-s3-endpoint-policy.json")
 
   tags = {
     Name    = "vay2017-metadata-ecr-s3"

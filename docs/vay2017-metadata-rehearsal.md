@@ -22,6 +22,9 @@ Before any deployment, review a fresh saved plan. Expected scope is one isolated
    ```
 
    This verifies the exact source snapshot and isolated restored instance, encryption/privacy, pinned image, dedicated VPC, no-internet/no-peering routes, endpoints, and security groups. It reads AWS metadata only; it does not connect to the database or inspect its contents. Do not dispatch the inventory if any check fails.
+   The default requires the exact ECR-only S3 endpoint policy. Only after the
+   [separately reviewed media endpoint change](vay2042-fresh-media.md), use the
+   same command with `--s3-media`; each mode rejects the other policy.
 3. The new restored database is created with its dedicated PostgreSQL-only security group in the same approved infrastructure plan. The older restore in the shared default VPC is not used or modified. If the new restore does not have exactly the expected security group, stop and get a new plan/review; do not repair its access rules manually.
 4. The one-time metadata reader setup already completed. Reuse it; do not rerun any bootstrap, rotate credentials, add grants or call its count function for this operation. If authentication fails, inspect the sanitized failure and obtain a separately reviewed recovery decision.
 5. After fresh isolation/effective-task checks and explicit approval for these four catalog reads, dispatch **VAY-2042 Source Catalog Fingerprints** from protected `main` (`vay2017-metadata-inventory.yml`). Its workflow has no caller-supplied command, database, or resource inputs and cannot retrieve the master secret. It starts the existing fixed Step Functions lane and uploads only the sanitized fingerprint artifact. Inspect any failure; do not retry blindly.

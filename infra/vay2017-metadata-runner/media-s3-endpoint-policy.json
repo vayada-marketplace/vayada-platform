@@ -1,0 +1,40 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::prod-eu-west-1-starport-layer-bucket/*"
+    },
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::vayada-uploads-prod/creators/*",
+        "arn:aws:s3:::vayada-uploads-prod/listings/*",
+        "arn:aws:s3:::vayada-creator-marketplace-images/*"
+      ],
+      "Condition": {
+        "ArnEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::269416271598:role/vayada-rehearsal-vay2042-20260926-media"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": [
+        "arn:aws:s3:::vayada-rehearsal-vay2042-20260926-269416271598/public/media/*",
+        "arn:aws:s3:::vayada-rehearsal-vay2042-20260926-269416271598/private/media/*"
+      ],
+      "Condition": {
+        "ArnEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::269416271598:role/vayada-rehearsal-vay2042-20260926-media"
+        }
+      }
+    }
+  ]
+}
