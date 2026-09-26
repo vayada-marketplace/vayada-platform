@@ -5,16 +5,6 @@ readonly region=eu-west-1
 readonly machine=arn:aws:states:eu-west-1:269416271598:stateMachine:vay2042-private-expiry-preflight
 for tool in aws jq; do command -v "$tool" >/dev/null; done
 aws sts get-caller-identity --query Account --output text 2>/dev/null | grep -Fxq 269416271598
-for pair in \
-  'arn:aws:secretsmanager:eu-west-1:269416271598:secret:vay2042/source-reader/vay2017-metadata-rehearsal-isolated-20260923-20260925-4kTuiw 91d7b931-e78e-419f-8a9f-b1aeb9c259ba' \
-  'arn:aws:secretsmanager:eu-west-1:269416271598:secret:vay2042/target-writer/vay2017-metadata-rehearsal-isolated-20260923-20260925-mfr57v 220507a8-4ac8-4bab-bd57-221862dd2dcc'; do
-  read -r secret version <<<"$pair"
-  metadata="$(aws secretsmanager describe-secret --region "$region" --secret-id "$secret" \
-    --query '{ARN:ARN,DeletedDate:DeletedDate,Versions:VersionIdsToStages}' --output json 2>/dev/null)"
-  jq -e --arg arn "$secret" --arg version "$version" \
-    '.ARN == $arn and .DeletedDate == null and (.Versions | keys == [$version]) and
-     .Versions[$version] == ["AWSCURRENT"]' <<<"$metadata" >/dev/null
-done
 execution="$(aws stepfunctions start-execution --region "$region" --state-machine-arn "$machine" \
   --name "preflight-$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID:-local}" --input '{}' \
   --query executionArn --output text 2>/dev/null)"
