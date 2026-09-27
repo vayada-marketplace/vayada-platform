@@ -1,0 +1,46 @@
+name: VAY-2042 source preservation tests
+on:
+  pull_request:
+    paths:
+      - scripts/vay2042-preservation-compare.mjs
+      - scripts/test-vay2042-preservation-compare.mjs
+      - scripts/build-vay2042-preservation-compare.mjs
+      - scripts/generated/vay2042-preservation-compare.mjs
+      - scripts/fixtures/vay2042-source-reader.json
+      - scripts/run-vay2042-preservation-compare.sh
+      - infra/vay2017-metadata-runner/preservation_compare.tf
+      - infra/vay2017-metadata-runner/source_reader.tf
+      - .github/workflows/vay2042-preservation-test.yml
+      - .github/workflows/vay2042-preservation-compare.yml
+permissions:
+  contents: read
+jobs:
+  compare:
+    name: PostgreSQL ${{ matrix.postgres }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        postgres: ['16', '17']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: fixture
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: npm install --prefix "$RUNNER_TEMP/vay2042-test" --no-audit --no-fund pg@8.16.3 esbuild@0.28.0
+      - run: node scripts/build-vay2042-preservation-compare.mjs --check
+        env:
+          ESBUILD_BINARY: ${{ runner.temp }}/vay2042-test/node_modules/.bin/esbuild
+      - run: node --test scripts/test-vay2042-preservation-compare.mjs
+        env:
+          VAY2042_TEST_DATABASE_URL: postgresql://postgres:fixture@127.0.0.1:5432/postgres
+          VAY2042_TEST_PG_MODULE: ${{ runner.temp }}/vay2042-test/node_modules/pg/lib/index.js
+      - run: bash -n scripts/run-vay2042-preservation-compare.sh
