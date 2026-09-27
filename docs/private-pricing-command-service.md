@@ -30,6 +30,12 @@ The API-to-service path must use authenticated HTTPS; a private IP or security
 group alone is not caller authentication. The service still verifies original
 WorkOS bearer tokens for owner commands and independently checks authorization.
 
+Read-only VPC inventory found only public subnets and no NAT gateway or VPC
+endpoints. Draft [network PR #297](https://github.com/vayada-marketplace/vayada-platform/pull/297)
+proposes two unused private subnets and one NAT for JWKS egress. Its single-AZ
+NAT dependency and recurring cost need review before merge/apply; it does not
+deploy the service or change any existing task.
+
 The first platform implementation may create the isolated resources with the
 service stopped. Starting tasks or admitting requests requires the gates below.
 
@@ -42,8 +48,18 @@ grants the common `ecsTaskExecutionRole` `ssm:GetParameter(s)` on that whole pre
 services. Merely omitting a secret from the ordinary API container definition
 would not isolate it from another task using that role.
 
-Use exact-ARN Secrets Manager resources, with values written by a separate
-reviewed provisioning step rather than Terraform state. The pricing task's
+The live common execution role also has a separate `SecretsManagerAccess`
+inline policy allowing `GetSecretValue` and `DescribeSecret` on
+`arn:aws:secretsmanager:eu-west-1:269416271598:secret:vayada/*`. IAM simulation
+allows a hypothetical `vayada/pricing-command/prod/...` secret and denies a
+`pricing-command/prod/...` secret for that role. Therefore pricing secrets must
+also stay outside the `vayada/*` Secrets Manager prefix. This is a naming
+proposal and negative policy check, not evidence that any pricing secret exists.
+
+Propose five `pricing-command/prod/` Secrets Manager names: identity-read,
+owner-read, owner-manage, public, and internal-token. Use exact-ARN resources;
+a separately reviewed provisioning step writes their values, not Terraform
+state. The pricing task's
 dedicated execution role reads only its four database URLs and internal token;
 the next API needs its own execution role reading only its current required
 SSM parameters and that internal token. Neither the API execution role nor its
@@ -70,6 +86,9 @@ It should report ready only after startup login-scope checks have passed; it
 must expose no credentials or property details. ECS and the deployment runner
 need a bounded authenticated probe from inside the private network. A running
 container or TCP-open port is insufficient proof.
+Draft [app PR #2656](https://github.com/vayada-marketplace/vayada/pull/2656)
+adds startup/process readiness; it does not continuously recheck database or
+WorkOS reachability.
 
 Before starting the service, an exact-role PostgreSQL 16/17 preflight must
 check login attributes, memberships, database-owned assignments, grants,
@@ -113,8 +132,11 @@ destroy nor schema rollback is a traffic rollback.
 1. Select and test private discovery and full transport encryption, including
    how authenticated probes reach the service and how JWKS egress works without
    a public task IP.
-2. Review the exact Secrets Manager ARNs, dedicated execution-role policies,
-   provisioning owner, rotation procedure, and negative IAM proof.
+2. Review the proposed `pricing-command/prod/` secret names, exact ARNs,
+   dedicated execution-role policies, provisioning owner, rotation procedure,
+   actual secret resource/KMS policies, and negative IAM proof for the final
+   ARNs against all shared roles and both the common SSM and Secrets Manager
+   wildcard policies.
 3. Complete the database grants/RLS inventory and live preflight before
    introducing credentials or a running task.
 4. Define the separate pricing deployment/hold record and its interaction with
