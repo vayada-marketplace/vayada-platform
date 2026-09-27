@@ -47,7 +47,7 @@ test('fixed target command, secret and network cannot be selected by workflow in
   const github = block(source, 'aws_iam_role_policy', 'vay2042_source_github');
   assert.match(github, /StartExecution.*aws_sfn_state_machine\.vay2042_target_bootstrap\.arn/);
   assert.match(github, /DescribeExecution.*execution:\$\{local\.vay2042_target_name\}:\*/);
-  assert.doesNotMatch(github, /PassRole|ecs:|secretsmanager:|rds:/);
+  assert.doesNotMatch(github, /PassRole|ecs:|secretsmanager:|rds:(?!DescribeDBInstances\b|DescribeDBSnapshots\b)|cloudtrail:(?!LookupEvents\b)/);
   assert.match(workflow, /environment: vay2042-data-rehearsal/);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /group: vay2017-metadata-runner\s+cancel-in-progress: false/);

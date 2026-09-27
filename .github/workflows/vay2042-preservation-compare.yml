@@ -1,0 +1,33 @@
+name: VAY-2042 Isolated Source Preservation Compare
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: vay2017-metadata-runner
+  cancel-in-progress: false
+jobs:
+  compare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: vay2042-data-rehearsal
+    timeout-minutes: 130
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-vay2042-source-reader
+          aws-region: eu-west-1
+      - name: Compare the exact private snapshot restores
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          VAY2042_EVIDENCE_PATH: ${{ runner.temp }}/vay2042-preservation-report.json
+        run: bash scripts/run-vay2042-preservation-compare.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vay2042-preservation-report-${{ github.run_id }}
+          path: ${{ runner.temp }}/vay2042-preservation-report.json
+          retention-days: 90
