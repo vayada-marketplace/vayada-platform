@@ -11,6 +11,8 @@ CHECK = ROOT / "scripts/assert-next-api-split-compatible-image.py"
 RELEASE = "8c2cdef397522740c9fe7803efc2ed36d637bac5"
 DIGEST = "sha256:b097e04a61d5bd3b5910bbf856f13849bddd7b66c5883a4e2e160e311737bfca"
 VAY_2027_DIGEST = "sha256:3da7374232c46f29ee34ac1a8036f7b7abb1c0d4b6d10a1405552f12484b11a5"
+VAY_846_RELEASE = "f0fdc908f9d30468beca555f8b90b884888f14fa"
+VAY_846_DIGEST = "sha256:d13cb3df2eca9fddb3610f5de9ec586c77888c9688abd64bce495c9693187300"
 
 
 def run(service: str, repository: str, digest: str, tags: list[str], ongoing: bool | None = False, environment=None, secrets=None):
@@ -45,6 +47,10 @@ class CompatibleImageTest(unittest.TestCase):
             run("next-target-backend", "vayada-next-api", VAY_2027_DIGEST, []).returncode,
             0,
         )
+        self.assertEqual(
+            run("next-target-backend", "vayada-next-api", VAY_846_DIGEST, [f"next-{VAY_846_RELEASE}"]).returncode,
+            0,
+        )
 
     def test_rejects_unreviewed_digest_or_wrong_repository(self) -> None:
         self.assertNotEqual(
@@ -61,6 +67,7 @@ class CompatibleImageTest(unittest.TestCase):
         self.assertEqual(run("next-target-backend", "vayada-next-api", DIGEST, [], ongoing=False).returncode, 0)
         ongoing_digest = "sha256:32842b3741aed2856fd6256e184a388649ddffdb8689fb80cf881f75f9f7a576"
         self.assertEqual(run("next-target-backend", "vayada-next-api", ongoing_digest, [], ongoing=True).returncode, 0)
+        self.assertEqual(run("next-target-backend", "vayada-next-api", VAY_846_DIGEST, [], ongoing=True).returncode, 0)
 
     def test_rejects_ambiguous_or_missing_activation_configuration(self) -> None:
         enabled = {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "true"}
