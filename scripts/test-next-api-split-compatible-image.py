@@ -41,6 +41,12 @@ def run(service: str, repository: str, digest: str, tags: list[str], ongoing: bo
 
 class CompatibleImageTest(unittest.TestCase):
     def test_accepts_reviewed_next_api_digest(self) -> None:
+        reviewed = dict(
+            line.split()
+            for line in (ROOT / "scripts/next-api-split-compatible-images.txt").read_text().splitlines()
+            if line and not line.startswith("#")
+        )
+        self.assertEqual(reviewed.get(VAY_1512_RELEASE), VAY_1512_DIGEST)
         self.assertEqual(
             run("next-target-backend", "vayada-next-api", DIGEST, [f"next-{RELEASE}"]).returncode,
             0,
