@@ -61,7 +61,8 @@ test('master retrieval and source credential persistence are separated and exact
   assert.doesNotMatch(task, /GetSecretValue|master_user_secret/);
   assert.match(block('aws_iam_role_policy', 'vay2042_source_execution'), /GetSecretValue.*vay2017_isolated_restore\.master_user_secret/);
   const github = block('aws_iam_role_policy', 'vay2042_source_github');
-  assert.doesNotMatch(github, /PassRole|ecs:|secretsmanager:|rds:/);
+  assert.doesNotMatch(github, /PassRole|ecs:|secretsmanager:|rds:(?!DescribeDBInstances\b|DescribeDBSnapshots\b)|cloudtrail:(?!LookupEvents\b)/);
+  assert.match(github, /\["rds:DescribeDBInstances", "rds:DescribeDBSnapshots", "cloudtrail:LookupEvents"\], Resource = "\*"/);
   assert.match(github, /StartExecution.*aws_sfn_state_machine\.vay2042_source_reader\.arn/);
 });
 test('fixed task and state machine reject caller command/network/role overrides', () => {
