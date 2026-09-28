@@ -1,4 +1,4 @@
-# VAY-1543 private pricing command service: platform contract
+# VAY-1543 pricing command service: platform contract
 
 Status: review proposal only. No resources, credentials, database grants, API
 routing, or deployment are created by this document. Initial admission is the
@@ -16,13 +16,16 @@ settings. It checks each operation login's database-owned assignment at
 startup. It does not yet have API proxy routing or a health endpoint.
 
 Provision a separate ECS service/task, log group, task role, execution role,
-and private listener/discovery path. Use a dedicated security
+and internal listener/discovery path. Use a dedicated security
 group and a separate next API security group, since both currently use the
 common ECS tasks group. Accept command traffic only from the next API group;
-allow outbound database, WorkOS JWKS, and required AWS endpoints only. Do not add a
-public ALB rule, public DNS name, public IP, shared writable volume, ECS Exec,
-or migration/owner credential. Reuse an attested immutable `vayada-next-api`
-image containing `apps/api/dist/pricingCommandServer.js`, and override its
+allow database access and the outbound HTTPS required for WorkOS JWKS and task
+startup. Security groups cannot restrict HTTPS by hostname: without a reviewed
+domain-aware egress control, broader internet HTTPS access is a residual risk
+in either network option below. Do not add a public ALB rule, public DNS name,
+shared writable volume, ECS Exec, or migration/owner credential. Reuse an
+attested immutable `vayada-next-api` image containing
+`apps/api/dist/pricingCommandServer.js`, and override its
 normal next API launch command with that entry point. This avoids a second
 image build without sharing the runtime credentials. Splitting the API security
 group must preserve its existing ALB and database access.
@@ -30,11 +33,28 @@ The API-to-service path must use authenticated HTTPS; a private IP or security
 group alone is not caller authentication. The service still verifies original
 WorkOS bearer tokens for owner commands and independently checks authorization.
 
-Read-only VPC inventory found only public subnets and no NAT gateway or VPC
-endpoints. Draft [network PR #297](https://github.com/vayada-marketplace/vayada-platform/pull/297)
-proposes two unused private subnets and one NAT for JWKS egress. Its single-AZ
-NAT dependency and recurring cost need review before merge/apply; it does not
-deploy the service or change any existing task.
+Read-only VPC inventory found only public subnets, no IPv6, and no NAT gateway
+or VPC endpoints. Two review alternatives exist; neither changes the required
+database-enforced per-property scope, dedicated roles, token, or HTTPS:
+
+- **Private-subnet task:** no public task IP; outbound internet access needs NAT
+  or a separately designed equivalent. Draft [network PR #297](https://github.com/vayada-marketplace/vayada-platform/pull/297)
+  proposes two unused private subnets and one zonal NAT. One NAT has recurring
+  hourly/data charges and is a single-AZ failure point for JWKS and task
+  startup; keep that PR unmerged until this tradeoff is accepted or revised.
+- **Public-subnet pilot task:** use an existing public subnet and
+  `assign_public_ip=true` for direct HTTPS egress. This avoids the NAT charge
+  but incurs a public-IPv4 charge and makes a mistaken ingress rule more
+  consequential. Keep the service out of public ALB/DNS, use private-IP service
+  discovery, and admit port 8010 only from the newly separated next API
+  security group; never from an internet CIDR or the shared ECS group. Prove
+  external reachability is denied and API-to-service HTTPS/token access works.
+  Record explicit acceptance of the public-IP exception and applicable
+  security-control impact before deployment.
+
+AWS [VPC pricing](https://aws.amazon.com/vpc/pricing/) bills NAT by hour and
+data volume, while public IPv4 is billed by address-hour. Neither option is
+selected by this document.
 
 The first platform implementation may create the isolated resources with the
 service stopped. Starting tasks or admitting requests requires the gates below.
@@ -83,9 +103,10 @@ full ACL matrix. Identity read must be unable to execute pricing writes.
 
 Add a private, token-protected readiness endpoint to the application service.
 It should report ready only after startup login-scope checks have passed; it
-must expose no credentials or property details. ECS and the deployment runner
-need a bounded authenticated probe from inside the private network. A running
-container or TCP-open port is insufficient proof.
+must expose no credentials or property details. ECS can check readiness inside
+the container. Separately, the deployment gate needs a bounded authenticated
+HTTPS probe through the next API security-group path before admitting traffic;
+local container health or a TCP-open port does not prove that path works.
 Draft [app PR #2656](https://github.com/vayada-marketplace/vayada/pull/2656)
 adds startup/process readiness; it does not continuously recheck database or
 WorkOS reachability.
@@ -98,7 +119,8 @@ privileges. Prove the real owner read/manage and public offer/no-payment quote
 paths with their optional branches, transaction rollback, replay and
 revocation. Compare the deployed task definition's image digest, source
 ancestry, launch command, all five secret ARN mappings, IAM roles, private
-ingress, and fixed property/slug to the reviewed plan. The application startup scope check is
+ingress, selected subnet/public-IP posture, and fixed property/slug to the
+reviewed plan. The application startup scope check is
 necessary but does not replace this platform preflight.
 
 ## Deployment order and rollback
@@ -113,7 +135,7 @@ failed rollout. Reusing the ordinary per-image dispatch without those checks
 is not an approved release path.
 
 Sequence: provision and prove database roles/secrets; deploy and attest the
-private service while API routing remains off; deploy an API image with the
+isolated service while API routing remains off; deploy an API image with the
 four fixed proxies through the current approved API lane (the six-service
 receiver only after VAY-2029 activates batch ownership); then run the bounded
 synthetic hotel smoke. The API must fail closed when service configuration,
@@ -122,16 +144,18 @@ target database, identity credential, or a different property login.
 
 Rollback first restores the previously attested API task/image or disables
 the proxy through its reviewed release control under the same lock. Preserve
-the private service hold and quote/authority evidence; restore its captured
+the service hold and quote/authority evidence; restore its captured
 task definition only through the pricing lane. Revoke or rotate new credentials
 only after reviewing active tasks and retained evidence. Neither Terraform
 destroy nor schema rollback is a traffic rollback.
 
 ## Decisions for the next implementation PRs
 
-1. Select and test private discovery and full transport encryption, including
-   how authenticated probes reach the service and how JWKS egress works without
-   a public task IP.
+1. Select the network option and test private-IP discovery, full transport
+   encryption, authenticated probes, JWKS egress, and denied public ingress.
+   Document either the NAT cost/single-AZ limitation (or a reviewed resilient
+   alternative) or the public-IP security exception before merging network
+   infrastructure. Review the residual outbound HTTPS exposure in both cases.
 2. Review the proposed `pricing-command/prod/` secret names, exact ARNs,
    dedicated execution-role policies, provisioning owner, rotation procedure,
    actual secret resource/KMS policies, and negative IAM proof for the final
