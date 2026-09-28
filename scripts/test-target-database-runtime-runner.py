@@ -37,7 +37,9 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('grant_scope="recurring_expense_insert"', RUNNER)
         self.assertIn('secret_name="TARGET_DATABASE_MIGRATION_URL"', RUNNER)
         self.assertIn('secret_parameter="/vayada/prod/target-database-url"', RUNNER)
-        self.assertIn('code_file="${code_file:-grant-target-database-product-audit-insert.mjs}"', RUNNER)
+        self.assertIn('code_file="grant-target-database-product-audit-insert.mjs"', RUNNER)
+        self.assertLess(RUNNER.index('code_file="grant-target-database-product-audit-insert.mjs"'),
+                        RUNNER.index('if [[ "${mode}" == "--grant-affiliate-read" ]]'))
         self.assertIn('ssl = { ca, rejectUnauthorized: true, servername: connectionUrl.hostname }', GRANT)
         self.assertIn('VAYADA_AUDIT_GRANT_LOCAL_FIXTURE', GRANT)
         self.assertIn('unexpected_database_host', GRANT)
@@ -117,6 +119,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
 
     def test_folio_command_grant_has_own_bounded_payload(self) -> None:
         self.assertIn('code_file="grant-target-database-folio-command.mjs"', RUNNER)
+        self.assertNotIn('code_file="${code_file:-', RUNNER)
         grant_code = (ROOT / 'scripts/grant-target-database-folio-command.mjs').read_bytes()
         encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
         self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)

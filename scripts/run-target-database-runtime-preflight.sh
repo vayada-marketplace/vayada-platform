@@ -46,6 +46,7 @@ case "${mode}" in
     ;;
   --grant-product-audit-insert|--grant-affiliate-read|--grant-finance-affiliate-read|--grant-platform-runtime-read|--grant-property-profile-lock|--grant-domain-events-append|--grant-jobs-insert|--grant-expense-category-insert|--grant-expense-insert|--grant-recurring-expense-insert|--grant-folio-command)
     ca_required=true
+    code_file="grant-target-database-product-audit-insert.mjs"
     if [[ "${mode}" == "--grant-affiliate-read" ]]; then
       grant_scope="affiliate_read"
     elif [[ "${mode}" == "--grant-finance-affiliate-read" ]]; then
@@ -70,7 +71,6 @@ case "${mode}" in
       grant_scope="audit_insert"
     fi
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
-    code_file="${code_file:-grant-target-database-product-audit-insert.mjs}"
     secret_name="TARGET_DATABASE_MIGRATION_URL"
     secret_parameter="/vayada/prod/target-database-url"
     family="vayada-next-api-db-runtime-preflight"
