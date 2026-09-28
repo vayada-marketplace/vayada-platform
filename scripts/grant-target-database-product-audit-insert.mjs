@@ -45,78 +45,6 @@ const platformRuntimeReadTables = [
   "platform.channex_management_worker_properties",
 ];
 
-const folioCommandTables = [
-  "finance.folios",
-  "finance.folio_revisions",
-  "finance.folio_lines",
-  "finance.folio_payment_references",
-];
-
-async function grantFolioCommand(client, supportsMaintain) {
-  for (const table of folioCommandTables) {
-    const ownership = await client.query(`
-      SELECT current_user = pg_catalog.pg_get_userbyid(relation.relowner) AS is_table_owner
-        FROM pg_catalog.pg_class AS relation
-       WHERE relation.oid = pg_catalog.to_regclass($1) AND relation.relkind IN ('r', 'p')
-    `, [table]);
-    if (ownership.rowCount !== 1 || !ownership.rows[0].is_table_owner)
-      throw new Error("folio_command_table_owner_required");
-  }
-  await client.query("BEGIN");
-  try {
-    await client.query("SET LOCAL lock_timeout = '2s'");
-    await client.query(`LOCK TABLE ${folioCommandTables.join(", ")} IN ACCESS EXCLUSIVE MODE`);
-    for (const table of folioCommandTables) {
-      const ownership = await client.query(`
-        SELECT current_user = pg_catalog.pg_get_userbyid(relation.relowner) AS is_table_owner
-          FROM pg_catalog.pg_class AS relation
-         WHERE relation.oid = pg_catalog.to_regclass($1) AND relation.relkind IN ('r', 'p')
-      `, [table]);
-      if (ownership.rowCount !== 1 || !ownership.rows[0].is_table_owner)
-        throw new Error("folio_command_table_owner_required");
-      const prohibited = ["SELECT WITH GRANT OPTION", "INSERT WITH GRANT OPTION",
-        "UPDATE", "DELETE", "TRUNCATE", "TRIGGER", "REFERENCES",
-        ...(supportsMaintain ? ["MAINTAIN"] : [])];
-      const violations = await client.query(`
-        SELECT privilege.name AS violation
-          FROM unnest($2::text[]) AS privilege(name)
-         WHERE pg_catalog.has_table_privilege('vayada_next_api_runtime', $1, privilege.name)
-        UNION ALL
-        SELECT attribute.attname || ':' || privilege.name
-          FROM pg_catalog.pg_attribute AS attribute
-          CROSS JOIN (VALUES ('UPDATE'), ('REFERENCES'),
-            ('SELECT WITH GRANT OPTION'), ('INSERT WITH GRANT OPTION'),
-            ('UPDATE WITH GRANT OPTION')) AS privilege(name)
-         WHERE attribute.attrelid = pg_catalog.to_regclass($1)
-           AND attribute.attnum > 0 AND NOT attribute.attisdropped
-           AND NOT ($1 = 'finance.folios' AND attribute.attname = 'id' AND privilege.name = 'UPDATE')
-           AND pg_catalog.has_column_privilege(
-             'vayada_next_api_runtime', attribute.attrelid, attribute.attname, privilege.name
-           )
-      `, [table, prohibited]);
-      if (violations.rowCount !== 0) throw new Error("folio_command_runtime_scope_too_broad");
-    }
-    await client.query(`GRANT INSERT ON ${folioCommandTables.join(", ")} TO vayada_next_api_runtime`);
-    await client.query("GRANT UPDATE (id) ON finance.folios TO vayada_next_api_runtime");
-    for (const table of folioCommandTables) {
-      const granted = await client.query(`
-        SELECT pg_catalog.has_table_privilege('vayada_next_api_runtime', $1, 'INSERT') AS can_insert
-      `, [table]);
-      if (!granted.rows[0].can_insert) throw new Error("folio_command_runtime_insert_missing");
-    }
-    const lock = await client.query(`
-      SELECT pg_catalog.has_column_privilege('vayada_next_api_runtime',
-        'finance.folios', 'id', 'UPDATE') AS can_lock
-    `);
-    if (!lock.rows[0].can_lock) throw new Error("folio_command_runtime_lock_missing");
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  }
-  console.log(JSON.stringify({ status: "PASS", grant: "finance.folio_command:INSERT,folios.UPDATE(id)" }));
-}
-
 async function grantDomainEventAppend(client, supportsMaintain) {
   const table = "platform.domain_events";
   const ownership = await client.query(`
@@ -524,7 +452,7 @@ try {
   );
   const supportsMaintain = version.rows[0].value >= 170000;
   const scope = process.env.VAYADA_DB_GRANT_SCOPE ?? "audit_insert";
-  if (!["audit_insert", "affiliate_read", "finance_affiliate_read", "platform_runtime_read", "property_profile_lock", "domain_events_append", "jobs_insert", "expense_category_insert", "expense_insert", "recurring_expense_insert", "folio_command"].includes(scope))
+  if (!["audit_insert", "affiliate_read", "finance_affiliate_read", "platform_runtime_read", "property_profile_lock", "domain_events_append", "jobs_insert", "expense_category_insert", "expense_insert", "recurring_expense_insert"].includes(scope))
     throw new Error("unknown_grant_scope");
   const role = await client.query(
     "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vayada_next_api_runtime'",
@@ -548,8 +476,6 @@ try {
     await grantFinanceInsert(client, supportsMaintain, "finance.expenses", "expenses");
   } else if (scope === "recurring_expense_insert") {
     await grantFinanceInsert(client, supportsMaintain, "finance.recurring_expense_rules", "recurring_expense_rules");
-  } else if (scope === "folio_command") {
-    await grantFolioCommand(client, supportsMaintain);
   } else {
     const check = await client.query(`
       SELECT current_user = pg_catalog.pg_get_userbyid(table_info.relowner) AS is_table_owner
@@ -611,10 +537,6 @@ try {
     "recurring_expense_rules_table_owner_required",
     "recurring_expense_rules_runtime_write_scope_too_broad",
     "recurring_expense_rules_runtime_insert_missing",
-    "folio_command_table_owner_required",
-    "folio_command_runtime_scope_too_broad",
-    "folio_command_runtime_insert_missing",
-    "folio_command_runtime_lock_missing",
     "unknown_grant_scope",
   ]);
   const code = expected.has(error.message) ? error.message : error.code ?? "runtime_grant_failed";

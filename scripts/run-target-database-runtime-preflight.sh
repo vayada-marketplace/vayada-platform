@@ -65,12 +65,12 @@ case "${mode}" in
     elif [[ "${mode}" == "--grant-recurring-expense-insert" ]]; then
       grant_scope="recurring_expense_insert"
     elif [[ "${mode}" == "--grant-folio-command" ]]; then
-      grant_scope="folio_command"
+      code_file="grant-target-database-folio-command.mjs"
     else
       grant_scope="audit_insert"
     fi
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
-    code_file="grant-target-database-product-audit-insert.mjs"
+    code_file="${code_file:-grant-target-database-product-audit-insert.mjs}"
     secret_name="TARGET_DATABASE_MIGRATION_URL"
     secret_parameter="/vayada/prod/target-database-url"
     family="vayada-next-api-db-runtime-preflight"

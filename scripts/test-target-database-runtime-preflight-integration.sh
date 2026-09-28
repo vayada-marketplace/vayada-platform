@@ -143,23 +143,26 @@ docker run --rm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/target-database-runtime-preflight.mjs" "${work}/preflight.mjs"
 cp "${root}/scripts/grant-target-database-product-audit-insert.mjs" "${work}/grant.mjs"
+cp "${root}/scripts/grant-target-database-folio-command.mjs" "${work}/folio-grant.mjs"
 
 run_grant() {
   local database_role="$1"
   local database_password="$2"
   local fixture_flag="${3:-1}"
   local grant_scope="${4:-audit_insert}"
+  local grant_file="grant.mjs"
+  [[ "${grant_scope}" == "folio_command" ]] && grant_file="folio-grant.mjs"
   docker run --rm \
     --network "${network}" \
     --volume "${node_modules_container}:/work" \
-    --volume "${work}/grant.mjs:/work/grant.mjs:ro" \
+    --volume "${work}/${grant_file}:/work/${grant_file}:ro" \
     --workdir /work \
     --env "TARGET_DATABASE_MIGRATION_URL=postgresql://${database_role}:${database_password}@vayada-db-preflight:5432/postgres" \
     --env "VAYADA_AUDIT_GRANT_LOCAL_FIXTURE=${fixture_flag}" \
     --env "VAYADA_DB_GRANT_SCOPE=${grant_scope}" \
     --env "VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE=${VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE:-0}" \
     --env "VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE=${VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE:-0}" \
-    node:22-bookworm node grant.mjs
+    node:22-bookworm node "${grant_file}"
 }
 
 run_preflight() {
