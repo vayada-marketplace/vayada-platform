@@ -34,27 +34,32 @@ group alone is not caller authentication. The service still verifies original
 WorkOS bearer tokens for owner commands and independently checks authorization.
 
 Read-only VPC inventory found only public subnets, no IPv6, and no NAT gateway
-or VPC endpoints. Two review alternatives exist; neither changes the required
-database-enforced per-property scope, dedicated roles, token, or HTTPS:
+or VPC endpoints. On 2026-09-28 the human owner selected the public-IP pilot
+topology, accepting its additional ingress-misconfiguration risk to avoid a
+billable NAT gateway for this bounded test. This does not waive the required
+database-enforced per-property scope, dedicated roles, token, HTTPS, or
+negative reachability proof:
 
-- **Private-subnet task:** no public task IP; outbound internet access needs NAT
-  or a separately designed equivalent. Draft [network PR #297](https://github.com/vayada-marketplace/vayada-platform/pull/297)
-  proposes two unused private subnets and one zonal NAT. One NAT has recurring
-  hourly/data charges and is a single-AZ failure point for JWKS and task
-  startup; keep that PR unmerged until this tradeoff is accepted or revised.
-- **Public-subnet pilot task:** use an existing public subnet and
+- **Selected public-subnet pilot task:** use an existing public subnet and
   `assign_public_ip=true` for direct HTTPS egress. This avoids the NAT charge
   but incurs a public-IPv4 charge and makes a mistaken ingress rule more
   consequential. Keep the service out of public ALB/DNS, use private-IP service
   discovery, and admit port 8010 only from the newly separated next API
   security group; never from an internet CIDR or the shared ECS group. Prove
   external reachability is denied and API-to-service HTTPS/token access works.
-  Record explicit acceptance of the public-IP exception and applicable
-  security-control impact before deployment.
+- **Deferred private-subnet alternative:** no public task IP; outbound internet
+  access needs NAT or a separately designed equivalent. Draft
+  [network PR #297](https://github.com/vayada-marketplace/vayada-platform/pull/297)
+  proposed two private subnets and one zonal NAT. It is not the selected pilot
+  path; its hourly/data charges and single-AZ egress failure point remain
+  reasons to reconsider it only through a separate review.
 
 AWS [VPC pricing](https://aws.amazon.com/vpc/pricing/) bills NAT by hour and
-data volume, while public IPv4 is billed by address-hour. Neither option is
-selected by this document.
+data volume, while public IPv4 is billed by address-hour. Review the
+public-IP security-control impact before deploying the selected pilot:
+[AWS Security Hub ECS.2](https://docs.aws.amazon.com/securityhub/latest/userguide/ecs-controls.html#ecs-2)
+would fail for an ECS service with automatic public-IP assignment if that
+control is enabled. This decision is not evidence of an active finding.
 
 The first platform implementation may create the isolated resources with the
 service stopped. Starting tasks or admitting requests requires the gates below.
@@ -151,11 +156,10 @@ destroy nor schema rollback is a traffic rollback.
 
 ## Decisions for the next implementation PRs
 
-1. Select the network option and test private-IP discovery, full transport
-   encryption, authenticated probes, JWKS egress, and denied public ingress.
-   Document either the NAT cost/single-AZ limitation (or a reviewed resilient
-   alternative) or the public-IP security exception before merging network
-   infrastructure. Review the residual outbound HTTPS exposure in both cases.
+1. Implement the selected public-IP pilot behind a dedicated security group;
+   test private-IP discovery, full transport encryption, authenticated probes,
+   JWKS egress, and denied public ingress. Review the security-control impact
+   and residual outbound HTTPS exposure before deploying.
 2. Review the proposed `pricing-command/prod/` secret names, exact ARNs,
    dedicated execution-role policies, provisioning owner, rotation procedure,
    actual secret resource/KMS policies, and negative IAM proof for the final
