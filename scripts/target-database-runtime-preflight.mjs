@@ -10,13 +10,23 @@ const requiredRelationPrivileges = {
   "platform.product_audit_events": ["SELECT", "INSERT"],
   "pms.channel_connections": ["SELECT", "INSERT", "UPDATE"],
 };
+const folioCommandPrivileges = {
+  "finance.folios": ["INSERT"],
+  "finance.folio_revisions": ["INSERT"],
+  "finance.folio_lines": ["INSERT"],
+  "finance.folio_payment_references": ["INSERT"],
+};
 // Permit reviewed grants before later releases require them.
 const stagedRelationPrivileges = {
+  ...folioCommandPrivileges,
   "finance.expense_categories": ["INSERT"],
   "finance.expenses": ["INSERT"],
   "finance.recurring_expense_rules": ["INSERT"],
   "platform.domain_events": ["INSERT"],
   "platform.jobs": ["INSERT"],
+};
+const stagedColumnPrivileges = {
+  "finance.folios": { UPDATE: ["id"] },
 };
 const requiredColumnPrivileges = {
   "hotel_catalog.properties": { UPDATE: ["id"] },
@@ -248,6 +258,40 @@ try {
     [JSON.stringify(requiredRelationPrivileges)],
     "runtime_relation_access_missing",
   );
+  if (process.env.VAYADA_DB_REQUIRE_FOLIO_COMMAND === "1") {
+    await requireNoMissing(
+      client,
+      `SELECT requirement.relation, privilege.name
+         FROM jsonb_each($1::jsonb) AS requirement(relation, privileges)
+         CROSS JOIN LATERAL jsonb_array_elements_text(requirement.privileges) AS privilege(name)
+        WHERE NOT coalesce(has_table_privilege(current_user, to_regclass(requirement.relation), privilege.name), false)`,
+      [JSON.stringify(folioCommandPrivileges)],
+      "runtime_folio_command_insert_missing",
+    );
+    check(
+      (await client.query(`SELECT has_column_privilege(current_user,
+        'finance.folios', 'id', 'UPDATE') AS can_lock`)).rows[0].can_lock,
+      "runtime_folio_command_lock_missing",
+    );
+    await requireNoMissing(
+      client,
+      `SELECT table_name.name, privilege.name
+         FROM unnest($1::text[]) AS table_name(name)
+         CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE')) AS privilege(name)
+        WHERE has_table_privilege(current_user, to_regclass(table_name.name),
+          privilege.name || ' WITH GRANT OPTION')
+        UNION ALL
+       SELECT table_name.name, attribute.attname || ':' || privilege.name
+         FROM unnest($1::text[]) AS table_name(name)
+         JOIN pg_attribute AS attribute ON attribute.attrelid=to_regclass(table_name.name)
+         CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE')) AS privilege(name)
+        WHERE attribute.attnum > 0 AND NOT attribute.attisdropped
+          AND has_column_privilege(current_user, attribute.attrelid, attribute.attname,
+            privilege.name || ' WITH GRANT OPTION')`,
+      [Object.keys(folioCommandPrivileges)],
+      "runtime_folio_command_grant_option_forbidden",
+    );
+  }
   await requireNoMissing(
     client,
     `SELECT requirement.relation, privilege.name, column_name.name
@@ -381,7 +425,7 @@ try {
              AND allowed_columns.column_name = attribute.attname
         )`,
     [JSON.stringify({ ...requiredRelationPrivileges, ...stagedRelationPrivileges }), receipt,
-      JSON.stringify(requiredColumnPrivileges)],
+      JSON.stringify({ ...requiredColumnPrivileges, ...stagedColumnPrivileges })],
     "runtime_unapproved_relation_column_write_forbidden",
   );
   await requireNoMissing(

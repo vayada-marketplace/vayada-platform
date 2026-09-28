@@ -74,6 +74,10 @@ CREATE TABLE finance.payments (id uuid PRIMARY KEY);
 CREATE TABLE finance.expense_categories (id uuid PRIMARY KEY);
 CREATE TABLE finance.expenses (id uuid PRIMARY KEY);
 CREATE TABLE finance.recurring_expense_rules (id uuid PRIMARY KEY);
+CREATE TABLE finance.folios (id uuid PRIMARY KEY, property_id uuid);
+CREATE TABLE finance.folio_revisions (id uuid PRIMARY KEY);
+CREATE TABLE finance.folio_lines (id uuid PRIMARY KEY);
+CREATE TABLE finance.folio_payment_references (id uuid PRIMARY KEY);
 CREATE TABLE finance.affiliate_earning_reconciliation_revisions (id uuid PRIMARY KEY);
 CREATE TABLE finance.affiliate_eligible_earning_revisions (id uuid PRIMARY KEY);
 CREATE TABLE finance.affiliate_earning_allocations (id uuid PRIMARY KEY);
@@ -118,6 +122,8 @@ GRANT SELECT, INSERT, UPDATE ON finance.payments,
   platform.external_webhook_events, pms.channel_connections
   TO vayada_next_api_runtime;
 GRANT SELECT ON finance.expense_categories, finance.expenses, finance.recurring_expense_rules TO vayada_next_api_runtime;
+GRANT SELECT ON finance.folios, finance.folio_revisions, finance.folio_lines,
+  finance.folio_payment_references TO vayada_next_api_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON platform.idempotency_keys
   TO vayada_next_api_runtime;
 GRANT SELECT ON platform.product_audit_events
@@ -137,23 +143,26 @@ docker run --rm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/target-database-runtime-preflight.mjs" "${work}/preflight.mjs"
 cp "${root}/scripts/grant-target-database-product-audit-insert.mjs" "${work}/grant.mjs"
+cp "${root}/scripts/grant-target-database-folio-command.mjs" "${work}/folio-grant.mjs"
 
 run_grant() {
   local database_role="$1"
   local database_password="$2"
   local fixture_flag="${3:-1}"
   local grant_scope="${4:-audit_insert}"
+  local grant_file="grant.mjs"
+  [[ "${grant_scope}" == "folio_command" ]] && grant_file="folio-grant.mjs"
   docker run --rm \
     --network "${network}" \
     --volume "${node_modules_container}:/work" \
-    --volume "${work}/grant.mjs:/work/grant.mjs:ro" \
+    --volume "${work}/${grant_file}:/work/${grant_file}:ro" \
     --workdir /work \
     --env "TARGET_DATABASE_MIGRATION_URL=postgresql://${database_role}:${database_password}@vayada-db-preflight:5432/postgres" \
     --env "VAYADA_AUDIT_GRANT_LOCAL_FIXTURE=${fixture_flag}" \
     --env "VAYADA_DB_GRANT_SCOPE=${grant_scope}" \
     --env "VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE=${VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE:-0}" \
     --env "VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE=${VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE:-0}" \
-    node:22-bookworm node grant.mjs
+    node:22-bookworm node "${grant_file}"
 }
 
 run_preflight() {
@@ -163,6 +172,7 @@ run_preflight() {
     --volume "${work}/preflight.mjs:/work/preflight.mjs:ro" \
     --workdir /work \
     --env "TARGET_DATABASE_URL=postgresql://vayada_next_api_runtime:runtime@${database_container}:5432/postgres" \
+    --env "VAYADA_DB_REQUIRE_FOLIO_COMMAND=${VAYADA_DB_REQUIRE_FOLIO_COMMAND:-0}" \
     node:22-bookworm node preflight.mjs
 }
 
@@ -594,6 +604,55 @@ if [[ "${postgres_version}" == "17" ]]; then
 fi
 
 run_preflight | grep -F '"status":"PASS"' >/dev/null
+VAYADA_DB_REQUIRE_FOLIO_COMMAND=1 expect_failure runtime_folio_command_insert_missing
+if folio_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 folio_command 2>&1)"; then
+  echo "non-owner Folios command grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"folio_command_table_owner_required"' <<<"${folio_non_owner_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (property_id) ON finance.folios TO vayada_next_api_runtime" >/dev/null
+if folio_broad_output="$(run_grant legacy_owner owner 1 folio_command 2>&1)"; then
+  echo "Folios command grant unexpectedly passed with broad UPDATE" >&2
+  exit 1
+fi
+grep -F '"code":"folio_command_runtime_scope_too_broad"' <<<"${folio_broad_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -tAc \
+  "SELECT has_table_privilege('vayada_next_api_runtime', 'finance.folios', 'INSERT')" \
+  | grep -Fx f >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (property_id) ON finance.folios FROM vayada_next_api_runtime" >/dev/null
+run_grant legacy_owner owner 1 folio_command | grep -F '"grant":"finance.folio_command:INSERT,folios.UPDATE(id)"' >/dev/null
+VAYADA_DB_REQUIRE_FOLIO_COMMAND=1 run_preflight | grep -F '"status":"PASS"' >/dev/null
+for privilege in 'INSERT (id)' 'SELECT (id)'; do
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT ${privilege} ON finance.folios TO vayada_next_api_runtime WITH GRANT OPTION" >/dev/null
+  if folio_grant_option_output="$(run_grant legacy_owner owner 1 folio_command 2>&1)"; then
+    echo "Folios command grant unexpectedly accepted a column grant option" >&2
+    exit 1
+  fi
+  grep -F '"code":"folio_command_runtime_scope_too_broad"' <<<"${folio_grant_option_output}" >/dev/null
+  VAYADA_DB_REQUIRE_FOLIO_COMMAND=1 expect_failure runtime_folio_command_grant_option_forbidden
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE GRANT OPTION FOR ${privilege} ON finance.folios FROM vayada_next_api_runtime" >/dev/null
+done
+VAYADA_DB_REQUIRE_FOLIO_COMMAND=1 run_preflight | grep -F '"status":"PASS"' >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -c \
+  "BEGIN; INSERT INTO finance.folios(id) VALUES ('00000000-0000-4000-8000-000000000011'); SELECT id FROM finance.folios WHERE id='00000000-0000-4000-8000-000000000011' FOR UPDATE; INSERT INTO finance.folio_revisions(id) VALUES ('00000000-0000-4000-8000-000000000012'); INSERT INTO finance.folio_lines(id) VALUES ('00000000-0000-4000-8000-000000000013'); INSERT INTO finance.folio_payment_references(id) VALUES ('00000000-0000-4000-8000-000000000014'); ROLLBACK" >/dev/null
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -c \
+  "UPDATE finance.folios SET property_id=property_id WHERE false" >/dev/null 2>&1; then
+  echo "runtime role unexpectedly updated Folios property scope" >&2
+  exit 1
+fi
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -c \
+  "DELETE FROM finance.folios WHERE false" >/dev/null 2>&1; then
+  echo "runtime role unexpectedly deleted Folios" >&2
+  exit 1
+fi
+
 for quota_read in 'SELECT' 'SELECT (link_id)'; do
   docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
     "GRANT ${quota_read} ON marketplace.affiliate_click_quota_windows TO vayada_next_api_runtime" >/dev/null
