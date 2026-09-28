@@ -78,6 +78,9 @@ CREATE TABLE finance.folios (id uuid PRIMARY KEY, property_id uuid);
 CREATE TABLE finance.folio_revisions (id uuid PRIMARY KEY);
 CREATE TABLE finance.folio_lines (id uuid PRIMARY KEY);
 CREATE TABLE finance.folio_payment_references (id uuid PRIMARY KEY);
+CREATE TABLE pms.channel_operational_alerts (
+  id uuid PRIMARY KEY, resolved_at timestamptz, acknowledged_at timestamptz
+);
 CREATE TABLE finance.affiliate_earning_reconciliation_revisions (id uuid PRIMARY KEY);
 CREATE TABLE finance.affiliate_eligible_earning_revisions (id uuid PRIMARY KEY);
 CREATE TABLE finance.affiliate_earning_allocations (id uuid PRIMARY KEY);
@@ -124,6 +127,7 @@ GRANT SELECT, INSERT, UPDATE ON finance.payments,
 GRANT SELECT ON finance.expense_categories, finance.expenses, finance.recurring_expense_rules TO vayada_next_api_runtime;
 GRANT SELECT ON finance.folios, finance.folio_revisions, finance.folio_lines,
   finance.folio_payment_references TO vayada_next_api_runtime;
+GRANT SELECT, UPDATE (resolved_at) ON pms.channel_operational_alerts TO vayada_next_api_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON platform.idempotency_keys
   TO vayada_next_api_runtime;
 GRANT SELECT ON platform.product_audit_events
@@ -603,6 +607,17 @@ if [[ "${postgres_version}" == "17" ]]; then
     "REVOKE MAINTAIN ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
 fi
 
+run_preflight | grep -F '"status":"PASS"' >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (acknowledged_at) ON pms.channel_operational_alerts TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_unapproved_relation_column_write_forbidden
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (acknowledged_at) ON pms.channel_operational_alerts FROM vayada_next_api_runtime" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (resolved_at) ON pms.channel_operational_alerts TO vayada_next_api_runtime WITH GRANT OPTION" >/dev/null
+expect_failure runtime_column_grant_option_forbidden
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE GRANT OPTION FOR UPDATE (resolved_at) ON pms.channel_operational_alerts FROM vayada_next_api_runtime" >/dev/null
 run_preflight | grep -F '"status":"PASS"' >/dev/null
 VAYADA_DB_REQUIRE_FOLIO_COMMAND=1 expect_failure runtime_folio_command_insert_missing
 if folio_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 folio_command 2>&1)"; then

@@ -27,6 +27,7 @@ const stagedRelationPrivileges = {
 };
 const stagedColumnPrivileges = {
   "finance.folios": { UPDATE: ["id"] },
+  "pms.channel_operational_alerts": { UPDATE: ["resolved_at"] },
 };
 const requiredColumnPrivileges = {
   "hotel_catalog.properties": { UPDATE: ["id"] },
@@ -315,7 +316,7 @@ try {
       WHERE relation.oid IS NOT NULL AND has_column_privilege(
         current_user, relation.oid, column_name.name, privilege.name || ' WITH GRANT OPTION'
       )`,
-    [JSON.stringify(requiredColumnPrivileges)],
+    [JSON.stringify({ ...requiredColumnPrivileges, ...stagedColumnPrivileges })],
     "runtime_column_grant_option_forbidden",
   );
   await requireNoMissing(
