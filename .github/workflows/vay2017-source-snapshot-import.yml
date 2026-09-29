@@ -93,8 +93,8 @@ jobs:
           [[ "$VERIFIED_AT" =~ ^[0-9]+$ ]]
           now="$(date +%s)"
           (( now >= VERIFIED_AT && now - VERIFIED_AT <= 180 ))
-          [[ "$SOURCE" == "919956c1d85c148845a96ba3b16c5c59068e4a3b" ]]
-          [[ "$DIGEST" == "sha256:2b5cb2fb788c68ee93589006361fc9c8a8b7467c73deb434d573f5937449c71f" ]]
+          [[ "$SOURCE" == "d98c3f6c3b629ea7a3483fc17350290fcb90154a" ]]
+          [[ "$DIGEST" == "sha256:ef4b691d742929ac1c5c93ff18e19bd910333433f26fb63db24f461f75f99565" ]]
           grep -Fx -- "$SOURCE $DIGEST" scripts/next-api-split-compatible-images.txt
           aws ecr describe-images --repository-name vayada-next-api \
             --image-ids "imageDigest=$DIGEST" --region eu-west-1 >/dev/null
