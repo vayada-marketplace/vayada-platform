@@ -42,6 +42,7 @@ const protectedRelations = [
   "platform.channex_adoption_rollbacks",
   "platform.legacy_owner_approval_records",
   "platform.legacy_owner_approval_revocations",
+  "platform.legacy_historical_binding_transitions",
   "platform.production_booking_migration_inferences",
   "platform.production_booking_migration_quarantines",
   "platform.production_cutover_runs",
@@ -208,6 +209,7 @@ try {
           'marketplace.affiliate_click_quota_windows',
           'pms.inventory_coverage_validation_queue',
           'platform.identity_migration_provenance',
+          'platform.legacy_historical_binding_transitions',
           'platform.channex_management_worker_properties',
           'platform.finance_export_worker_properties',
           'platform.finance_expense_worker_properties',
@@ -225,6 +227,15 @@ try {
         AND has_any_column_privilege(current_user, oid, 'SELECT')`,
     [],
     "runtime_identity_migration_provenance_read_forbidden",
+  );
+  // Historical binding transitions are migration evidence, not API state.
+  await requireNoMissing(
+    client,
+    `SELECT oid FROM pg_class
+      WHERE oid=to_regclass('platform.legacy_historical_binding_transitions')
+        AND has_any_column_privilege(current_user, oid, 'SELECT')`,
+    [],
+    "runtime_historical_binding_transitions_read_forbidden",
   );
   // Quota state is private to the guarded affiliate command, not the API login.
   await requireNoMissing(
