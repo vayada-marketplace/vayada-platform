@@ -70,8 +70,9 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('needs: verify-source', VAY2017_IMPORT_WORKFLOW)
         self.assertIn('now - VERIFIED_AT <= 180', VAY2017_IMPORT_WORKFLOW)
         self.assertNotIn('--with-decryption', VAY2017_IMPORT_WORKFLOW)
-        self.assertIn('919956c1d85c148845a96ba3b16c5c59068e4a3b', VAY2017_IMPORT_WORKFLOW)
-        self.assertIn('sha256:2b5cb2fb788c68ee93589006361fc9c8a8b7467c73deb434d573f5937449c71f', VAY2017_IMPORT_WORKFLOW)
+        self.assertIn('d98c3f6c3b629ea7a3483fc17350290fcb90154a', VAY2017_IMPORT_WORKFLOW)
+        self.assertIn('sha256:ef4b691d742929ac1c5c93ff18e19bd910333433f26fb63db24f461f75f99565', VAY2017_IMPORT_WORKFLOW)
+        self.assertIn('(if $vay2017_source_import_phase == "extract" then [{name:"SOURCE_ATTESTATION_OWNER",value:"vay2017_source_attestor_20260929"}] else [] end)', RUNNER)
         self.assertNotIn('__APP_', VAY2017_IMPORT_WORKFLOW)
 
     def test_vay2017_snapshot_import_rejects_bad_inputs_without_echoing_them(self) -> None:
