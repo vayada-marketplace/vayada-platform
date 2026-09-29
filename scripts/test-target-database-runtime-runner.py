@@ -12,9 +12,24 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNNER = (ROOT / "scripts/run-target-database-runtime-preflight.sh").read_text()
 GRANT = (ROOT / "scripts/grant-target-database-product-audit-insert.mjs").read_text()
 IAM = (ROOT / "infra/target_database_preflight_iam.tf").read_text()
+VAY2017_WORKFLOW = (ROOT / ".github/workflows/vay2017-historical-binding-preflight.yml").read_text()
 
 
 class RuntimePreflightRunnerTest(unittest.TestCase):
+    def test_vay2017_preflight_uses_ephemeral_external_signing_and_always_cleans_up(self) -> None:
+        self.assertIn('--preflight-vay2017-historical-bindings)', RUNNER)
+        self.assertIn('secret_parameter="/vayada/prod/db-marketplace-url"', RUNNER)
+        self.assertIn('del(.taskRoleArn)', RUNNER)
+        self.assertIn('legacyHistoricalBindingProductionPreflight.js', RUNNER)
+        self.assertIn('generateKeyPairSync("ed25519")', VAY2017_WORKFLOW)
+        self.assertIn('vay2017-private.pem', VAY2017_WORKFLOW)
+        self.assertIn('a4b4ac523cbbce43b85f3a12dbbecaddd1c7ed4e', VAY2017_WORKFLOW)
+        self.assertIn('sha256:3b76dbe29d7658eb60ac0e771b725f9a7181f1076fed458e6b5c7d77e267dd49', VAY2017_WORKFLOW)
+        self.assertIn('if: always() && steps.verify.outcome == \'success\'', VAY2017_WORKFLOW)
+        self.assertIn('cleanup "$DIGEST" "$SOURCE"', VAY2017_WORKFLOW)
+        self.assertNotIn('TARGET_DATABASE_ADMIN_URL:', VAY2017_WORKFLOW)
+        self.assertNotIn('{name:"APPLICATION_RELEASE",value:$vay2017_source_sha}', RUNNER)
+
     def test_temporary_task_receives_only_the_runtime_database_secret(self) -> None:
         self.assertIn('secret_name="TARGET_DATABASE_URL"', RUNNER)
         self.assertIn('secret_parameter="/vayada/prod/target-database-runtime-url"', RUNNER)
