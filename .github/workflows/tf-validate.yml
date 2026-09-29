@@ -28,6 +28,8 @@ on:
       - "scripts/pause-next-api-channex-worker.py"
       - "scripts/test-pause-next-api-channex-worker.py"
       - "scripts/run-target-database-runtime-preflight.sh"
+      - "scripts/vay2017-source-snapshot-import.mjs"
+      - "scripts/vay2017-source-snapshot-extract.mjs"
       - "scripts/target-database-runtime-preflight.mjs"
       - "scripts/financials-activation-readiness.mjs"
       - "scripts/grant-target-database-product-audit-insert.mjs"
@@ -61,6 +63,7 @@ on:
       - "scripts/assert-finance-export-bootstrap-plan.py"
       - ".github/workflows/finance-export-once.yml"
       - ".github/workflows/vay2017-historical-binding-preflight.yml"
+      - ".github/workflows/vay2017-source-snapshot-import.yml"
       - "scripts/assert-terraform-protected-resources.sh"
       - "scripts/test-marketplace-communication-unsubscribe-keys.mjs"
       - "scripts/test-finance-folio-kms-plan-guard.sh"
@@ -228,6 +231,8 @@ jobs:
           python3 scripts/test-target-database-credential-split.py
           python3 scripts/test-target-database-split-deployment-ready.py
           bash -n scripts/run-target-database-runtime-preflight.sh
+          node --check scripts/vay2017-source-snapshot-import.mjs
+          node --check scripts/vay2017-source-snapshot-extract.mjs
           node --check scripts/target-database-runtime-preflight.mjs
           node --check scripts/financials-activation-readiness.mjs
           node --check scripts/grant-target-database-product-audit-insert.mjs
