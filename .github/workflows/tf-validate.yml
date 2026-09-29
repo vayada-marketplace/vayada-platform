@@ -59,6 +59,7 @@ on:
       - "scripts/test-finance-export-once.py"
       - "scripts/assert-finance-export-bootstrap-plan.py"
       - ".github/workflows/finance-export-once.yml"
+      - ".github/workflows/vay2017-historical-binding-preflight.yml"
       - "scripts/assert-terraform-protected-resources.sh"
       - "scripts/test-marketplace-communication-unsubscribe-keys.mjs"
       - "scripts/test-finance-folio-kms-plan-guard.sh"
