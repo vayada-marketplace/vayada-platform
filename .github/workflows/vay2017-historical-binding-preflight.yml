@@ -1,0 +1,115 @@
+name: VAY-2017 read-only historical binding preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Reviewed app source revision"
+        required: true
+      image_digest:
+        description: "Reviewed immutable Next API digest"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Verify reviewed source and digest
+        id: verify
+        env:
+          SOURCE: ${{ inputs.source_sha }}
+          DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE" =~ ^[0-9a-f]{40}$ && "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$SOURCE" == "a4b4ac523cbbce43b85f3a12dbbecaddd1c7ed4e" ]]
+          [[ "$DIGEST" == "sha256:3b76dbe29d7658eb60ac0e771b725f9a7181f1076fed458e6b5c7d77e267dd49" ]]
+          grep -Fx -- "$SOURCE $DIGEST" scripts/next-api-split-compatible-images.txt
+          aws ecr describe-images --repository-name vayada-next-api \
+            --image-ids "imageDigest=$DIGEST" --region eu-west-1 >/dev/null
+      - name: Create ephemeral signing key
+        run: |
+          set -euo pipefail
+          umask 077
+          node <<'NODE'
+          const { generateKeyPairSync } = require("node:crypto");
+          const { writeFileSync } = require("node:fs");
+          const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+          writeFileSync(`${process.env.RUNNER_TEMP}/vay2017-private.pem`, privateKey.export({ type: "pkcs8", format: "pem" }));
+          writeFileSync(`${process.env.RUNNER_TEMP}/vay2017-public.pem`, publicKey.export({ type: "spki", format: "pem" }));
+          NODE
+          echo "VAY2017_PREFLIGHT_SIGNING_KEY_ID=vay2017-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+          echo "CHANNEX_ADOPTION_EXECUTION_PRINCIPAL=github:vayada-platform:vay2017-production-preflight" >> "$GITHUB_ENV"
+      - name: Prepare exact eight-hotel evidence
+        env:
+          SOURCE: ${{ inputs.source_sha }}
+          DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          umask 077
+          result="$(bash scripts/run-target-database-runtime-preflight.sh \
+            --preflight-vay2017-historical-bindings prepare "$DIGEST" "$SOURCE" \
+            "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")"
+          input="$(jq -er 'select(.status == "prepared") | .inputGzipBase64' <<<"$result")"
+          echo "::add-mask::$input"
+          printf '%s' "$input" > "$RUNNER_TEMP/vay2017-input.gz.b64"
+      - name: Sign the prepared evidence outside ECS
+        run: |
+          set -euo pipefail
+          umask 077
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require("node:fs");
+          const { sign } = require("node:crypto");
+          const { gunzipSync } = require("node:zlib");
+          const dir = process.env.RUNNER_TEMP;
+          const encoded = readFileSync(`${dir}/vay2017-input.gz.b64`, "utf8");
+          const raw = gunzipSync(Buffer.from(encoded, "base64"), { maxOutputLength: 256 * 1024 });
+          const input = JSON.parse(raw);
+          if (input.signingKeyId !== process.env.VAY2017_PREFLIGHT_SIGNING_KEY_ID)
+            throw new Error("signing_key_id_mismatch");
+          const payload = Buffer.concat([
+            Buffer.from("vayada:vay2017-historical-binding-preflight:v1\0"),
+            raw,
+          ]);
+          const signature = sign(null, payload, readFileSync(`${dir}/vay2017-private.pem`, "utf8"));
+          writeFileSync(`${dir}/vay2017-signature`, signature.toString("base64url"));
+          writeFileSync(`${dir}/vay2017-public.pem.b64`, readFileSync(`${dir}/vay2017-public.pem`).toString("base64"));
+          NODE
+      - name: Run one read-only eight-hotel comparison
+        env:
+          SOURCE: ${{ inputs.source_sha }}
+          DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          export VAY2017_PREFLIGHT_INPUT_GZIP_BASE64="$(<"$RUNNER_TEMP/vay2017-input.gz.b64")"
+          export VAY2017_PREFLIGHT_SIGNATURE="$(<"$RUNNER_TEMP/vay2017-signature")"
+          export VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64="$(<"$RUNNER_TEMP/vay2017-public.pem.b64")"
+          bash scripts/run-target-database-runtime-preflight.sh \
+            --preflight-vay2017-historical-bindings execute "$DIGEST" "$SOURCE" \
+            "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      - name: Remove temporary database logins
+        if: always() && steps.verify.outcome == 'success'
+        env:
+          SOURCE: ${{ inputs.source_sha }}
+          DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          bash scripts/run-target-database-runtime-preflight.sh \
+            --preflight-vay2017-historical-bindings cleanup "$DIGEST" "$SOURCE" \
+            "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

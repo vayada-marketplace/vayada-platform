@@ -24,6 +24,7 @@ test('role is restricted and only the PG16+ admin-only creator edge is tolerated
 
 test('database receives a SCRAM verifier; Secrets Manager receives the generated password', () => {
   assert.match(source, /PASSWORD %L/); assert.match(source, /provisionRole\(discoveryClient, passwordVerifier/);
+  assert.match(source, /pg_catalog\.format\([^\n]+\$1::text, \$2::text\)/);
   const password = 'known-random-password'; const verifier = scramVerifier(password, Buffer.from('0123456789abcdef'));
   assert.match(verifier, /^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+=*\$[A-Za-z0-9+/]+=*:[A-Za-z0-9+/]+=*$/);
   assert.doesNotMatch(verifier, new RegExp(password));
@@ -32,6 +33,28 @@ test('database receives a SCRAM verifier; Secrets Manager receives the generated
 
 test('bootstrap source has no relative imports when run with Node -e', () => {
   assert.doesNotMatch(source, /\bfrom\s+['"]\.\//);
+});
+
+test('bootstrap failures identify a fixed safe substep without source names', () => {
+  const diagnostics = source.slice(source.indexOf('const safeNetworkCodes'), source.indexOf('function trustedRdsCa'));
+  const safeFailure = Function(`${diagnostics}\nreturn safeFailure;`)();
+  assert.deepEqual(
+    safeFailure('count-helper', { name: 'error', code: '42601', message: 'private database name and SQL' }),
+    { status: 'FAIL', stage: 'count-helper', code: 'UNKNOWN', errorClass: 'Other' },
+  );
+  assert.equal(safeFailure('database-defaults', { name: 'DatabaseError', code: '42501' }).code, '42501');
+  assert.match(source, /phase = 'database-connect';\s*await client\.connect\(\);[\s\S]*?phase = 'database-defaults';\s*await hardenDatabaseDefaults\(/);
+  for (const [phase, operation] of [
+    ['database-defaults', 'hardenDatabaseDefaults'],
+    ['template-access', 'denyTemplateDatabaseAccess'],
+    ['existing-reader-check', 'readerPrivilegeCheck'],
+    ['reader-role-credential', 'provisionRole'],
+    ['count-helper', 'provisionDatabase'],
+  ]) {
+    assert.match(source, new RegExp(`phase = '${phase}';[\\s\\S]*?await ${operation}\\(`));
+  }
+  assert.match(source, /stage: phases\.has\(phase\) \? phase : 'reader-role-discovery'/);
+  assert.doesNotMatch(source, /console\.error\(error\)|console\.error\(error\.message\)/);
 });
 
 test('count helper is fixed, definer-owned, and cannot expose row values', () => {

@@ -1,243 +1,219 @@
 # VAY-2029 activation record and runbook
 
-Status: **NOT READY — activation disabled; approved receiver IAM and CI
-managed-policy bootstrap applied and verified. Receiver access and remaining
-activation gates are still open.**
-Read with [the architecture](https://linear.app/vayadacom/document/coordinated-deployment-architecture-and-acceptance-plan-3f706981f863)
-and [runtime controls](coordinated-releases.md). VAY-2027 and VAY-2028 were
-explicitly accepted. Receiver IAM installation was subsequently verified during
-the VAY-2029 operator bootstrap recorded below.
+Status: **ACTIVATED — final acceptance observation remains.** Coordinated batch
+ownership is live for all six services. Both retained holds were reconciled and
+cleared, the exact release and duplicate replay succeeded, the stale legacy
+event was rejected, and workflow availability was restored. Authenticated
+business-data reads and matched shared-package and merge-burst samples remain
+before explicit human acceptance.
 
-## Reviewed inputs and observed state
+Read with [the architecture](https://linear.app/vayadacom/document/coordinated-deployment-architecture-and-acceptance-plan-3f706981f863),
+[runtime controls](coordinated-releases.md), and the
+[VAY-2029 evidence index](evidence/vay-2029/README.md).
 
-| Component | Accepted implementation | Inspection revision |
+## Reviewed implementation and boundary evidence
+
+| Change | Reviewed identity | Result |
 | --- | --- | --- |
-| Application | [#2484](https://github.com/vayada-marketplace/vayada/pull/2484), `cb9a05c89e458ced6c7fd81bb9b98f2efae32a44` | `05caa7ade23c554856a8b44a6d48c6cd5d89a621` |
-| Platform | [#150](https://github.com/vayada-marketplace/vayada-platform/pull/150), `aeffe2f7cbb07365e9bfc96f6a7b12e793e05e08` | `67bffda7b8858dc08b7090161064ec5cc88892b2` |
-| API attestation | [#155](https://github.com/vayada-marketplace/vayada-platform/pull/155), `67bffda7b8858dc08b7090161064ec5cc88892b2` | Same |
+| Writer migration | platform [#262](https://github.com/vayada-marketplace/vayada-platform/pull/262), head `df2462b4a338991b4f1f34c54d8607045f30c729`, merge `3feb08591931d816d32eea300a6623a7ae9b0c29` | Apply [36105639066](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36105639066) succeeded with no infrastructure changes |
+| Protected OIDC trust | platform [#265](https://github.com/vayada-marketplace/vayada-platform/pull/265), head `a50087b146672ec049b6da7582490bedb006ce49`, merge `057cd77c95ec1cbbdfdc90947d25e75faffb2a59` | Protected admission [36109471264](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36109471264) passed; no-environment probe [36109998999](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36109998999) denied all 12 assume attempts |
+| Transition-session cutoff | platform [#272](https://github.com/vayada-marketplace/vayada-platform/pull/272), head `4e89f9b4ebb83a43c0c3533ece99a5c96fda1460`, merge `9ac1e0852e16dba42da39db7bc539b4baf63df61` | Cutoff `2026-09-25T08:08:47Z`; post-cutoff Apply [36117487916](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36117487916) passed with 0 added, 0 changed, 0 destroyed |
+| Candidate API attestations | platform [#274](https://github.com/vayada-marketplace/vayada-platform/pull/274), head `e600571272c5db7c7877986e26939cba5a66c7b5`, merge `73b73bb3013ef849f24c608559681218f448274b` | Merged after green CI and clean independent/CodeRabbit review; still not deployment approval |
+| Fresh API attestation | platform [#276](https://github.com/vayada-marketplace/vayada-platform/pull/276), head `5da1da6373f876cdaa6277c3f75e4d6d5da9fe80`, merge `c5b3592942280eb4b61533fe6932d76135faa667` | Green CI/CodeRabbit; independent review proved identical launcher and 11 Finance export modules |
+| Finance runtime reads | platform [#280](https://github.com/vayada-marketplace/vayada-platform/pull/280), head `5d0e217329ccdaf4768ee1782b9500e6c05c51a4`, merge `108ac012a7404f4a1675df08e9a2e51c770a1edd` | Green PostgreSQL 16/17 integration and identity/ACL checks; independent review approved the exact four-relation transactional `SELECT` grant and rollback proof |
 
-The VAY-2029 fixes must be independently reviewed and merged before activation.
-Record those final merge SHAs and the exact selected artifact/hashes in the
-ticket before requesting deployment approval. Never substitute the current main
-tip for the reviewed revision or infer live application SHA from platform SHA.
+The mutation role trust is limited to audience `sts.amazonaws.com` and subject
+`repo:vayada-marketplace/vayada-platform:environment:platform-mutations-v2`.
+Its cutoff explicitly denies older sessions. Retained queued runs `34749336429`
+and `34749338561` have no jobs and are fenced by that trust/cutoff; do not rerun,
+cancel, or use them as release evidence.
 
-Sanitized read-only AWS evidence: [live inventory](evidence/vay-2029/live-inventory.json),
-[ECR source tags](evidence/vay-2029/ecr-provenance.json),
-[verified source build/ancestry](evidence/vay-2029/source-build-proof.json), and
-[active queue](evidence/vay-2029/active-queue.json). All six source checks passed with the local operator credential after configuring
-the local Python trusted CA bundle; receiver credential proof is still pending.
-These are time-bounded,
-non-atomic observations, not a cutover authorization; recollect under the pause.
+## Exact activated candidate
 
-| Service | Task revision | Image source at inventory |
+The production candidate was:
+
+- app source `f2f02832f8db0e02859871becb6210a811639842`;
+- build [36141509208](https://github.com/vayada-marketplace/vayada/actions/runs/36141509208), attempt 1, `prepare_only=true`, one API image built and five images reused;
+- publisher [36141898912](https://github.com/vayada-marketplace/vayada/actions/runs/36141898912), attempt 1;
+- published artifact `10867296213`, expiring `2026-12-24T13:35:18Z`;
+- manifest ID `vayada-release/v1/f2f02832f8db0e02859871becb6210a811639842/36141509208/1`;
+- manifest SHA-256 `0cd2fc120e93cb83c5b040af565e3f4b0ec58d805e43c3bf35c2c6c69ef71c6f`;
+- published-record SHA-256 `1bd7e51dde9922c6f57637e0b952a678df108dcbfd209d2cfc0428ed0b86c55b`.
+
+All six immutable digests and publication metadata are in
+[final-candidate-publication.json](evidence/vay-2029/final-candidate-publication.json).
+The earlier `candidate-publication.json` remains historical preparation
+evidence and was not the activated artifact.
+
+## Pause-window snapshot
+
+Snapshot collected read-only at `2026-09-25T13:09:36Z`. Every service reported
+one desired, one running, zero pending, and PRIMARY rollout `COMPLETED`.
+
+| Service | Live task | Live digest |
 | --- | --- | --- |
-| API | `vayada-next-api:1116` | `cb9a05c89e458ced6c7fd81bb9b98f2efae32a44` |
-| PMS Web | `vayada-next-pms-frontend:564` | `99142518ab0ffafef4b76987bb3c7aadf6eea081` |
-| Booking Web | `vayada-next-booking-frontend:378` | `99142518ab0ffafef4b76987bb3c7aadf6eea081` |
-| Booking Admin | `vayada-next-booking-admin:506` | `05caa7ade23c554856a8b44a6d48c6cd5d89a621` |
-| Marketplace Web | `vayada-next-marketplace-frontend:526` | `05caa7ade23c554856a8b44a6d48c6cd5d89a621` |
-| Vayada Admin | `vayada-next-marketplace-admin:477` | `05caa7ade23c554856a8b44a6d48c6cd5d89a621` |
+| API | `vayada-next-api:1161` | `sha256:32842b3741aed2856fd6256e184a388649ddffdb8689fb80cf881f75f9f7a576` |
+| PMS Web | `vayada-next-pms-frontend:625` | `sha256:57c692910cb14c232e4cdc669dce2a9f78d68e9502b0bea31829dd08135695ec` |
+| Booking Web | `vayada-next-booking-frontend:427` | `sha256:2aabf5d5c475728265692def10e07c54b150a1839b726a81c41585e839c19196` |
+| Booking Admin | `vayada-next-booking-admin:551` | `sha256:60ebcb9fb979362631916a82c3653a82bb8b30431da53b9d8652ef97b2464a08` |
+| Marketplace Web | `vayada-next-marketplace-frontend:571` | `sha256:2ebd0659d44b4e8b64ab0a96e96da4bf76f5c93bf1e51ab209277b4d37ecb79c` |
+| Vayada Admin | `vayada-next-marketplace-admin:522` | `sha256:90147f6423e3b00e92fc3f2ccb29015bef63c328d74a5a24236383d11b71a2ed` |
 
-Every sampled service had one running/desired task, completed rollout, and a
-running-container digest matching its task definition. This is deployment
-inventory, not authenticated product smoke.
+At snapshot time, `COORDINATED_RELEASES_ENABLED`, ownership mode, and desired
+release were absent, so legacy/default ownership remained. Seven old app lanes
+and platform `Deploy App Service` were manually disabled; coordinated
+build/publish, deploy, and control workflows remained active. This is a
+historical pre-activation snapshot, not the current production state.
 
-## Blocking gates
+## Hold reconciliation outcome
 
-1. **Resolved IAM prerequisite.** The approved operator apply created `vayada-github-actions-coordinated-deploy`
-   and its inline policy, verified against the approved trust/policy document.
-   Updating the platform CI inline policy failed with `LimitExceeded: Maximum
-   policy size of 10240 bytes exceeded`, temporarily leaving CI without receiver access.
-   The revised scoped plan created `vayada-coordinated-receiver-management` as
-   a managed policy and attached it to the platform role, retaining the same
-   receiver management grant plus read-only access to its own policy metadata.
-   The revised two-resource plan was approved and applied successfully. Direct
-   policy/attachment verification and CI permission simulations pass.
-   Historical [apply 35212756725](https://github.com/vayada-marketplace/vayada-platform/actions/runs/35212756725)
-   originally failed `iam:CreateRole`; do not retry that broad apply unchanged.
+Both holds remain retained as cleared audit records:
 
-2. `COORDINATED_RELEASE_READ_TOKEN` is absent from the platform repository and
-   `next` environment secret listings. Organization-secret inspection is denied
-   (HTTP 403), so inherited availability remains unverified. Configure a
-   read-only Actions/Contents credential for the private application repository,
-   then prove exact artifact download and commit comparison from the receiver
-   identity. A local operator's `gh` access is not that proof. The app's
-   `PLATFORM_DEPLOY_TOKEN` is present; existence alone does not prove dispatch.
-3. API hold `legacy-35486395230-1` remains active, with
-   `dependentFrontendsCompatible=false`, captured task `vayada-next-api:1114` and
-   digest `sha256:d4123405c6187ec7eb49a59f692b0dd542a4ff7110acec6a52de6cfe6c6a67c8`.
-   Preserve it. Resolve through an explicitly approved exact-manifest API resume;
-   successful unrelated legacy deployments do not clear or invalidate the hold.
-4. Queue inventory contains pre-guard revision `2d7a5772d80365ccabab6938fb2c4c1d5993a808`
-   runs `34749338561` and `34749336429`, plus current pending/running writers.
-   Old checked-out code cannot enforce new ownership guards. Every such run
-   needs a documented drain or individually justified pre-mutation cancellation.
-5. No real coordinated release, non-production AWS failure rehearsal, matched
-   before/after sample, or complete product smoke evidence exists yet.
+1. API: operation `legacy-36096727520-1`, captured task `vayada-next-api:1158`,
+   digest `sha256:3cc5df6b3400b1c5710a595b3eb4baf0964add9c8d89e7347b123138c21cb798`,
+   reason “VAY-1134 user-authorized all-hotel export preparation”,
+   `dependentFrontendsCompatible=false`.
+2. Booking Web: operation `legacy-35844135741-1`, captured task
+   `vayada-next-booking-frontend:400`, digest
+   `sha256:3d21330c21f3a7ebce1102624f62a37f4f2952a026baa4f2b9ceece33bb9447a`,
+   reason automatic rollback after failed per-service cutover,
+   `dependentFrontendsCompatible=false`.
 
-## Protocol, permissions and state
+API resume [36158940242](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36158940242)
+deployed task `1162`, retained the Finance export enablement/cutoff, passed
+readiness smoke, and cleared its hold. Booking Web resume
+[36159531984](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36159531984)
+deployed task `428`, passed public smoke, and cleared its hold. Neither record
+was deleted or edited in place.
 
-Both repositories use v1; mirrored schemas/fixtures must compare byte-for-byte.
-Valid fixture hashes: manifest `6360c61c601c1c043ce032e2dd2fa22c709204fc45debd026417d09d0be84382`,
-record `96882677caea9450ba1f94c55e3996f32a30098fa90876697c97a73a57bbe16a`.
-Candidate retention is 14 days; published records are 90 days; plan bundles one
-day. Expired/unverifiable records require rebuilding, never reconstructing tags.
+## Executed pre-activation gates
 
-Terraform owns the scoped IAM role/policy, not runtime SSM values below
-`/vayada/prod/coordinated-deployments/v1`. Preserve desired state, bootstrap
-evidence, provenance, holds, pending operations and checkpoint evidence across
-rollback. There is no runtime record deletion or destructive schema rollback.
-Activation proves each unheld live digest against existing provenance or an
-unambiguous ECR source tag and successful allowlisted main-push build; the source
-must be an ancestor of the selected manifest. Unknown/manual images require an
-explicit hold. Bootstrap evidence is distinct from post-smoke provenance.
+The approved window executed these technical gates in order. The production
+approval named artifact `10867296213` and authorized the four broad operational
+steps, but did not restate both hashes, the reviewed platform revision, or every
+sub-action in the exact tuple required by step 5. That exact-approval evidence
+therefore remains partial even though the authorized activation succeeded:
 
-## Writer inventory and pause/drain sequence
+1. Confirm PR #274 merge `73b73bb3013ef849f24c608559681218f448274b`
+   remains an ancestor of the reviewed platform main revision. Re-run targeted
+   guard tests there.
+2. Reconfirm the artifact is non-expired and its manifest, record, producer,
+   publisher, source ancestry, six ECR digests, and API attestations match this
+   document exactly. Barriers must be empty.
+3. Keep old lanes disabled, pause merges/manual managed-target mutations,
+   inventory every app/platform/Terraform/control run, and let started mutations
+   finish. Never cancel a run that has started mutation.
+4. Re-snapshot services, Finance export configuration, ownership, desired
+   release, checkpoints, operations, provenance, pending operation, and holds.
+   Unknown/manual provenance blocks activation.
+5. Obtain separate approval naming the artifact ID, both hashes, reviewed
+   platform revision, producer-switch change, API resume, Booking resume,
+   activation dispatch, and workflow restoration. The received approval named
+   the artifact and four broad operational steps; it did not restate the full
+   tuple above, so this documentation gate is not fully closed.
+6. Resume the two holds in the order above. Both must be retained as `cleared`
+   only after exact live verification and smoke.
+7. During the frozen window, set application repository variable
+   `COORDINATED_RELEASES_ENABLED=true`, read it back, and keep merges paused
+   while accounting for every producer, publisher, and receiver run. Setting
+   the variable and enabling future automatic delivery requires the exact
+   approval in step 5; this runbook does not grant it.
 
-The six app `deploy-next-{api,pms-web,booking-web,booking-admin,marketplace-web,vayada-admin}.yml`
-files build/publish images and dispatch legacy events. Their automatic jobs now
-share `COORDINATED_RELEASES_ENABLED`; explicit manual image builds remain available.
-The coordinated build/publisher use the same switch. `deploy.yml`, coordinated
-deploy/control, Terraform Apply and its auth roll-forward/rollback all share
-`production-ecs-mutations`. Platform workflows retain queued requests with
-`queue: max`; only application builds coalesce waiting ordinary source revisions.
-Legacy/landing remain outside batch ownership. The isolated canary has distinct
-physical targets and lock; verify that identity before excluding it from drain.
+## Activation and verification record
 
-1. Obtain exact change/clean-plan approval; install IAM and verify token access.
-   Coordinate the maintenance window with current deployment/smoke tasks and
-   pause merges/manual managed-target mutations. Do not cancel running work.
-2. Temporarily disable the six old app workflows with
-   `gh workflow disable <workflow-file> -R vayada-marketplace/vayada`.
-   Record their previous states. Inventory *all* queued/pending/waiting/running
-   app and platform workflows, including old revisions and Terraform.
-3. Let active mutations finish. Classify every pending source, checkpoint,
-   manual operation and hold. Drain guarded runs; explicitly cancel only
-   reviewed obsolete runs that have not started mutation. Record run IDs and
-   reasons. Recheck the old pre-guard revisions are terminal.
-4. Recollect live task/container digests, source builds and SSM records.
-   Execute the controlled non-production rehearsal below. Unknown provenance,
-   unresolved barriers or incompatible API hold blocks activation (step 7).
-   Steps 5–6 may prepare the exact artifact and resolve the approved API hold.
-5. With the six old lanes paused, set the one producer switch only after the
-   reviewed gates pass:
-   `gh variable set COORDINATED_RELEASES_ENABLED --body true -R vayada-marketplace/vayada`.
-   Dispatch `build-coordinated-release.yml` on reviewed `main`. Bootstrap has no
-   published baseline, so expect six builds; subsequent releases prove reuse.
-   Ordinary receiver events in legacy mode must fail before state/ECS mutation.
-6. Record successful build run/attempt, publisher run, artifact ID, both hashes,
-   manifest source and all six digests. Approve that exact activation target.
-   Resolve any approved held API through `operation=resume` with those exact
-   inputs; failure preserves its hold and stops activation.
-7. Dispatch `deploy-coordinated-release.yml` on the reviewed platform revision
-   with `operation=activate`, `published_artifact_id`, `manifest_sha256` and
-   `published_record_sha256`. The shared lock encloses prepare/API/frontends/
-   finalize. Bootstrap validation precedes batch ownership. No ad-hoc SSM edits.
-8. Verify all six results individually, API readiness before frontend jobs,
-   frontend overlap and no Terraform mutation overlap. Redispatch the exact
-   artifact to prove no additional ECS updates. Re-enable the six old workflows
-   for manual recovery; their automatic jobs remain skipped by the switch.
-   Resume merges only after recording the chosen outcome.
+Reviewed platform main dispatched `operation=activate` with artifact
+`10867296213`, manifest hash
+`0cd2fc120e93cb83c5b040af565e3f4b0ec58d805e43c3bf35c2c6c69ef71c6f`,
+and record hash
+`1bd7e51dde9922c6f57637e0b952a678df108dcbfd209d2cfc0428ed0b86c55b`.
+No SSM state was edited ad hoc. The repository-scoped
+`production-ecs-mutations` lock serialized platform deploy, Terraform, and
+control mutations. App-repository legacy mutations were excluded separately by
+workflow disablement during the window and then by the producer switch plus
+batch-ownership fencing.
 
-## Rehearsal and acceptance evidence
+Preparation validated first, then wrote empty obligations, the exact desired
+release, and batch ownership. API reached the selected digest and passed
+`/health` before frontend jobs. Finalize recorded six `succeeded` results and no
+active hold.
 
-The [affected-input rehearsal](evidence/vay-2029/affected-input-rehearsal.json)
-uses the actual workspace dependency graph: an API source change selects only
-API; a domain-hotels change selects all six legitimate transitive consumers.
-Local producer and consumer suites cover selection/history, invalid publications,
-ordering, checkpoints, holds, retries and state failures using synthetic Git and
-mocked adapters. VAY-2029 adds unknown/newer/manual bootstrap rejection,
-post-rollback stale-event rejection and API compatibility before frontend resume.
-These are **not** an AWS/GitHub integration rehearsal. Execute failure injection
-only in an explicitly isolated non-production fixture with reviewed physical
-identities; the production allowlist must not be bypassed to create that fixture.
+Bounded release smoke covered API health, four auth gateways, Booking tenant
+build/host/profile/page, and the Booking browser canary without reservations or
+payments. The exact duplicate produced six no-op results and zero additional
+`UpdateService` calls. Authenticated business-data reads remain outstanding.
 
-Before activation, attach controlled non-production evidence for dispatch loss,
-stale/tampered events, partial frontend failure and carried-image retry, failed
-API gate, checkpoints, holds/resume, runner interruption and state-write failure.
-Test a stale legacy event both in batch mode and after system rollback. Real
-customer services must not be deliberately broken for these scenarios.
+After the duplicate proof, platform `Deploy App Service`, the six app deploy
+workflows, and the Booking public canary were restored. Automatic legacy jobs
+remain fenced by batch ownership and `COORDINATED_RELEASES_ENABLED=true`.
+Stale-event run `36161462488` proved rejection before ECS mutation.
 
-After activation, use the reusable accounts and coordinate fixture ownership.
-Exercise meaningful authenticated PMS/Booking Admin/Marketplace/Admin reads,
-creator access and public tenant availability/quote flows with synthetic data.
-No reservations or payments. Attach sanitized run links and exact deployed SHAs.
+## Failure and rollback
 
-Measure matched backend-only, shared-package and multi-merge-burst workloads.
-Merge-to-live = main merge timestamp to last required successful service smoke;
-queue = run creation to first mutation-lock job start; rollout = first mutation
-to last required smoke. Count actual `UpdateService` calls, built/reused images,
-superseded requests, failed/rolled-back/skipped/held services separately.
-Report observation window and sample counts; median/p90 only when supported.
-The historical 815 PR/2,338 workflow-start audit is context, not a matched control
-or actual ECS mutation count. No reduction percentage is currently measured.
+- Prepare failure before state writes: reread all state before retrying.
+- API failure after mutation: retain automatic hold/rollback; frontends stay
+  skipped. If hold creation fails, do not attempt an unprotected rollback.
+- Frontend failure: let siblings finish; retain the failed service hold and
+  reconcile it with the same artifact.
+- Runner/state-write interruption: never partial-rerun jobs; redispatch the exact
+  artifact so the reconciler observes live state and repairs provenance.
+- Missing, expired, tampered, or divergent publication: build and publish a new
+  complete release; never reconstruct one.
 
-## System rollback
+System rollback requires separate approval. Pause producer and old automatic
+lanes, drain/account for runs, disable the producer switch, then use
+`manage-coordinated-release.yml` action `set-legacy-mode` under the same lock.
+Retain desired state, holds, provenance, operations, checkpoints, and evidence.
+Before restoring workflow availability, prove the retained desired-release
+record still fences stale automatic events. Then re-enable platform `Deploy App
+Service` and the six app workflows and restore only through explicit
+`deploy.yml` manual recovery with approved immutable images and reasons. Treat
+the isolated canary separately after physical-identity validation. Never delete
+SSM state, reopen stale automatic delivery, or perform destructive schema
+rollback.
 
-Pause producer dispatch and all six old automatic lanes, drain/account for
-active runs and capture control records. Disable the producer switch, then use
-`manage-coordinated-release.yml` with `action=set-legacy-mode` under the same lock.
-Retained desired state deliberately keeps legacy automatic events fenced even
-in legacy mode. Restore service delivery through explicit `deploy.yml` manual
-recovery with approved immutable images/reasons; these establish durable holds.
-This restores the previous manual delivery mechanism without reopening stale
-automatic events. Re-enabling automatic legacy delivery requires a separately
-reviewed source/generation fence, not deleting the retained desired record.
-Keep all migration/checkpoint evidence and do not run destructive schema rollback.
+## Production outcome and remaining acceptance
 
-Keep VAY-2029 In Progress until deployed evidence and explicit human acceptance.
+Verify-only run `36158862064` passed before mutation. Activation
+[36160171047](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36160171047)
+completed with all six services succeeded, API readiness before frontend jobs,
+and the four required frontend mutations starting within 1.33 seconds. Exact
+duplicate `36160889150` succeeded with six no-op results and zero CloudTrail
+`UpdateService` events. Stale legacy event `36161462488` failed at the ownership
+guard with zero ECS mutations. Booking browser canary
+[36161297153](https://github.com/vayada-marketplace/vayada/actions/runs/36161297153)
+passed. Exact tasks, digests, results, smokes, operation intervals, and
+CloudTrail mutation events are recorded in the production evidence files;
+GitHub Actions, SSM, and CloudTrail remain the raw authoritative sources.
 
-## Preparation validation (2026-09-20)
+Subsequent production-root runs `36161738886` and `36161818636` historically
+failed before Terraform Apply at the target-database readiness guard because
+four Finance runtime relations lacked read access. Apply was skipped, so those
+runs neither changed the activated release nor satisfy the remaining
+matched-release sample. The affected deployed service was
+`next-target-backend` at `vayada-next-api:1162`.
 
-- Producer: 16 tests pass. Consumer: 40 tests pass, including API verification
-  preserving absent/compatible holds during frontend resume.
-- Shared v1 schema and fixture directories are byte-identical after aligning
-  the publication manifest-ID schema with the producer.
-- Eight changed workflows parse as YAML. Actionlint 1.7.12 passes six app
-  workflows; platform validation ignores only its unsupported `queue` key
-  diagnostic. Shellcheck was not run. Existing successful platform workflows
-  use `queue: max`; the real whole-batch exclusion rehearsal remains pending.
-- Independent combined review and correction review completed with no remaining
-  findings in these changes. Complexity pass found no additional abstraction
-  to remove. No product code changed; product builds/smoke are not claimed here.
-- These checks do not complete the ticket's integrated or deployed acceptance.
+The blocker was resolved through reviewed platform PR #280 at merge
+`108ac012a7404f4a1675df08e9a2e51c770a1edd`. The explicitly approved production
+command granted only `SELECT` on these relations:
 
-## Scoped IAM bootstrap execution and remaining plan
+- `finance.affiliate_earning_reconciliation_revisions`;
+- `finance.affiliate_eligible_earning_revisions`;
+- `finance.affiliate_earning_allocations`;
+- `finance.affiliate_earning_allocation_items`.
 
-The [original reviewed plan](evidence/vay-2029/iam-bootstrap-plan.json) was
-approved and partially applied: receiver role/policy creation succeeded; the
-platform inline-policy update failed the role's aggregate 10,240-byte quota.
-Created resources remain intact and match the approved trust and policy.
+Grant task definition `vayada-next-api-db-runtime-preflight:171` exited 0, and
+the immediately following read-only full runtime preflight using task definition
+`:172` exited 0. Both temporary task definitions are inactive, the preflight
+cluster is empty, and no Terraform Apply or release was run. Exact task and
+output evidence is in
+[`finance-runtime-grant.json`](evidence/vay-2029/finance-runtime-grant.json).
+Product impact remains unknown until authenticated Finance reads are exercised.
 
-The [revised approved plan](evidence/vay-2029/iam-managed-policy-plan.json)
-created one managed policy and its attachment successfully (2 added, 0 changed,
-0 destroyed). Direct policy/attachment checks and CI permission simulations pass. It makes no changes to the
-receiver, existing inline policies, ECS, databases or runtime SSM values.
-`ManageCoordinatedReceiverRole` is scoped to the receiver ARN; `ReadOwnManagedPolicy`
-allows only GetPolicy/GetPolicyVersion/ListPolicyVersions on the new policy.
-There is no wildcard IAM management or self-policy editing permission.
+Remaining acceptance is deliberately narrow: record reusable-account
+authenticated business-data reads for Finance, PMS, Booking Admin, Marketplace,
+and Admin without writes; then observe a normal post-activation shared-package
+release and an at-least-three-merge burst. Current sample counts do not support
+median, p90, or a reduction percentage.
 
-The private plans remain outside Git. They are targeted recovery plans using
-placeholders for unrelated excluded secret variables, not full-stack drift
-plans. Never execute an untargeted apply from that scratch directory. Both saved plans are consumed and must not be reused. CI plan run `35496945536`, attempt 2, passes after bootstrap and reports
-"No changes. Your infrastructure matches the configuration." Receiver OIDC and
-cross-repository artifact access still require separate proof. IAM PR #157 merged
-as `6774408471831dff7816f3c2b4a9fcff9c4b9b60`; post-merge Terraform Apply
-[35497724257](https://github.com/vayada-marketplace/vayada-platform/actions/runs/35497724257)
-passed with no configuration changes (0 added, 0 changed, 0 destroyed).
-Coordinated activation remains gated.
-
-Additional coordinated blocker reported by VAY-1543: normal API is still task
-`:1116`; [run 35496636149](https://github.com/vayada-marketplace/vayada-platform/actions/runs/35496636149)
-rejected digest `sha256:afd694c997eb910e7019a7e9f6cf521f030f49e167bab2b2b32fc50f541da242`
-because it has no reviewed immutable split-launcher attestation. Preserve that
-guard and the API hold; do not dispatch a duplicate or use coordinated resume
-to bypass this compatibility gate. The coordinated reconciler now invokes the
-same immutable attestation guard for the desired API image and the rollback
-image before writing operation state or mutating ECS, including recovery from
-an interrupted operation. The selected desired digest must pass even during
-verify-only API checks for frontend resume. A tagged rollback image is rejected.
-This change must reach main before activation is eligible. API attestation
-[PR #158](https://github.com/vayada-marketplace/vayada-platform/pull/158) is
-review-only and has not been merged by this task. Local guard tests exercise the
-real attestation file; reconciliation tests mock AWS and are not deployed proof.
+Keep VAY-2029 In Progress until the remaining observations and explicit human
+acceptance are complete.

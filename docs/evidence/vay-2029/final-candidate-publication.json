@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-25T16:35:45Z",
+  "prepareOnly": true,
+  "sourceSha": "f2f02832f8db0e02859871becb6210a811639842",
+  "producer": {
+    "runId": 36141509208,
+    "runAttempt": 1,
+    "conclusion": "success",
+    "affectedServices": ["next-target-backend"],
+    "imagesBuilt": 1,
+    "imagesReused": 5
+  },
+  "publisher": {"runId": 36141898912, "runAttempt": 1, "conclusion": "success"},
+  "candidateArtifact": {
+    "id": 10867326220,
+    "name": "next-release-candidate-v1-36141509208-1",
+    "expiresAt": "2026-10-09T13:35:11Z"
+  },
+  "publishedArtifact": {
+    "id": 10867296213,
+    "name": "next-release-published-v1-f2f02832f8db0e02859871becb6210a811639842-36141509208-1",
+    "expiresAt": "2026-12-24T13:35:18Z"
+  },
+  "manifestId": "vayada-release/v1/f2f02832f8db0e02859871becb6210a811639842/36141509208/1",
+  "manifestSha256": "0cd2fc120e93cb83c5b040af565e3f4b0ec58d805e43c3bf35c2c6c69ef71c6f",
+  "publishedRecordSha256": "1bd7e51dde9922c6f57637e0b952a678df108dcbfd209d2cfc0428ed0b86c55b",
+  "barriers": [],
+  "services": {
+    "next-target-backend": {"ecrRepository": "vayada-next-api", "digest": "sha256:1a7d9e4112445c2e83b867f6582cc118e0038ae73dede5047a9d3516a5586aaa", "imageSourceSha": "f2f02832f8db0e02859871becb6210a811639842"},
+    "next-pms-frontend": {"ecrRepository": "vayada-next-pms-frontend", "digest": "sha256:55e8ed2aa3cb1fabb70188cdc0a33cf377e7107984f89c6ddfa3684dd0dcdbbd", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"},
+    "next-booking-frontend": {"ecrRepository": "vayada-next-booking-frontend", "digest": "sha256:8b50032a57de17a937e565fb7af89ff236de78b19f7cf26850df527c15e772c6", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"},
+    "next-booking-admin": {"ecrRepository": "vayada-next-booking-admin-frontend", "digest": "sha256:93fffdf28afb8dc8119a78ecff3f1561903b0b88ce7100d3750ed340244e4b5f", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"},
+    "next-marketplace-frontend": {"ecrRepository": "vayada-next-marketplace-frontend", "digest": "sha256:43dd04c0c1a0b3ba2a87f46b6722e4db46b73a965984edf0e110088ec132601b", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"},
+    "next-marketplace-admin": {"ecrRepository": "vayada-next-admin-frontend", "digest": "sha256:a971831a03ab837a70b1243855affd2ff0630b118fca44de2a54e892982d7e94", "imageSourceSha": "b83cec1894c81b5f65fb8a871fdaa6e0e67335af"}
+  },
+  "platformAttestation": {
+    "pullRequest": 276,
+    "headSha": "5da1da6373f876cdaa6277c3f75e4d6d5da9fe80",
+    "mergeSha": "c5b3592942280eb4b61533fe6932d76135faa667",
+    "independentReview": "launcher and 11 compiled Finance export modules byte-identical to the previously attested image"
+  }
+}

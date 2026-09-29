@@ -33,6 +33,13 @@ const affiliateReadTables = [
   "booking.affiliate_original_booking_bindings",
 ];
 
+const financeAffiliateReadTables = [
+  "finance.affiliate_earning_reconciliation_revisions",
+  "finance.affiliate_eligible_earning_revisions",
+  "finance.affiliate_earning_allocations",
+  "finance.affiliate_earning_allocation_items",
+];
+
 const platformRuntimeReadTables = [
   "platform.pricing_runtime_property_scopes",
   "platform.channex_management_worker_properties",
@@ -231,6 +238,64 @@ async function grantAffiliateRead(client, supportsMaintain) {
   console.log(JSON.stringify({ status: "PASS", grant: "affiliate_tables:SELECT" }));
 }
 
+async function grantFinanceAffiliateRead(client, supportsMaintain, localFixture) {
+  const prohibitedTablePrivileges = [
+    "SELECT WITH GRANT OPTION", "INSERT", "UPDATE", "DELETE", "TRUNCATE",
+    "TRIGGER", "REFERENCES", ...(supportsMaintain ? ["MAINTAIN"] : []),
+  ];
+  const checkScope = async () => {
+    for (const table of financeAffiliateReadTables) {
+      const ownership = await client.query(`
+        SELECT current_user = pg_catalog.pg_get_userbyid(relation.relowner) AS is_table_owner
+          FROM pg_catalog.pg_class AS relation
+         WHERE relation.oid = pg_catalog.to_regclass($1)
+           AND relation.relkind IN ('r', 'p')
+      `, [table]);
+      if (ownership.rowCount !== 1 || !ownership.rows[0].is_table_owner)
+        throw new Error("finance_affiliate_table_owner_required");
+      const violations = await client.query(`
+        SELECT privilege.name
+          FROM unnest($2::text[]) AS privilege(name)
+         WHERE pg_catalog.has_table_privilege('vayada_next_api_runtime', $1, privilege.name)
+        UNION ALL
+        SELECT attribute.attname || ':' || privilege.name
+          FROM pg_catalog.pg_attribute AS attribute
+          CROSS JOIN (VALUES ('SELECT WITH GRANT OPTION'), ('INSERT'), ('UPDATE'), ('REFERENCES')) AS privilege(name)
+         WHERE attribute.attrelid = pg_catalog.to_regclass($1)
+           AND attribute.attnum > 0 AND NOT attribute.attisdropped
+           AND pg_catalog.has_column_privilege(
+             'vayada_next_api_runtime', attribute.attrelid, attribute.attname, privilege.name
+           )
+      `, [table, prohibitedTablePrivileges]);
+      if (violations.rowCount !== 0)
+        throw new Error("finance_affiliate_runtime_scope_too_broad");
+    }
+  };
+  await checkScope();
+  await client.query("BEGIN");
+  try {
+    await client.query("SET LOCAL lock_timeout = '2s'");
+    await client.query(`LOCK TABLE ${financeAffiliateReadTables.join(", ")} IN ACCESS EXCLUSIVE MODE`);
+    await checkScope();
+    await client.query(`GRANT SELECT ON ${financeAffiliateReadTables.join(", ")} TO vayada_next_api_runtime`);
+    if (localFixture && process.env.VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE === "1")
+      throw new Error("finance_affiliate_forced_post_grant_failure");
+    for (const table of financeAffiliateReadTables) {
+      const result = await client.query(`
+        SELECT pg_catalog.has_table_privilege('vayada_next_api_runtime', $1, 'SELECT') AS can_select
+      `, [table]);
+      if (!result.rows[0].can_select)
+        throw new Error("finance_affiliate_runtime_select_missing");
+    }
+    await checkScope();
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+  console.log(JSON.stringify({ status: "PASS", grant: "finance_affiliate_tables:SELECT" }));
+}
+
 async function grantPlatformRuntimeRead(client, supportsMaintain, localFixture) {
   const prohibitedTablePrivileges = [
     "SELECT WITH GRANT OPTION", "INSERT", "UPDATE", "DELETE", "TRUNCATE",
@@ -387,7 +452,7 @@ try {
   );
   const supportsMaintain = version.rows[0].value >= 170000;
   const scope = process.env.VAYADA_DB_GRANT_SCOPE ?? "audit_insert";
-  if (!["audit_insert", "affiliate_read", "platform_runtime_read", "property_profile_lock", "domain_events_append", "jobs_insert", "expense_category_insert", "expense_insert", "recurring_expense_insert"].includes(scope))
+  if (!["audit_insert", "affiliate_read", "finance_affiliate_read", "platform_runtime_read", "property_profile_lock", "domain_events_append", "jobs_insert", "expense_category_insert", "expense_insert", "recurring_expense_insert"].includes(scope))
     throw new Error("unknown_grant_scope");
   const role = await client.query(
     "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vayada_next_api_runtime'",
@@ -395,6 +460,8 @@ try {
   if (role.rowCount !== 1) throw new Error("runtime_role_missing");
   if (scope === "affiliate_read") {
     await grantAffiliateRead(client, supportsMaintain);
+  } else if (scope === "finance_affiliate_read") {
+    await grantFinanceAffiliateRead(client, supportsMaintain, localFixture);
   } else if (scope === "platform_runtime_read") {
     await grantPlatformRuntimeRead(client, supportsMaintain, localFixture);
   } else if (scope === "property_profile_lock") {
@@ -444,6 +511,10 @@ try {
     "affiliate_table_owner_required",
     "affiliate_runtime_write_scope_too_broad",
     "affiliate_runtime_select_missing",
+    "finance_affiliate_table_owner_required",
+    "finance_affiliate_runtime_scope_too_broad",
+    "finance_affiliate_runtime_select_missing",
+    "finance_affiliate_forced_post_grant_failure",
     "platform_runtime_table_owner_required",
     "platform_runtime_scope_too_broad",
     "platform_runtime_select_missing",

@@ -32,6 +32,7 @@ def run(
     reviewed_digest: str | None = DIGEST,
     environment: list[dict[str, str]] | None = None,
     environment_files: list[dict[str, str]] | None = None,
+    command: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     secret_entries = secrets if isinstance(secrets, list) else [
         {"name": name, "valueFrom": value} for name, value in secrets.items()
@@ -51,6 +52,7 @@ def run(
             "secrets": secret_entries,
             "environment": environment or [],
             "environmentFiles": environment_files or [],
+            **({"command": command} if command is not None else {}),
         }],
     }}
     reviewed_image = {"imageDetails": [] if reviewed_digest is None else [{
@@ -77,6 +79,42 @@ def run(
 
 
 class DeploymentReadinessTest(unittest.TestCase):
+    def test_ongoing_exports_require_cutoff_scope_and_certificate_bootstrap(self) -> None:
+        secrets = {
+            "TARGET_DATABASE_URL": RUNTIME,
+            "AUTH_DATABASE_URL": IDENTITY,
+            "TARGET_DATABASE_MIGRATION_URL": OWNER,
+            "FINANCE_EXPORT_WORKER_DATABASE_URL": FINANCE_EXPORT,
+        }
+        environment = {
+            "FINANCE_EXPORT_WORKER_ENABLED": "true",
+            "FINANCE_EXPORT_WORKER_ACCEPTED_AFTER": "2026-09-25T05:00:00.000Z",
+            "NODE_EXTRA_CA_CERTS": "/tmp/finance-export-rds-ca.pem",
+            "FINANCE_EXPORT_RDS_CA": (ROOT / "rehearsal/rds-ca-rsa2048-g1.pem").read_text(),
+        }
+        command = ["sh", "-c", "umask 077; printf '%s' \"$FINANCE_EXPORT_RDS_CA\" > \"$NODE_EXTRA_CA_CERTS\" && exec ./scripts/start-next-api.sh"]
+        def check(env=environment, mapped=secrets, launcher=command):
+            return run(f"{REPOSITORY}@{DIGEST}", mapped,
+                       environment=[{"name": k, "value": v} for k, v in env.items()],
+                       command=launcher)
+        valid = check()
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+        for key, value in (
+            ("FINANCE_EXPORT_WORKER_ACCEPTED_AFTER", "2026-02-30T05:00:00.000Z"),
+            ("FINANCE_EXPORT_WORKER_ACCEPTED_AFTER", ""),
+            ("FINANCE_EXPORT_WORKER_ENABLED", "false"),
+            ("FINANCE_EXPORT_WORKER_PROPERTY_ID", FINANCE_EXPORT_PROPERTY_ID),
+            ("FINANCE_EXPORT_WORKER_EXPORT_ID", "00000000-0000-4000-8000-000000000001"),
+            ("FINANCE_EXPORT_RDS_CA", "untrusted"),
+            ("NODE_EXTRA_CA_CERTS", ""),
+            ("NODE_TLS_REJECT_UNAUTHORIZED", "0"),
+        ):
+            with self.subTest(key=key, value=value):
+                self.assertNotEqual(check({**environment, key: value}).returncode, 0)
+        self.assertNotEqual(check(mapped={k: v for k, v in secrets.items() if k != "FINANCE_EXPORT_WORKER_DATABASE_URL"}).returncode, 0)
+        self.assertNotEqual(check(launcher=["./scripts/start-next-api.sh"]).returncode, 0)
+        self.assertNotEqual(check(mapped={**secrets, "NODE_TLS_REJECT_UNAUTHORIZED": "/unreviewed/tls-mode"}).returncode, 0)
+
     def test_rejects_more_than_one_task(self) -> None:
         self.assertNotEqual(run(
             f"{REPOSITORY}:next-{RELEASE}",

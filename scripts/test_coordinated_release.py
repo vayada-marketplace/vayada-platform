@@ -104,6 +104,32 @@ class ContractTests(unittest.TestCase):
             "idempotencyKey": self.record["idempotencyKey"],
         }
 
+    def compact_dispatch(self):
+        flat = self.dispatch()
+        return {
+            "schemaVersion": 2,
+            "publishedArtifactId": flat["publishedArtifactId"],
+            "release": {
+                "manifestId": flat["manifestId"],
+                "manifestSha256": flat["manifestSha256"],
+                "publishedRecordSha256": flat["publishedRecordSha256"],
+                "sourceSha": flat["sourceSha"],
+                "repository": flat["repository"],
+                "publishedArtifactName": flat["publishedArtifactName"],
+                "idempotencyKey": flat["idempotencyKey"],
+                "build": {
+                    "workflowName": flat["workflowName"],
+                    "workflowPath": flat["workflowPath"],
+                    "runId": flat["runId"],
+                    "runAttempt": flat["runAttempt"],
+                },
+                "publisher": {
+                    "runId": flat["publisherRunId"],
+                    "runAttempt": flat["publisherRunAttempt"],
+                },
+            },
+        }
+
     def build_run(self):
         build = self.manifest["build"]
         return {
@@ -161,6 +187,43 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(release.sha256_file(self.record_path), "96882677caea9450ba1f94c55e3996f32a30098fa90876697c97a73a57bbe16a")
         manifest, record = self.validate()
         self.assertEqual(manifest["manifestId"], record["manifestId"])
+
+    def test_compact_dispatch_envelope_validates_the_same_publication(self):
+        manifest, record = self.validate(dispatch=self.compact_dispatch())
+        self.assertEqual(manifest["manifestId"], record["manifestId"])
+
+    def test_compact_dispatch_rejects_unknown_or_missing_nested_fields(self):
+        for path, mutate, message in (
+            ("release", lambda value: value.update(extra="unexpected"), "dispatch.release fields"),
+            ("build", lambda value: value.pop("runAttempt"), "dispatch.release.build fields"),
+            ("publisher", lambda value: value.update(runAttempt="2"), "publisherRunAttempt"),
+        ):
+            with self.subTest(path=path):
+                dispatch = self.compact_dispatch()
+                target = dispatch["release"] if path == "release" else dispatch["release"][path]
+                mutate(target)
+                with self.assertRaisesRegex(release.ReleaseError, message):
+                    self.validate(dispatch=dispatch)
+
+        dispatch = self.compact_dispatch()
+        dispatch["unexpected"] = True
+        with self.assertRaisesRegex(release.ReleaseError, "dispatch fields"):
+            self.validate(dispatch=dispatch)
+
+        dispatch = self.compact_dispatch()
+        dispatch["schemaVersion"] = 3
+        with self.assertRaisesRegex(release.ReleaseError, "schemaVersion must be 1 or 2"):
+            self.validate(dispatch=dispatch)
+
+    def test_compact_dispatch_cannot_substitute_artifact_or_build_attempt(self):
+        dispatch = self.compact_dispatch()
+        dispatch["publishedArtifactId"] += 1
+        with self.assertRaisesRegex(release.ReleaseError, "Artifact metadata ID"):
+            self.validate(dispatch=dispatch)
+        dispatch = self.compact_dispatch()
+        dispatch["release"]["build"]["runAttempt"] += 1
+        with self.assertRaisesRegex(release.ReleaseError, "runAttempt"):
+            self.validate(dispatch=dispatch)
 
     def test_publication_verification_checks_real_contract_without_state_or_ecs_access(self):
         for order, bad_hash in (("ahead", False), ("diverged", False), ("ahead", True)):
@@ -608,16 +671,32 @@ class PhysicalIdentityTests(unittest.TestCase):
                         (ROOT / "scripts/next-api-split-compatible-images.txt").read_text().splitlines()
                         if line.strip() and not line.startswith("#"))
         aws = release.Aws(release.CommandRunner(), self.config)
+        task = {"containerDefinitions": [{"name": "vayada-next-api", "environment": [
+            {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"}]}]}
         for digest, allowed in ((attested, True), ("sha256:" + "a" * 64, False)):
             with mock.patch.object(aws, "json", return_value={"imageDetails": [{"imageDigest": digest}]}):
                 if allowed:
-                    aws.verify_api_split_image("next-target-backend", digest)
+                    aws.verify_api_split_image("next-target-backend", digest, task)
                 else:
                     with self.assertRaisesRegex(release.ReleaseError, "no reviewed immutable"):
-                        aws.verify_api_split_image("next-target-backend", digest)
+                        aws.verify_api_split_image("next-target-backend", digest, task)
         with mock.patch.object(aws, "json") as ecr:
-            aws.verify_api_split_image("next-booking-admin", "not-an-api-digest")
+            aws.verify_api_split_image("next-booking-admin", "not-an-api-digest", {})
             ecr.assert_not_called()
+        task["containerDefinitions"][0]["environment"] = [
+            {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "true"},
+            {"name": "FINANCE_EXPORT_WORKER_ACCEPTED_AFTER", "value": "2026-09-25T05:00:00.000Z"},
+        ]
+        ongoing = next(line.split()[1] for line in
+                       (ROOT / "scripts/next-api-ongoing-export-compatible-images.txt").read_text().splitlines()
+                       if line.strip() and not line.startswith("#"))
+        for digest in (attested, ongoing):
+            with mock.patch.object(aws, "json", return_value={"imageDetails": [{"imageDigest": digest}]}):
+                if digest == ongoing:
+                    aws.verify_api_split_image("next-target-backend", digest, task)
+                else:
+                    with self.assertRaisesRegex(release.ReleaseError, "disable ongoing exports"):
+                        aws.verify_api_split_image("next-target-backend", digest, task)
 
 
 class ActivationTests(unittest.TestCase):
@@ -714,7 +793,11 @@ class ActivationTests(unittest.TestCase):
         for recovering, reject_desired in ((False, True), (False, False), (True, False)):
             with self.subTest(recovering=recovering, reject_desired=reject_desired):
                 aws = mock.Mock()
+                live_definition = {"activation": "live"}
+                rollback_definition = {"activation": "rollback"}
+                aws.json.return_value = {"taskDefinition": rollback_definition}
                 aws.service_snapshot.return_value = {
+                    "taskDefinition": live_definition,
                     "digest": desired if recovering else previous,
                     "taskDefinitionArn": "live-task", "image": "repository@" + previous}
                 pending = {"rollbackTaskDefinitionArn": "previous-task", "rollbackImage": "repository@" + previous} if recovering else None
@@ -729,7 +812,11 @@ class ActivationTests(unittest.TestCase):
                         with self.assertRaisesRegex(release.ReleaseError, "unattested"):
                             release.reconcile_service(args)
                         aws.verify_api_split_image.assert_has_calls(
-                            [mock.call(key, desired)] if reject_desired else [mock.call(key, desired), mock.call(key, previous)])
+                            [mock.call(key, desired, live_definition)] if reject_desired else [mock.call(key, desired, live_definition), mock.call(key, previous, rollback_definition if recovering else live_definition)])
+                        if recovering:
+                            aws.json.assert_called_once_with("ecs", "describe-task-definition", "--task-definition", "previous-task")
+                        else:
+                            aws.json.assert_not_called()
                         aws.put_parameter.assert_not_called()
                         aws.register_rendered_task.assert_not_called()
                         aws.update_service.assert_not_called()
@@ -755,6 +842,20 @@ class ActivationTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_dispatch_artifact_id_is_extracted_from_the_captured_envelope(self):
+        workflow = (ROOT / ".github/workflows/deploy-coordinated-release.yml").read_text()
+        self.assertIn("id: dispatch", workflow)
+        self.assertIn('artifact_id = payload.get("publishedArtifactId")', workflow)
+        self.assertIn("published_artifact_id={artifact_id}", workflow)
+        self.assertIn(
+            "EVENT_ARTIFACT_ID: ${{ steps.dispatch.outputs.published_artifact_id }}",
+            workflow,
+        )
+        self.assertNotIn(
+            "EVENT_ARTIFACT_ID: ${{ github.event.client_payload.publishedArtifactId }}",
+            workflow,
+        )
+
     def test_batch_lock_api_gate_parallel_frontends_and_independent_failures(self):
         workflow = (ROOT / ".github" / "workflows" / "deploy-coordinated-release.yml").read_text()
         self.assertIn("group: production-ecs-mutations", workflow)

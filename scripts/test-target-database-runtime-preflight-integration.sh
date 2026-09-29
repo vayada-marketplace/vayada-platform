@@ -45,11 +45,13 @@ done
 
 docker exec -i "${database_container}" psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
 CREATE ROLE legacy_owner LOGIN PASSWORD 'owner';
+CREATE ROLE hotel_setup_provision_admin LOGIN CREATEROLE PASSWORD 'provision';
 CREATE ROLE vayada_next_api_runtime LOGIN PASSWORD 'runtime'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 CREATE ROLE elevated NOLOGIN;
 REVOKE CREATE, TEMPORARY ON DATABASE postgres FROM PUBLIC;
 GRANT CONNECT ON DATABASE postgres TO vayada_next_api_runtime;
+GRANT CONNECT ON DATABASE postgres TO legacy_owner, hotel_setup_provision_admin;
 
 CREATE SCHEMA platform AUTHORIZATION legacy_owner;
 CREATE SCHEMA app AUTHORIZATION legacy_owner;
@@ -74,6 +76,17 @@ CREATE TABLE finance.payments (id uuid PRIMARY KEY);
 CREATE TABLE finance.expense_categories (id uuid PRIMARY KEY);
 CREATE TABLE finance.expenses (id uuid PRIMARY KEY);
 CREATE TABLE finance.recurring_expense_rules (id uuid PRIMARY KEY);
+CREATE TABLE finance.folios (id uuid PRIMARY KEY, property_id uuid);
+CREATE TABLE finance.folio_revisions (id uuid PRIMARY KEY);
+CREATE TABLE finance.folio_lines (id uuid PRIMARY KEY);
+CREATE TABLE finance.folio_payment_references (id uuid PRIMARY KEY);
+CREATE TABLE pms.channel_operational_alerts (
+  id uuid PRIMARY KEY, resolved_at timestamptz, acknowledged_at timestamptz
+);
+CREATE TABLE finance.affiliate_earning_reconciliation_revisions (id uuid PRIMARY KEY);
+CREATE TABLE finance.affiliate_eligible_earning_revisions (id uuid PRIMARY KEY);
+CREATE TABLE finance.affiliate_earning_allocations (id uuid PRIMARY KEY);
+CREATE TABLE finance.affiliate_earning_allocation_items (id uuid PRIMARY KEY);
 CREATE TABLE platform.external_webhook_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.domain_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.idempotency_keys (id uuid PRIMARY KEY);
@@ -83,12 +96,15 @@ CREATE TABLE pms.channel_connections (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_links (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_agreement_lifecycle_events (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_click_occurrences (id uuid PRIMARY KEY);
+CREATE TABLE marketplace.affiliate_click_quota_windows (link_id uuid PRIMARY KEY, consumed integer);
 CREATE TABLE hotel_catalog.properties (id uuid PRIMARY KEY, profile_revision integer NOT NULL DEFAULT 1);
 CREATE TABLE booking.affiliate_click_contexts (id uuid PRIMARY KEY);
 CREATE TABLE booking.affiliate_click_admissions (id uuid PRIMARY KEY);
 CREATE TABLE booking.affiliate_original_booking_bindings (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_records (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_revocations (id uuid PRIMARY KEY);
+CREATE TABLE platform.identity_migration_provenance (id uuid PRIMARY KEY);
+CREATE TABLE platform.legacy_historical_binding_transitions (id uuid PRIMARY KEY);
 CREATE TABLE platform.channex_management_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.finance_expense_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.finance_export_worker_properties (property_id uuid PRIMARY KEY);
@@ -112,6 +128,9 @@ GRANT SELECT, INSERT, UPDATE ON finance.payments,
   platform.external_webhook_events, pms.channel_connections
   TO vayada_next_api_runtime;
 GRANT SELECT ON finance.expense_categories, finance.expenses, finance.recurring_expense_rules TO vayada_next_api_runtime;
+GRANT SELECT ON finance.folios, finance.folio_revisions, finance.folio_lines,
+  finance.folio_payment_references TO vayada_next_api_runtime;
+GRANT SELECT, UPDATE (resolved_at) ON pms.channel_operational_alerts TO vayada_next_api_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON platform.idempotency_keys
   TO vayada_next_api_runtime;
 GRANT SELECT ON platform.product_audit_events
@@ -130,23 +149,69 @@ docker run --rm \
   --workdir /work node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/target-database-runtime-preflight.mjs" "${work}/preflight.mjs"
+cp "${root}/scripts/provision-hotel-setup-scope-role.mjs" "${work}/hotel-setup-scope.mjs"
 cp "${root}/scripts/grant-target-database-product-audit-insert.mjs" "${work}/grant.mjs"
+cp "${root}/scripts/grant-target-database-folio-command.mjs" "${work}/folio-grant.mjs"
+
+run_hotel_setup_scope() {
+  local database_role="${1:-postgres}"
+  local password="${2:-postgres}"
+  local fixture_flag="${3:-1}"
+  docker run --rm \
+    --network "${network}" \
+    --volume "${node_modules_container}:/work" \
+    --volume "${work}/hotel-setup-scope.mjs:/work/hotel-setup-scope.mjs:ro" \
+    --workdir /work \
+    --env "TARGET_DATABASE_ADMIN_URL=postgresql://${database_role}:${password}@vayada-db-preflight:5432/postgres" \
+    --env "VAYADA_HOTEL_SETUP_SCOPE_LOCAL_FIXTURE=${fixture_flag}" \
+    node:22-bookworm node hotel-setup-scope.mjs
+}
+
+if untrusted_scope_output="$(run_hotel_setup_scope postgres postgres 0 2>&1)"; then
+  echo "hotel setup scope accepted an untrusted host" >&2
+  exit 1
+fi
+grep -F '"code":"hotel_setup_scope_admin_endpoint_untrusted"' <<<"${untrusted_scope_output}" >/dev/null
+if unprivileged_scope_output="$(run_hotel_setup_scope legacy_owner owner 2>&1)"; then
+  echo "hotel setup scope accepted a non-admin login" >&2
+  exit 1
+fi
+grep -F '"code":"hotel_setup_scope_admin_privilege_missing"' <<<"${unprivileged_scope_output}" >/dev/null
+run_hotel_setup_scope hotel_setup_provision_admin provision | grep -F '"created":true' >/dev/null
+run_hotel_setup_scope hotel_setup_provision_admin provision | grep -F '"created":false' >/dev/null
+docker exec "${database_container}" psql -U postgres -Atqc "
+  SELECT NOT (rolcanlogin OR rolsuper OR rolcreaterole OR rolcreatedb OR
+    rolinherit OR rolbypassrls OR rolreplication)
+  FROM pg_roles WHERE rolname = 'vayada_next_hotel_setup_scope'
+" | grep -Fx t >/dev/null
+docker exec "${database_container}" psql -v ON_ERROR_STOP=1 -U postgres -c \
+  'GRANT elevated TO vayada_next_hotel_setup_scope' >/dev/null
+if unsafe_scope_output="$(run_hotel_setup_scope 2>&1)"; then
+  echo "hotel setup scope accepted inherited membership" >&2
+  exit 1
+fi
+grep -F '"code":"hotel_setup_scope_role_unsafe"' <<<"${unsafe_scope_output}" >/dev/null
+docker exec "${database_container}" psql -v ON_ERROR_STOP=1 -U postgres -c \
+  'REVOKE elevated FROM vayada_next_hotel_setup_scope' >/dev/null
 
 run_grant() {
   local database_role="$1"
   local database_password="$2"
   local fixture_flag="${3:-1}"
   local grant_scope="${4:-audit_insert}"
+  local grant_file="grant.mjs"
+  [[ "${grant_scope}" == "folio_command" ]] && grant_file="folio-grant.mjs"
   docker run --rm \
     --network "${network}" \
     --volume "${node_modules_container}:/work" \
-    --volume "${work}/grant.mjs:/work/grant.mjs:ro" \
+    --volume "${work}/${grant_file}:/work/${grant_file}:ro" \
     --workdir /work \
     --env "TARGET_DATABASE_MIGRATION_URL=postgresql://${database_role}:${database_password}@vayada-db-preflight:5432/postgres" \
     --env "VAYADA_AUDIT_GRANT_LOCAL_FIXTURE=${fixture_flag}" \
     --env "VAYADA_DB_GRANT_SCOPE=${grant_scope}" \
     --env "VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE=${VAYADA_PLATFORM_RUNTIME_GRANT_FORCE_POST_GRANT_FAILURE:-0}" \
-    node:22-bookworm node grant.mjs
+    --env "VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE=${VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE:-0}" \
+    node:22-bookworm node "${grant_file}"
 }
 
 run_preflight() {
@@ -156,6 +221,7 @@ run_preflight() {
     --volume "${work}/preflight.mjs:/work/preflight.mjs:ro" \
     --workdir /work \
     --env "TARGET_DATABASE_URL=postgresql://vayada_next_api_runtime:runtime@${database_container}:5432/postgres" \
+    --env "VAYADA_DB_REQUIRE_FOLIO_COMMAND=${VAYADA_DB_REQUIRE_FOLIO_COMMAND:-0}" \
     node:22-bookworm node preflight.mjs
 }
 
@@ -213,6 +279,80 @@ if affiliate_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 aff
 fi
 grep -F '"code":"affiliate_table_owner_required"' <<<"${affiliate_non_owner_output}" >/dev/null
 run_grant legacy_owner owner 1 affiliate_read | grep -F '"grant":"affiliate_tables:SELECT"' >/dev/null
+
+if finance_missing_output="$(run_preflight 2>&1)"; then
+  echo "runtime preflight unexpectedly passed before Finance affiliate read grant" >&2
+  exit 1
+fi
+grep -F 'runtime_relation_read_missing' <<<"${finance_missing_output}" >/dev/null
+for table in \
+  finance.affiliate_earning_reconciliation_revisions \
+  finance.affiliate_eligible_earning_revisions \
+  finance.affiliate_earning_allocations \
+  finance.affiliate_earning_allocation_items; do
+  grep -F "${table}" <<<"${finance_missing_output}" >/dev/null
+done
+
+if finance_affiliate_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 finance_affiliate_read 2>&1)"; then
+  echo "non-owner Finance affiliate read grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"finance_affiliate_table_owner_required"' <<<"${finance_affiliate_non_owner_output}" >/dev/null
+run_grant legacy_owner owner 1 finance_affiliate_read | grep -F '"grant":"finance_affiliate_tables:SELECT"' >/dev/null
+for table in \
+  finance.affiliate_earning_reconciliation_revisions \
+  finance.affiliate_eligible_earning_revisions \
+  finance.affiliate_earning_allocations \
+  finance.affiliate_earning_allocation_items; do
+  docker exec -e PGPASSWORD=runtime "${database_container}" \
+    psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+    -c "SELECT count(*) FROM ${table}" >/dev/null
+done
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO finance.affiliate_earning_allocations(id) VALUES ('00000000-0000-0000-0000-000000000001')" \
+  >/dev/null 2>&1; then
+  echo "runtime role unexpectedly wrote a Finance affiliate allocation" >&2
+  exit 1
+fi
+
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE SELECT ON finance.affiliate_earning_reconciliation_revisions, finance.affiliate_eligible_earning_revisions, finance.affiliate_earning_allocations, finance.affiliate_earning_allocation_items FROM vayada_next_api_runtime" >/dev/null
+if finance_affiliate_rollback_output="$(
+  VAYADA_FINANCE_AFFILIATE_GRANT_FORCE_POST_GRANT_FAILURE=1 \
+    run_grant legacy_owner owner 1 finance_affiliate_read 2>&1
+)"; then
+  echo "forced post-grant Finance affiliate failure unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"finance_affiliate_forced_post_grant_failure"' <<<"${finance_affiliate_rollback_output}" >/dev/null
+for table in \
+  finance.affiliate_earning_reconciliation_revisions \
+  finance.affiliate_eligible_earning_revisions \
+  finance.affiliate_earning_allocations \
+  finance.affiliate_earning_allocation_items; do
+  docker exec "${database_container}" psql -U postgres -tAc \
+    "SELECT has_table_privilege('vayada_next_api_runtime', '${table}', 'SELECT')" | grep -Fx f >/dev/null
+done
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (id) ON finance.affiliate_earning_allocations TO vayada_next_api_runtime" >/dev/null
+if finance_affiliate_broad_output="$(run_grant legacy_owner owner 1 finance_affiliate_read 2>&1)"; then
+  echo "Finance affiliate read grant unexpectedly passed with write privilege" >&2
+  exit 1
+fi
+grep -F '"code":"finance_affiliate_runtime_scope_too_broad"' <<<"${finance_affiliate_broad_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (id) ON finance.affiliate_earning_allocations FROM vayada_next_api_runtime" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT SELECT ON finance.affiliate_earning_allocations TO vayada_next_api_runtime WITH GRANT OPTION" >/dev/null
+if finance_affiliate_grant_option_output="$(run_grant legacy_owner owner 1 finance_affiliate_read 2>&1)"; then
+  echo "Finance affiliate read grant unexpectedly passed with SELECT grant option" >&2
+  exit 1
+fi
+grep -F '"code":"finance_affiliate_runtime_scope_too_broad"' <<<"${finance_affiliate_grant_option_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE GRANT OPTION FOR SELECT ON finance.affiliate_earning_allocations FROM vayada_next_api_runtime" >/dev/null
+run_grant legacy_owner owner 1 finance_affiliate_read | grep -F '"grant":"finance_affiliate_tables:SELECT"' >/dev/null
 
 if jobs_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 jobs_insert 2>&1)"; then
   echo "non-owner jobs grant unexpectedly passed" >&2
@@ -512,6 +652,100 @@ if [[ "${postgres_version}" == "17" ]]; then
     "REVOKE MAINTAIN ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
 fi
 
+run_preflight | grep -F '"status":"PASS"' >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (acknowledged_at) ON pms.channel_operational_alerts TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_unapproved_relation_column_write_forbidden
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (acknowledged_at) ON pms.channel_operational_alerts FROM vayada_next_api_runtime" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (resolved_at) ON pms.channel_operational_alerts TO vayada_next_api_runtime WITH GRANT OPTION" >/dev/null
+expect_failure runtime_column_grant_option_forbidden
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE GRANT OPTION FOR UPDATE (resolved_at) ON pms.channel_operational_alerts FROM vayada_next_api_runtime" >/dev/null
+run_preflight | grep -F '"status":"PASS"' >/dev/null
+VAYADA_DB_REQUIRE_FOLIO_COMMAND=1 expect_failure runtime_folio_command_insert_missing
+if folio_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 folio_command 2>&1)"; then
+  echo "non-owner Folios command grant unexpectedly passed" >&2
+  exit 1
+fi
+grep -F '"code":"folio_command_table_owner_required"' <<<"${folio_non_owner_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "GRANT UPDATE (property_id) ON finance.folios TO vayada_next_api_runtime" >/dev/null
+if folio_broad_output="$(run_grant legacy_owner owner 1 folio_command 2>&1)"; then
+  echo "Folios command grant unexpectedly passed with broad UPDATE" >&2
+  exit 1
+fi
+grep -F '"code":"folio_command_runtime_scope_too_broad"' <<<"${folio_broad_output}" >/dev/null
+docker exec "${database_container}" psql -U postgres -tAc \
+  "SELECT has_table_privilege('vayada_next_api_runtime', 'finance.folios', 'INSERT')" \
+  | grep -Fx f >/dev/null
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (property_id) ON finance.folios FROM vayada_next_api_runtime" >/dev/null
+run_grant legacy_owner owner 1 folio_command | grep -F '"grant":"finance.folio_command:INSERT,folios.UPDATE(id)"' >/dev/null
+VAYADA_DB_REQUIRE_FOLIO_COMMAND=1 run_preflight | grep -F '"status":"PASS"' >/dev/null
+for privilege in 'INSERT (id)' 'SELECT (id)'; do
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT ${privilege} ON finance.folios TO vayada_next_api_runtime WITH GRANT OPTION" >/dev/null
+  if folio_grant_option_output="$(run_grant legacy_owner owner 1 folio_command 2>&1)"; then
+    echo "Folios command grant unexpectedly accepted a column grant option" >&2
+    exit 1
+  fi
+  grep -F '"code":"folio_command_runtime_scope_too_broad"' <<<"${folio_grant_option_output}" >/dev/null
+  VAYADA_DB_REQUIRE_FOLIO_COMMAND=1 expect_failure runtime_folio_command_grant_option_forbidden
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE GRANT OPTION FOR ${privilege} ON finance.folios FROM vayada_next_api_runtime" >/dev/null
+done
+VAYADA_DB_REQUIRE_FOLIO_COMMAND=1 run_preflight | grep -F '"status":"PASS"' >/dev/null
+docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -c \
+  "BEGIN; INSERT INTO finance.folios(id) VALUES ('00000000-0000-4000-8000-000000000011'); SELECT id FROM finance.folios WHERE id='00000000-0000-4000-8000-000000000011' FOR UPDATE; INSERT INTO finance.folio_revisions(id) VALUES ('00000000-0000-4000-8000-000000000012'); INSERT INTO finance.folio_lines(id) VALUES ('00000000-0000-4000-8000-000000000013'); INSERT INTO finance.folio_payment_references(id) VALUES ('00000000-0000-4000-8000-000000000014'); ROLLBACK" >/dev/null
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -c \
+  "UPDATE finance.folios SET property_id=property_id WHERE false" >/dev/null 2>&1; then
+  echo "runtime role unexpectedly updated Folios property scope" >&2
+  exit 1
+fi
+if docker exec -e PGPASSWORD=runtime "${database_container}" \
+  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -c \
+  "DELETE FROM finance.folios WHERE false" >/dev/null 2>&1; then
+  echo "runtime role unexpectedly deleted Folios" >&2
+  exit 1
+fi
+
+for quota_read in 'SELECT' 'SELECT (link_id)'; do
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "GRANT ${quota_read} ON marketplace.affiliate_click_quota_windows TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_affiliate_quota_read_forbidden
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "REVOKE ${quota_read} ON marketplace.affiliate_click_quota_windows FROM vayada_next_api_runtime" >/dev/null
+done
+
+for privilege in 'SELECT' 'SELECT (id)'; do
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "GRANT ${privilege} ON platform.identity_migration_provenance TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_identity_migration_provenance_read_forbidden
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "REVOKE ${privilege} ON platform.identity_migration_provenance FROM vayada_next_api_runtime" >/dev/null
+done
+for privilege in 'SELECT' 'SELECT (id)'; do
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "GRANT ${privilege} ON platform.legacy_historical_binding_transitions TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_historical_binding_transitions_read_forbidden
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "REVOKE ${privilege} ON platform.legacy_historical_binding_transitions FROM vayada_next_api_runtime" >/dev/null
+done
+for privilege in 'INSERT' 'UPDATE (id)'; do
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "GRANT ${privilege} ON platform.identity_migration_provenance TO vayada_next_api_runtime" >/dev/null
+  if [[ "${privilege}" == 'INSERT' ]]; then
+    expect_failure runtime_protected_relation_write_forbidden
+  else
+    expect_failure runtime_protected_relation_column_write_forbidden
+  fi
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    "REVOKE ${privilege} ON platform.identity_migration_provenance FROM vayada_next_api_runtime" >/dev/null
+done
 run_preflight | grep -F '"status":"PASS"' >/dev/null
 
 # Finance worker scopes remain private even when a table or column grant leaks.

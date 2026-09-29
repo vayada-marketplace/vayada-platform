@@ -13,6 +13,7 @@ locals {
   vay2017_rehearsal_subnet_az          = "eu-west-1a"
   vay2017_rehearsal_second_subnet_az   = "eu-west-1b"
   vay2017_rehearsal_image_digest       = "sha256:a6f1001b1713e5f86e52cf757b3e67c794ec936639273dc041cedc7b95ea7b3c"
+  vay2042_catalog_image_digest         = "sha256:b9cbbeedcdb7a1530b32fdae31c00d75db0ae4c6d53143ca2acf26c0002e3b17"
   vay2017_rehearsal_cluster_name       = "vay2017-metadata-rehearsal"
   vay2017_rehearsal_task_family        = "vay2017-metadata-runner"
   vay2017_rehearsal_state_machine_name = "vay2017-metadata-inventory"
@@ -292,15 +293,7 @@ resource "aws_vpc_endpoint" "vay2017_ecr_s3" {
   service_name      = "com.amazonaws.${local.vay2017_rehearsal_region}.s3"
   vpc_endpoint_type = "Gateway"
   route_table_ids   = [aws_route_table.vay2017_runner_private.id]
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = "*"
-      Action    = "s3:GetObject"
-      Resource  = "arn:aws:s3:::prod-eu-west-1-starport-layer-bucket/*"
-    }]
-  })
+  policy            = file("${path.module}/media-s3-endpoint-policy.json")
 
   tags = {
     Name    = "vay2017-metadata-ecr-s3"
@@ -392,17 +385,18 @@ resource "aws_ecs_task_definition" "vay2017_metadata" {
   execution_role_arn       = aws_iam_role.vay2017_inventory_execution.arn
   container_definitions = jsonencode([{
     name      = "metadata-runner"
-    image     = "${local.vay2017_rehearsal_ecr_repository_url}@${local.vay2017_rehearsal_image_digest}"
+    image     = "${local.vay2017_rehearsal_ecr_repository_url}@${local.vay2042_catalog_image_digest}"
     essential = true
     command   = ["node", "--input-type=module", "-e", file("${path.module}/../../scripts/vay2017-rehearsal-metadata.mjs")]
     environment = [
       { name = "VAY2017_RUN_MAIN", value = "1" },
+      { name = "VAY2017_CATALOG_ONLY", value = "1" },
       { name = "VAY2017_RESTORE_INSTANCE_ID", value = local.vay2017_rehearsal_db_instance_id },
       { name = "VAY2017_SOURCE_SNAPSHOT_ID", value = local.vay2017_rehearsal_snapshot_id },
       { name = "VAY2017_RESTORE_RESOURCE_ID", value = aws_db_instance.vay2017_isolated_restore.resource_id },
       { name = "VAY2017_RESTORE_INSTANCE_ARN", value = aws_db_instance.vay2017_isolated_restore.arn },
       { name = "VAY2017_RESTORE_ATTESTATION_CHECKSUM", value = filesha256("${path.module}/../../scripts/fixtures/vay2017-isolated-restore-plan.json") },
-      { name = "VAY2017_IMAGE_DIGEST", value = local.vay2017_rehearsal_image_digest },
+      { name = "VAY2017_IMAGE_DIGEST", value = local.vay2042_catalog_image_digest },
       { name = "VAY2017_SCANNER_SOURCE_CHECKSUM", value = filesha256("${path.module}/../../scripts/vay2017-rehearsal-metadata.mjs") },
       { name = "VAY2017_READER_FUNCTION_CHECKSUM", value = filesha256("${path.module}/../../scripts/provision-vay2017-metadata-reader.mjs") },
       { name = "VAY2017_RDS_CA_BUNDLE_GZIP", value = base64gzip(file("${path.module}/../../rehearsal/rds-ca-rsa2048-g1.pem")) },
@@ -480,6 +474,7 @@ data "aws_iam_policy_document" "vay2017_state_machine" {
     sid     = "PassOnlyFixedTaskExecutionRole"
     actions = ["iam:PassRole"]
     resources = [
+      aws_iam_role.vay2017_inventory_execution.arn,
       aws_iam_role.vay2017_task_execution.arn,
       aws_iam_role.vay2017_bootstrap_task.arn,
     ]
@@ -541,7 +536,7 @@ resource "aws_sfn_state_machine" "vay2017_metadata" {
           }
         }
         ResultSelector = {
-          "taskArn.$" = "$.Tasks[0].TaskArn"
+          "taskArn.$" = "$.TaskArn"
         }
         ResultPath = "$.result"
         Next       = "DescribeCompletedMetadataTask"

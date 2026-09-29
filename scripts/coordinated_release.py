@@ -367,28 +367,82 @@ def validate_published_record(record: dict[str, Any], manifest: dict[str, Any], 
         fail("Published record expiration must be after publication")
 
 
-def validate_dispatch(dispatch: dict[str, Any], manifest: dict[str, Any], record: dict[str, Any]) -> None:
-    exact_keys(
-        dispatch,
+FLAT_DISPATCH_FIELDS = {
+    "schemaVersion",
+    "manifestId",
+    "manifestSha256",
+    "publishedRecordSha256",
+    "sourceSha",
+    "repository",
+    "workflowName",
+    "workflowPath",
+    "runId",
+    "runAttempt",
+    "publishedArtifactId",
+    "publishedArtifactName",
+    "publisherRunId",
+    "publisherRunAttempt",
+    "idempotencyKey",
+}
+
+
+def normalize_dispatch(dispatch: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(dispatch, dict):
+        fail("dispatch must be an object")
+    version = dispatch.get("schemaVersion")
+    if type(version) is int and version == 1:
+        return exact_keys(dispatch, FLAT_DISPATCH_FIELDS, "dispatch")
+    if type(version) is not int or version != 2:
+        fail("dispatch.schemaVersion must be 1 or 2")
+    envelope = exact_keys(
+        dispatch, {"schemaVersion", "publishedArtifactId", "release"}, "dispatch"
+    )
+    release = exact_keys(
+        envelope["release"],
         {
-            "schemaVersion",
             "manifestId",
             "manifestSha256",
             "publishedRecordSha256",
             "sourceSha",
             "repository",
-            "workflowName",
-            "workflowPath",
-            "runId",
-            "runAttempt",
-            "publishedArtifactId",
             "publishedArtifactName",
-            "publisherRunId",
-            "publisherRunAttempt",
             "idempotencyKey",
+            "build",
+            "publisher",
         },
-        "dispatch",
+        "dispatch.release",
     )
+    build = exact_keys(
+        release["build"],
+        {"workflowName", "workflowPath", "runId", "runAttempt"},
+        "dispatch.release.build",
+    )
+    publisher = exact_keys(
+        release["publisher"], {"runId", "runAttempt"}, "dispatch.release.publisher"
+    )
+    return {
+        "schemaVersion": 1,
+        "manifestId": release["manifestId"],
+        "manifestSha256": release["manifestSha256"],
+        "publishedRecordSha256": release["publishedRecordSha256"],
+        "sourceSha": release["sourceSha"],
+        "repository": release["repository"],
+        "workflowName": build["workflowName"],
+        "workflowPath": build["workflowPath"],
+        "runId": build["runId"],
+        "runAttempt": build["runAttempt"],
+        "publishedArtifactId": envelope["publishedArtifactId"],
+        "publishedArtifactName": release["publishedArtifactName"],
+        "publisherRunId": publisher["runId"],
+        "publisherRunAttempt": publisher["runAttempt"],
+        "idempotencyKey": release["idempotencyKey"],
+    }
+
+
+def validate_dispatch(
+    dispatch: dict[str, Any], manifest: dict[str, Any], record: dict[str, Any]
+) -> dict[str, Any]:
+    dispatch = normalize_dispatch(dispatch)
     build = manifest["build"]
     expected = {
         "schemaVersion": 1,
@@ -412,6 +466,7 @@ def validate_dispatch(dispatch: dict[str, Any], manifest: dict[str, Any], record
     for field in ("manifestSha256", "publishedRecordSha256"):
         if not re.fullmatch(r"[0-9a-f]{64}", str(dispatch[field])):
             fail(f"dispatch.{field} is invalid")
+    return dispatch
 
 
 def validate_run(
@@ -463,7 +518,7 @@ def validate_publication(
     record = read_json(record_path)
     validate_manifest(manifest, config)
     validate_published_record(record, manifest, config)
-    validate_dispatch(dispatch, manifest, record)
+    dispatch = validate_dispatch(dispatch, manifest, record)
     manifest_hash = sha256_file(manifest_path)
     record_hash = sha256_file(record_path)
     if manifest_hash != dispatch["manifestSha256"] or manifest_hash != record["manifestSha256"]:
@@ -870,7 +925,7 @@ class Aws:
             fail(f"Registered task definition identity mismatch for {key}")
         return arn
 
-    def verify_api_split_image(self, key: str, digest: str) -> None:
+    def verify_api_split_image(self, key: str, digest: str, task_definition: dict[str, Any]) -> None:
         if key != "next-target-backend":
             return
         repository = self.config["services"][key]["ecrRepository"]
@@ -880,8 +935,10 @@ class Aws:
         with tempfile.TemporaryDirectory() as directory:
             document = Path(directory) / "image.json"
             document.write_text(json.dumps(details))
+            task_document = Path(directory) / "task.json"
+            task_document.write_text(json.dumps(task_definition))
             self.runner.run(sys.executable, str(ROOT / "scripts/assert-next-api-split-compatible-image.py"),
-                            key, repository, digest, str(document))
+                            key, repository, digest, str(document), str(task_document))
 
     def update_service(self, key: str, task_definition: str) -> None:
         physical = self.config["services"][key]
@@ -1602,8 +1659,8 @@ def reconcile_service_with_dependencies(
         fail(f"Unknown plan action for {key}")
     image = manifest["services"][key]
     aws.verify_image(key, image)
-    aws.verify_api_split_image(key, image["digest"])
     before = aws.service_snapshot(key)
+    aws.verify_api_split_image(key, image["digest"], before.get("taskDefinition", {}))
     if action == "verify" and before["digest"] != image["digest"]:
         fail(f"{key} changed after preparation; verify-only cannot mutate it")
     operation_id = require_id(plan["operationId"], "plan.operationId")
@@ -1619,7 +1676,11 @@ def reconcile_service_with_dependencies(
         recovering_mutation = rollback_task_definition != before["taskDefinitionArn"]
     if before["digest"] != image["digest"] or recovering_mutation:
         # Check the retained pre-mutation image as well, including interrupted retries.
-        aws.verify_api_split_image(key, rollback_image.rsplit("@", 1)[-1])
+        rollback_definition = before.get("taskDefinition", {})
+        if key == "next-target-backend" and rollback_task_definition != before["taskDefinitionArn"]:
+            rollback_definition = aws.json("ecs", "describe-task-definition",
+                                           "--task-definition", rollback_task_definition).get("taskDefinition", {})
+        aws.verify_api_split_image(key, rollback_image.rsplit("@", 1)[-1], rollback_definition)
     operation = {
         "schemaVersion": 1,
         "operationId": operation_id,

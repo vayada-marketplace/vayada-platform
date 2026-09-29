@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import json
+import hashlib
+from datetime import datetime
 from pathlib import Path
 import re
 import sys
@@ -161,6 +163,7 @@ def main() -> None:
     export_enabled = environment.get("FINANCE_EXPORT_WORKER_ENABLED")
     export_property = environment.get("FINANCE_EXPORT_WORKER_PROPERTY_ID")
     export_id = environment.get("FINANCE_EXPORT_WORKER_EXPORT_ID")
+    export_cutoff = environment.get("FINANCE_EXPORT_WORKER_ACCEPTED_AFTER")
     export_configured = export_secret_present or any(
         value is not None
         for value in (export_enabled, export_property, export_id)
@@ -170,11 +173,30 @@ def main() -> None:
     if export_enabled == "true":
         if export_value != FINANCE_EXPORT_PARAMETER:
             fail("enabled finance export worker lacks its dedicated database secret")
-        if export_property != FINANCE_EXPORT_PROPERTY_ID:
-            fail("enabled finance export worker property scope is unexpected")
-        if export_id != FINANCE_EXPORT_ID:
-            fail("enabled finance export worker export scope is unexpected")
+        if export_cutoff:
+            try:
+                cutoff = datetime.strptime(export_cutoff, "%Y-%m-%dT%H:%M:%S.%fZ")
+                if cutoff.isoformat(timespec="milliseconds") + "Z" != export_cutoff:
+                    raise ValueError()
+            except ValueError:
+                fail("ongoing finance export cutoff is invalid")
+            if export_property or export_id:
+                fail("ongoing finance exports cannot carry single-job scope")
+            if environment.get("NODE_TLS_REJECT_UNAUTHORIZED") == "0" or "NODE_TLS_REJECT_UNAUTHORIZED" in secrets:
+                fail("ongoing finance exports must not disable TLS verification")
+            ca = environment.get("FINANCE_EXPORT_RDS_CA", "")
+            if environment.get("NODE_EXTRA_CA_CERTS") != "/tmp/finance-export-rds-ca.pem" or hashlib.sha256(ca.encode()).hexdigest() != "f5c5f92ae025987c76dc49bdb1ace8556fdf332b4788d719a923bc274779d869":
+                fail("ongoing finance exports lack pinned certificate trust")
+            if container.get("command") != ["sh", "-c", "umask 077; printf '%s' \"$FINANCE_EXPORT_RDS_CA\" > \"$NODE_EXTRA_CA_CERTS\" && exec ./scripts/start-next-api.sh"]:
+                fail("ongoing finance export certificate bootstrap is unexpected")
+        else:
+            if export_property != FINANCE_EXPORT_PROPERTY_ID:
+                fail("enabled finance export worker property scope is unexpected")
+            if export_id != FINANCE_EXPORT_ID:
+                fail("enabled finance export worker export scope is unexpected")
     elif export_enabled == "false":
+        if export_cutoff:
+            fail("disabled finance exports carry an activation cutoff")
         if export_id is not None:
             fail("disabled finance export worker unexpectedly carries an export scope")
         disabled_mapped = (

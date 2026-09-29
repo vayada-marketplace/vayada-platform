@@ -1,0 +1,27 @@
+name: VAY-2042 Isolated Source Reader Bootstrap
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: vay2017-metadata-runner
+  cancel-in-progress: false
+jobs:
+  bootstrap:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: vay2042-data-rehearsal
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-vay2042-source-reader
+          aws-region: eu-west-1
+      - name: Run the fixed source-reader bootstrap
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: bash scripts/run-vay2042-source-reader-bootstrap.sh

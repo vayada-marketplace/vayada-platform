@@ -3,6 +3,9 @@ set -euo pipefail
 
 # A shell-function stub prevents these regression tests from reaching AWS.
 aws() {
+  if [[ "${MOCK_VAY2042:-false}" == true && "$1" == s3api ]]; then
+    [[ "$3" == --bucket && "$4" == vayada-rehearsal-vay2042-20260926-269416271598 ]] || return 1
+  fi
   case "$1 $2" in
     'sts get-caller-identity') echo "${MOCK_ACCOUNT:-269416271598}" ;;
     's3api get-public-access-block')
@@ -35,10 +38,27 @@ aws() {
       elif [[ "${MOCK_INBOX:-false}" == true ]]; then
         bucket=vayada-rehearsal-7200a43a-269416271598
         expected_role=arn:aws:iam::269416271598:role/vayada-rehearsal-7200a43a-media
+      elif [[ "${MOCK_VAY2042:-false}" == true ]]; then
+        bucket=vayada-rehearsal-vay2042-20260926-269416271598
+        expected_role=arn:aws:iam::269416271598:role/vayada-rehearsal-vay2042-20260926-media
       fi
       [[ "$role" == "$expected_role" ]] || return 1
       decision=explicitDeny
-      if [[ "$resource" == "arn:aws:s3:::${bucket}/public/media/"* || "$resource" == "arn:aws:s3:::${bucket}/private/media/"* ]]; then decision=allowed;
+      if [[ "${MOCK_VAY2042_CROSS_WRITE:-false}" == true && "$resource" == arn:aws:s3:::vayada-rehearsal-vay2042-20260926-269416271598/* ]]; then
+        decision=allowed
+      elif [[ "${MOCK_VAY2042:-false}" == true && "$resource" == "arn:aws:s3:::${bucket}/rehearsal-control/owner.json" && "${actions[0]}" == s3:GetObject ]]; then
+        decision=implicitDeny
+        [[ "${MOCK_OWNER_READ_ALLOWED:-false}" != true ]] || decision=allowed
+      elif [[ "${MOCK_VAY2042:-false}" == true && "${actions[0]}" == s3:ListBucketVersions ]]; then
+        decision=implicitDeny
+        [[ "${MOCK_VERSION_LIST_ALLOWED:-false}" != true ]] || decision=allowed
+      elif [[ "${MOCK_VAY2042:-false}" == true && "${actions[0]}" == s3:GetObjectVersion ]]; then
+        decision=implicitDeny
+        [[ "${MOCK_VERSION_ACCESS_ALLOWED:-false}" != true ]] || decision=allowed
+      elif [[ "${MOCK_VAY2042:-false}" == true && "${actions[0]}" == s3:ListBucket ]]; then
+        decision=implicitDeny
+        [[ "${MOCK_BUCKET_LIST_ALLOWED:-false}" != true ]] || decision=allowed
+      elif [[ "$resource" == "arn:aws:s3:::${bucket}/public/media/"* || "$resource" == "arn:aws:s3:::${bucket}/private/media/"* ]]; then decision=allowed;
       elif [[ "${MOCK_OWNER_READ_DENIED:-false}" == true && "$resource" == "arn:aws:s3:::${bucket}/rehearsal-control/owner.json" ]]; then decision=explicitDeny;
       elif [[ "${MOCK_VERSION_LIST_DENIED:-false}" == true && "${actions[0]}" == s3:ListBucketVersions ]]; then decision=explicitDeny;
       elif [[ "${actions[0]}" == s3:ListBucket ]]; then decision=implicitDeny;
@@ -59,21 +79,29 @@ aws() {
 }
 export -f aws
 check=scripts/check-migration-rehearsal-media.sh
-for mode in retained --fixed-release --midnight-release --inbox-release; do
+for mode in retained --fixed-release --midnight-release --inbox-release --vay2042; do
 export MOCK_FIXED=false
 export MOCK_MIDNIGHT=false
 export MOCK_INBOX=false
+export MOCK_VAY2042=false
 [[ "$mode" != --fixed-release ]] || export MOCK_FIXED=true
 [[ "$mode" != --midnight-release ]] || export MOCK_MIDNIGHT=true
 [[ "$mode" != --inbox-release ]] || export MOCK_INBOX=true
+[[ "$mode" != --vay2042 ]] || export MOCK_VAY2042=true
 bash "$check" "$mode"
 faults=(MOCK_ACCOUNT=wrong MOCK_BLOCKED=false MOCK_VERSIONING=Suspended \
   MOCK_ENCRYPTION=wrong MOCK_PRODUCTION_WRITE=true MOCK_MISSING=true MOCK_CONTEXT=true)
-if [[ "$mode" != retained ]]; then
+if [[ "$mode" != retained && "$mode" != --vay2042 ]]; then
   faults+=(MOCK_OWNER_READ_DENIED=true MOCK_VERSION_LIST_DENIED=true)
 fi
 if [[ "$mode" == --inbox-release ]]; then
   faults+=(MOCK_VERSION_PREFIX_LEAK=true)
+fi
+if [[ "$mode" == --vay2042 ]]; then
+  faults+=(MOCK_OWNER_READ_ALLOWED=true MOCK_VERSION_LIST_ALLOWED=true \
+    MOCK_VERSION_ACCESS_ALLOWED=true MOCK_BUCKET_LIST_ALLOWED=true)
+else
+  faults+=(MOCK_VAY2042_CROSS_WRITE=true)
 fi
 for fault in "${faults[@]}"; do
   if env "$fault" bash "$check" "$mode" >/dev/null 2>&1; then
@@ -84,4 +112,4 @@ done
 if bash "$check" --unknown >/dev/null 2>&1 || bash "$check" retained extra >/dev/null 2>&1; then
   echo 'Isolation check accepted an unknown boundary' >&2; exit 1
 fi
-echo 'All four rehearsal media boundaries: valid fixtures, thirty-five unsafe cases, and unknown-boundary refusals passed.'
+echo 'All five rehearsal media boundaries: valid fixtures, fifty unsafe cases, and unknown-boundary refusals passed.'

@@ -28,12 +28,17 @@ on:
       - "scripts/pause-next-api-channex-worker.py"
       - "scripts/test-pause-next-api-channex-worker.py"
       - "scripts/run-target-database-runtime-preflight.sh"
+      - "scripts/vay2017-source-snapshot-import.mjs"
+      - "scripts/vay2017-source-snapshot-extract.mjs"
       - "scripts/target-database-runtime-preflight.mjs"
+      - "scripts/financials-activation-readiness.mjs"
       - "scripts/grant-target-database-product-audit-insert.mjs"
+      - "scripts/grant-target-database-folio-command.mjs"
       - "scripts/finance-expense-worker-database.mjs"
       - "scripts/finance-export-worker-database.mjs"
       - "scripts/grant-target-database-identity-runtime.mjs"
       - "scripts/provision-target-database-identity-runtime.mjs"
+      - "scripts/provision-hotel-setup-scope-role.mjs"
       - "scripts/inspect-target-database-cluster-acl.mjs"
       - "scripts/harden-target-database-cluster-acl.mjs"
       - "scripts/test-target-database-cluster-acl.sh"
@@ -49,8 +54,16 @@ on:
       - "scripts/test-channex-worker-database.py"
       - "scripts/test-target-database-runtime-preflight-integration.sh"
       - "scripts/next-api-split-compatible-images.txt"
+      - "scripts/next-api-ongoing-export-compatible-images.txt"
+      - "scripts/planned-finance-export-mode.py"
       - "scripts/assert-next-api-split-compatible-image.py"
       - "scripts/test-next-api-split-compatible-image.py"
+      - "scripts/run-finance-export-once.py"
+      - "scripts/test-finance-export-once.py"
+      - "scripts/assert-finance-export-bootstrap-plan.py"
+      - ".github/workflows/finance-export-once.yml"
+      - ".github/workflows/vay2017-historical-binding-preflight.yml"
+      - ".github/workflows/vay2017-source-snapshot-import.yml"
       - "scripts/assert-terraform-protected-resources.sh"
       - "scripts/test-marketplace-communication-unsubscribe-keys.mjs"
       - "scripts/test-finance-folio-kms-plan-guard.sh"
@@ -89,12 +102,21 @@ on:
       - "scripts/test-migration-rehearsal-browser.mjs"
       - "scripts/vay2017-rehearsal-metadata.mjs"
       - "scripts/test-vay2017-rehearsal-metadata.mjs"
+      - "scripts/test-vay2042-source-catalog.mjs"
       - "scripts/provision-vay2017-metadata-reader.mjs"
       - "scripts/vay2017-pg-scram.mjs"
       - "scripts/test-vay2017-metadata-reader-provisioner.mjs"
       - "scripts/test-vay2017-metadata-reader-infra.mjs"
       - "scripts/run-vay2017-rehearsal-metadata.sh"
       - "scripts/run-vay2017-metadata-reader-bootstrap.sh"
+      - "scripts/run-vay2042-source-reader-bootstrap.sh"
+      - "scripts/test-vay2042-source-reader-runner.mjs"
+      - ".github/workflows/vay2042-source-reader-bootstrap.yml"
+      - "scripts/run-vay2042-target-bootstrap.sh"
+      - "scripts/test-vay2042-target-runner.mjs"
+      - "scripts/test-vay2042-media-infra.mjs"
+      - "scripts/test-vay2042-media-endpoint.mjs"
+      - ".github/workflows/vay2042-target-bootstrap.yml"
       - "scripts/check-vay2017-rehearsal-isolation.sh"
       - "scripts/fixtures/vay2017-restore-attestation.json"
       - "scripts/fixtures/vay2017-isolated-restore-plan.json"
@@ -209,12 +231,17 @@ jobs:
           python3 scripts/test-target-database-credential-split.py
           python3 scripts/test-target-database-split-deployment-ready.py
           bash -n scripts/run-target-database-runtime-preflight.sh
+          node --check scripts/vay2017-source-snapshot-import.mjs
+          node --check scripts/vay2017-source-snapshot-extract.mjs
           node --check scripts/target-database-runtime-preflight.mjs
+          node --check scripts/financials-activation-readiness.mjs
           node --check scripts/grant-target-database-product-audit-insert.mjs
+          node --check scripts/grant-target-database-folio-command.mjs
           node --check scripts/finance-expense-worker-database.mjs
           node --check scripts/finance-export-worker-database.mjs
           node --check scripts/grant-target-database-identity-runtime.mjs
           node --check scripts/provision-target-database-identity-runtime.mjs
+          node --check scripts/provision-hotel-setup-scope-role.mjs
           node --check scripts/inspect-target-database-cluster-acl.mjs
           node --check scripts/harden-target-database-cluster-acl.mjs
           python3 -m unittest scripts/test_restore_rds_admin_from_ssm.py
@@ -227,16 +254,22 @@ jobs:
           python3 scripts/test-channex-worker-database.py
           python3 scripts/test-pause-next-api-channex-worker.py
           python3 scripts/test-next-api-split-compatible-image.py
+          python3 scripts/test-finance-export-once.py
           bash scripts/test-finance-folio-kms-plan-guard.sh
           bash -n scripts/guard-finance-folio-kms-plan.sh
           bash scripts/test-finance-folio-kms-phase-guard.sh
           node scripts/test-marketplace-communication-unsubscribe-keys.mjs
           node --check scripts/vay2017-rehearsal-metadata.mjs
           node --test scripts/test-vay2017-rehearsal-metadata.mjs
+          node --test scripts/test-vay2042-source-catalog.mjs
           node --check scripts/provision-vay2017-metadata-reader.mjs
           node --test scripts/test-vay2017-metadata-reader-provisioner.mjs
           node --test scripts/test-vay2017-metadata-reader-infra.mjs
           node --test scripts/test-vay2017-metadata-reader-bootstrap.mjs
+          node --test scripts/test-vay2042-source-reader-runner.mjs
+          node --test scripts/test-vay2042-target-runner.mjs
+          node --test scripts/test-vay2042-media-infra.mjs
+          node --test scripts/test-vay2042-media-endpoint.mjs
           bash -n scripts/run-vay2017-rehearsal-metadata.sh
           bash -n scripts/run-vay2017-metadata-reader-bootstrap.sh
           bash -n scripts/check-vay2017-rehearsal-isolation.sh

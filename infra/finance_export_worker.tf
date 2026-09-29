@@ -14,3 +14,19 @@ variable "finance_export_worker_property_id" {
     error_message = "Expected an empty value or canonical property UUID."
   }
 }
+
+variable "finance_export_worker_enabled" {
+  type        = bool
+  default     = false
+  description = "Enable ongoing Financials export processing for enrolled hotels."
+}
+
+variable "finance_export_worker_accepted_after" {
+  type        = string
+  default     = ""
+  description = "Fixed activation cutoff; preserve across deployments so historical jobs cannot be replayed."
+  validation {
+    condition     = var.finance_export_worker_accepted_after == "" || can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$", var.finance_export_worker_accepted_after))
+    error_message = "Expected an empty value or canonical millisecond UTC timestamp."
+  }
+}

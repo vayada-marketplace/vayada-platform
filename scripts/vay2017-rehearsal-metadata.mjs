@@ -2,6 +2,13 @@ import { createHash, X509Certificate } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 
 export const QUERY_VERSION = 'v2';
+export const CATALOG_SQL_SHA256 = '9707f57e277e424ca9f97610511fce3f4d3b9fc56722cc4957b2971dd0541f37';
+export const CATALOG_IMAGE_DIGEST = 'sha256:b9cbbeedcdb7a1530b32fdae31c00d75db0ae4c6d53143ca2acf26c0002e3b17';
+export const CATALOG_DATABASES = Object.freeze([
+  ['auth', 'vayada_auth_db'], ['booking', 'vayada_booking_db'],
+  ['marketplace', 'postgres'], ['pms', 'vayada_pms_db'],
+].map(Object.freeze));
+export const CATALOG_IDENTITY_SQL = 'SELECT current_database() AS database_name, host(inet_server_addr()) AS server_address, current_user AS database_user, session_user AS session_user';
 
 export const DATABASES_SQL = `
 SELECT datname AS database_name
@@ -64,6 +71,10 @@ const INTERNAL_ERROR_CODES = new Set([
   'row_count_invalid',
   'unsupported_metadata_relation',
   'database_ca_invalid',
+  'catalog_configuration_invalid',
+  'catalog_query_invalid',
+  'database_endpoint_invalid',
+  'schema_fingerprint_invalid',
 ]);
 const RDS_CA_FINGERPRINT = '6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86';
 
@@ -87,7 +98,7 @@ const NODE_CONNECTION_ERROR_CODES = new Set([
   'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
 ]);
 const SAFE_ERROR_NAMES = new Set(['Error', 'TypeError', 'RangeError', 'DatabaseError', 'AggregateError']);
-const SAFE_PHASES = new Set(['database-connect', 'database-discovery', 'schema-inventory', 'row-count']);
+const SAFE_PHASES = new Set(['database-connect', 'database-discovery', 'schema-inventory', 'row-count', 'source-catalog']);
 
 function trustedRdsCa() {
   try {
@@ -102,7 +113,7 @@ function trustedRdsCa() {
 async function beginReadOnly(client) {
   await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   const mode = await client.query('SHOW transaction_read_only');
-  if (mode.rows?.[0]?.transaction_read_only !== 'on') {
+  if (mode.rows?.length !== 1 || mode.rows[0].transaction_read_only !== 'on') {
     throw new Error('read_only_transaction_required');
   }
 }
@@ -132,6 +143,57 @@ export function sanitizeError(error) {
   const errorClass = SAFE_ERROR_NAMES.has(cause?.name) ? cause.name : 'Other';
   const stage = SAFE_PHASES.has(error?.metadataPhase) ? error.metadataPhase : 'metadata-read';
   return { status: 'FAIL', stage, code, errorClass };
+}
+
+export async function collectSourceCatalog(connect, identity, fingerprintSql, now = new Date().toISOString()) {
+  const { restoreInstanceId, sourceSnapshotId, restoreResourceId, restoreInstanceArn,
+    restoreAttestationChecksum, imageDigest, scannerSourceChecksum } = identity;
+  if (restoreInstanceId !== 'vay2017-metadata-rehearsal-isolated-20260923' ||
+    sourceSnapshotId !== 'vay2017-legacy-source-freeze-20260920' ||
+    restoreResourceId !== 'db-BB7GOFQ3BQTLTBG444I2Q75X6Y' ||
+    restoreInstanceArn !== `arn:aws:rds:eu-west-1:269416271598:db:${restoreInstanceId}` ||
+    imageDigest !== CATALOG_IMAGE_DIGEST ||
+    !/^[a-f0-9]{64}$/.test(restoreAttestationChecksum) ||
+    !/^[a-f0-9]{64}$/.test(scannerSourceChecksum) || !Number.isFinite(Date.parse(now))) {
+    throw new Error('catalog_configuration_invalid');
+  }
+  if (typeof fingerprintSql !== 'string' || sha256(fingerprintSql) !== CATALOG_SQL_SHA256) {
+    throw new Error('catalog_query_invalid');
+  }
+  const databases = [];
+  for (const [sourceDatabase, name] of CATALOG_DATABASES) {
+    const client = await inPhase('database-connect', () => connect(name));
+    try {
+      const schemaFingerprint = await inPhase('source-catalog', async () => {
+        await beginReadOnly(client);
+        const endpoint = await client.query(CATALOG_IDENTITY_SQL);
+        if (endpoint.rows?.length !== 1 || endpoint.rows[0].database_name !== name ||
+          endpoint.rows[0].database_user !== 'vay2017_metadata_reader' ||
+          endpoint.rows[0].session_user !== 'vay2017_metadata_reader' ||
+          !/^10\.230\.0\.(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/.test(endpoint.rows[0].server_address)) {
+          throw new Error('database_endpoint_invalid');
+        }
+        const result = await client.query(fingerprintSql);
+        if (result.rows?.length !== 1 || result.rows[0].source_database !== name ||
+          typeof result.rows[0].schema_fingerprint !== 'string' ||
+          !/^[a-f0-9]{32}$/.test(result.rows[0].schema_fingerprint)) {
+          throw new Error('schema_fingerprint_invalid');
+        }
+        await client.query('COMMIT');
+        return result.rows[0].schema_fingerprint;
+      });
+      databases.push({ sourceDatabase, name, schemaFingerprint });
+    } catch (error) {
+      await rollbackQuietly(client);
+      throw error;
+    } finally {
+      await client.end().catch(() => {});
+    }
+  }
+  return { artifactVersion: 3, scope: 'isolated-source-catalog', collectedAt: now,
+    restoreInstanceId, sourceSnapshotId, restoreResourceId, restoreInstanceArn,
+    restoreAttestationChecksum, imageDigest, scannerSourceChecksum,
+    queryVersion: 'source-catalog-v1', queryChecksum: CATALOG_SQL_SHA256, databases };
 }
 
 export async function collectMetadata(connect, identity, now = new Date().toISOString()) {
@@ -301,8 +363,8 @@ async function main() {
     return;
   }
 
-  const { default: pg } = await import('pg');
   const connect = async (databaseName) => {
+    const { default: pg } = await import('pg');
     const client = new pg.Client({
       host: process.env.VAY2017_DB_HOST,
       port: Number(process.env.VAY2017_DB_PORT),
@@ -318,11 +380,13 @@ async function main() {
       statement_timeout: 30_000,
       application_name: 'vay2017-metadata-runner-v2',
     });
-    await client.connect();
+    client.on('error', () => {});
+    try { await client.connect(); }
+    catch (error) { await client.end().catch(() => {}); throw error; }
     return client;
   };
   try {
-    const artifact = await collectMetadata(connect, {
+    const identity = {
       restoreInstanceId: process.env.VAY2017_RESTORE_INSTANCE_ID,
       sourceSnapshotId: process.env.VAY2017_SOURCE_SNAPSHOT_ID,
       restoreResourceId: process.env.VAY2017_RESTORE_RESOURCE_ID,
@@ -331,7 +395,13 @@ async function main() {
       imageDigest: process.env.VAY2017_IMAGE_DIGEST,
       scannerSourceChecksum: process.env.VAY2017_SCANNER_SOURCE_CHECKSUM,
       readerFunctionChecksum: process.env.VAY2017_READER_FUNCTION_CHECKSUM,
-    });
+    };
+    const mode = process.env.VAY2017_CATALOG_ONLY;
+    if (mode !== undefined && mode !== '1') throw new Error('catalog_configuration_invalid');
+    const artifact = mode === '1'
+      ? await collectSourceCatalog(connect, identity,
+        (await import('file:///app/packages/backend-migration/dist/sourceInventory.js')).SOURCE_SCHEMA_FINGERPRINT_SQL)
+      : await collectMetadata(connect, identity);
     console.log(`VAY2017_METADATA_ARTIFACT=${JSON.stringify(artifact)}`);
   } catch (error) {
     console.error(JSON.stringify(sanitizeError(error)));
