@@ -36,6 +36,7 @@ on:
       - "scripts/finance-export-worker-database.mjs"
       - "scripts/grant-target-database-identity-runtime.mjs"
       - "scripts/provision-target-database-identity-runtime.mjs"
+      - "scripts/provision-hotel-setup-scope-role.mjs"
       - "scripts/inspect-target-database-cluster-acl.mjs"
       - "scripts/harden-target-database-cluster-acl.mjs"
       - "scripts/test-target-database-cluster-acl.sh"
@@ -234,6 +235,7 @@ jobs:
           node --check scripts/finance-export-worker-database.mjs
           node --check scripts/grant-target-database-identity-runtime.mjs
           node --check scripts/provision-target-database-identity-runtime.mjs
+          node --check scripts/provision-hotel-setup-scope-role.mjs
           node --check scripts/inspect-target-database-cluster-acl.mjs
           node --check scripts/harden-target-database-cluster-acl.mjs
           python3 -m unittest scripts/test_restore_rds_admin_from_ssm.py
