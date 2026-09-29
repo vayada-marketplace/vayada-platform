@@ -48,6 +48,8 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86', VAY2017_EXTRACT)
         self.assertNotIn('rejectUnauthorized: false', VAY2017_EXTRACT)
         self.assertIn('ALTER ROLE ${identifier(READER)} NOLOGIN', VAY2017_IMPORT)
+        self.assertIn("const ATTESTOR = 'vay2017_source_attestor_20260929'", VAY2017_IMPORT)
+        self.assertNotIn("const ATTESTOR = 'vayada_migration_attestor'", VAY2017_IMPORT)
         self.assertIn("namespace.nspname='vayada_migration_evidence'", VAY2017_IMPORT)
         self.assertIn('source_attestor_membership_cleanup_unsafe', VAY2017_IMPORT)
         self.assertIn('WHERE to_regclass(name) IS NOT NULL', VAY2017_IMPORT)

@@ -7,7 +7,7 @@ const HOST = 'vay2017-source-import-20260929.c7eiqkoq4as4.eu-west-1.rds.amazonaw
 const SNAPSHOT = 'arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-20260929';
 const RUN_ID = 'vay1351-61ec013e79ed2a042caadef8';
 const READER = 'vay2017_source_reader_20260929';
-const ATTESTOR = 'vayada_migration_attestor';
+const ATTESTOR = 'vay2017_source_attestor_20260929';
 const DATABASES = {
   auth: 'vayada_auth_db',
   booking: 'vayada_booking_db',
