@@ -19,18 +19,31 @@ concurrency:
   queue: max
 
 jobs:
+  authorize-import:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"
+
   verify-source:
     if: github.ref == 'refs/heads/main'
+    needs: authorize-import
     environment: vay2042-data-rehearsal
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      verified-at: ${{ steps.verify.outputs.verified_at }}
     steps:
       - uses: actions/checkout@v7
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-vay2042-source-reader
           aws-region: eu-west-1
+          inline-session-policy: >-
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["rds:DescribeDBInstances","rds:DescribeDBSnapshots","cloudtrail:LookupEvents"],"Resource":"*"}]}
       - name: Verify immutable source restore
+        id: verify
         run: |
           set -euo pipefail
           snapshot="$(aws rds describe-db-snapshots --db-snapshot-identifier vay2017-legacy-source-20260929 \
@@ -55,6 +68,7 @@ jobs:
             (.requestParameters.dBSnapshotIdentifier == "vay2017-legacy-source-20260929" or
              .requestParameters.dBSnapshotIdentifier == "arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-20260929") and
             .responseElements.dbiResourceId == "db-NCBRBMYRRBMVWL7N4LB3AVYLHM")' <<<"$restore_events" >/dev/null
+          printf 'verified_at=%s\n' "$(date +%s)" >> "$GITHUB_OUTPUT"
 
   import:
     if: github.ref == 'refs/heads/main'
@@ -73,8 +87,12 @@ jobs:
         env:
           SOURCE: ${{ inputs.source_sha }}
           DIGEST: ${{ inputs.image_digest }}
+          VERIFIED_AT: ${{ needs.verify-source.outputs.verified-at }}
         run: |
           set -euo pipefail
+          [[ "$VERIFIED_AT" =~ ^[0-9]+$ ]]
+          now="$(date +%s)"
+          (( now >= VERIFIED_AT && now - VERIFIED_AT <= 180 ))
           [[ "$SOURCE" == "919956c1d85c148845a96ba3b16c5c59068e4a3b" ]]
           [[ "$DIGEST" == "sha256:2b5cb2fb788c68ee93589006361fc9c8a8b7467c73deb434d573f5937449c71f" ]]
           grep -Fx -- "$SOURCE $DIGEST" scripts/next-api-split-compatible-images.txt
