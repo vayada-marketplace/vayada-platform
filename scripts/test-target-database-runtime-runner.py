@@ -64,6 +64,8 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('919956c1d85c148845a96ba3b16c5c59068e4a3b', VAY2017_IMPORT_WORKFLOW)
         self.assertIn('sha256:2b5cb2fb788c68ee93589006361fc9c8a8b7467c73deb434d573f5937449c71f', VAY2017_IMPORT_WORKFLOW)
         self.assertNotIn('__APP_', VAY2017_IMPORT_WORKFLOW)
+        for action in ('rds:DescribeDBInstances', 'rds:DescribeDBSnapshots', 'rds:ListTagsForResource'):
+            self.assertIn(action, IAM)
 
     def test_vay2017_snapshot_import_rejects_bad_inputs_without_echoing_them(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

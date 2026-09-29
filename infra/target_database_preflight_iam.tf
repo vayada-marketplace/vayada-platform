@@ -7,6 +7,21 @@ data "aws_iam_policy_document" "target_database_preflight_deploy" {
   statement {
     effect = "Allow"
     actions = [
+      "rds:DescribeDBInstances",
+      "rds:DescribeDBSnapshots",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["rds:ListTagsForResource"]
+    resources = ["arn:aws:rds:${var.aws_region}:${var.aws_account_id}:db:vay2017-source-import-20260929"]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
       "ecs:CreateCluster",
       "ecs:DeleteCluster",
       "ecs:PutClusterCapacityProviders",
