@@ -28,6 +28,7 @@ folio_required="false"
 vay2017_source_sha=""
 vay2017_execution_id=""
 vay2017_phase=""
+vay2017_source_import_phase=""
 case "${mode}" in
   preflight|--preflight-folio-command)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -160,6 +161,31 @@ case "${mode}" in
       }
     fi
     ;;
+  --import-vay2017-source-snapshot)
+    [[ "$#" -eq 6 && "$2" =~ ^(prepare|extract|cleanup)$ && "$3" =~ ^sha256:[a-f0-9]{64}$ && "$4" =~ ^[0-9a-f]{40}$ && "$5" == "vay1351-61ec013e79ed2a042caadef8" && "$6" =~ ^[0-9]{1,20}-[0-9]{1,3}$ ]] || {
+      echo "Source snapshot import requires a phase, immutable digest/source, pinned run ID, and run-attempt ID." >&2; exit 2;
+    }
+    ca_required=true
+    family="vayada-next-api-db-runtime-preflight"
+    if [[ "$2" == "extract" ]]; then
+      code_file="vay2017-source-snapshot-extract.mjs"
+    else
+      code_file="vay2017-source-snapshot-import.mjs"
+    fi
+    task_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$3"
+    vay2017_source_import_phase="$2"
+    vay2017_source_sha="$4"
+    vay2017_execution_id="$6"
+    extra_secret_name="VAY2017_SOURCE_READER_URL"
+    extra_secret_parameter="/vayada/prod/vay2017-source-import-url"
+    if [[ "$2" == "extract" ]]; then
+      secret_name="TARGET_DATABASE_MIGRATION_URL"
+      secret_parameter="/vayada/prod/target-database-url"
+    else
+      secret_name="VAY2017_SOURCE_ADMIN_URL"
+      secret_parameter="/vayada/prod/db-marketplace-url"
+    fi
+    ;;
   --provision-finance-export-worker|--grant-finance-export-worker|--preflight-finance-export-worker|--preflight-finance-export-ongoing)
     ca_required=true
     family="vayada-next-api-db-runtime-preflight"
@@ -228,7 +254,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
+  if [[ "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -244,7 +270,7 @@ if [[ "${ca_required}" == true ]]; then
     }
   fi
   ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
-  if [[ ( "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" ) && "${#ca_payload}" -gt 2100 ]]; then
+  if [[ ( "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" ) && "${#ca_payload}" -gt 2100 ]]; then
     echo "Pinned grant CA payload exceeds the reviewed ECS override budget." >&2; exit 1
   fi
 fi
@@ -265,6 +291,7 @@ fi
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
   --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg financials_readiness_property "${financials_readiness_property}" \
   --arg folio_required "${folio_required}" --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
+  --arg vay2017_source_import_phase "${vay2017_source_import_phase}" \
   --arg vay2017_signing_key_id "${VAY2017_PREFLIGHT_SIGNING_KEY_ID:-}" --arg vay2017_input "${VAY2017_PREFLIGHT_INPUT_GZIP_BASE64:-}" --arg vay2017_signature "${VAY2017_PREFLIGHT_SIGNATURE:-}" --arg vay2017_public_key "${VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64:-}" --arg vay2017_principal "${CHANNEX_ADOPTION_EXECUTION_PRINCIPAL:-}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
     environment:([{name:"VAYADA_DB_RUNTIME_PREFLIGHT_CODE",value:$code}] +
@@ -280,6 +307,7 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $financials_readiness_property == "" then [] else [{name:"FINANCIALS_READINESS_PROPERTY_ID",value:$financials_readiness_property}] end) +
       (if $channex_property == "" then [] else [{name:"PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID",value:$channex_property}] end) +
       (if $vay2017_phase == "" then [] else [{name:"VAY2017_PREFLIGHT_PHASE",value:$vay2017_phase}] end) +
+      (if $vay2017_source_import_phase == "" then [] else [{name:"VAY2017_SOURCE_IMPORT_PHASE",value:$vay2017_source_import_phase}] end) +
       (if $vay2017_source_sha == "" then [] else [{name:"VAY2017_PREFLIGHT_SOURCE_SHA",value:$vay2017_source_sha}] end) +
       (if $vay2017_execution_id == "" then [] else [{name:"VAY2017_PREFLIGHT_EXECUTION_ID",value:$vay2017_execution_id}] end) +
       (if $vay2017_signing_key_id == "" then [] else [{name:"VAY2017_PREFLIGHT_SIGNING_KEY_ID",value:$vay2017_signing_key_id}] end) +
@@ -361,7 +389,9 @@ task_arn="$(aws ecs run-task --cluster "${cluster}" --task-definition "${registe
 [[ "${task_arn}" == arn:aws:ecs:*:task/* ]] || { echo "ECS did not return a runtime preflight task ARN." >&2; exit 1; }
 
 stopped=false
-for _ in {1..60}; do
+max_polls=60
+[[ "${mode}" == "--import-vay2017-source-snapshot" ]] && max_polls=180
+for ((poll = 0; poll < max_polls; poll += 1)); do
   status="$(aws ecs describe-tasks --cluster "${cluster}" --tasks "${task_arn}" --region "${region}" \
     --query 'tasks[0].lastStatus' --output text)"
   if [[ "${status}" == "STOPPED" ]]; then
@@ -370,7 +400,11 @@ for _ in {1..60}; do
   fi
   sleep 5
 done
-[[ "${stopped}" == true ]] || { echo "Runtime preflight task exceeded five minutes." >&2; exit 1; }
+if [[ "${stopped}" != true ]]; then
+  [[ "${mode}" == "--import-vay2017-source-snapshot" ]] && message="Source snapshot import exceeded fifteen minutes." || message="Runtime preflight task exceeded five minutes."
+  echo "${message}" >&2
+  exit 1
+fi
 task_id="${task_arn##*/}"
 log_stream="ecs/${container}/${task_id}"
 messages="[]"
@@ -378,6 +412,9 @@ vay2017_expected_status=""
 if [[ "${vay2017_phase}" == "prepare" ]]; then vay2017_expected_status="prepared";
 elif [[ "${vay2017_phase}" == "execute" ]]; then vay2017_expected_status="complete";
 elif [[ "${vay2017_phase}" == "cleanup" ]]; then vay2017_expected_status="clean";
+elif [[ "${vay2017_source_import_phase}" == "prepare" ]]; then vay2017_expected_status="prepared";
+elif [[ "${vay2017_source_import_phase}" == "extract" ]]; then vay2017_expected_status="complete";
+elif [[ "${vay2017_source_import_phase}" == "cleanup" ]]; then vay2017_expected_status="clean";
 fi
 for _ in {1..10}; do
   messages="$(aws logs get-log-events --log-group-name /ecs/vayada-next-api --log-stream-name "${log_stream}" \

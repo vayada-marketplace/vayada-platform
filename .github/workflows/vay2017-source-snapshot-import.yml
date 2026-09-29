@@ -1,0 +1,81 @@
+name: VAY-2017 import immutable source snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Reviewed app source revision"
+        required: true
+      image_digest:
+        description: "Reviewed immutable Next API digest"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+
+jobs:
+  import:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Verify exact image and isolated source
+        id: verify
+        env:
+          SOURCE: ${{ inputs.source_sha }}
+          DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE" == "919956c1d85c148845a96ba3b16c5c59068e4a3b" ]]
+          [[ "$DIGEST" == "sha256:2b5cb2fb788c68ee93589006361fc9c8a8b7467c73deb434d573f5937449c71f" ]]
+          grep -Fx -- "$SOURCE $DIGEST" scripts/next-api-split-compatible-images.txt
+          aws ecr describe-images --repository-name vayada-next-api \
+            --image-ids "imageDigest=$DIGEST" --region eu-west-1 >/dev/null
+
+          snapshot="$(aws rds describe-db-snapshots --db-snapshot-identifier vay2017-legacy-source-20260929 \
+            --query 'DBSnapshots[0].{status:Status,source:DBInstanceIdentifier,encrypted:Encrypted,arn:DBSnapshotArn}' --output json)"
+          jq -e '.status=="available" and .source=="vayada-database" and .encrypted==true and
+            .arn=="arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-20260929"' <<<"$snapshot" >/dev/null
+
+          instance="$(aws rds describe-db-instances --db-instance-identifier vay2017-source-import-20260929 \
+            --query 'DBInstances[0].{status:DBInstanceStatus,public:PubliclyAccessible,multiAz:MultiAZ,encrypted:StorageEncrypted,endpoint:Endpoint.Address,resource:DbiResourceId,subnet:DBSubnetGroup.DBSubnetGroupName,vpc:DBSubnetGroup.VpcId,securityGroups:VpcSecurityGroups[].VpcSecurityGroupId,ca:CACertificateIdentifier}' --output json)"
+          jq -e '.status=="available" and .public==false and .multiAz==false and .encrypted==true and
+            .endpoint=="vay2017-source-import-20260929.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com" and
+            .resource=="db-NCBRBMYRRBMVWL7N4LB3AVYLHM" and .subnet=="default-vpc-055e8074dc3b2422a" and
+            .vpc=="vpc-055e8074dc3b2422a" and .securityGroups==["sg-0089fc5e42fa33566"] and
+            .ca=="rds-ca-rsa2048-g1"' <<<"$instance" >/dev/null
+
+          tags="$(aws rds list-tags-for-resource \
+            --resource-name arn:aws:rds:eu-west-1:269416271598:db:vay2017-source-import-20260929 \
+            --query 'TagList' --output json)"
+          jq -e 'any(.[]; .Key=="SourceSnapshotArn" and .Value=="arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-20260929")' <<<"$tags" >/dev/null
+          parameter="$(aws ssm get-parameter --name /vayada/prod/vay2017-source-import-url \
+            --query 'Parameter.{type:Type,version:Version}' --output json)"
+          jq -e '.type=="SecureString" and .version==1' <<<"$parameter" >/dev/null
+      - name: Prepare restricted source reader
+        env:
+          SOURCE: ${{ inputs.source_sha }}
+          DIGEST: ${{ inputs.image_digest }}
+        run: bash scripts/run-target-database-runtime-preflight.sh --import-vay2017-source-snapshot prepare "$DIGEST" "$SOURCE" vay1351-61ec013e79ed2a042caadef8 "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      - name: Extract exact source run
+        env:
+          SOURCE: ${{ inputs.source_sha }}
+          DIGEST: ${{ inputs.image_digest }}
+        run: bash scripts/run-target-database-runtime-preflight.sh --import-vay2017-source-snapshot extract "$DIGEST" "$SOURCE" vay1351-61ec013e79ed2a042caadef8 "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      - name: Disable and remove restricted source reader
+        if: always() && steps.verify.outcome == 'success'
+        env:
+          SOURCE: ${{ inputs.source_sha }}
+          DIGEST: ${{ inputs.image_digest }}
+        run: bash scripts/run-target-database-runtime-preflight.sh --import-vay2017-source-snapshot cleanup "$DIGEST" "$SOURCE" vay1351-61ec013e79ed2a042caadef8 "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

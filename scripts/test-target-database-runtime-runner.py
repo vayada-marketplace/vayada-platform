@@ -13,6 +13,9 @@ RUNNER = (ROOT / "scripts/run-target-database-runtime-preflight.sh").read_text()
 GRANT = (ROOT / "scripts/grant-target-database-product-audit-insert.mjs").read_text()
 IAM = (ROOT / "infra/target_database_preflight_iam.tf").read_text()
 VAY2017_WORKFLOW = (ROOT / ".github/workflows/vay2017-historical-binding-preflight.yml").read_text()
+VAY2017_IMPORT = (ROOT / "scripts/vay2017-source-snapshot-import.mjs").read_text()
+VAY2017_EXTRACT = (ROOT / "scripts/vay2017-source-snapshot-extract.mjs").read_text()
+VAY2017_IMPORT_WORKFLOW = (ROOT / ".github/workflows/vay2017-source-snapshot-import.yml").read_text()
 
 
 class RuntimePreflightRunnerTest(unittest.TestCase):
@@ -29,6 +32,64 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('cleanup "$DIGEST" "$SOURCE"', VAY2017_WORKFLOW)
         self.assertNotIn('TARGET_DATABASE_ADMIN_URL:', VAY2017_WORKFLOW)
         self.assertNotIn('{name:"APPLICATION_RELEASE",value:$vay2017_source_sha}', RUNNER)
+
+    def test_vay2017_snapshot_import_is_exact_bounded_and_cleanup_capable(self) -> None:
+        self.assertIn('--import-vay2017-source-snapshot)', RUNNER)
+        self.assertIn('vay1351-61ec013e79ed2a042caadef8', RUNNER)
+        self.assertIn('/vayada/prod/vay2017-source-import-url', RUNNER)
+        self.assertIn('max_polls=180', RUNNER)
+        self.assertIn('del(.taskRoleArn)', RUNNER)
+        self.assertIn('vay2017-source-import-20260929.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com', VAY2017_IMPORT)
+        self.assertIn('arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-20260929', VAY2017_IMPORT)
+        self.assertIn("environment: 'preprod'", VAY2017_EXTRACT)
+        self.assertIn("'/app/packages/backend-migration/dist/cli/sourceExtract.js'", VAY2017_EXTRACT)
+        self.assertIn("url.searchParams.set('sslmode', 'verify-full')", VAY2017_EXTRACT)
+        self.assertIn("url.searchParams.set('sslrootcert', CA_FILE)", VAY2017_EXTRACT)
+        self.assertIn('6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86', VAY2017_EXTRACT)
+        self.assertNotIn('rejectUnauthorized: false', VAY2017_EXTRACT)
+        self.assertIn('ALTER ROLE ${identifier(READER)} NOLOGIN', VAY2017_IMPORT)
+        self.assertIn("namespace.nspname='vayada_migration_evidence'", VAY2017_IMPORT)
+        self.assertIn('source_attestor_membership_cleanup_unsafe', VAY2017_IMPORT)
+        self.assertIn('WHERE to_regclass(name) IS NOT NULL', VAY2017_IMPORT)
+        self.assertIn("await client.query('DROP SCHEMA vayada_migration_evidence')", VAY2017_IMPORT)
+        self.assertIn('75 * 60 * 1000', VAY2017_IMPORT)
+        for source in (VAY2017_IMPORT, VAY2017_EXTRACT):
+            encoded = base64.b64encode(gzip.compress(source.encode(), compresslevel=9, mtime=0))
+            self.assertLessEqual(len(encoded) + 1460 + 1024, 8192)
+        self.assertIn('environment: platform-mutations-v2', VAY2017_IMPORT_WORKFLOW)
+        self.assertIn('if: always() && steps.verify.outcome == \'success\'', VAY2017_IMPORT_WORKFLOW)
+        self.assertEqual(VAY2017_IMPORT_WORKFLOW.count('--import-vay2017-source-snapshot'), 3)
+        self.assertIn('SourceSnapshotArn', VAY2017_IMPORT_WORKFLOW)
+        self.assertNotIn('--with-decryption', VAY2017_IMPORT_WORKFLOW)
+        self.assertIn('919956c1d85c148845a96ba3b16c5c59068e4a3b', VAY2017_IMPORT_WORKFLOW)
+        self.assertIn('sha256:2b5cb2fb788c68ee93589006361fc9c8a8b7467c73deb434d573f5937449c71f', VAY2017_IMPORT_WORKFLOW)
+        self.assertNotIn('__APP_', VAY2017_IMPORT_WORKFLOW)
+
+    def test_vay2017_snapshot_import_rejects_bad_inputs_without_echoing_them(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            importer = Path(directory) / 'import.mjs'
+            importer.write_text(VAY2017_EXTRACT)
+            secret = 'must-not-appear'
+            result = subprocess.run(
+                ['node', str(importer)], capture_output=True, text=True,
+                env={
+                    **os.environ,
+                    'VAY2017_SOURCE_IMPORT_PHASE': 'extract',
+                    'VAYADA_DB_RDS_CA_BUNDLE': (ROOT / 'rehearsal/rds-ca-rsa2048-g1.pem').read_text(),
+                    'VAY2017_SOURCE_READER_URL': f'postgresql://wrong:{secret}@wrong.invalid:5432/postgres?sslmode=require',
+                    'TARGET_DATABASE_MIGRATION_URL': 'postgresql://migration:x@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/vayada_target_prod?sslmode=require',
+                },
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('"code":"source_import_url_invalid"', result.stderr)
+        self.assertNotIn(secret, result.stderr)
+        invalid = subprocess.run(
+            ['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+             '--import-vay2017-source-snapshot', 'extract', f'sha256:{"a" * 64}', 'b' * 40,
+             'vay1351-deadbeefdeadbeefdeadbeef', '1-1'], capture_output=True, text=True,
+        )
+        self.assertEqual(invalid.returncode, 2)
+        self.assertIn('pinned run ID', invalid.stderr)
 
     def test_temporary_task_receives_only_the_runtime_database_secret(self) -> None:
         self.assertIn('secret_name="TARGET_DATABASE_URL"', RUNNER)
