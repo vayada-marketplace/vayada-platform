@@ -61,8 +61,9 @@ public-IP security-control impact before deploying the selected pilot:
 would fail for an ECS service with automatic public-IP assignment if that
 control is enabled. This decision is not evidence of an active finding.
 
-The first platform implementation may create the isolated resources with the
-service stopped. Starting tasks or admitting requests requires the gates below.
+Terraform declares the isolated empty resources, but the 2026-09-29 live
+read-only check found none created. Starting tasks or admitting requests
+requires the gates below.
 
 ### One-time empty-resource bootstrap gate
 
@@ -75,28 +76,32 @@ CI permission expansion or manual AWS resource creation.
 
 The 2026-09-29 hosted plan also includes an unrelated VAY-2017 preflight IAM
 policy update. Do not apply that combined plan as a pricing bootstrap. Let its
-owner resolve that change separately. The ordinary plan and deploy roles also
-currently lack metadata-read permission on the new secret containers, and the
-deploy role cannot refresh the new execution role/policy. First review and
-install only the minimal metadata-refresh grants for those exact resources;
-prove they do not grant secret values, resource creation, or role passing.
-These grants are a separate approved change, not part of the seven-resource
-bootstrap.
-
-Then obtain a fresh full plan against current `main` and state. The pricing
-bootstrap is eligible only if the saved plan contains exactly those seven
-resource addresses as additions, with zero updates, replacements, or
-deletions; do not use Terraform `-target` to manufacture that result.
+owner resolve that change separately. Then obtain a fresh full plan against
+current `main` and state. The pricing bootstrap is eligible only if the saved
+plan contains exactly those seven resource addresses as additions, with zero
+updates, replacements, or deletions; do not use Terraform `-target` to
+manufacture that result.
+The addresses are `aws_iam_role.pricing_command_execution`,
+`aws_iam_role_policy.pricing_command_secrets`, and
+`aws_secretsmanager_secret.pricing_command` for the five keys
+`identity_read`, `owner_read`, `owner_manage`, `public`, and `internal_token`.
 
 Pause competing platform writers, review the exact plan and AWS identity, and
 have the authorized operator apply that same saved plan under the existing
 Terraform state lock. Keep the plan and its sensitive variable values out of
 the repository, CI logs, and PR artifacts. If source, state, or plan changes,
-discard it and review a new plan. Afterwards verify the five empty containers,
-the role's trust and exact policy, unchanged shared-role secret access, and an
-ordinary no-op plan before resuming writers. This bootstrap does not provision
-database logins, populate secrets, launch the service, enable API routing, or
-authorize the hotel smoke.
+discard it and review a new plan. Verify the five empty containers, the role's
+trust and exact policy, and unchanged shared-role secret access.
+
+Keep writers paused: the ordinary plan and deploy roles currently cannot
+refresh the new secret containers, and the deploy role cannot refresh the new
+execution role/policy. In a separate reviewed configuration change, grant
+only exact-resource metadata refresh to those roles; prove it does not grant
+secret values, resource creation, or role passing. The authorized operator
+must apply its own fresh full saved plan with no unrelated changes. Resume
+ordinary writers only after their hosted plan refreshes to no-op. Neither
+phase provisions database logins, populates secrets, launches the service,
+enables API routing, or authorizes the hotel smoke.
 
 ## Secret and database isolation
 
