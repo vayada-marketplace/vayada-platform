@@ -19,30 +19,33 @@ concurrency:
   queue: max
 
 jobs:
-  import:
+  authorize-import:
     if: github.ref == 'refs/heads/main'
     environment: platform-mutations-v2
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    steps:
+      - run: "true"
+
+  verify-source:
+    if: github.ref == 'refs/heads/main'
+    needs: authorize-import
+    environment: vay2042-data-rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      verified-at: ${{ steps.verify.outputs.verified_at }}
     steps:
       - uses: actions/checkout@v7
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-vay2042-source-reader
           aws-region: eu-west-1
-      - name: Verify exact image and isolated source
+          inline-session-policy: >-
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["rds:DescribeDBInstances","rds:DescribeDBSnapshots","cloudtrail:LookupEvents"],"Resource":"*"}]}
+      - name: Verify immutable source restore
         id: verify
-        env:
-          SOURCE: ${{ inputs.source_sha }}
-          DIGEST: ${{ inputs.image_digest }}
         run: |
           set -euo pipefail
-          [[ "$SOURCE" == "919956c1d85c148845a96ba3b16c5c59068e4a3b" ]]
-          [[ "$DIGEST" == "sha256:2b5cb2fb788c68ee93589006361fc9c8a8b7467c73deb434d573f5937449c71f" ]]
-          grep -Fx -- "$SOURCE $DIGEST" scripts/next-api-split-compatible-images.txt
-          aws ecr describe-images --repository-name vayada-next-api \
-            --image-ids "imageDigest=$DIGEST" --region eu-west-1 >/dev/null
-
           snapshot="$(aws rds describe-db-snapshots --db-snapshot-identifier vay2017-legacy-source-20260929 \
             --query 'DBSnapshots[0].{status:Status,source:DBInstanceIdentifier,encrypted:Encrypted,arn:DBSnapshotArn}' --output json)"
           jq -e '.status=="available" and .source=="vayada-database" and .encrypted==true and
@@ -56,10 +59,46 @@ jobs:
             .vpc=="vpc-055e8074dc3b2422a" and .securityGroups==["sg-0089fc5e42fa33566"] and
             .ca=="rds-ca-rsa2048-g1"' <<<"$instance" >/dev/null
 
-          tags="$(aws rds list-tags-for-resource \
-            --resource-name arn:aws:rds:eu-west-1:269416271598:db:vay2017-source-import-20260929 \
-            --query 'TagList' --output json)"
-          jq -e 'any(.[]; .Key=="SourceSnapshotArn" and .Value=="arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-20260929")' <<<"$tags" >/dev/null
+          restore_events="$(aws cloudtrail lookup-events --region eu-west-1 \
+            --lookup-attributes AttributeKey=EventName,AttributeValue=RestoreDBInstanceFromDBSnapshot \
+            --start-time 2026-09-29T00:00:00Z --query 'Events[*].CloudTrailEvent' --output json)"
+          jq -e 'any(.[] | fromjson;
+            .errorCode == null and .awsRegion == "eu-west-1" and .recipientAccountId == "269416271598" and
+            .requestParameters.dBInstanceIdentifier == "vay2017-source-import-20260929" and
+            (.requestParameters.dBSnapshotIdentifier == "vay2017-legacy-source-20260929" or
+             .requestParameters.dBSnapshotIdentifier == "arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-20260929") and
+            .responseElements.dbiResourceId == "db-NCBRBMYRRBMVWL7N4LB3AVYLHM")' <<<"$restore_events" >/dev/null
+          printf 'verified_at=%s\n' "$(date +%s)" >> "$GITHUB_OUTPUT"
+
+  import:
+    if: github.ref == 'refs/heads/main'
+    needs: verify-source
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Verify exact image and import credential
+        id: verify
+        env:
+          SOURCE: ${{ inputs.source_sha }}
+          DIGEST: ${{ inputs.image_digest }}
+          VERIFIED_AT: ${{ needs.verify-source.outputs.verified-at }}
+        run: |
+          set -euo pipefail
+          [[ "$VERIFIED_AT" =~ ^[0-9]+$ ]]
+          now="$(date +%s)"
+          (( now >= VERIFIED_AT && now - VERIFIED_AT <= 180 ))
+          [[ "$SOURCE" == "919956c1d85c148845a96ba3b16c5c59068e4a3b" ]]
+          [[ "$DIGEST" == "sha256:2b5cb2fb788c68ee93589006361fc9c8a8b7467c73deb434d573f5937449c71f" ]]
+          grep -Fx -- "$SOURCE $DIGEST" scripts/next-api-split-compatible-images.txt
+          aws ecr describe-images --repository-name vayada-next-api \
+            --image-ids "imageDigest=$DIGEST" --region eu-west-1 >/dev/null
+
           parameter="$(aws ssm get-parameter --name /vayada/prod/vay2017-source-import-url \
             --query 'Parameter.{type:Type,version:Version}' --output json)"
           jq -e '.type=="SecureString" and .version==1' <<<"$parameter" >/dev/null
