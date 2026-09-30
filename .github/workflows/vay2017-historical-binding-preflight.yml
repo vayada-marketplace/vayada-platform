@@ -38,8 +38,8 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SOURCE" =~ ^[0-9a-f]{40}$ && "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          [[ "$SOURCE" == "b9c0ba2074a5cf425443d6d48ec5303dacc47db6" ]]
-          [[ "$DIGEST" == "sha256:cadaf4e64e97d10e00c27f276b7186259b2afb0d1e830555eca1cc394b25041d" ]]
+          [[ "$SOURCE" == "f6beaed255ef6a83509948c297f19cab7e62c499" ]]
+          [[ "$DIGEST" == "sha256:8caa417dfa8eb4822c37a9169f982795691d6dcbb1080b06a8530aba6c52b4ed" ]]
           grep -Fx -- "$SOURCE $DIGEST" scripts/next-api-split-compatible-images.txt
           aws ecr describe-images --repository-name vayada-next-api \
             --image-ids "imageDigest=$DIGEST" --region eu-west-1 >/dev/null
