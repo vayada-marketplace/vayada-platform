@@ -427,8 +427,9 @@ var requireTrue3 = (condition, code) => {
   if (!condition) throw new Error(code);
 };
 var initialExpiry = /* @__PURE__ */ new Map([
-  [reader, ["2026-09-26T13:22:00Z", "2026-09-26T13:23:15Z"]],
-  [writer, ["2026-09-26T13:33:58Z", "2026-09-26T13:34:59Z"]]
+  // The sole prior protected renewal (run 36282007889) set both roles to this expiry.
+  [reader, ["2026-09-28T00:17:57.465Z", "2026-09-28T00:17:57.465Z"]],
+  [writer, ["2026-09-28T00:17:57.465Z", "2026-09-28T00:17:57.465Z"]]
 ]);
 var expectedDatabases = [...vay2042_source_reader_default.databases, target].sort();
 var expectedSettings = [

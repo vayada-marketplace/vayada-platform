@@ -55,9 +55,11 @@ test('preflight renews only the exact two roles on a synthetic PostgreSQL restor
   const connect = (database, identity) => identity === 'admin' ? connectAdmin(database) :
     identity === 'source' ? open(database, reader, sourceCredential.password) :
       open(database, writer, targetCredential.password);
-  const result = await runPreflight({ connect, now: () => Date.parse('2026-09-26T16:00:00Z') });
+  for (const name of [reader, writer])
+    await root.query(`ALTER ROLE ${ident(name)} VALID UNTIL '2026-09-28T00:17:57.465Z'`);
+  const result = await runPreflight({ connect, now: () => Date.parse('2026-09-30T16:00:00Z') });
   assert.deepEqual(result, { status: 'OK', stage: 'complete', scope: 'isolated-catalog-preflight',
-    databases: 10, tables: 83, bound: false, expiresAt: '2026-09-27T16:00:00.000Z' });
+    databases: 10, tables: 83, bound: false, expiresAt: '2026-10-01T16:00:00.000Z' });
   const roles = (await root.query('SELECT rolname,rolvaliduntil FROM pg_roles WHERE rolname = ANY($1::text[])',
     [[reader, writer]])).rows;
   assert.equal(roles.length, 2);
