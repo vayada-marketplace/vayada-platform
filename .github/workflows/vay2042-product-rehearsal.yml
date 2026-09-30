@@ -1,0 +1,27 @@
+name: VAY-2042 Isolated Product Rehearsal
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: vay2017-metadata-runner
+  cancel-in-progress: false
+jobs:
+  rehearse:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: vay2042-data-rehearsal
+    timeout-minutes: 250
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Require separately reviewed exact run file
+        run: test -f rehearsal/vay2042/product-rehearsal-run.json
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-vay2042-product-rehearsal
+          aws-region: eu-west-1
+      - name: Launch only the fixed private task
+        run: bash scripts/run-vay2042-product-rehearsal.sh
