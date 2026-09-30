@@ -5,8 +5,9 @@ import { target, writer, attestor } from './provision-vay2042-target.mjs';
 
 const requireTrue = (condition, code) => { if (!condition) throw new Error(code); };
 const initialExpiry = new Map([
-  [reader, ['2026-09-26T13:22:00Z', '2026-09-26T13:23:15Z']],
-  [writer, ['2026-09-26T13:33:58Z', '2026-09-26T13:34:59Z']],
+  // The sole prior protected renewal (run 36282007889) set both roles to this expiry.
+  [reader, ['2026-09-28T00:17:57.465Z', '2026-09-28T00:17:57.465Z']],
+  [writer, ['2026-09-28T00:17:57.465Z', '2026-09-28T00:17:57.465Z']],
 ]);
 const expectedDatabases = [...manifest.databases, target].sort();
 const expectedSettings = [

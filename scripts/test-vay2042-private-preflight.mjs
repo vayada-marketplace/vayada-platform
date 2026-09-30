@@ -8,17 +8,17 @@ import { checkRole, checkSecretMetadata, runPreflight } from './vay2042-private-
 const role = (name, expiry) => ({ rolname: name, rolcanlogin: true, rolconnlimit: 4,
   rolsuper: false, rolcreatedb: false, rolcreaterole: false, rolinherit: false,
   rolreplication: false, rolbypassrls: false, rolvaliduntil: expiry });
-const now = Date.parse('2026-09-26T16:00:00Z');
+const now = Date.parse('2026-09-30T16:00:00Z');
 
-test('only the original expired, unelevated logins qualify', () => {
-  checkRole(role(reader, '2026-09-26T13:22:45Z'), reader, now);
-  checkRole(role(writer, '2026-09-26T13:34:20Z'), writer, now);
+test('only the previously renewed, expired, unelevated logins qualify', () => {
+  checkRole(role(reader, '2026-09-28T00:17:57.465Z'), reader, now);
+  checkRole(role(writer, '2026-09-28T00:17:57.465Z'), writer, now);
   for (const bad of [
-    { ...role(reader, '2026-09-26T13:22:45Z'), rolcanlogin: false },
-    { ...role(reader, '2026-09-26T13:22:45Z'), rolcreatedb: true },
-    { ...role(reader, '2026-09-26T13:22:45Z'), rolconnlimit: -1 },
-    role(reader, '2026-09-27T13:22:45Z'),
-    role(reader, '2026-09-26T13:21:59Z'),
+    { ...role(reader, '2026-09-28T00:17:57.465Z'), rolcanlogin: false },
+    { ...role(reader, '2026-09-28T00:17:57.465Z'), rolcreatedb: true },
+    { ...role(reader, '2026-09-28T00:17:57.465Z'), rolconnlimit: -1 },
+    role(reader, '2026-09-28T00:17:58.465Z'),
+    role(reader, '2026-09-28T00:17:56.465Z'),
   ]) assert.throws(() => checkRole(bad, reader, now), /role_identity_or_expiry_mismatch/);
 });
 
@@ -49,7 +49,7 @@ function fakeDatabase({ drift = false, directFailure = false, oldWriterAccess = 
         if (sql.includes('FROM pg_database\n      WHERE datallowconn')) return rows(
           (drift ? ['postgres'] : [...manifest.databases, target].sort()).map((datname) => ({ datname })));
         if (sql.startsWith('SELECT rolname,rolcanlogin')) return rows([
-          role(reader, '2026-09-26T13:22:45Z'), role(writer, '2026-09-26T13:34:20Z'),
+          role(reader, '2026-09-28T00:17:57.465Z'), role(writer, '2026-09-28T00:17:57.465Z'),
         ]);
         if (sql.includes('FROM pg_db_role_setting')) return rows([{ rolname: reader, global: true,
           setconfig: ['default_transaction_read_only=on', 'statement_timeout=60s',
