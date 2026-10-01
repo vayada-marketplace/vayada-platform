@@ -1,8 +1,10 @@
 # VAY-1543 temporary creation identity — review only
 
 **Blocked for execution:** the scoped SSM read exception below is proposed for
-review, not granted or approved for activation. Executor and role-policy-content
-gates are still absent. No activation is ready.
+review, not granted or approved for activation. The temporary identity now has
+no IAM write allowances and cannot execute the former seven-create plan.
+Separate operator-owned execution-role setup and executor gates are still
+absent. No activation is ready.
 
 This is the first implementation slice of the hosted operator proposal in
 [contract #251](https://github.com/vayada-marketplace/vayada-platform/pull/251).
@@ -22,24 +24,49 @@ is not evidence that production-root refresh works. The SSM opt-in is separately
 off by default (`enable_ssm_refresh_decryption=false`).
 
 The creation role reuses the enumerated plan-policy refresh/lock allowlist,
-adds writes only to the exact production state object, the dedicated execution
-role, and five fixed secret names with their required tags. Secret ARNs have
+adds writes only to the exact production state object and five fixed secret
+names with their required tags. Secret ARNs have
 six suffix placeholders, not a broad prefix. No metadata-policy mutation,
 service mutation, PassRole, Secrets Manager value read/subsequent write,
 or role assumption is allowed. KMS decrypt is denied by default; the proposed
 exception permits only the fixed SSM refresh described below. State/SSM
 configuration reads remain privileged.
-CreateSecret can include initial values and PutRolePolicy accepts arbitrary
-JSON: IAM does not prove the empty-container or policy-content restrictions.
-Reviewed source, exact-plan approval and verification must enforce them.
-CodeRabbit's review of the initial slice raised this as a major activation
-blocker: arbitrary execution-role trust/policy content can confer authority on
-another principal that outlives the bootstrap window. The bootstrap role's own
-time fences and chaining denial do not constrain that other principal. No
-execution-role permissions boundary exists in the seven-create declaration.
-Do not invent a boundary ARN or mark the concern resolved; require a reviewed
-content-enforcement design or explicit acceptance of this trusted-operator
-authority, plus implemented exact-source/plan controls, before activation.
+CreateSecret can include initial values: IAM does not prove empty containers.
+Reviewed source, exact-plan approval and verification must enforce that remaining
+trusted-operator restriction.
+
+### Role-mutation restriction — proposed for review
+
+CodeRabbit identified that CreateRole/PutRolePolicy could grant another
+principal persistent execution-role authority beyond the bootstrap window.
+The proposal removes both permissions rather than relying on expiry or an
+invented permissions-boundary ARN. An unconditional all-resource denial also
+covers role creation, inline policy writes/deletes, trust edits, managed-policy
+attachments/detachments, role deletion/tag changes and boundary changes.
+The remaining IAM allowances are exactly the existing eight Get/List actions.
+Tests verify this in both default-deny and SSM-opt-in policy compositions.
+Read-only custom-policy simulation denied all 11 mutation actions on the
+execution, bootstrap and unrelated role ARNs (33 resource decisions), allowed
+GetRole/ListRolePolicies, implicitly denied policy creation/version changes
+and explicitly denied PassRole. These simulated documents are not deployed
+policies or actual-role enforcement evidence.
+
+A [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html)
+limits identity-policy permissions, not the arbitrary trust document supplied
+to [CreateRole](https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreateRole.html).
+Keeping role creation with a secret-reading boundary would still let the
+creator name an unintended principal. No such delegation is proposed here.
+
+This restriction supersedes only the candidate IAM write permissions in draft
+contract #251; it does not implement a new provisioning lane. The unchanged
+root still declares five secrets, the execution role and its inline policy.
+The unchanged seven-create guard/plan proposal #343 therefore cannot be used
+as this identity's execution plan. A separately reviewed authorized-operator
+step must own exact ECS-only execution-role trust and policy, with reviewed
+state ownership and revised full-plan guards. Those controls are not provided
+by this PR. Do not remove denials, use imports/targeted applies to improvise
+that step, run the old plan hoping for partial success, or treat missing IAM
+permissions as a reason to widen this role again.
 
 Admission is a fixed OIDC audience/environment within a reviewed UTC window
 of at most one hour. Request-time denial stops already-issued sessions at the
@@ -48,13 +75,14 @@ prove the new `pricing-bootstrap-create-v1` environment admits reviewed `main`
 only and requires the agreed approved human reviewers. The IAM environment
 subject alone does not restrict branch or human identity. Do not configure
 or activate it under this PR's approval. Operators also control the new role;
-it cannot edit its own trust or permissions. Only its declared refresh policy
-may be attached. The inline all-action time fences also deny managed refresh
-permissions outside the window; IAM propagation still needs actual proof.
+it cannot edit its own or another role's trust or permissions. Only the declared
+refresh policies may be attached. The inline all-action time fences also deny
+managed refresh permissions outside the window; IAM propagation still needs
+actual proof.
 
-Provider action inventory was checked against the pinned [AWS 5.100.0 role](https://github.com/hashicorp/terraform-provider-aws/blob/v5.100.0/internal/service/iam/role.go)
-and [secret](https://github.com/hashicorp/terraform-provider-aws/blob/v5.100.0/internal/service/secretsmanager/secret.go)
-creation/read paths. CreateSecret name conditions are separate from TagResource,
+Provider action inventory was checked against the pinned [AWS 5.100.0 secret](https://github.com/hashicorp/terraform-provider-aws/blob/v5.100.0/internal/service/secretsmanager/secret.go)
+creation/read path; execution-role writes are intentionally unavailable.
+CreateSecret name conditions are separate from TagResource,
 which does not support that key ([AWS action reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_secretsmanager.html)).
 Offline native plans validate declaration/policy structure, not live IAM admission.
 

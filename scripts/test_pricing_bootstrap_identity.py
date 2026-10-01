@@ -11,7 +11,6 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = ROOT / "infra/pricing-bootstrap-identity"
 WINDOW = {"start": "2030-01-01T00:00:00Z", "end": "2030-01-01T01:00:00Z"}
-ROLE = "arn:aws:iam::269416271598:role/vayada-pricing-command-execution"
 SSM_KEY = "arn:aws:kms:eu-west-1:269416271598:key/3f96b311-bfda-431d-8f05-bfced29c2114"
 
 
@@ -91,7 +90,7 @@ class IdentityTests(unittest.TestCase):
         statements += json.loads(refresh)["Statement"]
         self.assertEqual(len({s["Sid"] for s in statements}), len(statements))
         by_sid = {s["Sid"]: s for s in statements}
-        self.assertEqual(by_sid["CreateDedicatedExecutionRole"]["Resource"], ROLE)
+        self.assert_role_writes_denied(statements)
         self.assertEqual(by_sid["ExactProductionStateWrite"]["Resource"], "arn:aws:s3:::vayada-terraform-state/platform/terraform.tfstate")
         self.assertEqual(by_sid["BeforeWindow"]["Condition"], {"DateLessThan": {"aws:CurrentTime": WINDOW["start"]}})
         self.assertEqual(by_sid["ExpireIssuedSessions"]["Condition"], {"DateGreaterThanEquals": {"aws:CurrentTime": WINDOW["end"]}})
@@ -121,7 +120,19 @@ class IdentityTests(unittest.TestCase):
         allowed_writes = {action for s in statements if s["Effect"] == "Allow" for action in s["Action"]
                           if not action.split(":")[1].startswith(("Get", "List", "Describe"))}
         self.assertEqual(allowed_writes, {"s3:PutObject", "dynamodb:PutItem", "dynamodb:DeleteItem",
-                                         "iam:CreateRole", "iam:PutRolePolicy", "secretsmanager:CreateSecret", "secretsmanager:TagResource"})
+                                         "secretsmanager:CreateSecret", "secretsmanager:TagResource"})
+
+    def assert_role_writes_denied(self, statements):
+        by_sid = {s["Sid"]: s for s in statements}
+        self.assertNotIn("CreateDedicatedExecutionRole", by_sid)
+        self.assertEqual(by_sid["NeverMutateRoles"], {
+            "Sid": "NeverMutateRoles", "Effect": "Deny", "Resource": "*",
+            "Action": ["iam:CreateRole", "iam:PutRolePolicy", "iam:UpdateAssumeRolePolicy", "iam:AttachRolePolicy",
+                       "iam:DetachRolePolicy", "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:TagRole", "iam:UntagRole",
+                       "iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary"]})
+        allowed_iam = {a for s in statements if s["Effect"] == "Allow" for a in s["Action"] if a.startswith("iam:")}
+        self.assertEqual(allowed_iam, {"iam:GetRole", "iam:ListRolePolicies", "iam:GetRolePolicy", "iam:ListAttachedRolePolicies",
+                                      "iam:ListRoleTags", "iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions"})
 
     def test_exact_key_metadata_without_decrypt(self):
         key = "arn:aws:kms:eu-west-1:269416271598:key/00000000-0000-0000-0000-000000000000"
@@ -152,6 +163,7 @@ class IdentityTests(unittest.TestCase):
         statements = [statement for policy in policies for statement in json.loads(policy)["Statement"]]
         by_sid = {s["Sid"]: s for s in statements}
         self.assertEqual(len(by_sid), len(statements))
+        self.assert_role_writes_denied(statements)
         self.assertNotIn("ParameterMetadata", by_sid)
         self.assertNotIn("DenyAllDecrypt", by_sid)
         parameters = by_sid["ExactManagedParameterRefresh"]

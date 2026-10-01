@@ -54,9 +54,8 @@ variable "enable_ssm_refresh_decryption" {
 }
 
 locals {
-  window_start   = try(var.creation_window.start, "1970-01-01T00:00:00Z")
-  window_end     = try(var.creation_window.end, "1970-01-01T00:00:01Z")
-  execution_role = "arn:aws:iam::269416271598:role/vayada-pricing-command-execution"
+  window_start = try(var.creation_window.start, "1970-01-01T00:00:00Z")
+  window_end   = try(var.creation_window.end, "1970-01-01T00:00:01Z")
   names = {
     identity_read  = "identity-read-database-url"
     owner_read     = "owner-read-database-url"
@@ -94,10 +93,6 @@ locals {
       Resource = "arn:aws:s3:::vayada-terraform-state/platform/terraform.tfstate"
     },
     {
-      Sid      = "CreateDedicatedExecutionRole", Effect = "Allow", Action = ["iam:CreateRole", "iam:PutRolePolicy"]
-      Resource = local.execution_role
-    },
-    {
       Sid      = "VerifyOnlyFixedSecretMetadata", Effect = "Allow"
       Action   = ["secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy", "secretsmanager:ListSecretVersionIds"]
       Resource = local.secret_arns
@@ -115,6 +110,12 @@ locals {
       }
   }]]))
   fences = [
+    {
+      Sid = "NeverMutateRoles", Effect = "Deny", Resource = "*"
+      Action = ["iam:CreateRole", "iam:PutRolePolicy", "iam:UpdateAssumeRolePolicy", "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy", "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:TagRole", "iam:UntagRole",
+      "iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary"]
+    },
     {
       Sid       = "BeforeWindow", Effect = "Deny", Action = "*", Resource = "*"
       Condition = { DateLessThan = { "aws:CurrentTime" = local.window_start } }
