@@ -74,10 +74,10 @@ deploy role permission to create IAM roles or secrets. Keep that boundary; use
 an authorized operator for this one-time Terraform bootstrap, not a permanent
 CI permission expansion or manual AWS resource creation.
 
-The 2026-09-29 hosted plan also includes an unrelated VAY-2017 preflight IAM
-policy update. Do not apply that combined plan as a pricing bootstrap. Let its
-owner resolve that change separately. Then obtain a fresh full plan against
-current `main` and state. The pricing bootstrap is eligible only if the saved
+The 2026-09-29 hosted plan included an unrelated VAY-2017 IAM update. That
+historical combined plan remains unusable; do not treat it as a current blocker
+without fresh evidence. Obtain a fresh full plan against current `main` and
+state. The pricing bootstrap is eligible only if the saved
 plan contains exactly those seven resource addresses as additions, with zero
 updates, replacements, or deletions; do not use Terraform `-target` to
 manufacture that result.
@@ -102,6 +102,97 @@ must apply its own fresh full saved plan with no unrelated changes. Resume
 ordinary writers only after their hosted plan refreshes to no-op. Neither
 phase provisions database logins, populates secrets, launches the service,
 enables API routing, or authorizes the hotel smoke.
+
+### Proposed hosted operator execution — not approved or implemented
+
+[Draft #343](https://github.com/vayada-marketplace/vayada-platform/pull/343)
+prepares and discards a guarded plan using existing GitHub production settings.
+It cannot apply and does not solve local operator input loading. Recommend a
+separate temporary hosted operator identity, rather than exporting inputs or
+expanding the ordinary deployment role. This proposal changes no IAM, GitHub
+environment, workflow, state or production resource.
+
+The identity prerequisite must have its own reviewed operator configuration
+and saved plan, using non-secret IAM/backend metadata only. Do not add it to the
+seven-resource root bootstrap plan or let it provision itself. Its main-only
+GitHub environment/OIDC admission, fixed audience, approved human operators,
+explicit expiry and session revocation require separate approval and proof.
+Normal CI role trust, grants and VAY-2029 cutoff stay unchanged.
+
+Candidate privileges for the **creation phase only**:
+
+- Enumerated provider refresh from the existing plan-policy template, not a
+  clone of the broad deployment role. This still exposes sensitive Terraform
+  state/SSM configuration; treat the operator job as privileged.
+- State read/write only on the existing exact production state object, and
+  existing lock-table metadata/leading-key bookkeeping; no other object writes.
+- `secretsmanager:CreateSecret` for the five fixed names, with their exact
+  name conditions, region/account and required tags. The ARN suffix is unknown
+  before creation; use only each fixed name plus its six-character suffix, not
+  `pricing-command/*`. Grant tagging and scoped metadata/version inventory
+  only where needed by the pinned provider and empty-container verification.
+- `iam:CreateRole` and `iam:PutRolePolicy` only on
+  `arn:aws:iam::269416271598:role/vayada-pricing-command-execution`, plus its
+  enumerated refresh reads. No other role/policy writes, PassRole, role
+  assumption, service/task mutation, secret-value reads, subsequent value
+  writes, resource-policy writes, rotation, replication or deletion.
+
+These are action/resource limits, **not** content-level enforcement.
+[CreateSecret](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html)
+can create an initial value in the same request; denying PutSecretValue does
+not make CreateSecret metadata-only. The
+[supported condition keys](https://docs.aws.amazon.com/service-authorization/latest/reference/list_secretsmanager.html)
+do not provide a SecretString/SecretBinary absence condition. Likewise,
+[PutRolePolicy](https://docs.aws.amazon.com/IAM/latest/APIReference/API_PutRolePolicy.html)
+accepts a policy document. Exact target scoping alone does not constrain its
+content. Empty containers and exact execution-role trust/policy therefore rely
+on the reviewed immutable workflow/provider/declarations, same-plan guards and
+post-apply verification. Residual trusted-operator authority requires explicit
+acceptance; no assertion that IAM proves these content restrictions is allowed.
+
+The proposed executor keeps one private runner and one saved plan alive through
+review; no plan, inputs or state is handed to another job, artifact or operator
+download. After a full plan passes all guards, emit only an allowlisted receipt
+with phase, exact source/run/attempt, account/identity, state lineage/serial,
+plan digest, fixed seven-resource security configuration and one-use nonce.
+An explicit approval must bind this receipt and digest, come from an approved
+human identity, and be created after the receipt. Reject bot, stale, edited,
+unbound, replayed or timed-out approvals. Existing chat “proceed” is not such a
+plan approval. The same-runner approval implementation is a required later
+review/test gate; do not claim it exists in #343.
+
+Native [GitHub deployment approval](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments)
+admits a job before execution, so it is not by itself review of that job's
+later saved plan. Do not split plan/apply jobs and silently move sensitive
+files between them to simulate this checkpoint. Immediately before apply,
+recheck current main, receipt authorization/expiry, plan digest, source/override
+guards, AWS identity and durable shared writer hold. Before either phase's
+saved-plan apply, require reviewed phase-specific authorization evidence for
+that identity, resource set and validity window: safe actual metadata/denial
+probes and IAM simulation of prohibited mutations/value reads. Missing or
+failed proof blocks apply; do not probe denial by writing or fetching values.
+Terraform must reject a stale state plan. Cancellation/failure keeps the hold
+and requires inspection, not a blind rerun or automatic destroy. Release no
+secrets or traffic.
+
+Creation-phase authority must not also permit the metadata-policy updates.
+After verifying the seven empty resources, expire/revoke that phase's sessions.
+The separately reviewed metadata phase allows only the exact two policy targets
+from [#338](https://github.com/vayada-marketplace/vayada-platform/pull/338), with
+its own fresh saved plan/approval and unchanged installed writer boundary.
+Policy-document mutation is privileged there too; guards and verification,
+not a claimed IAM document-content constraint, preserve the cutoff and deny
+extra grants. The setup identity must not alter its own trust/policies.
+
+Use explicit request-time expiry and the reviewed
+[session-revocation procedure](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_revoke-sessions.html);
+removing OIDC trust alone does not revoke issued sessions. Demonstrate allowed
+operations, denied unrelated/value/service/PassRole operations and old-session
+denial without prohibited mutation probes. Keep ordinary writers paused until
+temporary authority is retired, positive/negative metadata checks pass and
+ordinary hosted refresh is no-op. Concrete policies, provider action inventory,
+approval-channel code, partial-failure recovery and actual-role evidence remain
+implementation gates. No role, grant or apply is authorized by this proposal.
 
 ## Secret and database isolation
 
