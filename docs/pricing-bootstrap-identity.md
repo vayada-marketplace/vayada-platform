@@ -3,8 +3,8 @@
 **Blocked for execution:** the scoped SSM read exception below is proposed for
 review, not granted or approved for activation. The temporary identity now has
 no IAM write allowances and cannot execute the former seven-create plan.
-Separate operator-owned execution-role setup and executor gates are still
-absent. No activation is ready.
+The operator-owned setup route below is proposed, not implemented or approved
+for execution. Its executor gates remain absent. No activation is ready.
 
 This is the first implementation slice of the hosted operator proposal in
 [contract #251](https://github.com/vayada-marketplace/vayada-platform/pull/251).
@@ -62,11 +62,68 @@ contract #251; it does not implement a new provisioning lane. The unchanged
 root still declares five secrets, the execution role and its inline policy.
 The unchanged seven-create guard/plan proposal #343 therefore cannot be used
 as this identity's execution plan. A separately reviewed authorized-operator
-step must own exact ECS-only execution-role trust and policy, with reviewed
-state ownership and revised full-plan guards. Those controls are not provided
-by this PR. Do not remove denials, use imports/targeted applies to improvise
-that step, run the old plan hoping for partial success, or treat missing IAM
+step must own exact ECS-only execution-role trust and policy. The proposed
+same-root route below preserves state ownership and the seven-create guard;
+it does not provide an executor. Do not remove denials, use imports/targeted
+applies to improvise that step, run the old plan hoping for partial success, or treat missing IAM
 permissions as a reason to widen this role again.
+
+### Proposed operator setup: keep all seven resources in the existing root
+
+Use one separately authorized operator for the **whole** seven-create phase,
+not a role-only apply followed by this temporary identity. This is a proposal
+for review, not a selection of an AWS operator or permission to run setup.
+It reuses `infra/pricing_command_secrets.tf` and the guarded plan proposal
+[#343](https://github.com/vayada-marketplace/vayada-platform/pull/343).
+No second pricing-resource root, duplicate role declaration, state transfer,
+import, targeted apply or extra IAM provisioning identity is needed.
+
+The sole owner of the five containers, execution role and inline policy stays
+the normal `infra` root at `s3://vayada-terraform-state/platform/terraform.tfstate`.
+The separate `vay1543/bootstrap-identity/terraform.tfstate` key owns only this
+proposal's temporary identity resources; it must never own pricing resources.
+The temporary identity is **not** used for this seven-create apply, even if its
+creation window or SSM opt-in is enabled. Do not provision it merely to unlock
+this operator route or add back its IAM writes.
+
+The operator must first be explicitly identified and approved, with reviewed
+session admission, time limits/revocation, phase-specific permissions and safe
+positive/negative authorization evidence. Ordinary CI, migration credentials
+and an unnamed administrator are not substitutes. The approved executor must
+load the existing production input bindings on its private runner without
+exporting them, guessing them from runtime SSM copies or publishing state/plan
+data. #343 is plan-only and discards its plan; #344 provides no executor.
+Neither a chat approval nor a pre-job environment approval binds a later plan.
+CreateRole/PutRolePolicy do not enforce approved document contents, and
+CreateSecret can include a value. This operator route therefore requires
+explicit acceptance of that residual trusted-operator authority plus immutable
+source/exact-plan controls; approval to prepare this document is not acceptance.
+
+Keep #343's full seven-create guard, not a new two-create or five-create guard:
+it checks the exact ECS-only trust, fixed account/region, five names/tags,
+disabled metadata phase and inline policy derived only from the five generated
+secret ARNs. Those ARNs are unknown until creation; do not replace the expression
+with invented suffixes or a wildcard. Review the exact current-main source,
+source fingerprint and all guards together before admitting the operator.
+Any unrelated change, live drift, import, move, update, replacement or deletion
+rejects the full plan. Preserve the installed writer boundary and protected
+resource guards; no partial plan or refresh bypass is acceptable.
+
+Execution still requires the independently reviewed same-runner, post-plan
+receipt approval and durable shared writer hold described in #251. Apply only
+the approved unchanged saved plan using the existing state lock. Inspect
+post-apply metadata: five containers have no versions, trust is ECS-only, the
+inline policy grants only GetSecretValue on their actual exact ARNs, and no
+extra inline/managed policies or shared-role access appeared. Do not fetch
+values or start tasks to verify this empty-resource phase. Terraform creation
+is not atomic: cancellation or partial failure keeps the hold and requires a
+new reviewed recovery plan, never a blind rerun, manual import or destroy.
+
+Keep the hold through the separately authorized two-policy metadata phase,
+operator-session retirement proof and an ordinary hosted no-op refresh.
+Only then may ordinary writers resume. Execution-role image-pull/log grants,
+PassRole, database roles/values, service launch, proxy cutover and hotel testing
+remain separate reviewed steps. This route does not complete those gates.
 
 Admission is a fixed OIDC audience/environment within a reviewed UTC window
 of at most one hour. Request-time denial stops already-issued sessions at the
