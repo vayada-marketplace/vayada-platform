@@ -242,6 +242,20 @@ same separately approved UTC start/end, spanning at most one hour. Revalidate
 the user's stable ID and the interval before rendering; do not substitute a
 different owner, remove MFA or extend/reopen a window as recovery.
 
+Flamur subsequently explicitly directed skipping MFA and continuing preparation.
+The separate `deployment/pricing-operator-trust-no-mfa.json.tftpl` is the selected
+**pilot proposal** for that decision; the MFA template above remains unchanged.
+The alternative removes only the MFA admission condition and preserves the
+selected ARN/stable ID, source identity and reviewed window. Stolen owner
+credentials could therefore assume the future pilot role during its window
+without a second factor; source identity and expiry do not replace MFA.
+This is not permission to disable installed MFA controls, change credentials,
+relax another role/SCP/boundary, issue a session or run setup. If composed live
+controls require MFA, the proposal does not override them. Exact phase-limited
+grants, attached session fence and separate plan/receipt/writer-hold approvals
+remain prerequisites. Never combine both trust variants or use administrator
+credentials in the private runner to sidestep those gates.
+
 `deployment/pricing-operator-session-fence.json.tftpl` is **deny only**. It
 rejects requests before the start or at/after expiry, sessions issued before the
 start or missing token issuance context, wrong/missing source identity, PassRole and role
@@ -251,18 +265,18 @@ sufficient. Never attach it to the selected user or the pricing execution role.
 It is not the whole-platform writer hold and grants no creation/metadata access.
 
 No Terraform root, role, policy attachment, renderer, credential command or
-workflow consumes either template. They are concrete review inputs, not an
+workflow consumes any of these templates. They are concrete review inputs, not an
 admission controller. Offline tests check the exact declarations only. Exact
-role/RoleId admission, MFA-backed admission, source-identity/CloudTrail attribution,
+role/RoleId admission, selected-variant admission, source-identity/CloudTrail attribution,
 full composed grants and live positive/negative expiry/revocation evidence
 remain unproven. The private runner must receive only its admitted role session,
 never administrator credential sources or MFA codes. Preserve all existing
 receipt/source/plan/hold guards and phase separation before admission.
 Read-only `GetUser` reconfirmed the selected ARN/stable ID; `ListMFADevices`
-reported zero devices. Operator MFA enrollment is therefore an unmet
-prerequisite. No enrollment, device secret or code was requested or created;
-do not bypass the MFA condition or treat general preparation approval as
-authorization to change the user's credentials.
+reported zero devices. That remains a blocker for the original MFA variant,
+not an enrollment prerequisite for the explicitly selected no-MFA pilot proposal.
+No enrollment, device secret or code was requested or created. Do not treat
+preparation or the pilot exception as authorization to change user credentials.
 See [AWS source identity](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html)
 and [MFA with AssumeRole](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html).
 

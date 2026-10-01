@@ -80,6 +80,13 @@ class OperatorTemplateTests(unittest.TestCase):
             },
         }]})
 
+    def test_no_mfa_pilot_only_changes_the_explicit_admission_factor(self):
+        expected = self.render("pricing-operator-trust.json.tftpl")
+        expected["Statement"][0]["Sid"] = "SelectedOwnerNoMFAPilotOnly"
+        del expected["Statement"][0]["Condition"]["Bool"]
+        self.assertEqual(self.render("pricing-operator-trust-no-mfa.json.tftpl"), expected)
+        self.assertEqual(approval.APPROVED_HUMAN_IDS, frozenset())
+
     def test_fence_is_deny_only_and_rejects_missing_session_attribution(self):
         policy = self.render("pricing-operator-session-fence.json.tftpl")
         statements = {s["Sid"]: s for s in policy["Statement"]}
