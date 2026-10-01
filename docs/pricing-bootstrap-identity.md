@@ -125,6 +125,37 @@ Only then may ordinary writers resume. Execution-role image-pull/log grants,
 PassRole, database roles/values, service launch, proxy cutover and hotel testing
 remain separate reviewed steps. This route does not complete those gates.
 
+### Same-runner approval component — not an executor
+
+`scripts/pricing_bootstrap_approval.py` implements only the in-process approval
+boundary. No human GitHub IDs are authorized by default; selecting them requires
+explicit approval and a reviewed code change, never a dispatch/environment input.
+It generates an allowlisted receipt with source/run/attempt, operator session,
+state lineage/serial, saved-plan digest, writer-hold and authorization-evidence
+digests, a random nonce and a 15-minute expiry. An unedited later GitHub comment
+from an approved User must match the receipt digest and nonce byte-for-byte.
+Wrong discussion, bot/app, stale, edited, expired and replayed approvals fail.
+Receipt copies cannot change its in-memory context, and approval is consumed
+before an apply attempt; it cannot be reused after failure or restored on a
+different process/run. Copy/serialization and fork reuse are rejected, and
+consumption is atomic across threads. It writes nothing and has no executable
+setup entry point.
+
+The future executor must obtain comments directly from the fixed repository's
+authenticated GitHub API, re-fetch the chosen comment immediately before use,
+and supply GraphQL `lastEditedAt`, `editor` and `isMinimized` evidence bound to
+the same REST node/`fullDatabaseId`. Missing fields reject approval; equal REST
+created/updated timestamps alone are insufficient. See the official
+[IssueComment schema](https://docs.github.com/en/graphql/reference/issues#issuecomment).
+It must run all source/plan/identity/state/hold/authorization guards before building
+the receipt and again before consumption. The component compares their context;
+it does **not** authenticate caller-supplied JSON or prove an operator/hold from
+a digest. Service holds do not freeze Terraform writers. Private input loading,
+live evidence collection, durable whole-writer hold, polling/publication, apply,
+post-apply verification, recovery and metadata-phase integration remain absent.
+No setup workflow calls this component or gains permissions, and its tests use only
+synthetic data. Passing them is not authorization to execute setup.
+
 Admission is a fixed OIDC audience/environment within a reviewed UTC window
 of at most one hour. Request-time denial stops already-issued sessions at the
 end; older sessions are rejected when a new window starts. Before provisioning,
