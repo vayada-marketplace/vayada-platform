@@ -34,9 +34,9 @@ locals {
     ))
   }))
   platform_plan_policy = jsonencode(merge(local.platform_plan_policy_document, {
-    Statement = [for statement in local.platform_plan_policy_document.Statement : statement
+    Statement = concat([for statement in local.platform_plan_policy_document.Statement : statement
       if statement.Sid != "ExactKeyMetadata" || length(statement.Resource) > 0
-    ]
+    ], local.pricing_command_metadata_statements)
   }))
 }
 
@@ -88,7 +88,7 @@ resource "aws_iam_policy" "platform_writer_boundary" {
         Action   = ["iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions"]
         Resource = local.platform_boundary_policy_arn
       }
-      ], var.platform_writer_boundary.revoke_before == null ? [] : [{
+      ], local.pricing_command_metadata_statements, var.platform_writer_boundary.revoke_before == null ? [] : [{
         Sid       = "RevokeSessionsBeforeReviewedCutover"
         Effect    = "Deny"
         Action    = "*"
