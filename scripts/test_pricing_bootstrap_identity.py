@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = ROOT / "infra/pricing-bootstrap-identity"
 WINDOW = {"start": "2030-01-01T00:00:00Z", "end": "2030-01-01T01:00:00Z"}
 ROLE = "arn:aws:iam::269416271598:role/vayada-pricing-command-execution"
+SSM_KEY = "arn:aws:kms:eu-west-1:269416271598:key/3f96b311-bfda-431d-8f05-bfced29c2114"
 
 
 class IdentityTests(unittest.TestCase):
@@ -57,10 +58,11 @@ class IdentityTests(unittest.TestCase):
             raise AssertionError(result.stderr)
         return result
 
-    def inspect(self, window=None, kms=None):
+    def inspect(self, window=None, kms=None, decrypt=False):
         args = [] if window is None else ["-var=creation_window=" + json.dumps(window)]
         if kms is not None:
             args += ["-var=refresh_kms_key_arns=" + json.dumps(kms)]
+        args += ["-var=enable_ssm_refresh_decryption=" + str(decrypt).lower()]
         self.run_tf("plan", "-refresh=false", "-out=fixture.tfplan", *args)
         plan = json.loads(self.run_tf("show", "-json", "fixture.tfplan").stdout)
         return {item["address"]: item for item in plan.get("resource_changes", [])}
@@ -99,7 +101,9 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(by_sid["TerraformLock"]["Condition"]["ForAllValues:StringEquals"]["dynamodb:LeadingKeys"],
                          ["vayada-terraform-state/platform/terraform.tfstate", "vayada-terraform-state/platform/terraform.tfstate-md5"])
         denied = set(by_sid["NeverReadOrPopulateValuesOrPassRoles"]["Action"])
-        self.assertTrue({"iam:PassRole", "kms:Decrypt", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"} <= denied)
+        self.assertTrue({"iam:PassRole", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"} <= denied)
+        self.assertEqual(by_sid["DenyAllDecrypt"], {"Sid": "DenyAllDecrypt", "Effect": "Deny", "Action": ["kms:Decrypt"], "Resource": "*"})
+        self.assertNotIn("ParameterMetadata", by_sid)
         creates = [s for s in statements if s["Action"] == ["secretsmanager:CreateSecret"]]
         tags = [s for s in statements if s["Action"] == ["secretsmanager:TagResource"]]
         self.assertEqual(len(creates), 5)
@@ -129,11 +133,58 @@ class IdentityTests(unittest.TestCase):
 
     def test_fences_precede_attachment_and_ci_uses_native_binary(self):
         source = (IDENTITY / "main.tf").read_text()
-        attachment = source.split('resource "aws_iam_role_policy_attachment" "refresh" {', 1)[1]
-        self.assertIn("depends_on = [aws_iam_role_policy.creation]", attachment)
+        for name in ("refresh", "ssm_refresh"):
+            attachment = source.split(f'resource "aws_iam_role_policy_attachment" "{name}" {{', 1)[1].split("\n}", 1)[0]
+            self.assertIn("depends_on = [aws_iam_role_policy.creation]", attachment)
         workflow = (ROOT / ".github/workflows/tf-validate.yml").read_text()
         setup = workflow.split("      - name: Setup Terraform\n", 1)[1].split("      - name:", 1)[0]
         self.assertIn("terraform_wrapper: false", setup)
+
+    def test_ssm_opt_in_is_exact_and_defaults_remain_inactive(self):
+        self.assertEqual(self.inspect(decrypt=True), {})
+        items = self.inspect(WINDOW, decrypt=True)
+        self.assertEqual(len(items), 6)
+        self.assertTrue(all(item["change"]["actions"] == ["create"] for item in items.values()))
+        policies = [item["change"]["after"]["policy"] for item in items.values() if "policy" in item["change"]["after"]]
+        for item in items.values():
+            if "policy" in item["change"]["after"]:
+                self.assertLessEqual(len(item["change"]["after"]["policy"]), 6144 if item["type"] == "aws_iam_policy" else 10240)
+        statements = [statement for policy in policies for statement in json.loads(policy)["Statement"]]
+        by_sid = {s["Sid"]: s for s in statements}
+        self.assertEqual(len(by_sid), len(statements))
+        self.assertNotIn("ParameterMetadata", by_sid)
+        self.assertNotIn("DenyAllDecrypt", by_sid)
+        parameters = by_sid["ExactManagedParameterRefresh"]
+        self.assertEqual(set(parameters["Action"]), {"ssm:GetParameter", "ssm:GetParameters", "ssm:ListTagsForResource"})
+        self.assertTrue(all("*" not in arn and "?" not in arn for arn in parameters["Resource"]))
+        # Fixed allowlist must match the root's declarations, not a live prefix scan.
+        source = (ROOT / "infra/ssm.tf").read_text()
+        expected = set()
+        for name, prefix in (("prod_core_ssm_secrets", "prod"), ("prod_next_api_required_ssm_secrets", "prod"),
+                             ("staging_pms_runtime_ssm_secrets", "staging")):
+            block = source.split(name + " =", 1)[1].split("\n  }", 1)[0]
+            expected.update(f"arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/{prefix}/{key}"
+                            for key in re.findall(r'^\s*"([a-z0-9-]+)"\s*=', block, re.M))
+        conditional = source.split("prod_next_api_ssm_secrets =", 1)[1].split("\n  )", 1)[0]
+        expected.update("arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/" + key
+                        for key in re.findall(r'"([a-z0-9-]+)"\s*=', conditional))
+        expected.update("arn:aws:ssm:eu-west-1:269416271598:parameter" + name
+                        for name in re.findall(r'^  name\s*=\s*"(/vayada/[^"$]+)"', source, re.M))
+        self.assertEqual(set(parameters["Resource"]), expected)
+        self.assertEqual(len(expected), 36)
+        declarations = {(path.name, name) for path in (ROOT / "infra").glob("*.tf")
+                        for name in re.findall(r'resource "aws_ssm_parameter" "([^"]+)"', path.read_text())}
+        self.assertEqual(declarations, {("ssm.tf", name) for name in
+                         ("marketplace_database_url", "secrets", "staging_rehearsal_secrets", "next_stripe_test_secret")})
+        self.assertEqual(by_sid["SSMRefreshDecrypt"], {"Sid": "SSMRefreshDecrypt", "Effect": "Allow", "Action": ["kms:Decrypt"],
+                         "Resource": SSM_KEY, "Condition": {"StringEquals": {"kms:ViaService": "ssm.eu-west-1.amazonaws.com"}}})
+        self.assertEqual(by_sid["DenyOtherDecryptKeys"], {"Sid": "DenyOtherDecryptKeys", "Effect": "Deny",
+                         "Action": ["kms:Decrypt"], "NotResource": SSM_KEY})
+        for sid, key, value in (("DenyDecryptOutsideSSM", "kms:ViaService", "ssm.eu-west-1.amazonaws.com"),
+                                ("DenyDecryptOutsideManagedParameters", "kms:EncryptionContext:PARAMETER_ARN", parameters["Resource"])):
+            self.assertEqual(by_sid[sid], {"Sid": sid, "Effect": "Deny", "Action": ["kms:Decrypt"], "Resource": "*",
+                             "Condition": {"StringNotEqualsIfExists": {key: value}}})
+        self.assertNotIn("ssm:GetParametersByPath", {a for s in statements for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])})
 
     def test_reject_invalid_windows_and_key_scope(self):
         for window in ({"start": "bad", "end": WINDOW["end"]},

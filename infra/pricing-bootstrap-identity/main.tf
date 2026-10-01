@@ -47,6 +47,12 @@ variable "refresh_kms_key_arns" {
   }
 }
 
+variable "enable_ssm_refresh_decryption" {
+  description = "Review-only opt-in for the fixed existing SSM inventory, via SSM and its exact observed key. Not activation approval."
+  type        = bool
+  default     = false
+}
+
 locals {
   window_start   = try(var.creation_window.start, "1970-01-01T00:00:00Z")
   window_end     = try(var.creation_window.end, "1970-01-01T00:00:01Z")
@@ -62,6 +68,26 @@ locals {
   refresh = jsondecode(templatefile("${path.module}/../platform_plan_policy.json.tftpl", {
     account_id = "269416271598", region = "eu-west-1", kms_resources = jsonencode(var.refresh_kms_key_arns)
   })).Statement
+  # Fixed inventory from ../ssm.tf; tests reject declaration drift. No value lookup.
+  ssm_names = concat([for name in [
+    "db-booking-url", "db-auth-url", "db-pms-url", "db-auth-url-ssl", "db-pms-url-ssl",
+    "jwt-secret-key", "smtp-username", "smtp-password", "stripe-secret-key", "stripe-webhook-secret",
+    "stripe-connect-webhook-secret", "cloudflare-api-token", "channex-api-key", "next-channex-webhook-token",
+    "anthropic-api-key", "firecrawl-api-key", "target-database-url", "workos-api-key", "workos-webhook-secret",
+    "auth-cookie-secret", "resend-api-key", "marketplace-communication-unsubscribe-signing-keys",
+    "resend-webhook-secret", "db-marketplace-url"
+    ] : "vayada/prod/${name}"], [for name in [
+    "pms-database-url", "pms-auth-database-url", "pms-booking-engine-database-url", "pms-jwt-secret-key",
+    "pms-smtp-username", "pms-smtp-password", "pms-stripe-secret-key", "pms-stripe-webhook-secret",
+    "pms-channex-api-key", "pms-anthropic-api-key", "pms-firecrawl-api-key", "next-stripe-test-secret-key"
+  ] : "vayada/staging/${name}"])
+  ssm_arns = [for name in local.ssm_names : "arn:aws:ssm:eu-west-1:269416271598:parameter/${name}"]
+  # DescribeKey + DescribeParameters metadata only, 2026-10-01. Reverify before activation.
+  ssm_key = "arn:aws:kms:eu-west-1:269416271598:key/3f96b311-bfda-431d-8f05-bfced29c2114"
+  ssm_policy = jsonencode({ Version = "2012-10-17", Statement = [{
+    Sid    = "ExactManagedParameterRefresh", Effect = "Allow"
+    Action = ["ssm:GetParameter", "ssm:GetParameters", "ssm:ListTagsForResource"], Resource = local.ssm_arns
+  }] })
   creation_statements = concat([
     {
       Sid      = "ExactProductionStateWrite", Effect = "Allow", Action = ["s3:PutObject"]
@@ -107,13 +133,36 @@ locals {
         "secretsmanager:UpdateSecret", "secretsmanager:PutResourcePolicy", "secretsmanager:DeleteResourcePolicy",
         "secretsmanager:DeleteSecret", "secretsmanager:RestoreSecret", "secretsmanager:RotateSecret",
         "secretsmanager:ReplicateSecretToRegions", "secretsmanager:RemoveRegionsFromReplication",
-      "kms:Decrypt", "iam:PassRole", "sts:AssumeRole", "sts:AssumeRoleWithWebIdentity", "sts:AssumeRoleWithSAML"]
+      "iam:PassRole", "sts:AssumeRole", "sts:AssumeRoleWithWebIdentity", "sts:AssumeRoleWithSAML"]
     }
   ]
-  refresh_policy = jsonencode({ Version = "2012-10-17", Statement = [
-    for statement in local.refresh : statement if statement.Sid != "ExactKeyMetadata" || length(var.refresh_kms_key_arns) > 0
-  ] })
-  policy = jsonencode({ Version = "2012-10-17", Statement = concat(local.creation_statements, local.fences) })
+  # Separate denies mean ANY failed check denies, including missing context/service.
+  # Retain these even though the AWS-managed SSM key already admits SSM requests.
+  decrypt_statements = jsondecode(var.enable_ssm_refresh_decryption ? jsonencode([
+    {
+      Sid       = "SSMRefreshDecrypt", Effect = "Allow", Action = ["kms:Decrypt"], Resource = local.ssm_key
+      Condition = { StringEquals = { "kms:ViaService" = "ssm.eu-west-1.amazonaws.com" } }
+    },
+    {
+      Sid = "DenyOtherDecryptKeys", Effect = "Deny", Action = ["kms:Decrypt"], NotResource = local.ssm_key
+    },
+    {
+      Sid       = "DenyDecryptOutsideSSM", Effect = "Deny", Action = ["kms:Decrypt"], Resource = "*"
+      Condition = { StringNotEqualsIfExists = { "kms:ViaService" = "ssm.eu-west-1.amazonaws.com" } }
+    },
+    {
+      Sid       = "DenyDecryptOutsideManagedParameters", Effect = "Deny", Action = ["kms:Decrypt"], Resource = "*"
+      Condition = { StringNotEqualsIfExists = { "kms:EncryptionContext:PARAMETER_ARN" = local.ssm_arns } }
+    }
+    ]) : jsonencode([{
+      Sid = "DenyAllDecrypt", Effect = "Deny", Action = ["kms:Decrypt"], Resource = "*"
+  }]))
+  refresh_policy = jsonencode({ Version = "2012-10-17", Statement = concat([
+    for statement in local.refresh : statement if statement.Sid != "ParameterMetadata" && (statement.Sid != "ExactKeyMetadata" || length(var.refresh_kms_key_arns) > 0)
+  ], [for statement in local.creation_statements : statement if statement.Sid == "VerifyOnlyFixedSecretMetadata"]) })
+  policy = jsonencode({ Version = "2012-10-17", Statement = concat(
+    [for statement in local.creation_statements : statement if statement.Sid != "VerifyOnlyFixedSecretMetadata"],
+  local.fences, local.decrypt_statements) })
   trust = var.creation_window == null ? null : jsonencode({
     Version = "2012-10-17", Statement = [{
       Effect    = "Allow", Action = "sts:AssumeRoleWithWebIdentity"
@@ -170,6 +219,28 @@ resource "aws_iam_role_policy_attachment" "refresh" {
   count      = var.creation_window == null ? 0 : 1
   role       = aws_iam_role.creation[0].id
   policy_arn = aws_iam_policy.refresh[0].arn
+  depends_on = [aws_iam_role_policy.creation]
+  lifecycle { prevent_destroy = true }
+}
+
+# Exact SSM inventory is separate to stay below each managed/inline policy quota.
+resource "aws_iam_policy" "ssm_refresh" {
+  count  = var.creation_window != null && var.enable_ssm_refresh_decryption ? 1 : 0
+  name   = "vayada-pricing-bootstrap-create-ssm-refresh"
+  policy = local.ssm_policy
+  lifecycle {
+    prevent_destroy = true
+    precondition {
+      condition     = length(local.ssm_policy) <= 6144
+      error_message = "Exact SSM refresh inventory exceeds the managed policy quota."
+    }
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_refresh" {
+  count      = var.creation_window != null && var.enable_ssm_refresh_decryption ? 1 : 0
+  role       = aws_iam_role.creation[0].id
+  policy_arn = aws_iam_policy.ssm_refresh[0].arn
   depends_on = [aws_iam_role_policy.creation]
   lifecycle { prevent_destroy = true }
 }
