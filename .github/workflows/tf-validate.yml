@@ -32,6 +32,7 @@ on:
       - "scripts/vay2017-source-snapshot-import.mjs"
       - "scripts/vay2017-source-snapshot-extract.mjs"
       - "scripts/target-database-runtime-preflight.mjs"
+      - ".github/workflows/runtime-affiliate-read-repair.yml"
       - "scripts/financials-activation-readiness.mjs"
       - "scripts/grant-target-database-product-audit-insert.mjs"
       - "scripts/grant-target-database-folio-command.mjs"
