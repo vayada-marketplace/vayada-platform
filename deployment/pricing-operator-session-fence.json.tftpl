@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "BeforeWindow", "Effect": "Deny", "Action": "*", "Resource": "*",
+      "Condition": {"DateLessThan": {"aws:CurrentTime": "${window_start}"}}
+    },
+    {
+      "Sid": "ExpireIssuedSessions", "Effect": "Deny", "Action": "*", "Resource": "*",
+      "Condition": {"DateGreaterThanEquals": {"aws:CurrentTime": "${window_end}"}}
+    },
+    {
+      "Sid": "RejectEarlierOrMissingSessions", "Effect": "Deny", "Action": "*", "Resource": "*",
+      "Condition": {"DateLessThanIfExists": {"aws:TokenIssueTime": "${window_start}"}}
+    },
+    {
+      "Sid": "SelectedSourceIdentityOnly", "Effect": "Deny", "Action": "*", "Resource": "*",
+      "Condition": {"StringNotEqualsIfExists": {"aws:SourceIdentity": "AIDAT5OTWB3XLUEYGCQ56"}}
+    },
+    {
+      "Sid": "NeverPassOrChainRoles", "Effect": "Deny", "Resource": "*",
+      "Action": ["iam:PassRole", "sts:AssumeRole", "sts:AssumeRoleWithWebIdentity", "sts:AssumeRoleWithSAML"]
+    }
+  ]
+}

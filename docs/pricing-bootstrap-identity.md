@@ -169,15 +169,23 @@ and hosted no-op. The current workflow observation is not that fence. Operator
 session expiry must never automatically release the writer hold. Preserve the
 installed VAY-2029 trust and cutoff. No new pause control is activated here.
 
-### Limited-access proposal — explicit content-authority decision required
+### Limited-access proposal — role-policy trust decision accepted for preparation
+
+Flamur explicitly accepted reliance on the trusted operator and reviewed plan
+for the exact role-permission contents in this chat, then directed preparation
+to proceed. This clears that design decision only: it does not approve a grant,
+credential/session issuance, role/fence installation, production plan/apply or
+deployment. Do not infer separate acceptance of SSM plaintext access, initial
+secret values or metadata-policy content authority from that role-policy decision.
 
 This is the proposed permission boundary for the selected owner's future
 phase-limited sessions, **not** a policy grant or an implemented identity.
 The existing restricted hosted role keeps `NeverMutateRoles`; do not relax it
 or reuse it for the operator phase. Do not copy `AdministratorAccess` or the
 ordinary deploy role's policies into a new session. Before implementing the
-privileged execution lane, explicitly accept or reject the remaining content
-authority described below; naming the owner did not make that decision.
+privileged execution lane, retain the explicit role-policy decision above and
+resolve remaining content-authority gates below; naming the owner alone did not
+make that decision.
 
 | Phase | Proposed write scope | Required plan/verification boundary |
 | --- | --- | --- |
@@ -204,8 +212,8 @@ initial value, and metadata-policy writes could insert unintended grants.
 The trusted operator, reviewed immutable declarations/provider/runner, exact
 saved-plan approval and post-write verification enforce these content limits;
 expiry does not undo an unintended persistent grant. No test or owner selection
-is acceptance of that trust assumption. Rejecting it keeps execution blocked
-and requires a different reviewed design; do not silently restore IAM writes
+is acceptance of that trust assumption. Rejecting a remaining gate keeps
+execution blocked and requires a different reviewed design; do not silently restore IAM writes
 or replace it with direct administrator execution.
 
 For the deployment pause, propose an AWS-enforced mutation fence on the full
@@ -224,6 +232,39 @@ release or cancellation/retry of retained authentication-fenced requests.
 The concrete fence policy, identity inventory, installation/rollback plan and
 live evidence are still absent. This proposal neither implements nor activates
 the pause and preserves the installed VAY-2029 trust/cutoff unchanged.
+
+### Concrete operator admission/fence templates — unattached, no grants
+
+`deployment/pricing-operator-trust.json.tftpl` proposes direct admission only
+from the selected user ARN and stable user ID, with MFA and an exact required
+`sts:SourceIdentity`. Both admission and issued-session restrictions use the
+same separately approved UTC start/end, spanning at most one hour. Revalidate
+the user's stable ID and the interval before rendering; do not substitute a
+different owner, remove MFA or extend/reopen a window as recovery.
+
+`deployment/pricing-operator-session-fence.json.tftpl` is **deny only**. It
+rejects requests before the start or at/after expiry, sessions issued before the
+start or missing token issuance context, wrong/missing source identity, PassRole and role
+chaining. Attach the reviewed fence to the future operator role before any
+grant can make it usable; an optional caller-supplied session policy is not
+sufficient. Never attach it to the selected user or the pricing execution role.
+It is not the whole-platform writer hold and grants no creation/metadata access.
+
+No Terraform root, role, policy attachment, renderer, credential command or
+workflow consumes either template. They are concrete review inputs, not an
+admission controller. Offline tests check the exact declarations only. Exact
+role/RoleId admission, MFA-backed admission, source-identity/CloudTrail attribution,
+full composed grants and live positive/negative expiry/revocation evidence
+remain unproven. The private runner must receive only its admitted role session,
+never administrator credential sources or MFA codes. Preserve all existing
+receipt/source/plan/hold guards and phase separation before admission.
+Read-only `GetUser` reconfirmed the selected ARN/stable ID; `ListMFADevices`
+reported zero devices. Operator MFA enrollment is therefore an unmet
+prerequisite. No enrollment, device secret or code was requested or created;
+do not bypass the MFA condition or treat general preparation approval as
+authorization to change the user's credentials.
+See [AWS source identity](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html)
+and [MFA with AssumeRole](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html).
 
 ### Same-runner approval component — not an executor
 

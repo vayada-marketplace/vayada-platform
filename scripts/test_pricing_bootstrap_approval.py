@@ -55,6 +55,52 @@ def paused_workflows():
     ]}
 
 
+class OperatorTemplateTests(unittest.TestCase):
+    """Offline declaration checks, not actual-role admission/enforcement proof."""
+
+    def render(self, name):
+        source = (ROOT / "deployment" / name).read_text()
+        self.assertEqual(source.count("${window_start}"), 1 if "trust" in name else 2)
+        self.assertEqual(source.count("${window_end}"), 1)
+        return json.loads(source.replace("${window_start}", "2030-01-01T00:00:00Z")
+                         .replace("${window_end}", "2030-01-01T01:00:00Z"))
+
+    def test_trust_requires_selected_stable_owner_mfa_source_and_window(self):
+        policy = self.render("pricing-operator-trust.json.tftpl")
+        self.assertEqual(policy, {"Version": "2012-10-17", "Statement": [{
+            "Sid": "SelectedOwnerWithMFAOnly", "Effect": "Allow",
+            "Principal": {"AWS": approval.SELECTED_OPERATOR_ARN},
+            "Action": ["sts:AssumeRole", "sts:SetSourceIdentity"],
+            "Condition": {
+                "StringEquals": {"aws:userid": approval.SELECTED_OPERATOR_ID,
+                                 "sts:SourceIdentity": approval.SELECTED_OPERATOR_ID},
+                "Bool": {"aws:MultiFactorAuthPresent": "true"},
+                "DateGreaterThanEquals": {"aws:CurrentTime": "2030-01-01T00:00:00Z"},
+                "DateLessThan": {"aws:CurrentTime": "2030-01-01T01:00:00Z"},
+            },
+        }]})
+
+    def test_fence_is_deny_only_and_rejects_missing_session_attribution(self):
+        policy = self.render("pricing-operator-session-fence.json.tftpl")
+        statements = {s["Sid"]: s for s in policy["Statement"]}
+        expected = {
+            "BeforeWindow": {"DateLessThan": {"aws:CurrentTime": "2030-01-01T00:00:00Z"}},
+            "ExpireIssuedSessions": {"DateGreaterThanEquals": {"aws:CurrentTime": "2030-01-01T01:00:00Z"}},
+            "RejectEarlierOrMissingSessions": {"DateLessThanIfExists": {"aws:TokenIssueTime": "2030-01-01T00:00:00Z"}},
+            "SelectedSourceIdentityOnly": {"StringNotEqualsIfExists": {"aws:SourceIdentity": approval.SELECTED_OPERATOR_ID}},
+        }
+        self.assertEqual(policy["Version"], "2012-10-17")
+        self.assertEqual(len(policy["Statement"]), 5)
+        self.assertEqual(set(statements), set(expected) | {"NeverPassOrChainRoles"})
+        for sid, condition in expected.items():
+            self.assertEqual(statements[sid], {"Sid": sid, "Effect": "Deny", "Action": "*",
+                                               "Resource": "*", "Condition": condition})
+        self.assertEqual(statements["NeverPassOrChainRoles"], {
+            "Sid": "NeverPassOrChainRoles", "Effect": "Deny", "Resource": "*",
+            "Action": ["iam:PassRole", "sts:AssumeRole", "sts:AssumeRoleWithWebIdentity", "sts:AssumeRoleWithSAML"],
+        })
+
+
 class ApprovalTests(unittest.TestCase):
     def test_valid_approval_is_one_use_and_not_resumable(self):
         gate = approval.ApprovalGate(context(), 344, now=NOW)
