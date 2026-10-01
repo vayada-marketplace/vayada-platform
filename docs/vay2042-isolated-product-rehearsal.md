@@ -9,8 +9,22 @@ and `vayada/packages/backend-migration/README.md` own the migration contract.
 On September 30 the owner accepted a **fresh, matching 83-table comparison** of
 the two private restores of the same immutable snapshot as sufficient
 source-preservation evidence for this isolated test. The September 27 comparison
-is a baseline, not the fresh proof. The new comparator report must name the
-exact snapshot and both RDS resource IDs, all 83 reviewed tables, grouped row
+is a baseline, not the fresh proof. The October 1 protected
+[comparison run 36847109009](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36847109009)
+matched all 83 tables and 51,477 rows across the two exact private restores,
+with zero mismatches. Its retained artifact has the same report-file SHA-256
+`8ccc7f011968dc179f975ca0901ea7b21efd50d129124ea975cfbb35f72c3790`
+and canonical evidence SHA-256
+`985c14b0756937c147a04be3193f3592939a3188c867bb10a9005dbc922c0b6c`
+as the September 27 baseline. The protected
+[preflight run 36846730112](https://github.com/vayada-marketplace/vayada-platform/actions/runs/36846730112)
+renewed only the two existing isolated test logins. Its sole sanitized
+completion record gives expiry `2026-10-02T10:05:05.957Z` and confirms the clean
+target remained unbound. These executions are evidence, not a committed run
+file or authorization to read source rows with the product CLI.
+
+The comparator report must name the exact snapshot and both RDS resource IDs,
+all 83 reviewed tables, grouped row
 counts and checksums, and query version, with zero mismatches. Bind that report
 to the protected workflow, Step Functions/ECS task and image, and collection
 time using their retained execution records; do not invent missing report fields.
