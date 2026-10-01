@@ -77,7 +77,8 @@ selected below; the execution session and its permissions are not approved.
 It reuses `infra/pricing_command_secrets.tf` and the guarded plan proposal
 [#343](https://github.com/vayada-marketplace/vayada-platform/pull/343).
 No second pricing-resource root, duplicate role declaration, state transfer,
-import, targeted apply or extra IAM provisioning identity is needed.
+import or targeted apply is needed. Any phase-limited operator identity needs
+its own separately reviewed prerequisite setup; it is not a pricing-resource root.
 
 The sole owner of the five containers, execution role and inline policy stays
 the normal `infra` root at `s3://vayada-terraform-state/platform/terraform.tfstate`.
@@ -167,6 +168,62 @@ exceptions, failure ownership and explicit release after metadata verification
 and hosted no-op. The current workflow observation is not that fence. Operator
 session expiry must never automatically release the writer hold. Preserve the
 installed VAY-2029 trust and cutoff. No new pause control is activated here.
+
+### Limited-access proposal — explicit content-authority decision required
+
+This is the proposed permission boundary for the selected owner's future
+phase-limited sessions, **not** a policy grant or an implemented identity.
+The existing restricted hosted role keeps `NeverMutateRoles`; do not relax it
+or reuse it for the operator phase. Do not copy `AdministratorAccess` or the
+ordinary deploy role's policies into a new session. Before implementing the
+privileged execution lane, explicitly accept or reject the remaining content
+authority described below; naming the owner did not make that decision.
+
+| Phase | Proposed write scope | Required plan/verification boundary |
+| --- | --- | --- |
+| Empty-resource creation | `iam:CreateRole` and `iam:PutRolePolicy` only on `arn:aws:iam::269416271598:role/vayada-pricing-command-execution`; `secretsmanager:CreateSecret`/`TagResource` only on the five fixed names and required tags already declared above | Exactly seven creates from #343, ECS-only trust, one expected inline policy derived from actual five secret ARNs, no initial secret versions |
+| Metadata refresh | Separate session for only the two existing policy targets in `docs/pricing-command-metadata-refresh.md`, never the operator's own role or the creation-role grants | Exactly two policy updates, final exact resource ARNs, unchanged VAY-2029 trust/cutoff and no extra permissions |
+| State bookkeeping | Existing exact production state-object write and existing lock-table item operations/leading keys, not another backend or general S3/DynamoDB writes | Same saved plan, state lineage/serial, backend lock and immutable source; no imports, targeted apply or refresh bypass |
+
+Both sessions also need the reviewed provider-read inventory, exact admitted
+role/RoleId and owner attribution, independent source/plan guards, and proven
+request-time expiry/revocation. Sensitive SSM/KMS refresh remains a separate
+unaccepted permission gate; no broad read wildcard or decryption exception is
+implied by this table. Neither session may pass/assume roles, launch/change
+services, populate/read pricing secret values, change its own permissions or
+perform the other phase's writes. Provider action inventory and actual composed
+permissions must be reviewed before any admission; the table is not executable
+policy or sufficient authorization evidence.
+
+The unavoidable risk is concrete: `CreateRole` accepts a caller-supplied trust
+document and `PutRolePolicy` accepts caller-supplied permissions. Scoping the
+resource ARN does not make IAM check ECS-only trust, the inline policy's name
+or its exact contents. An admitted operator could instead create persistent
+unintended authority on that role. Likewise, `CreateSecret` can include an
+initial value, and metadata-policy writes could insert unintended grants.
+The trusted operator, reviewed immutable declarations/provider/runner, exact
+saved-plan approval and post-write verification enforce these content limits;
+expiry does not undo an unintended persistent grant. No test or owner selection
+is acceptance of that trust assumption. Rejecting it keeps execution blocked
+and requires a different reviewed design; do not silently restore IAM writes
+or replace it with direct administrator execution.
+
+For the deployment pause, propose an AWS-enforced mutation fence on the full
+reviewed platform-writer inventory, not only workflow disabling or service
+holds. It must cover old/new sessions and later queued credential requests,
+while preserving only enumerated metadata/lock access needed for verification.
+Keep operator-phase exceptions separate and explicitly approved. Audit other
+repositories and out-of-band control-plane writers; coordinate administrator
+non-interference and recovery ownership rather than claiming the fence blocks
+the selected administrator from changing it. Uncovered writers block setup.
+Prove propagation and drain previously accepted AWS changes before planning.
+Any IAM/GitHub access or fence installation needs its own separately approved
+prerequisite configuration/plan; it cannot be bundled into either the seven-
+create or two-update plan. Failure/timeout keeps the hold, with no automatic
+release or cancellation/retry of retained authentication-fenced requests.
+The concrete fence policy, identity inventory, installation/rollback plan and
+live evidence are still absent. This proposal neither implements nor activates
+the pause and preserves the installed VAY-2029 trust/cutoff unchanged.
 
 ### Same-runner approval component — not an executor
 
