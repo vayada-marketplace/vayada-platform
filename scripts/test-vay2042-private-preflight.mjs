@@ -65,6 +65,7 @@ function fakeDatabase({ drift = false, directFailure = false, oldWriterAccess = 
           manifest.sources.find((s) => s.database === database).tables.map((name) => ({ name })));
         if (sql.includes('AS writer_denied')) return rows([{ writer_denied: !oldWriterAccess }]);
         if (sql.includes('LATERAL aclexplode')) return rows([{ grants: defaultGrant ? 1 : 0 }]);
+        if (sql.startsWith("SELECT 1 FROM pg_namespace WHERE nspname='vayada_migration_evidence'")) return rows([]);
         if (sql.includes('SELECT nspname AS name FROM pg_namespace')) return rows([
           { name: 'public' }, { name: 'vayada_migration_evidence' },
         ]);

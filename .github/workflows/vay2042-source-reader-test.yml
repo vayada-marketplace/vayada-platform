@@ -20,6 +20,13 @@ on:
       - scripts/build-vay2042-private-preflight.mjs
       - scripts/generated/vay2042-private-preflight.mjs
       - scripts/run-vay2042-private-preflight.sh
+      - scripts/vay2042-source-attestation.mjs
+      - scripts/build-vay2042-source-attestation.mjs
+      - scripts/generated/vay2042-source-attestation.mjs
+      - scripts/run-vay2042-source-attestation.sh
+      - docs/vay2042-source-preservation-proof-20261001.json
+      - infra/vay2017-metadata-runner/source_attestation.tf
+      - .github/workflows/vay2042-source-attestation.yml
       - scripts/fixtures/vay2042-source-reader.json
       - scripts/fixtures/vay2017-isolated-restore-plan.json
       - rehearsal/rds-ca-rsa2048-g1.pem
@@ -57,6 +64,9 @@ jobs:
         env:
           ESBUILD_BINARY: ${{ runner.temp }}/vay2042-test/node_modules/.bin/esbuild
       - run: node scripts/build-vay2042-private-preflight.mjs --check && node --test scripts/test-vay2042-private-preflight.mjs && bash -n scripts/run-vay2042-private-preflight.sh
+        env:
+          ESBUILD_BINARY: ${{ runner.temp }}/vay2042-test/node_modules/.bin/esbuild
+      - run: node scripts/build-vay2042-source-attestation.mjs --check && bash -n scripts/run-vay2042-source-attestation.sh
         env:
           ESBUILD_BINARY: ${{ runner.temp }}/vay2042-test/node_modules/.bin/esbuild
       - run: node --test scripts/test-vay2042-${{ matrix.scope }}.mjs

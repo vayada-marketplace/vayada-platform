@@ -174,7 +174,9 @@ SELECT
     WHERE ${applicationSchema} AND p.prosecdef AND p.prokind IN ('f','p')
       AND has_function_privilege(r.oid, p.oid, 'EXECUTE')) AS definer_privileges,
   EXISTS (SELECT 1 FROM unnest($2::text[]) expected(name)
-    WHERE NOT has_table_privilege(r.oid, expected.name, 'SELECT')) AS missing_read
+    LEFT JOIN (pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace)
+      ON n.nspname || '.' || c.relname = expected.name
+    WHERE c.oid IS NULL OR NOT has_table_privilege(r.oid, c.oid, 'SELECT')) AS missing_read
 FROM pg_roles r WHERE r.rolname = $1`;
 async function verifyPrivileges(client, tables) {
   const result = await client.query(privilegeSql, [reader, tables]);
@@ -432,6 +434,8 @@ var initialExpiry = /* @__PURE__ */ new Map([
   [writer, ["2026-09-28T00:17:57.465Z", "2026-09-28T00:17:57.465Z"]]
 ]);
 var expectedDatabases = [...vay2042_source_reader_default.databases, target].sort();
+var sourceProofSha256 = "acf9fb92b78057919ea92b947533fe458fdc1efc40d54db232e45b19933e0eda";
+var sourceEvidenceTable = "vayada_migration_evidence.database_attestations";
 var expectedSettings = [
   "default_transaction_read_only=on",
   "idle_in_transaction_session_timeout=60s",
@@ -482,14 +486,48 @@ async function checkPrivileges(client, name, tables, ignored = []) {
 }
 async function checkOldDatabase(client, database) {
   const source = vay2042_source_reader_default.sources.find((entry) => entry.database === database);
+  let sourceBound = false;
   if (source) {
+    const schema = await client.query("SELECT 1 FROM pg_namespace WHERE nspname='vayada_migration_evidence'");
+    sourceBound = schema.rowCount === 1;
     const tables = (await client.query(`SELECT n.nspname || '.' || c.relname AS name
       FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
       WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
         AND c.relkind IN ('r','p') ORDER BY 1`)).rows.map((row) => row.name);
-    requireTrue3(JSON.stringify(tables) === JSON.stringify(source.tables), "source_table_inventory_changed");
+    requireTrue3(
+      JSON.stringify(tables) === JSON.stringify(
+        [...source.tables, ...sourceBound ? [sourceEvidenceTable] : []].sort()
+      ),
+      "source_table_inventory_changed"
+    );
+    if (sourceBound) {
+      const owner = (await client.query(`SELECT n.nspowner=r.oid AND c.relowner=r.oid AS trusted
+        FROM pg_namespace n JOIN pg_class c ON c.relnamespace=n.oid
+        JOIN pg_roles r ON r.rolname=$1
+        WHERE n.nspname='vayada_migration_evidence' AND c.relname='database_attestations'`, [attestor])).rows[0];
+      await client.query("BEGIN READ ONLY");
+      let evidence;
+      try {
+        await client.query(`SET LOCAL ROLE "${attestor}"`);
+        evidence = (await client.query(`SELECT attestation_key,attestation_value
+          FROM ${sourceEvidenceTable} ORDER BY attestation_key`)).rows;
+      } finally {
+        await client.query("ROLLBACK");
+      }
+      requireTrue3(owner?.trusted === true && JSON.stringify(evidence) === JSON.stringify([
+        { attestation_key: "vayada.cutover_freeze_proof_sha256", attestation_value: sourceProofSha256 },
+        {
+          attestation_key: "vayada.source_snapshot_identifier",
+          attestation_value: "arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-freeze-20260920"
+        }
+      ]), "source_attestation_mismatch");
+    }
   }
-  await checkPrivileges(client, reader, source?.tables ?? []);
+  await checkPrivileges(
+    client,
+    reader,
+    [...source?.tables ?? [], ...sourceBound ? [sourceEvidenceTable] : []]
+  );
   await checkPrivileges(client, writer, [], ["database_write"]);
   const defaults = await client.query(`SELECT count(*)::int AS grants FROM pg_default_acl d,
     LATERAL aclexplode(d.defaclacl) a
@@ -499,6 +537,7 @@ async function checkOldDatabase(client, database) {
   const boundary = await client.query(`SELECT NOT has_database_privilege($1, current_database(), 'CREATE')
     AND NOT has_database_privilege($1, current_database(), 'TEMP') AS writer_denied`, [writer]);
   requireTrue3(boundary.rows[0]?.writer_denied === true, "old_database_writer_privilege_mismatch");
+  return source ? sourceBound : null;
 }
 async function checkTarget(client, admin = true) {
   const schemas = (await client.query(`SELECT nspname AS name FROM pg_namespace
@@ -628,14 +667,20 @@ async function runPreflight({ connect, checkCredentials = async () => {
       settings.length === 1 && settings[0].rolname === reader && settings[0].global === true && JSON.stringify([...settings[0].setconfig].sort()) === JSON.stringify(expectedSettings),
       "role_settings_mismatch"
     );
+    const sourceBindings = [];
     for (const database of vay2042_source_reader_default.databases) {
       const client = database === "postgres" ? control : await connect(database, "admin");
       try {
-        await checkOldDatabase(client, database);
+        const sourceBound = await checkOldDatabase(client, database);
+        if (sourceBound !== null) sourceBindings.push(sourceBound);
       } finally {
         if (client !== control) await client.end();
       }
     }
+    requireTrue3(
+      sourceBindings.length === 4 && sourceBindings.every((value) => value === sourceBindings[0]),
+      "source_attestation_mismatch"
+    );
     const fresh = await connect(target, "admin");
     try {
       await checkTarget(fresh);
@@ -666,7 +711,14 @@ async function runPreflight({ connect, checkCredentials = async () => {
       try {
         await client.query("BEGIN READ ONLY");
         try {
-          await checkPrivileges(client, reader, vay2042_source_reader_default.sources.find((s) => s.database === database).tables);
+          await checkPrivileges(
+            client,
+            reader,
+            [
+              ...vay2042_source_reader_default.sources.find((s) => s.database === database).tables,
+              ...sourceBindings[0] ? [sourceEvidenceTable] : []
+            ]
+          );
         } finally {
           await client.query("ROLLBACK");
         }
@@ -720,6 +772,7 @@ var codes2 = /* @__PURE__ */ new Set([
   "old_database_default_acl_mismatch",
   "old_database_writer_privilege_mismatch",
   "target_evidence_shape_mismatch",
+  "source_attestation_mismatch",
   "target_privilege_mismatch",
   "target_attestor_mismatch",
   "renewal_committed_requires_inspection",
