@@ -1,0 +1,152 @@
+"""Native Terraform checks on local-only fixtures. Not live IAM authorization proof."""
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+IDENTITY = ROOT / "infra/pricing-bootstrap-identity"
+WINDOW = {"start": "2030-01-01T00:00:00Z", "end": "2030-01-01T01:00:00Z"}
+ROLE = "arn:aws:iam::269416271598:role/vayada-pricing-command-execution"
+
+
+class IdentityTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.TemporaryDirectory(prefix="vay1543-identity-test-")
+        cls.fixture = Path(cls.directory.name) / "infra/pricing-bootstrap-identity"
+        cls.fixture.mkdir(parents=True)
+        # Remove only the backend from a copy. No production state or inputs.
+        source, count = re.subn(r'  backend "s3" \{[^}]+\}\n', "", (IDENTITY / "main.tf").read_text())
+        assert count == 1
+        (cls.fixture / "main.tf").write_text(source)
+        shutil.copyfile(ROOT / "infra/platform_plan_policy.json.tftpl", cls.fixture.parent / "platform_plan_policy.json.tftpl")
+        shutil.copyfile(IDENTITY / ".terraform.lock.hcl", cls.fixture / ".terraform.lock.hcl")
+        (cls.fixture / "offline_override.tf").write_text('''provider "aws" {
+  access_key = "offline-fixture"
+  secret_key = "offline-fixture"
+  allowed_account_ids = null
+  skip_credentials_validation = true
+  skip_requesting_account_id = true
+  skip_metadata_api_check = true
+  skip_region_validation = true
+  endpoints { iam = "http://127.0.0.1:9" }
+}
+''')
+        config = Path(cls.directory.name) / "terraformrc"
+        config.write_text("")
+        cls.env = {"PATH": os.environ["PATH"], "HOME": cls.directory.name,
+                   "TF_CLI_CONFIG_FILE": str(config), "TF_IN_AUTOMATION": "true", "TF_INPUT": "false",
+                   "AWS_EC2_METADATA_DISABLED": "true"}
+        cls.run_tf("init", "-backend=false", "-lockfile=readonly",
+                   "-plugin-dir=" + str(IDENTITY / ".terraform/providers"))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.directory.cleanup()
+
+    @classmethod
+    def run_tf(cls, *args, input=None, ok=True):
+        result = subprocess.run(["terraform", *args, "-no-color"], cwd=cls.fixture, env=cls.env,
+                                input=input, capture_output=True, text=True, timeout=60)
+        if ok and result.returncode:
+            raise AssertionError(result.stderr)
+        return result
+
+    def inspect(self, window=None, kms=None):
+        args = [] if window is None else ["-var=creation_window=" + json.dumps(window)]
+        if kms is not None:
+            args += ["-var=refresh_kms_key_arns=" + json.dumps(kms)]
+        self.run_tf("plan", "-refresh=false", "-out=fixture.tfplan", *args)
+        plan = json.loads(self.run_tf("show", "-json", "fixture.tfplan").stdout)
+        return {item["address"]: item for item in plan.get("resource_changes", [])}
+
+    def test_default_is_zero_and_explicit_window_only_creates_four(self):
+        self.assertEqual(self.inspect(), {})
+        items = self.inspect(WINDOW)
+        self.assertEqual(set(items), {"aws_iam_role.creation[0]", "aws_iam_role_policy.creation[0]",
+                                     "aws_iam_policy.refresh[0]", "aws_iam_role_policy_attachment.refresh[0]"})
+        self.assertTrue(all(item["change"]["actions"] == ["create"] for item in items.values()))
+        role = items["aws_iam_role.creation[0]"]["change"]["after"]
+        trust = json.loads(role["assume_role_policy"])["Statement"][0]
+        self.assertEqual(role["name"], "vayada-pricing-bootstrap-create")
+        self.assertEqual(trust["Action"], "sts:AssumeRoleWithWebIdentity")
+        self.assertEqual(trust["Principal"], {"Federated": "arn:aws:iam::269416271598:oidc-provider/token.actions.githubusercontent.com"})
+        self.assertEqual(trust["Condition"]["DateGreaterThanEquals"], {"aws:CurrentTime": WINDOW["start"]})
+        self.assertEqual(trust["Condition"]["DateLessThan"], {"aws:CurrentTime": WINDOW["end"]})
+        self.assertEqual(trust["Condition"]["StringEquals"], {
+            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+            "token.actions.githubusercontent.com:sub": "repo:vayada-marketplace/vayada-platform:environment:pricing-bootstrap-create-v1"})
+        policy = items["aws_iam_role_policy.creation[0]"]["change"]["after"]["policy"]
+        self.assertLessEqual(len(policy), 10240)
+        statements = json.loads(policy)["Statement"]
+        refresh = items["aws_iam_policy.refresh[0]"]["change"]["after"]["policy"]
+        self.assertLessEqual(len(refresh), 6144)
+        statements += json.loads(refresh)["Statement"]
+        self.assertEqual(len({s["Sid"] for s in statements}), len(statements))
+        by_sid = {s["Sid"]: s for s in statements}
+        self.assertEqual(by_sid["CreateDedicatedExecutionRole"]["Resource"], ROLE)
+        self.assertEqual(by_sid["ExactProductionStateWrite"]["Resource"], "arn:aws:s3:::vayada-terraform-state/platform/terraform.tfstate")
+        self.assertEqual(by_sid["BeforeWindow"]["Condition"], {"DateLessThan": {"aws:CurrentTime": WINDOW["start"]}})
+        self.assertEqual(by_sid["ExpireIssuedSessions"]["Condition"], {"DateGreaterThanEquals": {"aws:CurrentTime": WINDOW["end"]}})
+        self.assertEqual(by_sid["RejectEarlierSessions"]["Condition"], {"DateLessThan": {"aws:TokenIssueTime": WINDOW["start"]}})
+        for sid in ("BeforeWindow", "ExpireIssuedSessions", "RejectEarlierSessions"):
+            self.assertEqual((by_sid[sid]["Effect"], by_sid[sid]["Action"], by_sid[sid]["Resource"]), ("Deny", "*", "*"))
+        self.assertEqual(by_sid["TerraformLock"]["Condition"]["ForAllValues:StringEquals"]["dynamodb:LeadingKeys"],
+                         ["vayada-terraform-state/platform/terraform.tfstate", "vayada-terraform-state/platform/terraform.tfstate-md5"])
+        denied = set(by_sid["NeverReadOrPopulateValuesOrPassRoles"]["Action"])
+        self.assertTrue({"iam:PassRole", "kms:Decrypt", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"} <= denied)
+        creates = [s for s in statements if s["Action"] == ["secretsmanager:CreateSecret"]]
+        tags = [s for s in statements if s["Action"] == ["secretsmanager:TagResource"]]
+        self.assertEqual(len(creates), 5)
+        self.assertEqual(len(tags), 5)
+        expected = {"identity-read-database-url", "internal-token", "owner-manage-database-url",
+                    "owner-read-database-url", "public-database-url"}
+        self.assertEqual({s["Condition"]["StringEquals"]["secretsmanager:Name"].removeprefix("pricing-command/prod/") for s in creates}, expected)
+        for statement in creates + tags:
+            self.assertTrue(statement["Resource"].endswith("-??????"))
+            self.assertNotIn("*", statement["Resource"])
+            self.assertIn(statement["Resource"], {"arn:aws:secretsmanager:eu-west-1:269416271598:secret:pricing-command/prod/" + name + "-??????" for name in expected})
+            conditions = statement["Condition"]["StringEquals"]
+            self.assertEqual(conditions["aws:RequestTag/Environment"], "production")
+            self.assertEqual("secretsmanager:Name" in conditions, statement in creates)
+        allowed_writes = {action for s in statements if s["Effect"] == "Allow" for action in s["Action"]
+                          if not action.split(":")[1].startswith(("Get", "List", "Describe"))}
+        self.assertEqual(allowed_writes, {"s3:PutObject", "dynamodb:PutItem", "dynamodb:DeleteItem",
+                                         "iam:CreateRole", "iam:PutRolePolicy", "secretsmanager:CreateSecret", "secretsmanager:TagResource"})
+
+    def test_exact_key_metadata_without_decrypt(self):
+        key = "arn:aws:kms:eu-west-1:269416271598:key/00000000-0000-0000-0000-000000000000"
+        policy = self.inspect(WINDOW, [key])["aws_iam_policy.refresh[0]"]["change"]["after"]["policy"]
+        keys = [s for s in json.loads(policy)["Statement"] if s["Sid"] == "ExactKeyMetadata"]
+        self.assertEqual(len(keys), 1)
+        self.assertEqual(keys[0]["Resource"], [key])
+        self.assertEqual(set(keys[0]["Action"]), {"kms:DescribeKey", "kms:GetKeyPolicy", "kms:GetKeyRotationStatus", "kms:ListResourceTags"})
+
+    def test_fences_precede_attachment_and_ci_uses_native_binary(self):
+        source = (IDENTITY / "main.tf").read_text()
+        attachment = source.split('resource "aws_iam_role_policy_attachment" "refresh" {', 1)[1]
+        self.assertIn("depends_on = [aws_iam_role_policy.creation]", attachment)
+        workflow = (ROOT / ".github/workflows/tf-validate.yml").read_text()
+        setup = workflow.split("      - name: Setup Terraform\n", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("terraform_wrapper: false", setup)
+
+    def test_reject_invalid_windows_and_key_scope(self):
+        for window in ({"start": "bad", "end": WINDOW["end"]},
+                       {"start": WINDOW["end"], "end": WINDOW["start"]},
+                       {"start": WINDOW["start"], "end": WINDOW["start"]},
+                       {"start": WINDOW["start"], "end": "2030-01-01T01:00:01Z"}):
+            result = self.run_tf("plan", "-refresh=false", "-var=creation_window=" + json.dumps(window), ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Invalid value for variable", result.stderr)
+        result = self.run_tf("plan", "-refresh=false", '-var=refresh_kms_key_arns=["arn:aws:kms:eu-west-1:269416271598:key/*"]', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Invalid value for variable", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

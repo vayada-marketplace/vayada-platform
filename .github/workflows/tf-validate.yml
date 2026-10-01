@@ -10,6 +10,7 @@ on:
       - "scripts/assert-platform-writer-boundary-plan.py"
       - "scripts/test_platform_writer_boundary.py"
       - "scripts/test_pricing_command_metadata_refresh.py"
+      - "scripts/test_pricing_bootstrap_identity.py"
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
       - "scripts/test_coordinated_recovery.py"
@@ -286,6 +287,7 @@ jobs:
         uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "~1.5"
+          terraform_wrapper: false
 
       - name: Terraform init (no backend)
         run: terraform init -backend=false
@@ -306,3 +308,9 @@ jobs:
       - name: Validate isolated VAY-2043 Terraform root
         run: terraform validate
         working-directory: infra/vay2017-metadata-runner
+
+      - name: Validate temporary pricing identity without backend or AWS
+        run: |
+          terraform -chdir=infra/pricing-bootstrap-identity init -backend=false
+          terraform -chdir=infra/pricing-bootstrap-identity validate
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_pricing_bootstrap_identity.py
