@@ -112,6 +112,13 @@ class BootstrapPlanTest(unittest.TestCase):
         ordinary = ordinary.split("      - name: Preserve installed", 1)[0]
         bindings = lambda text: re.findall(r"^          TF_VAR_.*$", text, re.MULTILINE)
         self.assertEqual(bindings(workflow), bindings(ordinary))
+        checkout, verification = workflow.split("      - name: Require exact reviewed current main\n", 1)
+        verification, later_steps = verification.split("      - name: Allocate private transient plan directory\n", 1)
+        self.assertIn("persist-credentials: false", checkout)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", verification)
+        self.assertIn('gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha', verification)
+        self.assertNotIn("GH_TOKEN", later_steps)
+        self.assertNotIn("git ls-remote", workflow)
         for forbidden in ("terraform apply", "upload-artifact", "actions/cache", "-target", "--with-decryption"):
             self.assertNotIn(forbidden, workflow)
         for required in ("environment: platform-mutations-v2", "group: production-ecs-mutations",

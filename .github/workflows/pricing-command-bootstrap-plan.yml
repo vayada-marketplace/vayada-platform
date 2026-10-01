@@ -29,18 +29,21 @@ jobs:
     steps:
       - name: Checkout reviewed code
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Require exact reviewed current main
         env:
           EXPECTED_SHA: ${{ inputs.expected_main_sha }}
           WORKFLOW_SHA: ${{ github.sha }}
           WORKFLOW_REF: ${{ github.ref }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$WORKFLOW_REF" = refs/heads/main
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$EXPECTED_SHA" = "$WORKFLOW_SHA"
           test "$EXPECTED_SHA" = "$(git rev-parse HEAD)"
-          test "$EXPECTED_SHA" = "$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "$EXPECTED_SHA" = "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
           python3 scripts/assert-pricing-bootstrap-plan.py --check-source
       - name: Allocate private transient plan directory
         id: files
