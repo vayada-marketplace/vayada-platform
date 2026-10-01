@@ -2,6 +2,7 @@ import copy
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import json
 import multiprocessing
 from pathlib import Path
 import pickle
@@ -32,6 +33,26 @@ def comment(gate):
             "created_at": "2030-01-01T00:00:01Z", "updated_at": "2030-01-01T00:00:01Z",
             "editEvidence": {"id": "IC_fixture", "fullDatabaseId": "50",
                              "lastEditedAt": None, "editor": None, "isMinimized": False}}
+
+
+def api_comment(gate):
+    rest = comment(gate)
+    rest["id"] = 5931916571
+    rest["user"]["node_id"] = "U_fixture"
+    rest.pop("editEvidence")
+    node = {"id": rest["node_id"], "fullDatabaseId": str(rest["id"]),
+            "author": {"id": "U_fixture", "__typename": "User"},
+            "body": rest["body"], "createdAt": rest["created_at"], "updatedAt": rest["updated_at"],
+            "lastEditedAt": None, "editor": None, "isMinimized": False}
+    return rest, {"data": {"node": node}}
+
+
+def paused_workflows():
+    return {"total_count": 3, "workflows": [
+        {"id": 1, "path": ".github/workflows/tf-plan.yml", "state": "active"},
+        {"id": 2, "path": ".github/workflows/tf-validate.yml", "state": "active"},
+        {"id": 3, "path": ".github/workflows/tf-apply.yml", "state": "disabled_manually"},
+    ]}
 
 
 class ApprovalTests(unittest.TestCase):
@@ -169,6 +190,134 @@ class ApprovalTests(unittest.TestCase):
         with patch.object(approval, "APPROVED_HUMAN_IDS", frozenset({42})), ThreadPoolExecutor(2) as pool:
             results = list(pool.map(lambda _: consume(), range(2)))
         self.assertEqual(sorted(results), ["accepted", "rejected"])
+
+    def test_fresh_authenticated_comment_is_bound_and_consumed(self):
+        gate = approval.ApprovalGate(context(), 344, now=NOW)
+        rest, graphql = api_comment(gate)
+        with patch.object(approval, "_github_json", side_effect=[rest, graphql]) as api, \
+                patch.object(approval, "APPROVED_HUMAN_IDS", frozenset({42})), \
+                patch.object(approval, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = NOW + timedelta(seconds=2)
+            gate.fetch_and_consume(rest["id"], context())
+            self.assertEqual(api.call_args_list[0].args,
+                             (f"repos/{approval.REPOSITORY}/issues/comments/5931916571",))
+            self.assertEqual(api.call_args_list[1].args, ("graphql",))
+            self.assertEqual(api.call_args_list[1].kwargs, {"node_id": "IC_fixture"})
+        self.assertTrue(gate._consumed)
+        empty = approval.ApprovalGate(context(), 344, now=NOW)
+        with patch.object(approval, "_github_json") as api, self.assertRaises(ValueError):
+            empty.fetch_and_consume(rest["id"], context())
+        api.assert_not_called()
+
+    def test_comment_fetch_rejects_missing_malformed_or_disagreeing_evidence(self):
+        gate = approval.ApprovalGate(context(), 344, now=NOW)
+        original, graph = api_comment(gate)
+        node = graph["data"]["node"]
+        cases = [(original | {"id": True}, graph), (original | {"id": 50}, graph),
+                 (original | {"node_id": "bad/path"}, graph),
+                 (original | {"user": None}, graph), (original, {"data": []}),
+                 (original, {"data": {"node": None}})]
+        for field, value in (("id", "IC_other"), ("fullDatabaseId", "50"),
+                             ("fullDatabaseId", True), ("author", {"id": "U_other", "__typename": "User"}),
+                             ("body", "edited"), ("createdAt", "2029-01-01T00:00:00Z"),
+                             ("updatedAt", "2030-01-01T00:00:02Z")):
+            cases.append((original, {"data": {"node": node | {field: value}}}))
+        for field in node:
+            cases.append((original, {"data": {"node": {k: v for k, v in node.items() if k != field}}}))
+        for rest, graphql in cases:
+            with self.subTest(rest=rest, graphql=graphql), \
+                    patch.object(approval, "_github_json", side_effect=[rest, graphql]), \
+                    self.assertRaises(ValueError):
+                approval.read_github_comment(original["id"])
+        for identity in (True, 0, "50", None):
+            with patch.object(approval, "_github_json") as api, self.assertRaises(ValueError):
+                approval.read_github_comment(identity)
+            api.assert_not_called()
+
+    def test_api_commands_are_fixed_host_read_only_and_errors_are_redacted(self):
+        endpoint = f"repos/{approval.REPOSITORY}/issues/comments/50"
+        result = subprocess.CompletedProcess([], 0, '{}', '')
+        with patch.object(approval.subprocess, "run", return_value=result) as run:
+            approval._github_json(endpoint)
+            self.assertEqual(run.call_args.args[0],
+                             ["gh", "api", "--hostname", "github.com", endpoint, "--method", "GET"])
+            self.assertEqual(run.call_args.kwargs, {"capture_output": True, "text": True, "timeout": 20})
+            approval._github_json("graphql", node_id="IC_fixture")
+            self.assertEqual(run.call_args.args[0],
+                             ["gh", "api", "--hostname", "github.com", "graphql", "--method", "POST",
+                              "-f", "query=" + approval.EDIT_QUERY, "-f", "id=IC_fixture"])
+        cases = [subprocess.CompletedProcess([], 1, 'SECRET_SENTINEL', 'SECRET_SENTINEL'),
+                 subprocess.CompletedProcess([], 0, 'SECRET_SENTINEL', ''),
+                 subprocess.CompletedProcess([], 0, '[]', ''),
+                 subprocess.CompletedProcess([], 0, json.dumps({"errors": ["SECRET_SENTINEL"]}), ''),
+                 subprocess.CompletedProcess([], 0, 'x' * 2_000_001, '')]
+        for result in cases:
+            with patch.object(approval.subprocess, "run", return_value=result), self.assertRaises(ValueError) as error:
+                approval._github_json(endpoint)
+            self.assertNotIn("SECRET_SENTINEL", str(error.exception))
+        for error in (OSError("SECRET_SENTINEL"), subprocess.TimeoutExpired("SECRET_SENTINEL", 20)):
+            with patch.object(approval.subprocess, "run", side_effect=error), self.assertRaises(ValueError) as raised:
+                approval._github_json(endpoint)
+            self.assertNotIn("SECRET_SENTINEL", str(raised.exception))
+        for path, node_id in (("https://evil.example/", None), ("repos/other/repo/actions/workflows", None),
+                              (endpoint, "IC_fixture")):
+            with patch.object(approval.subprocess, "run") as run, self.assertRaises(ValueError):
+                approval._github_json(path, node_id=node_id)
+            run.assert_not_called()
+
+    def test_pause_observation_checks_all_nonterminal_statuses_without_branch_or_date_filter(self):
+        statuses = ("queued", "in_progress", "waiting", "pending", "requested")
+        responses = [paused_workflows()] + [
+            {"total_count": 1, "workflow_runs": [{"id": index + 10, "workflow_id": 1, "status": status}]}
+            for index, status in enumerate(statuses)]
+        with patch.object(approval, "_github_json", side_effect=responses) as api:
+            observation = approval.observe_workflow_pause()
+        self.assertEqual(observation["scope"], "workflow-disable-observation-only")
+        self.assertEqual(set(observation), {"repository", "scope", "workflows"})
+        self.assertEqual([call.args[0] for call in api.call_args_list],
+                         [f"repos/{approval.REPOSITORY}/actions/workflows?per_page=100"] +
+                         [f"repos/{approval.REPOSITORY}/actions/runs?status={status}&per_page=100" for status in statuses])
+
+    def test_pause_observation_rejects_incomplete_or_unreviewed_inventory(self):
+        original = paused_workflows()
+        cases = [original | {"total_count": 101}, original | {"total_count": True},
+                 original | {"total_count": 4}, original | {"workflows": None},
+                 {"total_count": 2, "workflows": original["workflows"][1:]}]
+        for fields in ({"state": "active"}, {"state": "disabled_inactivity"},
+                       {"id": 1}, {"id": True}, {"path": ".github/workflows/tf-plan.yml"},
+                       {"path": "https://evil.example/"}):
+            changed = copy.deepcopy(original)
+            changed["workflows"][2].update(fields)
+            cases.append(changed)
+        for inventory in cases:
+            with self.subTest(inventory=inventory), \
+                    patch.object(approval, "_github_json", return_value=inventory), self.assertRaises(ValueError):
+                approval.observe_workflow_pause()
+
+    def test_pause_observation_never_ignores_old_queued_writers_or_truncated_runs(self):
+        statuses = ("queued", "in_progress", "waiting", "pending", "requested")
+        empty = {"total_count": 0, "workflow_runs": []}
+        for position, status in enumerate(statuses):
+            cases = [{"total_count": 1, "workflow_runs": [
+                {"id": 10, "workflow_id": 3, "status": status, "head_branch": "old-branch",
+                 "created_at": "2020-01-01T00:00:00Z"}]},
+                {"total_count": 101, "workflow_runs": []}, {"total_count": True, "workflow_runs": []},
+                {"total_count": 1, "workflow_runs": []},
+                {"total_count": 1, "workflow_runs": [{"id": 10, "workflow_id": True, "status": status}]},
+                {"total_count": 1, "workflow_runs": [{"id": 10, "workflow_id": 1, "status": "completed"}]},
+                {"total_count": 1, "workflow_runs": [{"workflow_id": 1, "status": status}]},
+                {"total_count": 1, "workflow_runs": [{"id": True, "workflow_id": 1, "status": status}]},
+                {"total_count": 1, "workflow_runs": [{"id": 0, "workflow_id": 1, "status": status}]},
+                {"total_count": 2, "workflow_runs": [{"id": 10, "workflow_id": 1, "status": status}] * 2}]
+            for run_list in cases:
+                with self.subTest(status=status, run_list=run_list), \
+                        patch.object(approval, "_github_json", side_effect=[paused_workflows()] +
+                                     [empty] * position + [run_list]), self.assertRaises(ValueError):
+                    approval.observe_workflow_pause()
+        with patch.object(approval, "_github_json", side_effect=[paused_workflows()] + [
+                {"total_count": 1, "workflow_runs": [{"id": 10, "workflow_id": 1, "status": status}]}
+                for status in statuses]), self.assertRaises(ValueError):
+            approval.observe_workflow_pause()
 
 
 if __name__ == "__main__":

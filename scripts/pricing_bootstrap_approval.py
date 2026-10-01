@@ -11,6 +11,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import threading
 
 REPOSITORY = "vayada-marketplace/vayada-platform"
@@ -21,6 +22,116 @@ CONTEXT_FIELDS = frozenset({
     "sourceSha", "runId", "runAttempt", "operatorArn", "stateLineage", "stateSerial",
     "planSha256", "writerHoldSha256", "authorizationSha256",
 })
+# Only these reviewed read/validation workflows may remain active in this
+# diagnostic. No setup-runner exception is configured or silently inferred.
+READ_WORKFLOWS = frozenset({".github/workflows/tf-plan.yml", ".github/workflows/tf-validate.yml"})
+EDIT_QUERY = """query($id: ID!) {
+  node(id: $id) {
+    ... on IssueComment {
+      id fullDatabaseId body createdAt updatedAt lastEditedAt
+      editor { id } isMinimized author { id __typename }
+    }
+  }
+}"""
+
+
+def _github_json(path, *, node_id=None):
+    """Fixed-host GETs or the fixed read-only GraphQL query; no raw error output."""
+    args = ["gh", "api", "--hostname", "github.com"]
+    if node_id is not None:
+        if path != "graphql":
+            raise ValueError("Invalid approval API endpoint")
+        args += ["graphql", "--method", "POST", "-f", "query=" + EDIT_QUERY, "-f", "id=" + node_id]
+    else:
+        if not path.startswith(f"repos/{REPOSITORY}/"):
+            raise ValueError("Invalid approval API endpoint")
+        args += [path, "--method", "GET"]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=20)
+        if result.returncode or len(result.stdout) > 2_000_000:
+            raise ValueError("Approval API evidence unavailable")
+        data = json.loads(result.stdout)
+        if not isinstance(data, dict) or data.get("errors"):
+            raise ValueError("Invalid approval API evidence")
+        return data
+    except (OSError, subprocess.TimeoutExpired, UnicodeError, json.JSONDecodeError):
+        raise ValueError("Approval API evidence unavailable") from None
+
+
+def read_github_comment(comment_id):
+    if type(comment_id) is not int or comment_id < 1:
+        raise ValueError("Invalid approval comment ID")
+    comment = _github_json(f"repos/{REPOSITORY}/issues/comments/{comment_id}")
+    node_id = comment.get("node_id")
+    user = comment.get("user")
+    if (type(comment.get("id")) is not int or comment["id"] != comment_id
+            or not isinstance(node_id, str) or not re.fullmatch(r"[A-Za-z0-9_=-]{1,200}", node_id)
+            or not isinstance(user, dict) or not isinstance(user.get("node_id"), str)
+            or not re.fullmatch(r"[A-Za-z0-9_=-]{1,200}", user["node_id"])):
+        raise ValueError("Invalid approval comment identity")
+    response = _github_json("graphql", node_id=node_id)
+    data = response.get("data")
+    node = data.get("node") if isinstance(data, dict) else None
+    if (not isinstance(node, dict) or node.get("id") != node_id
+            or type(node.get("fullDatabaseId")) not in (int, str)
+            or str(node["fullDatabaseId"]) != str(comment_id)
+            or node.get("author") != {"id": user["node_id"], "__typename": user.get("type")}
+            or any(field not in node or node[field] != comment.get(rest) for field, rest in (
+                ("body", "body"), ("createdAt", "created_at"), ("updatedAt", "updated_at")))):
+        raise ValueError("Approval API snapshots disagree")
+    try:
+        comment["editEvidence"] = {field: node[field] for field in
+                                   ("id", "fullDatabaseId", "lastEditedAt", "editor", "isMinimized")}
+    except KeyError:
+        raise ValueError("Missing approval edit evidence") from None
+    return comment
+
+
+def observe_workflow_pause():
+    """Observe manual disable/drain only; not an enforced all-writer hold."""
+    response = _github_json(f"repos/{REPOSITORY}/actions/workflows?per_page=100")
+    workflows = response.get("workflows")
+    if (not isinstance(workflows, list) or type(response.get("total_count")) is not int
+            or not 1 <= response["total_count"] <= 100 or len(workflows) != response["total_count"]):
+        raise ValueError("Incomplete workflow inventory")
+    seen_ids, seen_paths, inventory, read_ids = set(), set(), [], set()
+    for workflow in workflows:
+        if not isinstance(workflow, dict):
+            raise ValueError("Invalid workflow inventory")
+        identity, path, state = (workflow.get(field) for field in ("id", "path", "state"))
+        if (type(identity) is not int or identity < 1 or identity in seen_ids
+                or not isinstance(path, str) or path in seen_paths
+                or not re.fullmatch(r"\.github/workflows/[A-Za-z0-9_-]+\.ya?ml", path)):
+            raise ValueError("Invalid workflow inventory")
+        seen_ids.add(identity)
+        seen_paths.add(path)
+        if path in READ_WORKFLOWS:
+            if state not in ("active", "disabled_manually"):
+                raise ValueError("Unreviewed validation workflow state")
+            read_ids.add(identity)
+        elif state != "disabled_manually":
+            raise ValueError("Writer workflow is not manually paused")
+        inventory.append({"id": identity, "path": path, "state": state})
+    if not READ_WORKFLOWS <= seen_paths:
+        raise ValueError("Required workflow inventory missing")
+    # All nonterminal statuses, without a main/date filter that could hide an
+    # old waiting or queued writer. Large/truncated responses fail closed.
+    seen_runs = set()
+    for status in ("queued", "in_progress", "waiting", "pending", "requested"):
+        response = _github_json(f"repos/{REPOSITORY}/actions/runs?status={status}&per_page=100")
+        runs = response.get("workflow_runs")
+        if (not isinstance(runs, list) or type(response.get("total_count")) is not int
+                or not 0 <= response["total_count"] <= 100 or len(runs) != response["total_count"]):
+            raise ValueError("Incomplete workflow-run inventory")
+        for run in runs:
+            if (not isinstance(run, dict) or type(run.get("id")) is not int
+                    or run["id"] < 1 or run["id"] in seen_runs
+                    or type(run.get("workflow_id")) is not int
+                    or run["workflow_id"] not in read_ids or run.get("status") != status):
+                raise ValueError("Invalid run inventory or a nonterminal writer remains")
+            seen_runs.add(run["id"])
+    return {"repository": REPOSITORY, "scope": "workflow-disable-observation-only",
+            "workflows": sorted(inventory, key=lambda item: item["id"])}
 
 
 def timestamp(value):
@@ -150,6 +261,14 @@ class ApprovalGate:
                 raise ValueError("Source, plan, session, state or guard evidence changed")
             self.check_comment(comment, now=now)
             self._consumed = True
+
+    def fetch_and_consume(self, comment_id, current_context):
+        """Fresh authenticated evidence; caller must first rerun real guards."""
+        if not APPROVED_HUMAN_IDS:
+            raise ValueError("No approved humans configured")
+        if os.getpid() != self._pid:
+            raise ValueError("Approval gate belongs to another process")
+        self.consume(read_github_comment(comment_id), current_context)
 
 
 if __name__ == "__main__":

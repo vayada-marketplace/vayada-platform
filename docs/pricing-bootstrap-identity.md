@@ -141,20 +141,46 @@ different process/run. Copy/serialization and fork reuse are rejected, and
 consumption is atomic across threads. It writes nothing and has no executable
 setup entry point.
 
-The future executor must obtain comments directly from the fixed repository's
-authenticated GitHub API, re-fetch the chosen comment immediately before use,
-and supply GraphQL `lastEditedAt`, `editor` and `isMinimized` evidence bound to
-the same REST node/`fullDatabaseId`. Missing fields reject approval; equal REST
-created/updated timestamps alone are insufficient. See the official
+`ApprovalGate.fetch_and_consume` now obtains the selected comment directly via
+native `gh api` on fixed `github.com` endpoints. It binds matching REST/GraphQL
+IDs, author, body and timestamps, including GraphQL `lastEditedAt`, `editor`
+and `isMinimized` evidence. Missing fields, partial API errors or disagreeing
+snapshots reject approval; equal REST created/updated timestamps alone are
+insufficient. API failures expose only sanitized messages, not response bodies.
+An empty approved-human allowlist fails before fetching. See the official
 [IssueComment schema](https://docs.github.com/en/graphql/reference/issues#issuecomment).
-It must run all source/plan/identity/state/hold/authorization guards before building
-the receipt and again before consumption. The component compares their context;
+The future executor must run all source/plan/identity/state/hold/authorization
+guards before building the receipt and again before consumption. The component compares their context;
 it does **not** authenticate caller-supplied JSON or prove an operator/hold from
 a digest. Service holds do not freeze Terraform writers. Private input loading,
 live evidence collection, durable whole-writer hold, polling/publication, apply,
 post-apply verification, recovery and metadata-phase integration remain absent.
 No setup workflow calls this component or gains permissions, and its tests use only
 synthetic data. Passing them is not authorization to execute setup.
+
+### Workflow pause observation — not an authorization fence
+
+`observe_workflow_pause` is a read-only diagnostic, not an executor prerequisite
+that establishes the receipt's `writerHoldSha256`. It requires a complete
+single-page inventory (at most 100 workflows), manually disabled workflows
+except the reviewed `tf-plan.yml` and `tf-validate.yml`, and no nonterminal runs
+outside those two. It checks every queued/in-progress/waiting/pending/requested
+status without branch or date filters. Missing, duplicate, malformed or truncated
+workflow/run identities fail closed. No setup-runner exception is inferred; the diagnostic does not
+disable, enable, cancel or retry anything.
+
+[GitHub workflow disabling](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows)
+stops new triggers. A snapshot of disabled workflows does not revoke issued AWS
+sessions, drain accepted AWS actions, prevent administrator re-enablement/reruns,
+or cover other repositories and out-of-band operators. This observation must
+not be treated as proof of a durable all-writer hold or atomic drain snapshot:
+a writer may change status between sequential API queries and go unobserved.
+The reviewed hold still
+needs phase-specific coverage, ownership, fresh checks and safe recovery through
+creation, metadata verification and the ordinary hosted no-op. Retained older
+authentication-fenced writer runs will block this diagnostic too; do not cancel
+or retry them merely to make it pass. Their disposition requires the existing
+writer-boundary coordination and reviewed fence evidence. No live pause was made.
 
 Admission is a fixed OIDC audience/environment within a reviewed UTC window
 of at most one hour. Request-time denial stops already-issued sessions at the
@@ -217,7 +243,7 @@ Do not bypass refresh, use `-target`, broaden reads to pricing secret values,
 or count the dummy local plans as evidence that production refresh succeeds.
 
 Still required before either production apply: independently reviewed
-same-runner receipt/approval code, immutable source/plan and full root guards,
+same-runner receipt/approval integration, immutable source/plan and full root guards,
 durable shared writer hold, phase-specific authorization/negative evidence,
 separate metadata phase, expiry/revocation proof and partial-failure recovery.
 Creation expiry is not retirement verification. Keep the writer hold through
