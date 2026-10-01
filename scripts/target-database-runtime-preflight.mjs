@@ -25,7 +25,26 @@ const stagedRelationPrivileges = {
   "platform.domain_events": ["INSERT"],
   "platform.jobs": ["INSERT"],
 };
+// VAY-965: columns used by the authorized setup track transaction; no private scope access.
 const stagedColumnPrivileges = {
+  "hotel_catalog.organization_setup_track_intents": {
+    INSERT: ["organization_id", "selected_tracks", "revision"],
+    UPDATE: ["selected_tracks", "revision", "updated_at"],
+  },
+  "identity.product_entitlements": {
+    INSERT: ["organization_id", "product", "entitlement_key", "status", "starts_at", "expires_at", "metadata"],
+    UPDATE: ["status", "starts_at", "expires_at", "updated_at"],
+  },
+  "identity.organization_resource_links": {
+    INSERT: ["organization_id", "product", "resource_type", "resource_id", "relationship", "status"],
+    UPDATE: ["id"],
+  },
+  "finance.billing_entitlements": { UPDATE: ["id"] },
+  "booking.booking_settings": { INSERT: ["property_id"] },
+  "marketplace.marketplace_hotel_profiles": {
+    INSERT: ["property_id", "organization_id", "source_system", "source_hotel_profile_id"],
+    UPDATE: ["property_id"],
+  },
   "finance.folios": { UPDATE: ["id"] },
   "pms.channel_operational_alerts": { UPDATE: ["resolved_at"] },
 };

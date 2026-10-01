@@ -36,6 +36,7 @@ on:
       - "scripts/financials-activation-readiness.mjs"
       - "scripts/grant-target-database-product-audit-insert.mjs"
       - "scripts/grant-target-database-folio-command.mjs"
+      - "scripts/grant-target-database-hotel-setup-tracks.mjs"
       - "scripts/finance-expense-worker-database.mjs"
       - "scripts/finance-export-worker-database.mjs"
       - "scripts/grant-target-database-identity-runtime.mjs"
@@ -240,6 +241,7 @@ jobs:
           node --check scripts/financials-activation-readiness.mjs
           node --check scripts/grant-target-database-product-audit-insert.mjs
           node --check scripts/grant-target-database-folio-command.mjs
+          node --check scripts/grant-target-database-hotel-setup-tracks.mjs
           node --check scripts/finance-expense-worker-database.mjs
           node --check scripts/finance-export-worker-database.mjs
           node --check scripts/grant-target-database-identity-runtime.mjs
