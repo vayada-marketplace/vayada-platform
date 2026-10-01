@@ -1,5 +1,11 @@
 # Empty secret containers only. A separate reviewed bootstrap supplies values after
 # the database roles and their property-scoped grants pass the actual-role preflight.
+variable "enable_pricing_command_metadata_refresh" {
+  description = "Enable only after the seven empty pricing resources exist and a separate operator plan is reviewed"
+  type        = bool
+  default     = false
+}
+
 locals {
   pricing_command_secret_names = {
     identity_read  = "pricing-command/prod/identity-read-database-url"
@@ -8,6 +14,10 @@ locals {
     public         = "pricing-command/prod/public-database-url"
     internal_token = "pricing-command/prod/internal-token"
   }
+  pricing_command_metadata_statements = var.enable_pricing_command_metadata_refresh ? jsondecode(templatefile("${path.module}/pricing_command_metadata_policy.json.tftpl", {
+    secret_arns = jsonencode([for secret in aws_secretsmanager_secret.pricing_command : secret.arn])
+    role_arn    = jsonencode(aws_iam_role.pricing_command_execution.arn)
+  })).Statement : []
 }
 
 resource "aws_secretsmanager_secret" "pricing_command" {

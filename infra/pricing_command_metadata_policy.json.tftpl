@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RefreshExactPricingSecrets",
+      "Effect": "Allow",
+      "Action": ["secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy"],
+      "Resource": ${secret_arns}
+    },
+    {
+      "Sid": "RefreshPricingExecutionRole",
+      "Effect": "Allow",
+      "Action": ["iam:GetRole", "iam:ListRolePolicies", "iam:GetRolePolicy", "iam:ListAttachedRolePolicies"],
+      "Resource": ${role_arn}
+    }
+  ]
+}
