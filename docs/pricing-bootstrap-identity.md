@@ -72,7 +72,8 @@ permissions as a reason to widen this role again.
 
 Use one separately authorized operator for the **whole** seven-create phase,
 not a role-only apply followed by this temporary identity. This is a proposal
-for review, not a selection of an AWS operator or permission to run setup.
+for review, not permission to run setup. The accountable operator has now been
+selected below; the execution session and its permissions are not approved.
 It reuses `infra/pricing_command_secrets.tf` and the guarded plan proposal
 [#343](https://github.com/vayada-marketplace/vayada-platform/pull/343).
 No second pricing-resource root, duplicate role declaration, state transfer,
@@ -86,9 +87,9 @@ The temporary identity is **not** used for this seven-create apply, even if its
 creation window or SSM opt-in is enabled. Do not provision it merely to unlock
 this operator route or add back its IAM writes.
 
-The operator must first be explicitly identified and approved, with reviewed
-session admission, time limits/revocation, phase-specific permissions and safe
-positive/negative authorization evidence. Ordinary CI, migration credentials
+The selected operator still needs reviewed session admission, time limits/
+revocation, phase-specific permissions and safe positive/negative authorization
+evidence. Ordinary CI, migration credentials
 and an unnamed administrator are not substitutes. The approved executor must
 load the existing production input bindings on its private runner without
 exporting them, guessing them from runtime SSM copies or publishing state/plan
@@ -125,10 +126,53 @@ Only then may ordinary writers resume. Execution-role image-pull/log grants,
 PassRole, database roles/values, service launch, proxy cutover and hotel testing
 remain separate reviewed steps. This route does not complete those gates.
 
+### Selected operator — ownership only, not execution admission
+
+Flamur explicitly approved designating the existing `VayadaUser` administrator
+as the responsible one-time setup operator in this chat. The selected principal
+is `arn:aws:iam::269416271598:user/VayadaUser`, stable IAM user ID
+`AIDAT5OTWB3XLUEYGCQ56`, verified with read-only `GetUser`. Recreating a user
+with the same name/ARN must not silently inherit this selection. Reverify both
+fields before any later admission; mismatch requires a fresh reviewed decision.
+
+This resolves operator ownership only. It does not authorize using the current
+administrator credentials for apply, changing permissions, issuing sessions,
+loading production settings or modifying GitHub protections. It does not accept
+residual arbitrary trust/policy or initial-secret-value authority and does not
+choose the separate GitHub receipt approvers. Those remain explicit gates.
+
+The receipt records this owner separately from `context.operatorArn`, which
+still requires an assumed-role session. Owner metadata does not prove that a
+role/session belongs to the selected operator. No execution-role allowlist,
+session admission or attributable-role evidence is configured yet; do not
+widen the session check to accept this IAM-user ARN or any role merely because
+it is in the account. This component alone is not an admission controller.
+
+The access proposal must use an independently reviewed phase-limited role,
+exact trust/admission and request-time expiry/revocation. Keep the owner's
+long-term credentials and other administrator credential sources out of the
+private runner; prove its actual caller, role policy composition and allowed/
+denied operations rather than relying on a requested session duration or policy.
+[GetSessionToken](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetSessionToken.html)
+retains the user's permissions; it is not a least-privilege substitute.
+[AssumeRole](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html)
+can restrict a session through role/session policies, but the actual role,
+resource policies and admission still need review and proof. Neither API was
+called and no role, grant, session or credential was created by this decision.
+
+Before connecting an executor, review the concrete all-writer pause with this
+operator: admission and issued-session fencing, accepted-action drain, covered
+writer identities, retained authentication-fenced requests, phase-specific
+exceptions, failure ownership and explicit release after metadata verification
+and hosted no-op. The current workflow observation is not that fence. Operator
+session expiry must never automatically release the writer hold. Preserve the
+installed VAY-2029 trust and cutoff. No new pause control is activated here.
+
 ### Same-runner approval component — not an executor
 
 `scripts/pricing_bootstrap_approval.py` implements only the in-process approval
-boundary. No human GitHub IDs are authorized by default; selecting them requires
+boundary. The selected AWS owner is receipt metadata only. No human GitHub IDs
+are authorized by default; selecting them requires
 explicit approval and a reviewed code change, never a dispatch/environment input.
 It generates an allowlisted receipt with source/run/attempt, operator session,
 state lineage/serial, saved-plan digest, writer-hold and authorization-evidence

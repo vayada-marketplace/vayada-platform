@@ -15,6 +15,10 @@ import subprocess
 import threading
 
 REPOSITORY = "vayada-marketplace/vayada-platform"
+# Human-selected accountable owner, not authorization for a runner/session.
+# Stable IAM ID was read with GetUser; never infer ownership from credentials.
+SELECTED_OPERATOR_ARN = "arn:aws:iam::269416271598:user/VayadaUser"
+SELECTED_OPERATOR_ID = "AIDAT5OTWB3XLUEYGCQ56"
 # Empty until the human identities are explicitly chosen and reviewed in code.
 # Never load approvers from dispatch inputs, comments or the process environment.
 APPROVED_HUMAN_IDS = frozenset()
@@ -174,6 +178,7 @@ class ApprovalGate:
         self._issue_url = f"https://api.github.com/repos/{REPOSITORY}/issues/{issue_number}"
         self._receipt = {
             "schemaVersion": 1, "phase": "creation", "repository": REPOSITORY,
+            "operatorOwner": {"arn": SELECTED_OPERATOR_ARN, "userId": SELECTED_OPERATOR_ID},
             "accountId": "269416271598", "region": "eu-west-1",
             "stateObject": "s3://vayada-terraform-state/platform/terraform.tfstate",
             "guard": "exact-seven-empty-pricing-creates", "context": copy.deepcopy(context),
@@ -272,4 +277,4 @@ class ApprovalGate:
 
 
 if __name__ == "__main__":
-    raise SystemExit("Approval component only; no setup executor or approved operators configured")
+    raise SystemExit("Approval component only; no setup executor or approved sessions/approvers configured")

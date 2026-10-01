@@ -73,6 +73,21 @@ class ApprovalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gate.consume(comment(gate), context(), now=NOW + timedelta(seconds=2))
 
+    def test_selected_owner_is_receipt_metadata_not_session_authorization(self):
+        gate = approval.ApprovalGate(context(), 344, now=NOW)
+        expected = {"arn": "arn:aws:iam::269416271598:user/VayadaUser", "userId": "AIDAT5OTWB3XLUEYGCQ56"}
+        self.assertEqual(gate.receipt()["receipt"]["operatorOwner"], expected)
+        exported = gate.receipt()
+        exported["receipt"]["operatorOwner"]["arn"] = "other"
+        self.assertEqual(gate.receipt()["receipt"]["operatorOwner"], expected)
+        changed = context() | {"operatorArn": expected["arn"]}
+        with self.assertRaises(ValueError):
+            approval.ApprovalGate(changed, 344, now=NOW)
+        with self.assertRaises(ValueError):
+            gate.consume(comment(gate), changed, now=NOW + timedelta(seconds=2))
+        self.assertFalse(gate._consumed)
+        self.assertEqual(approval.APPROVED_HUMAN_IDS, frozenset())
+
     def test_context_and_receipt_cannot_smuggle_or_mutate_fields(self):
         private = context() | {"privatePlan": "SECRET_SENTINEL"}
         with self.assertRaises(ValueError):
