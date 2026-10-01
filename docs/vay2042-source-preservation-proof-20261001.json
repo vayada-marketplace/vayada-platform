@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "purpose": "isolated-rehearsal-source-preservation-not-production-freeze",
+  "snapshotArn": "arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-freeze-20260920",
+  "sourceRestoreResourceId": "db-BB7GOFQ3BQTLTBG444I2Q75X6Y",
+  "controlRestoreResourceId": "db-KWO2HSCRBXNV75OK7LNIBZN7TQ",
+  "workflowRunId": 36847109009,
+  "workflowCommit": "a91ba253108e97aa8f6b523ed01b9f499cb33679",
+  "executionArn": "arn:aws:states:eu-west-1:269416271598:execution:vay2042-source-preservation-compare:compare-20261001T100757Z-36847109009",
+  "taskArn": "arn:aws:ecs:eu-west-1:269416271598:task/vay2017-metadata-rehearsal/4cb7b09d642645df8e1eb7740e754693",
+  "taskDefinitionArn": "arn:aws:ecs:eu-west-1:269416271598:task-definition/vay2042-source-preservation-compare:1",
+  "imageDigest": "sha256:a6f1001b1713e5f86e52cf757b3e67c794ec936639273dc041cedc7b95ea7b3c",
+  "reportLogTimestamp": "2026-10-01T10:08:30.999Z",
+  "reportArtifactId": 11154281211,
+  "reportFileSha256": "8ccc7f011968dc179f975ca0901ea7b21efd50d129124ea975cfbb35f72c3790",
+  "canonicalEvidenceSha256": "985c14b0756937c147a04be3193f3592939a3188c867bb10a9005dbc922c0b6c",
+  "databases": 4,
+  "tables": 83,
+  "rows": 51477
+}
