@@ -20,9 +20,10 @@ logins under the fixed property prefix; it cannot read the reader URL/internal
 token from Secrets Manager, write/rotate secrets or read unrelated credentials.
 The service receives its reader and token through ECS secret injection. Native
 purpose selection comes from the current database assignment, not secret naming.
-These roles are not attached to any task and deployment roles receive no PassRole
-permission in this change. ECR/logging execution permissions belong to the later
-reviewed task definition, not the application task role.
+The credential flag alone attaches these roles to no task; deployment roles
+receive no PassRole permission here. Separately gated service staging adds
+ECR/logging execution permissions only to the execution role, not the application
+task role.
 
 ## Deployment contract
 
@@ -88,3 +89,29 @@ The public subnet IDs do not make an internal ALB internet-facing. Task HTTPS
 egress remains internet-wide because security groups cannot restrict the WorkOS
 hostname; runtime IAM and TLS still apply. No task or API forwarding is created
 by the network slice.
+
+## Staged service and rollback definitions
+
+`enable_hotel_setup_service_staging=false` registers nothing. When separately
+approved, staging requires both credential/network flags and reviewed primary
+and rollback digests. `deployment/hotel-setup-command-images.json` maps each
+reviewed digest to its exact 40-character source commit; it is intentionally
+empty until the composed private executable is built and verified. An ordinary
+API image is not a valid attestation. Both task definitions use the same private
+entrypoint, environment and restricted roles; no broad-credential fallback.
+
+The staged ECS service has desired count zero and ECS Exec disabled. It starts
+no worker, scheduler or migration. The existing public-subnet pilot uses a task
+public IP for WorkOS/AWS egress, with no internet inbound SG rule. The task is
+read-only except an ephemeral CA directory. Its startup shell writes the public
+reviewed RDS CA with mode0600 and Node adds that CA without disabling TLS or
+hostname verification. It uses the image's default root user for this write;
+no privileged container/host mount is enabled. Review live RDS CA compatibility.
+
+Current CI receives no new PassRole permission and no workflow deploys this
+service. Exact staged-role PassRole and a reviewed private release workflow are
+additional gates. Activating desired count and API forwarding requires a later
+approved change; do not apply this zero-count staging configuration over an
+activated service. Automated circuit rollback uses ECS's last completed service
+deployment, not the separately registered rollback family. A future release must
+select and verify that exact rollback task explicitly before activation.

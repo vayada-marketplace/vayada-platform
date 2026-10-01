@@ -1,0 +1,25 @@
+[{
+  "name": "hotel-setup",
+  "essential": true,
+  "image": ${image_json},
+  "workingDirectory": "/app",
+  "entryPoint": ["/bin/sh", "-ec"],
+  "command": ["umask 077; printf '%s' \"$HOTEL_SETUP_RDS_CA\" > /runtime/rds-ca.pem; unset HOTEL_SETUP_RDS_CA; exec node apps/api/dist/hotelSetupCommandServer.js"],
+  "readonlyRootFilesystem": true,
+  "privileged": false,
+  "portMappings": [{"containerPort": 8011, "protocol": "tcp"}],
+  "mountPoints": [{"sourceVolume": "runtime", "containerPath": "/runtime", "readOnly": false}],
+  "environment": ${environment_json},
+  "secrets": [
+    {"name": "HOTEL_SETUP_COMMAND_READER_DATABASE_URL", "valueFrom": ${reader_arn_json}},
+    {"name": "HOTEL_SETUP_COMMAND_INTERNAL_TOKEN", "valueFrom": ${token_arn_json}}
+  ],
+  "logConfiguration": {
+    "logDriver": "awslogs",
+    "options": {
+      "awslogs-group": ${log_group_json},
+      "awslogs-region": ${region_json},
+      "awslogs-stream-prefix": "private-setup"
+    }
+  }
+}]
