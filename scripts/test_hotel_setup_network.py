@@ -62,6 +62,7 @@ output "setup_environment" { value = local.hotel_setup_environment }
             (path / 'fixture.auto.tfvars.json').write_text(json.dumps({
                 'enable_hotel_setup_service_staging': service.get('enabled', False),
                 'enable_hotel_setup_credential_infrastructure': service.get('credentials', False),
+                'hotel_setup_command_mode': service.get('mode', 'property_commands'),
                 'hotel_setup_image_digests': service.get('digests', {'primary': '', 'rollback': ''})}))
         env = {**os.environ, 'AWS_EC2_METADATA_DISABLED': 'true'}
         env.pop('AWS_PROFILE', None)

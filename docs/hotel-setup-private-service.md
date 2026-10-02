@@ -116,3 +116,25 @@ approved change; do not apply this zero-count staging configuration over an
 activated service. Automated circuit rollback uses ECS's last completed service
 deployment, not the separately registered rollback family. A future release must
 select and verify that exact rollback task explicitly before activation.
+
+
+## Creation-only staged runtime
+
+Set `hotel_setup_command_mode=property_creation` for the reviewed creation image.
+The executable receives that fixed mode and constructs no currency or Feature Hub
+adapter. The execution role reads only the separately named
+`hotel-setup-creation/prod/reader-database-url` and
+`hotel-setup-creation/prod/internal-token` secret containers. The reader URL must
+use `vayada_next_hotel_setup_creation_reader`; the app rejects the property reader.
+The task role reads only organization secrets below
+`hotel-setup-command/prod/organization/vayada_next_hotel_setup_org_` and cannot
+read property-command, ordinary API, owner or migration credentials.
+
+This reuses the disabled private deployment contract. Default mode remains
+`property_commands`, all infrastructure flags remain false and staged capacity
+remains zero. No secret value, role grant, approved image, public API forwarding
+or deployment is introduced here. Native creation and creation-reader release
+preflights, isolated credential provisioning and normal CI release/rollback
+remain activation gates. A mode change after staging can replace protected secret
+containers and requires its own clean Terraform plan; do not use it as a live
+service-purpose switch.

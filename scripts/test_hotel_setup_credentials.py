@@ -11,7 +11,7 @@ SOURCE = ROOT / "infra/hotel_setup_credentials.tf"
 TEMPLATE = ROOT / "infra/hotel_setup_secret_read_policy.json.tftpl"
 
 
-def render(enabled):
+def render(enabled, mode="property_commands"):
     with tempfile.TemporaryDirectory() as directory:
         # Only locals/variables: no provider, backend, AWS access or state.
         text = SOURCE.read_text().split('resource "', 1)[0]
@@ -19,9 +19,9 @@ def render(enabled):
         text += '\nvariable "aws_account_id" { default = "269416271598" }\n'
         Path(directory, "main.tf").write_text(text)
         Path(directory, TEMPLATE.name).write_text(TEMPLATE.read_text())
-        expression = 'jsonencode({names=local.hotel_setup_secret_names,trust=jsondecode(local.hotel_setup_role_trust),policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([local.hotel_setup_property_secret_arn])}))})'
+        expression = 'jsonencode({names=local.hotel_setup_secret_names,trust=jsondecode(local.hotel_setup_role_trust),policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([local.hotel_setup_native_secret_arn])}))})'
         result = subprocess.run(
-            ["terraform", "console", "-no-color", f"-var=enable_hotel_setup_credential_infrastructure={str(enabled).lower()}"],
+            ["terraform", "console", "-no-color", f"-var=enable_hotel_setup_credential_infrastructure={str(enabled).lower()}", f"-var=hotel_setup_command_mode={mode}"],
             input=expression + "\n", text=True, capture_output=True, cwd=directory, check=True, timeout=30)
         return json.loads(json.loads(result.stdout.strip()))
 
@@ -39,6 +39,24 @@ class HotelSetupCredentialsTests(unittest.TestCase):
         for path in (ROOT / "infra").glob("*.tf"):
             if path != SOURCE and path.name != "hotel_setup_service.tf":
                 self.assertNotIn('aws_iam_role.hotel_setup_', path.read_text(), str(path))
+
+    def test_unknown_mode_fails_closed(self):
+        with self.assertRaises((subprocess.CalledProcessError, ValueError)):
+            render(True, "unreviewed")
+
+    def test_creation_reads_exclude_property_and_injected_credentials(self):
+        rendered = render(True, "property_creation")
+        self.assertEqual(rendered["names"], {
+            "reader_database_url": "hotel-setup-creation/prod/reader-database-url",
+            "internal_token": "hotel-setup-creation/prod/internal-token"})
+        statement, = rendered["policy"]["Statement"]
+        self.assertEqual(statement["Action"], ["secretsmanager:GetSecretValue"])
+        pattern, = statement["Resource"]
+        prefix = "arn:aws:secretsmanager:eu-west-1:269416271598:secret:"
+        self.assertEqual(pattern, prefix + "hotel-setup-command/prod/organization/vayada_next_hotel_setup_org_*")
+        self.assertTrue(fnmatch.fnmatchcase(prefix + "hotel-setup-command/prod/organization/vayada_next_hotel_setup_org_abc-AbCd12", pattern))
+        for name in [*rendered["names"].values(), "hotel-setup-command/prod/property/vayada_next_hotel_setup_property_abc", "pricing-command/prod/owner-manage-database-url", "hotel-setup-command/prod/organization/postgres"]:
+            self.assertFalse(fnmatch.fnmatchcase(prefix + name + "-AbCd12", pattern), name)
 
     def test_native_reads_are_isolated_from_injected_and_unrelated_secrets(self):
         rendered = render(True)
