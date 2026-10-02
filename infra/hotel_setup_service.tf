@@ -108,5 +108,5 @@ resource "aws_ecs_service" "hotel_setup" {
     container_name   = "hotel-setup"
     container_port   = 8011
   }
-  depends_on = [aws_lb_listener.hotel_setup, aws_iam_role_policy.hotel_setup_execution_runtime, aws_iam_role_policy.hotel_setup_execution_secrets, aws_iam_role_policy.hotel_setup_property_secrets]
+  depends_on = [aws_lb_listener.hotel_setup, aws_lb_listener_rule.hotel_setup_creation, aws_iam_role_policy.hotel_setup_execution_runtime, aws_iam_role_policy.hotel_setup_execution_secrets, aws_iam_role_policy.hotel_setup_property_secrets]
 }

@@ -85,7 +85,12 @@ creates only the separate empty property reader/token containers and unattached
 execution/task roles. The original credential slice must be off or explicitly
 select `property_creation`; a reviewed plan rejects reuse of the same property
 containers by both identities. This flag creates no versions, grants, database
-logins, tasks or service. Network and service staging remain later slices.
+logins, tasks or service. `enable_hotel_setup_property_network=false` adds no destination. The reviewed
+opt-in uses the shared internal HTTPS ALB/certificate with a separate property
+host rule, target group, task security group and VPC-only DNS zone. The creation
+host keeps its own target; unknown hosts receive403. It requires the shared
+network flag and neither attaches the caller group nor creates tasks. Service
+staging remains a later slice.
 
 Acceptance must cover the actual wizard Save: property creation, optional logo,
 launch-settings save, status reload, and subsequent native PMS first-currency
