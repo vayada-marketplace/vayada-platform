@@ -33,7 +33,7 @@ def runtime_result():
 
 def context():
     return {"sourceSha": "a" * 40, "runId": 123, "runAttempt": 1,
-            "operatorArn": "arn:aws:sts::269416271598:assumed-role/reviewed-fixture/session",
+            "operatorArn": "arn:aws:sts::269416271598:assumed-role/vayada-pricing-operator-create/session",
             "stateLineage": "00000000-0000-0000-0000-000000000001", "stateSerial": 7,
             "planSha256": "b" * 64, "writerHoldSha256": "c" * 64, "authorizationSha256": "d" * 64}
 
@@ -215,6 +215,31 @@ class ApprovalTests(unittest.TestCase):
             gate.consume(comment(gate), changed, now=NOW + timedelta(seconds=2))
         self.assertFalse(gate._consumed)
 
+    def test_creation_context_rejects_other_role_names_before_source_or_approval(self):
+        self.assertEqual(approval.CREATION_OPERATOR_ROLE, "vayada-pricing-operator-create")
+        declaration = (ROOT / "infra/pricing-bootstrap-identity/operator.tf").read_text().split(
+            'resource "aws_iam_role" "operator_creation" {', 1)[1].split("\n}", 1)[0]
+        self.assertIn(f'name                 = "{approval.CREATION_OPERATOR_ROLE}"', declaration)
+        invalid = [approval.SELECTED_OPERATOR_ARN, "arn:aws:iam::269416271598:root"]
+        invalid += [f"arn:aws:sts::269416271598:assumed-role/{role}/session" for role in (
+            "reviewed-fixture", "vayada-github-actions-platform-deploy", "vayada-pricing-command-execution",
+            "vayada-pricing-bootstrap-create", "vayada-pricing-operator-create-extra", "Vayada-pricing-operator-create")]
+        invalid += [context()["operatorArn"].replace("269416271598", "111111111111"),
+                    context()["operatorArn"] + "/extra", context()["operatorArn"].replace("/session", "/")]
+        with patch.object(approval, "_github_json") as api:
+            for arn in invalid:
+                with self.subTest(arn=arn), self.assertRaises(ValueError):
+                    approval.ApprovalGate(context() | {"operatorArn": arn}, 344, now=NOW)
+            self.source.assert_not_called()
+            api.assert_not_called()
+        gate = approval.ApprovalGate(context(), 344, now=NOW)
+        with patch.object(approval, "APPROVED_HUMAN_IDS", frozenset({42})):
+            for arn in invalid:
+                with self.subTest(arn=arn), self.assertRaises(ValueError):
+                    gate.consume(comment(gate), context() | {"operatorArn": arn}, now=NOW + timedelta(seconds=2))
+                self.assertFalse(gate._consumed)
+            gate.consume(comment(gate), context(), now=NOW + timedelta(seconds=2))
+
     def test_context_and_receipt_cannot_smuggle_or_mutate_fields(self):
         private = context() | {"privatePlan": "SECRET_SENTINEL"}
         with self.assertRaises(ValueError):
@@ -234,7 +259,7 @@ class ApprovalTests(unittest.TestCase):
                 changed = context()
                 replacements = {"sourceSha": "e" * 40, "planSha256": "e" * 64,
                                 "writerHoldSha256": "e" * 64, "authorizationSha256": "e" * 64,
-                                "operatorArn": "arn:aws:sts::269416271598:assumed-role/reviewed-fixture/other-session",
+                                "operatorArn": "arn:aws:sts::269416271598:assumed-role/vayada-pricing-operator-create/other-session",
                                 "stateLineage": "00000000-0000-0000-0000-000000000002"}
                 changed[field] = changed[field] + 1 if type(changed[field]) is int else replacements[field]
                 approval.validate_context(changed)

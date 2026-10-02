@@ -151,10 +151,15 @@ selected explicitly below. Session admission and exact receipt approval remain g
 
 The receipt records this owner separately from `context.operatorArn`, which
 still requires an assumed-role session. Owner metadata does not prove that a
-role/session belongs to the selected operator. No execution-role allowlist,
-session admission or attributable-role evidence is configured yet; do not
-widen the session check to accept this IAM-user ARN or any role merely because
-it is in the account. This component alone is not an admission controller.
+role/session belongs to the selected operator. Creation context now accepts
+only the exact account's assumed-role ARN for the proposed
+`vayada-pricing-operator-create` role. Other roles (including ordinary deployment,
+the pricing service execution role and the old hosted creation candidate), IAM
+users/root, account mismatches and role-name lookalikes reject. This fixed name
+binding is metadata validation, not authenticated session admission or stable
+role-ID evidence: a caller can still supply a string or recreate a same-named
+role. Those checks remain required. This component alone is not an admission
+controller and cannot admit the separate metadata-policy phase.
 
 The access proposal must use an independently reviewed phase-limited role,
 exact trust/admission and request-time expiry/revocation. Keep the owner's

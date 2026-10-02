@@ -24,6 +24,8 @@ REPOSITORY = "vayada-marketplace/vayada-platform"
 # Stable IAM ID was read with GetUser; never infer ownership from credentials.
 SELECTED_OPERATOR_ARN = "arn:aws:iam::269416271598:user/VayadaUser"
 SELECTED_OPERATOR_ID = "AIDAT5OTWB3XLUEYGCQ56"
+# Creation receipt metadata only; actual caller/role ID and admission remain required.
+CREATION_OPERATOR_ROLE = "vayada-pricing-operator-create"
 # Flamur explicitly selected GitHub User FlamurMaliqi; bind its stable ID, not login.
 # Never load approvers from dispatch inputs, comments or the process environment.
 APPROVED_HUMAN_IDS = frozenset({120040061})
@@ -338,7 +340,7 @@ def validate_context(context):
             r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", context["stateLineage"]):
         raise ValueError("Invalid state lineage")
     if not isinstance(context["operatorArn"], str) or not re.fullmatch(
-            r"arn:aws:sts::269416271598:assumed-role/[A-Za-z0-9+=,.@_-]+/[A-Za-z0-9+=,.@_-]+",
+            rf"arn:aws:sts::269416271598:assumed-role/{CREATION_OPERATOR_ROLE}/[A-Za-z0-9+=,.@_-]+",
             context["operatorArn"]):
         raise ValueError("Invalid operator session metadata")
 
