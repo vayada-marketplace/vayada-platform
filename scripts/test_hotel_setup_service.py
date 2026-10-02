@@ -26,8 +26,9 @@ class HotelSetupServiceTests(unittest.TestCase):
         result = plan(True, service=selected)
         resources = {r['address']: r['values'] for r in result['planned_values']['root_module']['resources']}
         environment = {entry['name']: entry['value'] for entry in result['planned_values']['outputs']['setup_environment']['value']}
-        self.assertEqual(set(environment), {'NODE_ENV', 'HOST', 'PORT', 'AWS_REGION', 'HOTEL_SETUP_COMMAND_DATABASE_ENDPOINT', 'HOTEL_SETUP_COMMAND_SECRET_PREFIX', 'HOTEL_SETUP_COMMAND_WORKOS_JWKS_URL', 'HOTEL_SETUP_COMMAND_WORKOS_ISSUER', 'HOTEL_SETUP_COMMAND_WORKOS_AUDIENCE', 'HOTEL_SETUP_RDS_CA', 'NODE_EXTRA_CA_CERTS'})
+        self.assertEqual(set(environment), {'NODE_ENV', 'HOST', 'PORT', 'AWS_REGION', 'HOTEL_SETUP_COMMAND_DATABASE_ENDPOINT', 'HOTEL_SETUP_COMMAND_MODE', 'HOTEL_SETUP_COMMAND_SECRET_PREFIX', 'HOTEL_SETUP_COMMAND_WORKOS_JWKS_URL', 'HOTEL_SETUP_COMMAND_WORKOS_ISSUER', 'HOTEL_SETUP_COMMAND_WORKOS_AUDIENCE', 'HOTEL_SETUP_RDS_CA', 'NODE_EXTRA_CA_CERTS'})
         self.assertEqual(environment['HOTEL_SETUP_COMMAND_DATABASE_ENDPOINT'], 'postgresql://db.internal:5432/vayada_target_prod')
+        self.assertEqual(environment['HOTEL_SETUP_COMMAND_MODE'], 'property_commands')
         self.assertEqual(environment['HOTEL_SETUP_COMMAND_SECRET_PREFIX'], 'hotel-setup-command/prod/property/')
         self.assertEqual(environment['NODE_EXTRA_CA_CERTS'], '/runtime/rds-ca.pem')
         service = resources['aws_ecs_service.hotel_setup[0]']
@@ -43,6 +44,26 @@ class HotelSetupServiceTests(unittest.TestCase):
         selected['credentials'] = False
         with self.assertRaisesRegex(AssertionError, 'Hotel setup staging requires'):
             plan(True, service=selected)
+
+    def test_creation_mode_isolated_and_still_not_started(self):
+        selected = {'enabled': True, 'credentials': True, 'mode': 'property_creation',
+                    'digests': {'primary': DIGEST, 'rollback': ROLLBACK},
+                    'inventory': {DIGEST: 'c' * 40, ROLLBACK: 'd' * 40}}
+        result = plan(True, service=selected)
+        environment = {entry['name']: entry['value'] for entry in result['planned_values']['outputs']['setup_environment']['value']}
+        self.assertEqual(environment['HOTEL_SETUP_COMMAND_MODE'], 'property_creation')
+        self.assertEqual(environment['HOTEL_SETUP_COMMAND_SECRET_PREFIX'], 'hotel-setup-command/prod/organization/')
+        resources = {r['address']: r['values'] for r in result['planned_values']['root_module']['resources']}
+        self.assertEqual(resources['aws_ecs_service.hotel_setup[0]']['desired_count'], 0)
+        configuration = {r['address']: r for r in result['configuration']['root_module']['resources']}
+        reader_policy = configuration['aws_iam_role_policy.hotel_setup_creation_reader_bootstrap']
+        self.assertIn('aws_secretsmanager_secret.hotel_setup', reader_policy['expressions']['policy']['references'])
+        self.assertNotIn('local.hotel_setup_creation_secret_arn', reader_policy['expressions']['policy']['references'])
+        self.assertEqual(resources['aws_iam_role.hotel_setup_creation_reader_bootstrap[0]']['name'], 'vayada-hotel-setup-creation-reader-bootstrap')
+        policy = json.loads(resources['aws_iam_role_policy.hotel_setup_property_secrets[0]']['policy'])
+        self.assertIn('/organization/vayada_next_hotel_setup_org_', policy['Statement'][0]['Resource'][0])
+        for key in ['internal_token', 'reader_database_url']:
+            self.assertTrue(resources[f'aws_secretsmanager_secret.hotel_setup["{key}"]']['name'].startswith('hotel-setup-creation/'))
 
     def test_exact_container_and_verified_rds_trust(self):
         values = {
@@ -70,7 +91,15 @@ class HotelSetupServiceTests(unittest.TestCase):
             target = Path(directory, 'rds-ca.pem')
             self.assertEqual(target.read_text(), ca)
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(json.loads((ROOT / 'deployment/hotel-setup-command-images.json').read_text()), {})
+        inventory = json.loads((ROOT / 'deployment/hotel-setup-command-images.json').read_text())
+        proof = json.loads((ROOT / 'deployment/hotel-setup-creation-image-proof.json').read_text())
+        self.assertEqual(inventory, {proof[key]['digest']: proof[key]['source'] for key in ('primary', 'rollback')})
+        for digest, source in inventory.items():
+            self.assertRegex(digest, r'^sha256:[a-f0-9]{64}$')
+            self.assertRegex(source, r'^[a-f0-9]{40}$')
+        self.assertEqual(proof['purpose'], 'property_creation')
+        self.assertEqual(proof['verification']['postgresVersions'], [16, 17])
+        self.assertTrue(proof['verification']['actualCompiledImage'])
 
 
 if __name__ == '__main__':

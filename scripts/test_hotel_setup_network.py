@@ -15,7 +15,7 @@ def plan(enabled, service=None):
         path = Path(directory) / "infra"
         path.mkdir()
         if service is not None:
-            for name in ["hotel_setup_credentials.tf", "hotel_setup_secret_read_policy.json.tftpl", "hotel_setup_service.tf", "hotel_setup_container.json.tftpl"]:
+            for name in ["hotel_setup_creation_bootstrap.tf", "hotel_setup_credentials.tf", "hotel_setup_secret_read_policy.json.tftpl", "hotel_setup_service.tf", "hotel_setup_container.json.tftpl"]:
                 shutil.copy(ROOT / "infra" / name, path)
             (path.parent / "deployment").mkdir()
             (path.parent / "deployment/hotel-setup-command-images.json").write_text(json.dumps(service.get("inventory", {})))
@@ -62,6 +62,7 @@ output "setup_environment" { value = local.hotel_setup_environment }
             (path / 'fixture.auto.tfvars.json').write_text(json.dumps({
                 'enable_hotel_setup_service_staging': service.get('enabled', False),
                 'enable_hotel_setup_credential_infrastructure': service.get('credentials', False),
+                'hotel_setup_command_mode': service.get('mode', 'property_commands'),
                 'hotel_setup_image_digests': service.get('digests', {'primary': '', 'rollback': ''})}))
         env = {**os.environ, 'AWS_EC2_METADATA_DISABLED': 'true'}
         env.pop('AWS_PROFILE', None)

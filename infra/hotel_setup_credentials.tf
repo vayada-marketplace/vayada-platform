@@ -5,13 +5,27 @@ variable "enable_hotel_setup_credential_infrastructure" {
   default     = false
 }
 
+variable "hotel_setup_command_mode" {
+  description = "Reviewed private executable mode; creation never registers Financials commands"
+  type        = string
+  default     = "property_commands"
+  validation {
+    condition     = contains(["property_commands", "property_creation"], var.hotel_setup_command_mode)
+    error_message = "Only reviewed hotel setup command modes are supported."
+  }
+}
+
 locals {
   hotel_setup_secret_names = var.enable_hotel_setup_credential_infrastructure ? {
-    reader_database_url = "hotel-setup-command/prod/reader-database-url"
-    internal_token      = "hotel-setup-command/prod/internal-token"
+    reader_database_url = var.hotel_setup_command_mode == "property_creation" ? "hotel-setup-creation/prod/reader-database-url" : "hotel-setup-command/prod/reader-database-url"
+    internal_token      = var.hotel_setup_command_mode == "property_creation" ? "hotel-setup-creation/prod/internal-token" : "hotel-setup-command/prod/internal-token"
   } : {}
   hotel_setup_property_secret_prefix = "hotel-setup-command/prod/property/"
   hotel_setup_property_secret_arn    = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${local.hotel_setup_property_secret_prefix}vayada_next_hotel_setup_property_*"
+  hotel_setup_creation_secret_prefix = "hotel-setup-command/prod/organization/"
+  hotel_setup_creation_secret_arn    = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${local.hotel_setup_creation_secret_prefix}vayada_next_hotel_setup_org_*"
+  hotel_setup_native_secret_prefix   = var.hotel_setup_command_mode == "property_creation" ? local.hotel_setup_creation_secret_prefix : local.hotel_setup_property_secret_prefix
+  hotel_setup_native_secret_arn      = var.hotel_setup_command_mode == "property_creation" ? local.hotel_setup_creation_secret_arn : local.hotel_setup_property_secret_arn
   hotel_setup_role_trust = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -30,7 +44,7 @@ resource "aws_secretsmanager_secret" "hotel_setup" {
   for_each = local.hotel_setup_secret_names
 
   name        = each.value
-  description = "VAY-1092 private setup ${each.key}; no value managed by Terraform"
+  description = "Private ${var.hotel_setup_command_mode} setup ${each.key}; no value managed by Terraform"
   lifecycle {
     prevent_destroy = true
   }
@@ -63,9 +77,9 @@ resource "aws_iam_role" "hotel_setup_task" {
 resource "aws_iam_role_policy" "hotel_setup_property_secrets" {
   count = var.enable_hotel_setup_credential_infrastructure ? 1 : 0
 
-  name = "hotel-setup-native-property-secret-read"
+  name = "hotel-setup-native-command-secret-read"
   role = aws_iam_role.hotel_setup_task[0].id
   policy = templatefile("${path.module}/hotel_setup_secret_read_policy.json.tftpl", {
-    secret_arns = jsonencode([local.hotel_setup_property_secret_arn])
+    secret_arns = jsonencode([local.hotel_setup_native_secret_arn])
   })
 }

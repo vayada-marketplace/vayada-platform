@@ -28,8 +28,9 @@ task role.
 The offline credential test renders the shared read-policy template and fixed
 Terraform names. It models the generated execution-secret ARN suffix and checks
 that both read policies exclude `hotel-setup-command/prod/reader-candidate/`
-containers and grant only `GetSecretValue`. Execution reads stay pinned to the
-two exact injected container ARNs. This is source/template evidence, not a live
+containers and grant only `GetSecretValue` in both `property_commands` and
+`property_creation` modes. Execution reads stay pinned to the two exact injected
+container ARNs for the selected mode. This is source/template evidence, not a live
 IAM simulation: review all attached policies, resource policies and effective
 live access before publishing credentials or launching the service.
 
@@ -124,3 +125,96 @@ approved change; do not apply this zero-count staging configuration over an
 activated service. Automated circuit rollback uses ECS's last completed service
 deployment, not the separately registered rollback family. A future release must
 select and verify that exact rollback task explicitly before activation.
+
+
+## Creation-only staged runtime
+
+Set `hotel_setup_command_mode=property_creation` for the reviewed creation image.
+The executable receives that fixed mode and constructs no currency or Feature Hub
+adapter. The execution role reads only the separately named
+`hotel-setup-creation/prod/reader-database-url` and
+`hotel-setup-creation/prod/internal-token` secret containers. The reader URL must
+use `vayada_next_hotel_setup_creation_reader`; the app rejects the property reader.
+The task role reads only organization secrets below
+`hotel-setup-command/prod/organization/vayada_next_hotel_setup_org_` and cannot
+read property-command, ordinary API, owner or migration credentials.
+
+This reuses the disabled private deployment contract. Default mode remains
+`property_commands`, all infrastructure flags remain false and staged capacity
+remains zero. No secret value, role grant, approved image, public API forwarding
+or deployment is introduced here. Native creation and creation-reader release
+preflights, isolated credential provisioning and normal CI release/rollback
+remain activation gates. A mode change after staging can replace protected secret
+containers and requires its own clean Terraform plan; do not use it as a live
+service-purpose switch.
+
+
+## Organization credential bootstrap
+
+`provision-hotel-setup-creation-login.mjs` is an operational one-off task, never
+a private service entrypoint. Run only in an approved composed application image:
+it imports that image's exact creation grant inventory and native release check.
+The fixed admin secret references the known RDS admin on `/postgres`; the client
+uses the reviewed CA with verified TLS and the fixed target database. Supply only
+the organization's and current owner's UUIDs. Existing organization assignments
+are rejected; roles and passwords are never adopted or silently rotated.
+
+The script creates a fresh native login, exact column grants and organization
+assignment, writes and rereads its two-field vault credential, then independently
+proves the native connection and current owner. It saves no hotel or business
+audit. A failure disables only the newly created role, removes its assignment and
+terminates its sessions; this also covers a lost COMMIT acknowledgement. A
+`hotel_setup_creation_provision_cleanup_required` receipt blocks release until
+that named role is verified disabled. Failed secret values can remain orphaned,
+but are not selected by any organization registry entry.
+
+The separately staged bootstrap IAM role can create/read/write only native
+organization secrets. It cannot access reader/token, ordinary API, owner or
+migration secret values. The one-off execution role injects the exact operational
+admin secret; never attach the bootstrap role or admin secret to the service.
+Production caller wiring and private-service release remain separate gates.
+The local fixture requires the owned disposable creation database and a memory
+vault; it does not connect to AWS. It proves failed owner checks, duplicate
+assignment rejection, lost COMMIT cleanup and unchanged hotel/audit counts.
+
+
+## Creation reader bootstrap
+
+The same operational script supports the explicit purpose `creation_reader`.
+It creates only `vayada_next_hotel_setup_creation_reader`, with the exact reader
+columns and rejection-only audit inserts. The login has no parent membership or
+organization assignment. Its real TLS/reader/database-isolation preflight must
+pass before literal URL and random internal-token strings are published to the
+two pre-created creation secret containers. JSON quoting is not added to injected
+secret values. Existing secret versions or an existing reader role are rejected,
+never overwritten or adopted.
+
+Use the separate creation-reader bootstrap IAM role: Get/Put on those exact two
+secret ARNs only, with no native organization-secret access. Partial publication
+fails release and disables the new login; orphaned versions need explicit
+operational cleanup before retry. The native organization bootstrap role remains
+separate. Local fault injection proves partial token publication disables the
+reader, an existing secret blocks creation, and an existing reader stays intact.
+No task caller or service is enabled by this slice.
+
+
+### Creation credential bootstrap
+
+The main-only `hotel-setup-creation-bootstrap.yml` workflow provisions either the
+isolated reader or one organization's native login. It requires the reviewed
+public task definition to remain stable and the private service to exist with
+zero desired, running, and pending tasks. The immutable image must be in
+`deployment/hotel-setup-command-images.json`; an unlisted digest is rejected
+before any AWS call. Reader runs reject organization/actor inputs.
+
+The existing ephemeral-task runner replaces inherited serving credentials and
+task permissions with one operational admin secret and the exact purpose's
+bootstrap IAM role. It clears serving environment and ports, uses the approved
+image digest and pinned RDS CA, then stops its task and deregisters its temporary
+definition. It never updates an ECS service. The bootstrap role is not attached
+to the private service. A failure or cleanup-required report blocks activation;
+do not retry blindly or substitute serving/migration credentials.
+
+Run `python3 scripts/test_hotel_setup_creation_runner.py` to exercise both modes
+and input rejection with an AWS stub. This check also measures the actual ECS
+override size and verifies credential replacement and owned-task cleanup.

@@ -65,6 +65,8 @@ data "aws_iam_policy_document" "github_actions_platform_deploy" {
       "arn:aws:iam::${var.aws_account_id}:role/ecsTaskExecutionRole",
       "arn:aws:iam::${var.aws_account_id}:role/ecsTaskRole",
       "arn:aws:iam::${var.aws_account_id}:role/vayada-next-api-media-task-role",
+      "arn:aws:iam::${var.aws_account_id}:role/vayada-hotel-setup-creation-bootstrap",
+      "arn:aws:iam::${var.aws_account_id}:role/vayada-hotel-setup-creation-reader-bootstrap",
     ]
 
     condition {
