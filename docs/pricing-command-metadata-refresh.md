@@ -26,7 +26,7 @@ inputs/comments/environment or switched at consumption. The metadata saved-plan
 path reuses sealed-FD custody/native decoding and the writer/Finance guards,
 running the exact two-update check before fresh approval consumption. Actual
 source/runtime/backend/state/session/authorization/whole-writer-hold admission
-and the boundary version-count preflight are still required; this is not a
+and live boundary version-count preflight integration are still required; this is not a
 configured or authorized execution lane.
 
 The existing IAM-only root now contains an inactive
@@ -40,6 +40,16 @@ policy-version deletion and old-version default switching, and retains the
 existing session fences. Before admission, verify fewer than five boundary
 versions under the writer hold: the pinned provider otherwise attempts pruning.
 No role or metadata gate is activated by this proposal.
+
+The shared `observe_metadata_policy_capacity` component prepares a fixed-target
+read-only check, but no executor invokes it and no live AWS observation was
+performed. It requires explicit temporary credentials and a separately reviewed
+stable metadata RoleId, verifies the exact STS account/ARN/RoleId/session, and
+rejects an incomplete or ambiguous version list or five existing versions.
+It grants nothing and cannot retire old versions. The admitted private runner
+must rerun it under the durable whole-writer hold before constructing and
+consuming each receipt; passing it does not prove session/window authorization,
+IAM composition, policy contents, hold or immutable runtime/source/state.
 
 The native offline regression test copies these declarations and both real
 policy assemblies into a backend-free fixture with synthetic local state and

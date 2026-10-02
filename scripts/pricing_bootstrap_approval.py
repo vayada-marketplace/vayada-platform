@@ -356,6 +356,69 @@ def validate_context(context, *, phase="creation"):
         raise ValueError("Invalid operator session metadata")
 
 
+def observe_metadata_policy_capacity(context, expected_role_id):
+    """Read-only observation for an admitted private runner under its writer hold.
+
+    The reviewed RoleId must not come from dispatch/environment or this API.
+    This does not admit the runner, session/window, policy composition or hold.
+    No executor calls this component; rerun before receipt and consumption.
+    """
+    try:
+        context = copy.deepcopy(context)
+        validate_context(context, phase="metadata")
+        if not isinstance(expected_role_id, str) or not re.fullmatch(r"AROA[A-Z0-9]{17}", expected_role_id):
+            raise ValueError
+        credentials = {key: os.environ[key] for key in
+                       ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")}
+        if (not re.fullmatch(r"ASIA[A-Z0-9]{16}", credentials["AWS_ACCESS_KEY_ID"])
+                or not all(credentials.values())):
+            raise ValueError
+        env = {"PATH": os.environ["PATH"], "HOME": "/nonexistent",
+               "AWS_CONFIG_FILE": os.devnull, "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
+               "AWS_EC2_METADATA_DISABLED": "true", "AWS_MAX_ATTEMPTS": "1", **credentials}
+        def unique_fields(pairs):
+            data = dict(pairs)
+            if len(data) != len(pairs):
+                raise ValueError
+            return data
+        def read(*args):
+            result = subprocess.run(["aws", "--region", "eu-west-1", "--output", "json",
+                                     "--no-cli-pager", "--no-cli-auto-prompt", *args],
+                                    cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
+            if result.returncode or len(result.stdout) > 16_384:
+                raise ValueError
+            data = json.loads(result.stdout, object_pairs_hook=unique_fields)
+            if not isinstance(data, dict):
+                raise ValueError
+            return data
+        caller = read("sts", "get-caller-identity")
+        session = context["operatorArn"].rsplit("/", 1)[1]
+        if (caller.get("Account") != "269416271598" or caller.get("Arn") != context["operatorArn"]
+                or caller.get("UserId") != expected_role_id + ":" + session):
+            raise ValueError
+        policy = "arn:aws:iam::269416271598:policy/vayada-platform-writer-boundary"
+        data = read("iam", "list-policy-versions", "--policy-arn", policy, "--no-paginate")
+        versions = data.get("Versions")
+        if (data.get("IsTruncated") is not False or "Marker" in data or "NextToken" in data
+                or not isinstance(versions, list) or not 1 <= len(versions) < 5):
+            raise ValueError
+        ids, defaults = [], []
+        for version in versions:
+            if (not isinstance(version, dict) or not isinstance(version.get("VersionId"), str)
+                    or not re.fullmatch(r"v[1-9][0-9]*(\.[A-Za-z0-9-]*)?", version["VersionId"])
+                    or type(version.get("IsDefaultVersion")) is not bool):
+                raise ValueError
+            ids.append(version["VersionId"])
+            if version["IsDefaultVersion"]:
+                defaults.append(version["VersionId"])
+        if len(set(ids)) != len(ids) or len(defaults) != 1:
+            raise ValueError
+        return {"policyArn": policy, "operatorArn": caller["Arn"], "roleId": expected_role_id,
+                "versionIds": sorted(ids), "defaultVersionId": defaults[0]}
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError, subprocess.TimeoutExpired):
+        raise ValueError("Metadata policy capacity observation rejected; raw output withheld") from None
+
+
 class ApprovalGate:
     def __init__(self, context, issue_number, *, now=None, phase="creation"):
         context = copy.deepcopy(context)

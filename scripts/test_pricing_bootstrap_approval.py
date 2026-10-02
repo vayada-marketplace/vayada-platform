@@ -124,6 +124,109 @@ class OperatorTemplateTests(unittest.TestCase):
         })
 
 
+class MetadataCapacityTests(unittest.TestCase):
+    def setUp(self):
+        self.role_id = "AROA" + "A" * 17
+        self.caller = {"Account": "269416271598", "Arn": metadata_context()["operatorArn"],
+                       "UserId": self.role_id + ":session"}
+        self.inventory = {"IsTruncated": False, "Versions": [
+            {"VersionId": "v1", "IsDefaultVersion": True},
+            {"VersionId": "v2", "IsDefaultVersion": False}]}
+        self.credentials = {"PATH": os.environ["PATH"], "AWS_ACCESS_KEY_ID": "ASIA" + "A" * 16,
+                            "AWS_SECRET_ACCESS_KEY": "fixture-secret", "AWS_SESSION_TOKEN": "fixture-token"}
+        env = patch.dict(os.environ, self.credentials, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_only_fixed_read_calls_with_temporary_credentials_and_complete_capacity(self):
+        for count in (1, 4):
+            inventory = self.inventory | {"Versions": [
+                {"VersionId": f"v{index}", "IsDefaultVersion": index == 1} for index in range(1, count + 1)]}
+            with patch.dict(os.environ, {"AWS_PROFILE": "SECRET_SENTINEL", "AWS_ENDPOINT_URL": "SECRET_SENTINEL",
+                                       "AWS_CA_BUNDLE": "SECRET_SENTINEL", "HTTPS_PROXY": "SECRET_SENTINEL"}), \
+                    patch.object(approval.subprocess, "run", side_effect=[
+                        subprocess.CompletedProcess([], 0, json.dumps(body), "SECRET_SENTINEL")
+                        for body in (self.caller, inventory)]) as run:
+                observed = approval.observe_metadata_policy_capacity(metadata_context(), self.role_id)
+            self.assertEqual(observed, {"policyArn": "arn:aws:iam::269416271598:policy/vayada-platform-writer-boundary",
+                                       "operatorArn": self.caller["Arn"], "roleId": self.role_id,
+                                       "versionIds": sorted(f"v{index}" for index in range(1, count + 1)),
+                                       "defaultVersionId": "v1"})
+            prefix = ["aws", "--region", "eu-west-1", "--output", "json", "--no-cli-pager", "--no-cli-auto-prompt"]
+            self.assertEqual([call.args[0] for call in run.call_args_list], [
+                prefix + ["sts", "get-caller-identity"], prefix + ["iam", "list-policy-versions",
+                    "--policy-arn", observed["policyArn"], "--no-paginate"]])
+            for call in run.call_args_list:
+                self.assertEqual(call.kwargs["env"], self.credentials | {
+                    "HOME": "/nonexistent", "AWS_CONFIG_FILE": os.devnull, "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
+                    "AWS_EC2_METADATA_DISABLED": "true", "AWS_MAX_ATTEMPTS": "1"})
+                self.assertEqual(call.kwargs["cwd"], ROOT)
+                self.assertEqual(call.kwargs["timeout"], 20)
+                self.assertTrue(call.kwargs["capture_output"])
+
+    def test_context_changes_during_observation_cannot_rebind_the_session(self):
+        current = metadata_context()
+        responses = iter((self.caller, self.inventory))
+        def read(*args, **kwargs):
+            current["operatorArn"] = context()["operatorArn"]
+            return subprocess.CompletedProcess([], 0, json.dumps(next(responses)), "")
+        with patch.object(approval.subprocess, "run", side_effect=read):
+            observed = approval.observe_metadata_policy_capacity(current, self.role_id)
+        self.assertEqual(observed["operatorArn"], self.caller["Arn"])
+        self.assertNotEqual(observed["operatorArn"], current["operatorArn"])
+
+    def test_capacity_and_identity_fail_closed_without_raw_output_or_other_calls(self):
+        invalid = [None, [], {}, self.inventory | {"IsTruncated": True},
+                   self.inventory | {"IsTruncated": 0}, self.inventory | {"Marker": "SECRET_SENTINEL"},
+                   self.inventory | {"NextToken": "SECRET_SENTINEL"}]
+        for versions in (None, [], self.inventory["Versions"] * 3,
+                         [{"VersionId": f"v{i}", "IsDefaultVersion": i == 1} for i in range(1, 6)],
+                         self.inventory["Versions"] * 2,
+                         [self.inventory["Versions"][0], self.inventory["Versions"][1] | {"VersionId": "v1"}],
+                         [{"VersionId": "v1", "IsDefaultVersion": False}],
+                         [{"VersionId": "v1", "IsDefaultVersion": True}, {"VersionId": "v2", "IsDefaultVersion": True}],
+                         [None], [{"VersionId": "v0", "IsDefaultVersion": True}],
+                         [{"VersionId": "v1", "IsDefaultVersion": 1}], [{"VersionId": "v1"}]):
+            invalid.append(self.inventory | {"Versions": versions})
+        cases = [[subprocess.CompletedProcess([], 0, json.dumps(self.caller), ""),
+                  subprocess.CompletedProcess([], 0, json.dumps(body), "SECRET_SENTINEL")] for body in invalid]
+        for caller in (self.caller | {"Account": "111111111111"}, self.caller | {"Arn": context()["operatorArn"]},
+                       self.caller | {"UserId": "AROA" + "B" * 17 + ":session"},
+                       self.caller | {"UserId": self.role_id + ":other"}):
+            cases.append([subprocess.CompletedProcess([], 0, json.dumps(caller), "SECRET_SENTINEL")])
+        for failure in (subprocess.CompletedProcess([], 1, "SECRET_SENTINEL", "SECRET_SENTINEL"),
+                        subprocess.CompletedProcess([], 0, "SECRET_SENTINEL", ""),
+                        subprocess.CompletedProcess([], 0, "x" * 16_385, ""),
+                        OSError("SECRET_SENTINEL"), subprocess.TimeoutExpired("SECRET_SENTINEL", 20)):
+            cases.extend(([failure], [subprocess.CompletedProcess([], 0, json.dumps(self.caller), ""), failure]))
+        duplicate = '{"IsTruncated":true,"IsTruncated":false,"Versions":[{"VersionId":"v1","IsDefaultVersion":false,"IsDefaultVersion":true}]}'
+        cases.append([subprocess.CompletedProcess([], 0, json.dumps(self.caller), ""),
+                      subprocess.CompletedProcess([], 0, duplicate, "SECRET_SENTINEL")])
+        duplicate = json.dumps(self.caller).replace('{', '{"Account":"111111111111",', 1)
+        cases.append([subprocess.CompletedProcess([], 0, duplicate, "SECRET_SENTINEL")])
+        for results in cases:
+            with self.subTest(calls=len(results)), patch.object(approval.subprocess, "run", side_effect=results) as run, \
+                    self.assertRaisesRegex(ValueError, "raw output withheld") as error:
+                approval.observe_metadata_policy_capacity(metadata_context(), self.role_id)
+            self.assertEqual(run.call_count, len(results))
+            self.assertNotIn("SECRET_SENTINEL", str(error.exception))
+        for current, role in ((context(), self.role_id), (metadata_context(), None),
+                              (metadata_context(), "SECRET_SENTINEL")):
+            with patch.object(approval.subprocess, "run") as run, self.assertRaises(ValueError):
+                approval.observe_metadata_policy_capacity(current, role)
+            run.assert_not_called()
+        for key, value in (("AWS_ACCESS_KEY_ID", "AKIA" + "A" * 16),
+                           ("AWS_SECRET_ACCESS_KEY", ""), ("AWS_SESSION_TOKEN", "")):
+            with patch.dict(os.environ, {key: value}), patch.object(approval.subprocess, "run") as run, \
+                    self.assertRaises(ValueError):
+                approval.observe_metadata_policy_capacity(metadata_context(), self.role_id)
+            run.assert_not_called()
+        with patch.dict(os.environ, {}, clear=True), patch.object(approval.subprocess, "run") as run, \
+                self.assertRaises(ValueError):
+            approval.observe_metadata_policy_capacity(metadata_context(), self.role_id)
+        run.assert_not_called()
+
+
 class ApprovalTests(unittest.TestCase):
     def setUp(self):
         source_patch = patch.object(approval, "verify_checkout_source")

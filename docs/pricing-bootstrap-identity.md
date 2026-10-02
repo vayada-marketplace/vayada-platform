@@ -417,7 +417,7 @@ The saved-plan path always selects the receipt's phase, never a per-call switch.
 Metadata uses the same native sealed-FD inspection, writer-boundary and Finance
 guards, but the exact two-update check instead of the seven-create check.
 Guard failure stops before approval fetching/consumption. No CLI, workflow or
-apply lane is added; the policy-version count preflight remains unimplemented.
+apply lane is added; live policy-version preflight integration remains absent.
 
 ### Separate metadata operator — inactive permission proposal
 
@@ -453,6 +453,29 @@ limit. Admission must confirm fewer than five versions while holding writers;
 stop otherwise and separately review any version retirement. Do not widen this
 role or bypass the check. No production plan, apply or live permission proof
 is supplied by the native offline tests.
+
+`observe_metadata_policy_capacity` now prepares that read-only observation;
+no executor calls it and it was not run against AWS. A future independently
+admitted private runner must supply the reviewed stable metadata RoleId and
+its exact session context, never select the ID from dispatch/environment or
+from the observation itself. The helper accepts only explicit temporary
+session credentials, disables profile/config/metadata fallback and drops
+endpoint, proxy, CA and other environment overrides. Fixed native AWS CLI
+calls first compare authenticated STS account, ARN and RoleId/session, then
+list versions of only the existing writer-boundary ARN. A single-page response
+must explicitly be complete, have one to four distinct valid version IDs and
+exactly one boolean default. Five versions, pagination markers, malformed
+responses, command failures and timeouts reject with a fixed error; no raw
+responses or credentials are returned. It never deletes or switches versions.
+
+The allowlisted result is point-in-time identity/capacity observation, **not**
+session/window authorization, IAM composition, runtime/source/state admission
+or the whole-writer hold. The future executor must rerun it under that hold
+before both receipt construction and consumption, not accept saved JSON or
+reuse an earlier success. Policy-version identity/content and unchanged state
+still require their separate guards. The actual RoleId/session/window remain
+unselected; synthetic tests do not establish live enforcement. See the official
+[complete-list response contract](https://docs.aws.amazon.com/IAM/latest/APIReference/API_ListPolicyVersions.html).
 
 ### Same-runner approval component — not an executor
 
