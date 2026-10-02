@@ -24,6 +24,11 @@ class IdentityTests(unittest.TestCase):
         source, count = re.subn(r'  backend "s3" \{[^}]+\}\n', "", (IDENTITY / "main.tf").read_text())
         assert count == 1
         (cls.fixture / "main.tf").write_text(source)
+        shutil.copyfile(IDENTITY / "operator.tf", cls.fixture / "operator.tf")
+        deployment = Path(cls.directory.name) / "deployment"
+        deployment.mkdir()
+        for name in ("pricing-operator-trust-no-mfa.json.tftpl", "pricing-operator-session-fence.json.tftpl"):
+            shutil.copyfile(ROOT / "deployment" / name, deployment / name)
         shutil.copyfile(ROOT / "infra/platform_plan_policy.json.tftpl", cls.fixture.parent / "platform_plan_policy.json.tftpl")
         shutil.copyfile(IDENTITY / ".terraform.lock.hcl", cls.fixture / ".terraform.lock.hcl")
         (cls.fixture / "offline_override.tf").write_text('''provider "aws" {
@@ -57,8 +62,10 @@ class IdentityTests(unittest.TestCase):
             raise AssertionError(result.stderr)
         return result
 
-    def inspect(self, window=None, kms=None, decrypt=False):
+    def inspect(self, window=None, kms=None, decrypt=False, operator=None):
         args = [] if window is None else ["-var=creation_window=" + json.dumps(window)]
+        if operator is not None:
+            args += ["-var=operator_creation_window=" + json.dumps(operator)]
         if kms is not None:
             args += ["-var=refresh_kms_key_arns=" + json.dumps(kms)]
         args += ["-var=enable_ssm_refresh_decryption=" + str(decrypt).lower()]
@@ -141,6 +148,76 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(len(keys), 1)
         self.assertEqual(keys[0]["Resource"], [key])
         self.assertEqual(set(keys[0]["Action"]), {"kms:DescribeKey", "kms:GetKeyPolicy", "kms:GetKeyRotationStatus", "kms:ListResourceTags"})
+
+    def test_selected_operator_creates_four_with_exact_phase_scope(self):
+        items = self.inspect(operator=WINDOW)
+        self.assertEqual(set(items), {"aws_iam_role.operator_creation[0]", "aws_iam_role_policy.operator_creation[0]",
+                                     "aws_iam_policy.operator_refresh[0]", "aws_iam_role_policy_attachment.operator_refresh[0]"})
+        self.assertTrue(all(item["change"]["actions"] == ["create"] for item in items.values()))
+        role = items["aws_iam_role.operator_creation[0]"]["change"]["after"]
+        self.assertEqual(role["name"], "vayada-pricing-operator-create")
+        self.assertEqual(role["max_session_duration"], 3600)
+        trust = json.loads(role["assume_role_policy"])["Statement"]
+        self.assertEqual(len(trust), 1)
+        self.assertEqual(trust[0]["Principal"], {"AWS": "arn:aws:iam::269416271598:user/VayadaUser"})
+        self.assertEqual(trust[0]["Action"], ["sts:AssumeRole", "sts:SetSourceIdentity"])
+        self.assertEqual(trust[0]["Condition"], {
+            "StringEquals": {"aws:userid": "AIDAT5OTWB3XLUEYGCQ56", "sts:SourceIdentity": "AIDAT5OTWB3XLUEYGCQ56"},
+            "DateGreaterThanEquals": {"aws:CurrentTime": WINDOW["start"]},
+            "DateLessThan": {"aws:CurrentTime": WINDOW["end"]}})
+        policies = [item["change"]["after"]["policy"] for item in items.values() if "policy" in item["change"]["after"]]
+        for policy in policies:
+            self.assertLessEqual(len(policy), 6144 if policy == items["aws_iam_policy.operator_refresh[0]"]["change"]["after"]["policy"] else 10240)
+        statements = [s for policy in policies for s in json.loads(policy)["Statement"]]
+        by_sid = {s["Sid"]: s for s in statements}
+        self.assertEqual(len(by_sid), len(statements))
+        execution = "arn:aws:iam::269416271598:role/vayada-pricing-command-execution"
+        self.assertEqual(by_sid["CreateDedicatedExecutionRole"], {
+            "Sid": "CreateDedicatedExecutionRole", "Effect": "Allow",
+            "Action": ["iam:CreateRole", "iam:PutRolePolicy"], "Resource": execution})
+        self.assertEqual(by_sid["NeverCreateOrWriteOtherRoles"], {
+            "Sid": "NeverCreateOrWriteOtherRoles", "Effect": "Deny",
+            "Action": ["iam:CreateRole", "iam:PutRolePolicy"], "NotResource": execution})
+        self.assertEqual(by_sid["NeverChangeRoleTrustOrAttachments"]["Effect"], "Deny")
+        self.assertEqual(by_sid["NeverChangeRoleTrustOrAttachments"]["Resource"], "*")
+        self.assertEqual(set(by_sid["NeverChangeRoleTrustOrAttachments"]["Action"]), {
+            "iam:UpdateAssumeRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole",
+            "iam:DeleteRolePolicy", "iam:TagRole", "iam:UntagRole", "iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary"})
+        self.assertEqual(by_sid["BeforeWindow"]["Condition"], {"DateLessThan": {"aws:CurrentTime": WINDOW["start"]}})
+        self.assertEqual(by_sid["ExpireIssuedSessions"]["Condition"], {"DateGreaterThanEquals": {"aws:CurrentTime": WINDOW["end"]}})
+        self.assertEqual(by_sid["RejectEarlierOrMissingSessions"]["Condition"], {"DateLessThanIfExists": {"aws:TokenIssueTime": WINDOW["start"]}})
+        self.assertEqual(by_sid["SelectedSourceIdentityOnly"]["Condition"], {"StringNotEqualsIfExists": {"aws:SourceIdentity": "AIDAT5OTWB3XLUEYGCQ56"}})
+        for sid in ("BeforeWindow", "ExpireIssuedSessions", "RejectEarlierOrMissingSessions", "SelectedSourceIdentityOnly"):
+            self.assertEqual((by_sid[sid]["Effect"], by_sid[sid]["Action"], by_sid[sid]["Resource"]), ("Deny", "*", "*"))
+        self.assertEqual(by_sid["DenyAllDecrypt"], {"Sid": "DenyAllDecrypt", "Effect": "Deny", "Action": ["kms:Decrypt"], "Resource": "*"})
+        self.assertNotIn("ParameterMetadata", by_sid)
+        writes = {a for s in statements if s["Effect"] == "Allow" for a in s["Action"]
+                  if not a.split(":")[1].startswith(("Get", "List", "Describe"))}
+        self.assertEqual(writes, {"iam:CreateRole", "iam:PutRolePolicy", "s3:PutObject", "dynamodb:PutItem",
+                                 "dynamodb:DeleteItem", "secretsmanager:CreateSecret", "secretsmanager:TagResource"})
+        # All reused secret/state/lock/metadata statements remain byte-for-byte equivalent.
+        hosted = self.inspect(WINDOW)
+        for address, target in (("aws_iam_role_policy.creation[0]", "aws_iam_role_policy.operator_creation[0]"),
+                                ("aws_iam_policy.refresh[0]", "aws_iam_policy.operator_refresh[0]")):
+            expected = json.loads(hosted[address]["change"]["after"]["policy"])["Statement"]
+            actual = json.loads(items[target]["change"]["after"]["policy"])["Statement"]
+            self.assertTrue(all(s in actual for s in expected if s["Effect"] == "Allow"))
+        source = (IDENTITY / "operator.tf").read_text()
+        self.assertIn("depends_on = [aws_iam_role_policy.operator_creation]", source)
+        self.assertEqual(source.count("prevent_destroy = true"), 4)
+
+    def test_operator_rejects_invalid_and_mixed_admission(self):
+        for window in ({"start": "bad", "end": WINDOW["end"]},
+                       {"start": WINDOW["end"], "end": WINDOW["start"]},
+                       {"start": WINDOW["start"], "end": WINDOW["start"]},
+                       {"start": WINDOW["start"], "end": "2030-01-01T01:00:01Z"}):
+            result = self.run_tf("plan", "-refresh=false", "-var=operator_creation_window=" + json.dumps(window), ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Invalid value for variable", result.stderr)
+        for extra in ("-var=creation_window=" + json.dumps(WINDOW), "-var=enable_ssm_refresh_decryption=true"):
+            result = self.run_tf("plan", "-refresh=false", "-var=operator_creation_window=" + json.dumps(WINDOW), extra, ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Operator creation cannot overlap", result.stderr)
 
     def test_fences_precede_attachment_and_ci_uses_native_binary(self):
         source = (IDENTITY / "main.tf").read_text()

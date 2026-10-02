@@ -3,14 +3,16 @@
 **Blocked for execution:** the scoped SSM read exception below is proposed for
 review, not granted or approved for activation. The temporary identity now has
 no IAM write allowances and cannot execute the former seven-create plan.
-The operator-owned setup route below is proposed, not implemented or approved
-for execution. Its executor gates remain absent. No activation is ready.
+The distinct selected-owner creation role below is now concrete Terraform for
+review, not installed or approved for execution. Its executor gates remain absent.
+No activation is ready.
 
 This is the first implementation slice of the hosted operator proposal in
 [contract #251](https://github.com/vayada-marketplace/vayada-platform/pull/251).
 It defines only the creation identity, not an executor or metadata-phase identity.
 Merging it creates nothing: the normal platform root does not load this folder.
-The isolated root's default `creation_window=null` declares zero resources.
+The isolated root's default `creation_window=null` and
+`operator_creation_window=null` declare zero resources.
 No workflow provisions or assumes the new role.
 
 `infra/pricing-bootstrap-identity` owns a separate IAM-only state key. An
@@ -169,6 +171,43 @@ and hosted no-op. The current workflow observation is not that fence. Operator
 session expiry must never automatically release the writer hold. Preserve the
 installed VAY-2029 trust and cutoff. No new pause control is activated here.
 
+### Selected-owner IAM prerequisite — concrete, inactive configuration
+
+Flamur approved preparing a one-time permission setup by the selected owner,
+without widening the deployment role. `operator.tf` now consumes the selected
+no-MFA trust and deny-only session-fence templates in the existing IAM-only root.
+Both window variables remain null; normal CI/merge provisions nothing. Do not
+enable the old hosted identity as a prerequisite for this new operator role.
+
+An explicit `operator_creation_window` proposes exactly four additions:
+`vayada-pricing-operator-create`, its creation/fence inline policy,
+`vayada-pricing-operator-create-refresh`, and its attachment. The attachment
+depends on the inline fence. The window must be explicit UTC, positive and at
+most one hour; hosted creation and the SSM opt-in cannot be enabled alongside it.
+The chosen owner's exact ARN/stable ID and source identity remain required.
+MFA is deliberately absent only in this selected pilot candidate.
+
+The policy reuses the fixed five-secret names/tags, exact production state
+object, lock leading keys and enumerated provider metadata from the existing
+proposal. It adds only CreateRole/PutRolePolicy on the exact pricing execution
+role. Explicit denies cover those writes on every other role, all role trust/
+attachment/boundary edits, secret value reads/subsequent writes, KMS decrypt,
+PassRole and role chaining. No metadata-policy or service writes are granted.
+Request-time fences reject wrong/missing source identity, old/missing token
+issuance context and requests before the start or at/after expiry.
+
+This is the prerequisite identity's four-create configuration, **not** a saved
+live plan or permission to install it, issue credentials or apply the seven
+pricing-resource creates. A fresh exact IAM setup plan and composed live
+authorization evidence still need independent review/approval. The owner's
+administrator credentials must never enter the private pricing runner.
+CreateRole/PutRolePolicy still accept caller-supplied documents; CreateSecret
+can carry an initial value. The accepted role-content trust decision does not
+accept the separate initial-value risk. SSM plaintext refresh remains blocked
+and this candidate cannot perform full production refresh; do not bypass it.
+Receipt/executor, durable writer hold, separate metadata phase, retirement and
+deployment remain unimplemented gates. No AWS mutation occurred.
+
 ### Limited-access proposal — role-policy trust decision accepted for preparation
 
 Flamur explicitly accepted reliance on the trusted operator and reviewed plan
@@ -264,9 +303,10 @@ grant can make it usable; an optional caller-supplied session policy is not
 sufficient. Never attach it to the selected user or the pricing execution role.
 It is not the whole-platform writer hold and grants no creation/metadata access.
 
-No Terraform root, role, policy attachment, renderer, credential command or
-workflow consumes any of these templates. They are concrete review inputs, not an
-admission controller. Offline tests check the exact declarations only. Exact
+The inactive `operator.tf` candidate now consumes only the selected no-MFA trust
+and deny-only fence; the original MFA template remains unused. No credential
+command or workflow assumes or provisions the operator. Offline native plans
+check the rendered declarations only, not an admission controller. Exact
 role/RoleId admission, selected-variant admission, source-identity/CloudTrail attribution,
 full composed grants and live positive/negative expiry/revocation evidence
 remain unproven. The private runner must receive only its admitted role session,
