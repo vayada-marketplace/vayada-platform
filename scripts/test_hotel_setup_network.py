@@ -86,18 +86,23 @@ output "property_environment" { value = local.hotel_setup_property_environment }
                 raise AssertionError(completed.stdout + completed.stderr)
         result = subprocess.run(['terraform', 'show', '-json', 'fixture.plan'], cwd=path, env=env, capture_output=True, text=True, check=True)
         rendered = json.loads(result.stdout)
-        if service and service.get('existing_property_service'):
+        if service and service.get('existing_service'):
+            property_service = service['existing_service'] == 'property'
+            resource_name = 'hotel_setup_property' if property_service else 'hotel_setup'
+            service_name = 'vayada-hotel-setup-property-service' if property_service else 'vayada-hotel-setup-service'
+            task_family = 'vayada-hotel-setup-property-primary' if property_service else 'vayada-hotel-setup-primary'
             resource = next(r for r in rendered['planned_values']['root_module']['resources']
-                            if r['address'] == 'aws_ecs_service.hotel_setup_property[0]')
+                            if r['address'] == f'aws_ecs_service.{resource_name}[0]')
             values = resource['values']
-            values.update(id='arn:aws:ecs:eu-west-1:269416271598:service/offline-cluster/vayada-hotel-setup-property-service',
-                          desired_count=1, task_definition='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-hotel-setup-property-primary:77')
+            values.update(id=f'arn:aws:ecs:eu-west-1:269416271598:service/offline-cluster/{service_name}',
+                          desired_count=1, task_definition=f'arn:aws:ecs:eu-west-1:269416271598:task-definition/{task_family}:77')
             (path / 'terraform.tfstate').write_text(json.dumps({
                 'version': 4, 'serial': 1, 'lineage': str(uuid4()), 'outputs': {},
-                'resources': [{'mode': 'managed', 'type': 'aws_ecs_service', 'name': 'hotel_setup_property',
+                'resources': [{'mode': 'managed', 'type': 'aws_ecs_service', 'name': resource_name,
                                'provider': 'provider["registry.terraform.io/hashicorp/aws"]',
                                'instances': [{'index_key': 0, 'schema_version': resource['schema_version'], 'attributes': values}]}]}))
-            overrides = ['-var=enable_hotel_setup_property_service_staging=false'] if service.get('remove_property_service') else []
+            flag = 'enable_hotel_setup_property_service_staging' if property_service else 'enable_hotel_setup_service_staging'
+            overrides = [f'-var={flag}=false'] if service.get('remove_service') else []
             resumed = subprocess.run(['terraform', 'plan', '-input=false', '-refresh=false', '-no-color',
                                       '-out=resumed.plan', f'-var=enable_hotel_setup_private_network={str(enabled).lower()}',
                                       f'-var=enable_hotel_setup_property_network={str(property_network).lower()}', *overrides],
