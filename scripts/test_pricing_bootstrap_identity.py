@@ -1,4 +1,6 @@
 """Native Terraform checks on local-only fixtures. Not live IAM authorization proof."""
+import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = ROOT / "infra/pricing-bootstrap-identity"
 WINDOW = {"start": "2030-01-01T00:00:00Z", "end": "2030-01-01T01:00:00Z"}
 SSM_KEY = "arn:aws:kms:eu-west-1:269416271598:key/3f96b311-bfda-431d-8f05-bfced29c2114"
+spec = importlib.util.spec_from_file_location("approval", ROOT / "scripts/pricing_bootstrap_approval.py")
+approval = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(approval)
 
 
 class IdentityTests(unittest.TestCase):
@@ -129,6 +134,22 @@ class IdentityTests(unittest.TestCase):
                           if not action.split(":")[1].startswith(("Get", "List", "Describe"))}
         self.assertEqual(allowed_writes, {"s3:PutObject", "dynamodb:PutItem", "dynamodb:DeleteItem",
                                          "secretsmanager:CreateSecret", "secretsmanager:TagResource"})
+
+    @unittest.skipUnless(hasattr(os, "memfd_create"), "Requires native Linux sealing")
+    def test_native_terraform_reads_the_sealed_plan_after_original_removal(self):
+        expected = self.inspect(operator=WINDOW, operator_decrypt=True)
+        path = self.fixture / "fixture.tfplan"
+        path.chmod(0o600)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        with approval.sealed_saved_plan(path, digest) as fd:
+            path.unlink()
+            result = subprocess.run(["terraform", "show", "-json", f"/proc/self/fd/{fd}"],
+                                    cwd=self.fixture, env=self.env, pass_fds=(fd,),
+                                    capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, "Native Terraform could not read sealed plan")
+            actual = {item["address"]: item for item in json.loads(result.stdout)["resource_changes"]}
+            self.assertEqual(actual, expected)
+            self.assertEqual(len(actual), 8)
 
     def assert_role_writes_denied(self, statements):
         by_sid = {s["Sid"]: s for s in statements}

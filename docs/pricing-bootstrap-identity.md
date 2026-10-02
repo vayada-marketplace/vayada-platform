@@ -384,6 +384,26 @@ snapshots reject approval; equal REST created/updated timestamps alone are
 insufficient. API failures expose only sanitized messages, not response bodies.
 An empty approved-human allowlist fails before fetching. See the official
 [IssueComment schema](https://docs.github.com/en/graphql/reference/issues#issuecomment).
+
+Saved-plan custody now uses native Linux seals, not a mutable pathname or a
+caller-reported hash alone. `sealed_saved_plan` accepts only an owner-private
+regular `0600` file with one link, no final symlink, and 1 byte–64 MiB of bytes; it
+copies to an anonymous private descriptor, seals writes/growth/shrinkage and
+further seal changes, and verifies the actual SHA-256. Platforms without Linux
+sealing reject before opening the source. The descriptor closes on normal or
+exceptional context exit; no plan bytes or descriptor path enter the receipt.
+`ApprovalGate.fetch_and_consume_saved_plan` checks this sealed descriptor against
+the receipt's plan digest, then obtains and consumes fresh GitHub evidence.
+The future executor must keep that context open and pass the **same live FD**
+to native Terraform show/guard/apply using `/proc/self/fd/<fd>` and `pass_fds`.
+It must not close/reuse the FD, reopen the original file, or use the older
+metadata-only consumption method as execution authorization. This is only
+artifact custody, not an executor: #343's full seven-create/source guards and
+every admission/state/hold/authorization check still need actual integration.
+Tests use synthetic bytes and offline Terraform fixtures. Native Linux CI
+checks that Terraform can read the sealed plan after its original is removed;
+there is no apply call or AWS operation in this custody slice.
+
 The future executor must run all source/plan/identity/state/hold/authorization
 guards before building the receipt and again before consumption. The component compares their context;
 it does **not** authenticate caller-supplied JSON or prove an operator/hold from

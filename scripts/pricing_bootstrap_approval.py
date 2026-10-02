@@ -5,12 +5,15 @@ before constructing this gate and again before consuming approval. Receipt
 metadata and comment evidence alone do not establish those prerequisites.
 """
 import copy
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import fcntl
 import hashlib
 import json
 import os
 import re
 import secrets
+import stat
 import subprocess
 import threading
 
@@ -37,6 +40,76 @@ EDIT_QUERY = """query($id: ID!) {
     }
   }
 }"""
+
+MAX_PLAN_BYTES = 64 * 1024 * 1024
+
+
+def saved_plan_digest(fd):
+    """Hash only a private, anonymous, kernel-sealed Linux plan descriptor."""
+    if not hasattr(os, "memfd_create"):
+        raise ValueError("Saved plan custody requires Linux sealing")
+    try:
+        if type(fd) is not int or fd < 0:
+            raise ValueError
+        info = os.fstat(fd)
+        seals = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 0
+                or not 0 < info.st_size <= MAX_PLAN_BYTES
+                or fcntl.fcntl(fd, fcntl.F_GET_SEALS) & seals != seals):
+            raise ValueError
+        digest = hashlib.sha256()
+        for offset in range(0, info.st_size, 1024 * 1024):
+            size = min(1024 * 1024, info.st_size - offset)
+            chunk = os.pread(fd, size, offset)
+            if len(chunk) != size:
+                raise ValueError
+            digest.update(chunk)
+        return digest.hexdigest()
+    except (OSError, ValueError, OverflowError):
+        raise ValueError("Saved plan binding rejected") from None
+
+
+@contextmanager
+def sealed_saved_plan(path, expected_sha256):
+    """Keep exact approved bytes private and immutable; no Terraform/AWS call."""
+    if not hasattr(os, "memfd_create"):
+        raise ValueError("Saved plan custody requires Linux sealing")
+    if not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+        raise ValueError("Invalid saved plan digest")
+    fd = None
+    try:
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
+            info = os.fstat(source.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                    or not 0 < info.st_size <= MAX_PLAN_BYTES):
+                raise ValueError
+            fd = os.memfd_create("pricing-plan", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+            os.fchmod(fd, 0o600)
+            with os.fdopen(os.dup(fd), "wb") as target:
+                remaining = info.st_size
+                while remaining:
+                    chunk = source.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError
+                    target.write(chunk)
+                    remaining -= len(chunk)
+                if source.read(1):
+                    raise ValueError
+        fcntl.fcntl(fd, fcntl.F_ADD_SEALS,
+                    fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
+        if saved_plan_digest(fd) != expected_sha256:
+            raise ValueError
+        os.lseek(fd, 0, os.SEEK_SET)
+    except (OSError, TypeError, ValueError, OverflowError):
+        if fd is not None:
+            os.close(fd)
+        raise ValueError("Saved plan binding rejected") from None
+    try:
+        yield fd
+    finally:
+        os.close(fd)
 
 
 def _github_json(path, *, node_id=None):
@@ -274,6 +347,19 @@ class ApprovalGate:
         if os.getpid() != self._pid:
             raise ValueError("Approval gate belongs to another process")
         self.consume(read_github_comment(comment_id), current_context)
+
+    def fetch_and_consume_saved_plan(self, comment_id, current_context, plan_fd):
+        """Future runner must guard/show/apply this same live sealed descriptor.
+
+        Other source/session/state/hold/authorization guards are still required.
+        The caller must keep sealed_saved_plan open and pass this FD to Terraform.
+        """
+        if os.getpid() != self._pid:
+            raise ValueError("Approval gate belongs to another process")
+        if saved_plan_digest(plan_fd) != self._context["planSha256"]:
+            raise ValueError("Saved plan differs from receipt")
+        self.fetch_and_consume(comment_id, current_context)
+        return f"/proc/self/fd/{plan_fd}"
 
 
 if __name__ == "__main__":

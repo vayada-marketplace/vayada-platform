@@ -2,12 +2,16 @@ import copy
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import fcntl
+import hashlib
 import json
 import multiprocessing
+import os
 from pathlib import Path
 import pickle
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from unittest.mock import patch
@@ -108,6 +112,15 @@ class OperatorTemplateTests(unittest.TestCase):
 
 
 class ApprovalTests(unittest.TestCase):
+    def test_saved_plan_custody_requires_linux_before_reading_anything(self):
+        with patch.object(approval, "os", spec=["open"]) as platform:
+            with self.assertRaisesRegex(ValueError, "requires Linux"):
+                with approval.sealed_saved_plan("SECRET_SENTINEL", "b" * 64):
+                    self.fail("Unsupported platform accepted")
+            with self.assertRaisesRegex(ValueError, "requires Linux"):
+                approval.saved_plan_digest(1)
+            platform.open.assert_not_called()
+
     def test_valid_approval_is_one_use_and_not_resumable(self):
         gate = approval.ApprovalGate(context(), 344, now=NOW)
         with patch.object(approval, "APPROVED_HUMAN_IDS", frozenset({42})):
@@ -401,6 +414,126 @@ class ApprovalTests(unittest.TestCase):
                 {"total_count": 1, "workflow_runs": [{"id": 10, "workflow_id": 1, "status": status}]}
                 for status in statuses]), self.assertRaises(ValueError):
             approval.observe_workflow_pause()
+
+
+@unittest.skipUnless(hasattr(os, "memfd_create"), "Requires native Linux sealing")
+class SavedPlanTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="pricing-plan-test-")
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "SECRET_SENTINEL.tfplan"
+        self.data = b"private-plan-fixture" * 60000  # Cross the bounded-copy boundary.
+        self.digest = hashlib.sha256(self.data).hexdigest()
+        self.path.write_bytes(self.data)
+        self.path.chmod(0o600)
+
+    def test_sealed_snapshot_is_immutable_and_closed_on_exit(self):
+        with approval.sealed_saved_plan(self.path, self.digest) as fd:
+            self.assertEqual(approval.saved_plan_digest(fd), self.digest)
+            self.assertEqual(os.lseek(fd, 0, os.SEEK_CUR), 0)
+            self.path.unlink()
+            self.path.write_bytes(b"replacement")
+            self.assertEqual(os.pread(fd, len(self.data), 0), self.data)
+            for mutate in (lambda: os.write(fd, b"changed"),
+                           lambda: os.ftruncate(fd, 1),
+                           lambda: os.ftruncate(fd, len(self.data) + 1),
+                           lambda: fcntl.fcntl(fd, fcntl.F_ADD_SEALS, 0)):
+                with self.assertRaises(OSError):
+                    mutate()
+        with self.assertRaises(OSError):
+            os.fstat(fd)
+        self.path.write_bytes(self.data)
+        self.path.chmod(0o600)
+        with self.assertRaisesRegex(RuntimeError, "body failure"):
+            with approval.sealed_saved_plan(self.path, self.digest) as fd:
+                raise RuntimeError("body failure")
+        with self.assertRaises(OSError):
+            os.fstat(fd)
+
+    def test_reject_wrong_digest_unsafe_files_and_bounds_without_disclosure(self):
+        def reject(path=self.path, digest=self.digest):
+            with self.assertRaises(ValueError) as raised:
+                with approval.sealed_saved_plan(path, digest):
+                    self.fail("Unsafe plan accepted")
+            self.assertNotIn("SECRET_SENTINEL", str(raised.exception))
+
+        reject(digest="0" * 64)
+        reject(digest=self.digest.upper())
+        self.path.chmod(0o644)
+        reject()
+        self.path.chmod(0o600)
+        linked = self.path.with_name("link")
+        linked.symlink_to(self.path)
+        reject(linked)
+        linked.unlink()
+        os.link(self.path, linked)
+        reject()
+        linked.unlink()
+        fifo = self.path.with_name("fifo")
+        os.mkfifo(fifo, 0o600)
+        reject(fifo)
+        reject(Path(self.directory.name))
+        reject(self.path.with_name("missing"))
+        with patch.object(approval, "MAX_PLAN_BYTES", len(self.data) - 1):
+            reject()
+        self.path.write_bytes(b"")
+        reject(digest=hashlib.sha256(b"").hexdigest())
+
+    def test_reject_unsealed_invalid_and_short_read_descriptors(self):
+        for fd in (-1, True, "1", None):
+            with self.subTest(fd=fd), self.assertRaises(ValueError):
+                approval.saved_plan_digest(fd)
+        fd = os.memfd_create("unsealed", os.MFD_ALLOW_SEALING)
+        try:
+            os.fchmod(fd, 0o600)
+            os.write(fd, self.data)
+            with self.assertRaises(ValueError):
+                approval.saved_plan_digest(fd)
+        finally:
+            os.close(fd)
+        with self.assertRaises(ValueError):
+            approval.saved_plan_digest(fd)
+        with approval.sealed_saved_plan(self.path, self.digest) as fd:
+            with patch.object(approval.os, "pread", return_value=b""), self.assertRaises(ValueError):
+                approval.saved_plan_digest(fd)
+
+    def test_actual_snapshot_binds_fresh_human_approval_and_replay(self):
+        current = context() | {"planSha256": self.digest}
+        gate = approval.ApprovalGate(current, 344, now=NOW)
+        rest, graphql = api_comment(gate)
+        rest["user"]["id"] = 120040061
+        with approval.sealed_saved_plan(self.path, self.digest) as fd, \
+                patch.object(approval, "_github_json", side_effect=[rest, graphql, rest, graphql]) as api, \
+                patch.object(approval, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = NOW + timedelta(seconds=2)
+            path = gate.fetch_and_consume_saved_plan(rest["id"], current, fd)
+            self.assertEqual(path, f"/proc/self/fd/{fd}")
+            self.assertTrue(gate._consumed)
+            self.assertEqual(api.call_count, 2)
+            self.assertNotIn(path, json.dumps(gate.receipt()))
+            with self.assertRaises(ValueError):
+                gate.fetch_and_consume_saved_plan(rest["id"], current, fd)
+
+    def test_mismatched_snapshot_rejects_before_api_and_context_change_rejects(self):
+        current = context() | {"planSha256": self.digest}
+        gate = approval.ApprovalGate(current, 344, now=NOW)
+        self.path.write_bytes(b"other")
+        other = hashlib.sha256(b"other").hexdigest()
+        with approval.sealed_saved_plan(self.path, other) as fd, \
+                patch.object(approval, "_github_json") as api, self.assertRaises(ValueError):
+            gate.fetch_and_consume_saved_plan(50, current, fd)
+        api.assert_not_called()
+        self.assertFalse(gate._consumed)
+        self.path.write_bytes(self.data)
+        rest, graphql = api_comment(gate)
+        rest["user"]["id"] = 120040061
+        with approval.sealed_saved_plan(self.path, self.digest) as fd, \
+                patch.object(approval, "_github_json", side_effect=[rest, graphql]), \
+                patch.object(approval, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = NOW + timedelta(seconds=2)
+            with self.assertRaises(ValueError):
+                gate.fetch_and_consume_saved_plan(rest["id"], current | {"stateSerial": 8}, fd)
+        self.assertFalse(gate._consumed)
 
 
 if __name__ == "__main__":
