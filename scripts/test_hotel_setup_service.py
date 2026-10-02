@@ -88,6 +88,61 @@ class HotelSetupServiceTests(unittest.TestCase):
             self.assertIn('aws_secretsmanager_secret.hotel_setup_property', references)
             self.assertNotIn('aws_secretsmanager_secret.hotel_setup', references)
 
+    def test_property_staging_is_default_off_and_requires_both_reviewed_images(self):
+        selected = {'mode': 'property_creation', 'credentials': True,
+                    'property_enabled': True, 'property_credentials': True,
+                    'property_digests': {'primary': DIGEST, 'rollback': ROLLBACK}}
+        with self.assertRaisesRegex(AssertionError, 'Property setup staging requires'):
+            plan(True, service=selected, property_network=True)
+        selected['property_inventory'] = {DIGEST: 'c' * 40}
+        with self.assertRaisesRegex(AssertionError, 'Property setup staging requires'):
+            plan(True, service=selected, property_network=True)
+        selected['property_inventory'][ROLLBACK] = 'd' * 40
+        for credentials, network in [(False, True), (True, False)]:
+            with self.assertRaisesRegex(AssertionError, 'Property setup staging requires'):
+                plan(True, service={**selected, 'property_credentials': credentials}, property_network=network)
+        result = plan(True, service=selected, property_network=True)
+        resources = {r['address']: r['values'] for r in result['planned_values']['root_module']['resources']}
+        service = resources['aws_ecs_service.hotel_setup_property[0]']
+        self.assertEqual(service['name'], 'vayada-hotel-setup-property-service')
+        self.assertEqual(service['desired_count'], 0)
+        self.assertFalse(service['enable_execute_command'])
+        self.assertNotIn('aws_ecs_service.hotel_setup[0]', resources)
+        environment = {e['name']: e['value'] for e in result['planned_values']['outputs']['property_environment']['value']}
+        self.assertEqual(environment['HOTEL_SETUP_COMMAND_MODE'], 'property_commands')
+        self.assertEqual(environment['HOTEL_SETUP_COMMAND_SECRET_PREFIX'], 'hotel-setup-command/prod/property/')
+        configuration = {r['address']: r for r in result['configuration']['root_module']['resources']}
+        self.assertIn('aws_lb_listener_rule.hotel_setup_property', configuration['aws_ecs_service.hotel_setup_property']['depends_on'])
+        task = configuration['aws_ecs_task_definition.hotel_setup_property']['expressions']
+        self.assertIn('aws_iam_role.hotel_setup_property_execution', task['execution_role_arn']['references'])
+        self.assertIn('aws_iam_role.hotel_setup_property_task', task['task_role_arn']['references'])
+        for slot in ['primary', 'rollback']:
+            self.assertEqual(resources[f'aws_ecs_task_definition.hotel_setup_property["{slot}"]']['family'], 'vayada-hotel-setup-property-' + slot)
+        self.assertEqual(json.loads((ROOT / 'deployment/hotel-setup-property-images.json').read_text()), {})
+        source = (ROOT / 'infra/hotel_setup_property_service.tf').read_text()
+        self.assertIn('prevent_destroy = true', source)
+        self.assertIn('ignore_changes = [desired_count, task_definition]', source)
+
+        # Both independently configured services can coexist without changing modes.
+        selected.update(enabled=True, digests=selected['property_digests'], inventory=selected['property_inventory'])
+        resources = {r['address']: r['values'] for r in plan(True, service=selected, property_network=True)['planned_values']['root_module']['resources']}
+        self.assertEqual(len([r for r in resources if r.startswith('aws_ecs_task_definition.')]), 4)
+        self.assertEqual(len([r for r in resources if r.startswith('aws_ecs_service.')]), 2)
+        self.assertTrue(all(v['desired_count'] == 0 for r, v in resources.items() if r.startswith('aws_ecs_service.')))
+
+    def test_property_restage_preserves_serving_task_count_and_rejects_removal(self):
+        selected = {'mode': 'property_creation', 'property_enabled': True,
+                    'property_credentials': True, 'existing_property_service': True,
+                    'property_digests': {'primary': DIGEST, 'rollback': ROLLBACK},
+                    'property_inventory': {DIGEST: 'c' * 40, ROLLBACK: 'd' * 40}}
+        result = plan(True, service=selected, property_network=True)
+        service = next(r['values'] for r in result['planned_values']['root_module']['resources']
+                       if r['address'] == 'aws_ecs_service.hotel_setup_property[0]')
+        self.assertEqual(service['desired_count'], 1)
+        self.assertTrue(service['task_definition'].endswith(':77'))
+        with self.assertRaisesRegex(AssertionError, 'cannot be destroyed'):
+            plan(True, service={**selected, 'remove_property_service': True}, property_network=True)
+
     def test_exact_container_and_verified_rds_trust(self):
         values = {
             'image_json': json.dumps('fixture@' + DIGEST),
