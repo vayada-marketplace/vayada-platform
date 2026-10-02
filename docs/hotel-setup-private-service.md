@@ -25,6 +25,14 @@ receive no PassRole permission here. Separately gated service staging adds
 ECR/logging execution permissions only to the execution role, not the application
 task role.
 
+The offline credential test renders the shared read-policy template and fixed
+Terraform names. It models the generated execution-secret ARN suffix and checks
+that both read policies exclude `hotel-setup-command/prod/reader-candidate/`
+containers and grant only `GetSecretValue`. Execution reads stay pinned to the
+two exact injected container ARNs. This is source/template evidence, not a live
+IAM simulation: review all attached policies, resource policies and effective
+live access before publishing credentials or launching the service.
+
 ## Deployment contract
 
 Launch only the app's `start:hotel-setup-command` executable on port 8011. This

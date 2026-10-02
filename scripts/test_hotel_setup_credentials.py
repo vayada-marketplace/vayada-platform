@@ -19,7 +19,13 @@ def render(enabled):
         text += '\nvariable "aws_account_id" { default = "269416271598" }\n'
         Path(directory, "main.tf").write_text(text)
         Path(directory, TEMPLATE.name).write_text(TEMPLATE.read_text())
-        expression = 'jsonencode({names=local.hotel_setup_secret_names,trust=jsondecode(local.hotel_setup_role_trust),policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([local.hotel_setup_property_secret_arn])}))})'
+        # Execution resource ARNs need AWS state; model only their generated suffix.
+        expression = '''jsonencode({
+          names=local.hotel_setup_secret_names,
+          trust=jsondecode(local.hotel_setup_role_trust),
+          policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([local.hotel_setup_property_secret_arn])})),
+          execution_policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([for name in values(local.hotel_setup_secret_names): "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${name}-AbCd12"])}))
+        })'''.replace("\n", " ")
         result = subprocess.run(
             ["terraform", "console", "-no-color", f"-var=enable_hotel_setup_credential_infrastructure={str(enabled).lower()}"],
             input=expression + "\n", text=True, capture_output=True, cwd=directory, check=True, timeout=30)
@@ -60,6 +66,24 @@ class HotelSetupCredentialsTests(unittest.TestCase):
         self.assertEqual(trust["Action"], "sts:AssumeRole")
         self.assertEqual(trust["Condition"]["StringEquals"], {"aws:SourceAccount": "269416271598"})
         self.assertEqual(trust["Condition"]["ArnLike"], {"aws:SourceArn": "arn:aws:ecs:eu-west-1:269416271598:*"})
+
+    def test_both_read_policies_exclude_candidates_and_secret_writes(self):
+        rendered = render(True)
+        prefix = "arn:aws:secretsmanager:eu-west-1:269416271598:secret:"
+        execution, = rendered["execution_policy"]["Statement"]
+        resources = execution["Resource"]
+        self.assertCountEqual(resources, [prefix + name + "-AbCd12" for name in rendered["names"].values()])
+        self.assertTrue(all("*" not in arn and "?" not in arn for arn in resources))
+        for arn in resources:
+            for altered in [arn.replace("AbCd12", "EfGh34"), arn.replace("269416271598", "111111111111"), arn.replace("eu-west-1", "eu-west-2")]:
+                self.assertNotIn(altered, resources)
+        self.assertEqual(render(False)["execution_policy"]["Statement"][0]["Resource"], [])
+        for policy in [rendered["policy"], rendered["execution_policy"]]:
+            statement, = policy["Statement"]
+            self.assertEqual(statement["Effect"], "Allow")
+            self.assertEqual(statement["Action"], ["secretsmanager:GetSecretValue"])
+            for name in ["hotel-setup-command/prod/reader-candidate/00000000-0000-4000-8000-000000000000", "hotel-setup-command/prod/reader-candidate/vayada_next_hotel_setup_property_abc"]:
+                self.assertFalse(any(fnmatch.fnmatchcase(prefix + name + "-AbCd12", arn) for arn in statement["Resource"]), name)
 
 
 if __name__ == "__main__":
