@@ -14,6 +14,12 @@ secret identities. It neither applies nor authenticates its input. No workflow
 or creation receipt admits this later phase; trusted sealed-plan decoding, full
 root/protected guards and distinct metadata approval remain required.
 
+The separately selected metadata receipt approver is GitHub User `FlamurMaliqi`,
+stable numeric ID `120040061`. This is a human selection only, not approval of a
+receipt, plan, AWS role/session, execution window or policy write. The metadata
+role/session remains unselected and its approval gate is not configured; the
+existing creation gate and role must not authorize this phase.
+
 The native offline regression test copies these declarations and both real
 policy assemblies into a backend-free fixture with synthetic local state and
 AWS provider 5.100.0. It checks default-off no-op, the guarded two-update plan,

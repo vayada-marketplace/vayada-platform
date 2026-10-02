@@ -252,8 +252,9 @@ Flamur explicitly accepted reviewed-plan/trusted-operator enforcement of the
 contents of the two existing metadata-policy targets after disclosure that a
 faulty operator could add unintended access. This decision is for preparation
 only: no grant, session, policy update, setup, deployment or hotel test is
-authorized. It does not select a metadata-phase receipt approver or execution
-window, approve any saved plan, or prove the runner, authorization or writer hold.
+authorized. That content decision did not select a metadata-phase receipt
+approver or execution window, approve any saved plan, or prove the runner,
+authorization or writer hold. The later human selection below is separate.
 The two-policy phase still requires its own separately admitted session and
 exact approval; the existing creation receipt cannot authorize it.
 
@@ -385,6 +386,22 @@ No enrollment, device secret or code was requested or created. Do not treat
 preparation or the pilot exception as authorization to change user credentials.
 See [AWS source identity](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html)
 and [MFA with AssumeRole](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html).
+
+### Metadata-phase human selected — no gate or execution admission
+
+Flamur subsequently selected the same GitHub User `FlamurMaliqi`, stable numeric
+ID `120040061`, for the separate two-policy metadata approval. Read-only GitHub
+account metadata reconfirmed the ID and User type. This records who may approve
+a future exact metadata receipt; it approves no receipt, plan, execution window,
+AWS role/session, permission grant, policy update, setup or deployment.
+
+The implemented `ApprovalGate` and `APPROVED_HUMAN_IDS` remain creation-only.
+Do not reuse a creation receipt or the creation operator role to admit metadata
+updates. The metadata AWS role/session and execution window remain unselected;
+no metadata approval gate or executor is configured. Connect distinct metadata
+approval only after its phase-specific identity and execution contract are
+reviewed, retaining sealed-plan custody, the exact two-update check, full-root
+guards, source/runtime/backend/state admission and the whole-writer hold.
 
 ### Same-runner approval component — not an executor
 
