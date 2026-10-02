@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import subprocess
 import tempfile
@@ -135,6 +136,96 @@ class IdentityTests(unittest.TestCase):
                           if not action.split(":")[1].startswith(("Get", "List", "Describe"))}
         self.assertEqual(allowed_writes, {"s3:PutObject", "dynamodb:PutItem", "dynamodb:DeleteItem",
                                          "secretsmanager:CreateSecret", "secretsmanager:TagResource"})
+
+    def test_native_two_update_metadata_plan_and_extra_grant_rejection(self):
+        # Synthetic local state, real declarations/provider. Never refresh or apply.
+        fixture = Path(self.directory.name) / "metadata"
+        fixture.mkdir()
+        for name in ("pricing_command_secrets.tf", "platform_writer_boundary.tf",
+                     "pricing_command_metadata_policy.json.tftpl", "platform_plan_policy.json.tftpl",
+                     "platform_writer_boundary.auto.tfvars.json"):
+            shutil.copyfile(ROOT / "infra" / name, fixture / name)
+        shutil.copyfile(IDENTITY / ".terraform.lock.hcl", fixture / ".terraform.lock.hcl")
+        provider = (self.fixture / "offline_override.tf").read_text().replace(
+            'endpoints { iam = "http://127.0.0.1:9" }', '''endpoints {
+    iam = "http://127.0.0.1:9"
+    secretsmanager = "http://127.0.0.1:9"
+    kms = "http://127.0.0.1:9"
+  }''')
+        (fixture / "main.tf").write_text('''terraform {
+  required_version = "~> 1.5.0"
+  required_providers { aws = { source = "hashicorp/aws", version = "5.100.0" } }
+}
+variable "aws_account_id" { default = "269416271598" }
+variable "aws_region" { default = "eu-west-1" }
+resource "aws_iam_role" "github_actions_platform_deploy" {
+  name = "offline-deploy-role"
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [] })
+}
+''' + provider.replace('provider "aws" {', 'provider "aws" {\n  region = "eu-west-1"') + "\n" +
+            "\n".join(f'resource "aws_kms_key" "{name}" {{ count = 0 }}' for name in (
+                "finance_folio_recipient", "finance_folio_recipient_fingerprint", "finance_bank_transfer",
+                "migration_rehearsal_application", "migration_rehearsal_inbox_application")))
+        with patch.object(type(self), "fixture", fixture):
+            self.run_tf("init", "-backend=false", "-lockfile=readonly",
+                        "-plugin-dir=" + str(IDENTITY / ".terraform/providers"))
+            schemas = json.loads(self.run_tf("providers", "schema", "-json").stdout)[
+                "provider_schemas"]["registry.terraform.io/hashicorp/aws"]["resource_schemas"]
+
+            def plan(enabled=False):
+                (fixture / "pricing_stage.auto.tfvars.json").write_text(json.dumps({
+                    "enable_pricing_command_metadata_refresh": enabled}))
+                self.run_tf("plan", "-refresh=false", "-out=fixture.tfplan")
+                return json.loads(self.run_tf("show", "-json", "fixture.tfplan").stdout)
+
+            # Populate only synthetic provider-computed identities. A second native
+            # plan resolves the real policy expressions against those identities.
+            for _ in range(2):
+                resources = {}
+                for resource in plan()["resource_changes"]:
+                    attributes = resource["change"]["after"]
+                    kind = resource["type"]
+                    name = attributes.get("name")
+                    if "tags_all" in schemas[kind]["block"]["attributes"] and attributes.get("tags_all") is None:
+                        attributes["tags_all"] = attributes.get("tags") or {}
+                    if kind == "aws_secretsmanager_secret":
+                        attributes.update(arn=f"arn:aws:secretsmanager:eu-west-1:269416271598:secret:{name}-AbCd12")
+                        attributes["id"] = attributes["arn"]
+                    elif kind in ("aws_iam_role", "aws_iam_policy"):
+                        prefix = "role" if kind == "aws_iam_role" else "policy"
+                        attributes.update(arn=f"arn:aws:iam::269416271598:{prefix}/{name}")
+                        attributes["id"] = name if kind == "aws_iam_role" else attributes["arn"]
+                        if kind == "aws_iam_role":
+                            attributes.update(unique_id="AROAOFFLINEFIXTURE", create_date="2030-01-01T00:00:00Z",
+                                              inline_policy=[], managed_policy_arns=[])
+                    elif kind == "aws_iam_role_policy":
+                        attributes.setdefault("role", "vayada-pricing-command-execution" if
+                                              name == "pricing-command-exact-secret-read" else "vayada-github-actions-platform-plan")
+                        attributes["id"] = f'{attributes["role"]}:{name}'
+                    elif kind == "aws_iam_role_policy_attachment":
+                        attributes["id"] = "offline-attachment"
+                        attributes.setdefault("policy_arn", "arn:aws:iam::269416271598:policy/vayada-platform-writer-boundary")
+                    instance = {"schema_version": schemas[kind]["version"], "attributes": attributes}
+                    if "index" in resource:
+                        instance["index_key"] = resource["index"]
+                    resources.setdefault((kind, resource["name"]), {
+                        "mode": "managed", "type": kind, "name": resource["name"],
+                        "provider": 'provider["registry.terraform.io/hashicorp/aws"]', "instances": []
+                    })["instances"].append(instance)
+                (fixture / "terraform.tfstate").write_text(json.dumps({
+                    "version": 4, "terraform_version": "1.5.7", "serial": 1,
+                    "lineage": "00000000-0000-0000-0000-000000000000", "outputs": {}, "resources": list(resources.values())}))
+            self.assertEqual([(r["address"], r["change"]) for r in plan()["resource_changes"]
+                              if r["change"]["actions"] != ["no-op"]], [])
+            guard = runpy.run_path(str(ROOT / "scripts/assert-pricing-bootstrap-plan.py"))["check_metadata"]
+            enabled = plan(True)
+            self.assertIs(enabled["variables"]["enable_pricing_command_metadata_refresh"]["value"], True)
+            guard(enabled)
+            template = fixture / "pricing_command_metadata_policy.json.tftpl"
+            template.write_text(template.read_text().replace(
+                '"secretsmanager:DescribeSecret"', '"secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"'))
+            with self.assertRaisesRegex(ValueError, "Only exact metadata statements"):
+                guard(plan(True))
 
     @unittest.skipUnless(hasattr(os, "memfd_create"), "Requires native Linux sealing")
     def test_native_terraform_reads_the_sealed_plan_after_original_removal(self):

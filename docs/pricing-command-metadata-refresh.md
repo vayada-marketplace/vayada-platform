@@ -14,6 +14,14 @@ secret identities. It neither applies nor authenticates its input. No workflow
 or creation receipt admits this later phase; trusted sealed-plan decoding, full
 root/protected guards and distinct metadata approval remain required.
 
+The native offline regression test copies these declarations and both real
+policy assemblies into a backend-free fixture with synthetic local state and
+AWS provider 5.100.0. It checks default-off no-op, the guarded two-update plan,
+and rejection of an added secret-value grant. Conditional selection happens
+before JSON decoding: the two heterogeneous statement objects cannot unify
+with an empty Terraform tuple once the final ARNs are known. No refresh, apply,
+production state or credentials are used; this is not live authorization proof.
+
 After the seven empty pricing resources have been created through their
 reviewed saved operator plan, keep competing platform writers paused. A separate
 reviewed activation must set `enable_pricing_command_metadata_refresh=true` in

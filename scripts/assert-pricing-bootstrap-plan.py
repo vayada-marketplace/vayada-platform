@@ -17,7 +17,7 @@ NAMES = {
     "public": "public-database-url",
     "internal_token": "internal-token",
 }
-SOURCE_HASH = "d86cde9408a3d9fccde0eb76270d32663a82ecf96dce74745d6d05704bd426b4"
+SOURCE_HASH = "eba9a173e39661a761edbd6ad283f7111bfba4dfc42b19d4c29f18ca8202b39a"
 SOURCE = Path(__file__).resolve().parents[1] / "infra/pricing_command_secrets.tf"
 METADATA_HASH = "3137c89b74dd2f059226f3f6c94c9fc6f11b335fd84240f3ed945fa398bed42f"
 

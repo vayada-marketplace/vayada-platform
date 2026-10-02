@@ -263,8 +263,9 @@ executor or authenticated live evidence**. No workflow calls the metadata mode.
 Trusted native decoding of the sealed saved plan, source/runtime/backend/state
 admission, actual ARN/role and authorization evidence, all root/protected guards,
 whole-writer hold, metadata-specific approval and post-write verification still
-must be connected before execution. Tests use synthetic plans only; no positive
-production metadata plan or actual-role authorization is proven.
+must be connected before execution. Tests include a native Terraform two-update
+plan using copied declarations and synthetic local state, without refresh or
+apply; no production metadata plan or actual-role authorization is proven.
 
 ### Limited-access proposal — role-policy trust decision accepted for preparation
 

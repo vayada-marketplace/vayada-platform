@@ -197,8 +197,8 @@ class PricingMetadataTests(unittest.TestCase):
     def test_default_off_and_both_policies_use_final_resource_arns(self):
         source = (ROOT / "infra/pricing_command_secrets.tf").read_text()
         self.assertRegex(source, r'variable "enable_pricing_command_metadata_refresh"\s*\{[^}]*default\s*=\s*false')
-        self.assertIn("var.enable_pricing_command_metadata_refresh ? jsondecode(templatefile(", source)
-        self.assertIn("})).Statement : []", source)
+        self.assertIn("jsondecode(var.enable_pricing_command_metadata_refresh ? templatefile(", source)
+        self.assertIn("}) : jsonencode({ Statement = [] })).Statement", source)
         self.assertIn("secret_arns = jsonencode([for secret in aws_secretsmanager_secret.pricing_command : secret.arn])", source)
         self.assertIn("role_arn    = jsonencode(aws_iam_role.pricing_command_execution.arn)", source)
         assembly = (ROOT / "infra/platform_writer_boundary.tf").read_text()

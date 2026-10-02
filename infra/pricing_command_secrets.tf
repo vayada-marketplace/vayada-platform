@@ -14,10 +14,10 @@ locals {
     public         = "pricing-command/prod/public-database-url"
     internal_token = "pricing-command/prod/internal-token"
   }
-  pricing_command_metadata_statements = var.enable_pricing_command_metadata_refresh ? jsondecode(templatefile("${path.module}/pricing_command_metadata_policy.json.tftpl", {
+  pricing_command_metadata_statements = jsondecode(var.enable_pricing_command_metadata_refresh ? templatefile("${path.module}/pricing_command_metadata_policy.json.tftpl", {
     secret_arns = jsonencode([for secret in aws_secretsmanager_secret.pricing_command : secret.arn])
     role_arn    = jsonencode(aws_iam_role.pricing_command_execution.arn)
-  })).Statement : []
+  }) : jsonencode({ Statement = [] })).Statement
 }
 
 resource "aws_secretsmanager_secret" "pricing_command" {
