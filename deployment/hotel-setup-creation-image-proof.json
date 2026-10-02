@@ -2,14 +2,15 @@
   "purpose": "property_creation",
   "repository": "269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api",
   "primary": {
-    "digest": "sha256:f2268619590e12638d7895d101a9e87214cd9534f0cd2475bce27ea0fa990e41",
-    "source": "1d0dc008076a847f731f5fccfe94d93629f008dd",
-    "buildRun": "https://github.com/vayada-marketplace/vayada/actions/runs/37019248333"
+    "digest": "sha256:29d50e0373685f881916c5be93525db178c087ce5e7a53124e6429519ff583f1",
+    "source": "767477c29b344d54bff055ebe7340e85839b23fd",
+    "buildRun": "https://github.com/vayada-marketplace/vayada/actions/runs/37075394277"
   },
   "rollback": {
-    "digest": "sha256:a0f630fdfad2833e1db74d2cd7cb3ca694c4966567f7d8040fa03470cf6a42ce",
-    "source": "cd67a4ded37716b1b9b4cd373fa170e306c0636e",
-    "buildRun": "https://github.com/vayada-marketplace/vayada/actions/runs/37019336702"
+    "digest": "sha256:87c174a77842fda075b6c4784054f95bcc685d6f3d35c91d7b8bd08f174eafb8",
+    "source": "7615180847bce85853127c9e117d8a7f60b1827a",
+    "buildRun": "https://github.com/vayada-marketplace/vayada/actions/runs/37062361866",
+    "launchSettingsEndpoint": false
   },
   "verification": {
     "actualCompiledImage": true,
@@ -27,10 +28,14 @@
       "existing reader secret denied before role creation"
     ],
     "publicDeploymentDispatch": "skipped in both build runs",
-    "migration": "0461_hotel_setup_completion_role_scope.sql",
-    "composedCiRun": "https://github.com/vayada-marketplace/vayada/actions/runs/37020851514",
-    "composedCiSource": "ec1318075f765a94ce51e1a817c302c3fb4a1d85",
-    "composedCiStatus": "passed"
+    "migration": "0462_hotel_setup_launch_settings_scope.sql",
+    "composedCiRun": "https://github.com/vayada-marketplace/vayada/actions/runs/37063890501",
+    "composedCiSource": "767477c29b344d54bff055ebe7340e85839b23fd",
+    "composedCiStatus": "passed",
+    "scope": "creation_and_creation_reader_only",
+    "propertyPurposeProofs": "not established by this evidence",
+    "imageSourceLabels": "verified for both downloaded images",
+    "localFixtureDatabase": "fresh isolated synthetic database migrated through final 0462"
   },
-  "releaseStatus": "candidate images only; shared prerequisite merges, live plan, credentials, IAM, readiness and owner smoke still required"
+  "releaseStatus": "candidate creation images only; property-purpose provisioning/proof, caller admission and rollback, prerequisite merges, clean live plan and authenticated full-wizard smoke still required"
 }
