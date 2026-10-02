@@ -202,11 +202,27 @@ pricing-resource creates. A fresh exact IAM setup plan and composed live
 authorization evidence still need independent review/approval. The owner's
 administrator credentials must never enter the private pricing runner.
 CreateRole/PutRolePolicy still accept caller-supplied documents; CreateSecret
-can carry an initial value. The accepted role-content trust decision does not
-accept the separate initial-value risk. SSM plaintext refresh remains blocked
+can carry an initial value. The separate initial-value decision is now accepted
+below; this does not authorize supplying values. SSM plaintext refresh remains blocked
 and this candidate cannot perform full production refresh; do not bypass it.
 Receipt/executor, durable writer hold, separate metadata phase, retirement and
-deployment remain unimplemented gates. No AWS mutation occurred.
+deployment remain unimplemented gates. No role, policy, session, secret or
+service was created or changed. Native-console diagnostics may have used
+temporary IAM-only backend lock bookkeeping; the lock is released and state
+remains absent. This is not installation or execution evidence.
+
+### Empty-container enforcement — separate decision accepted
+
+Flamur explicitly accepted relying on the reviewed pricing plan to enforce
+"empty containers only" after the initial-value limitation was disclosed.
+CreateSecret can carry a value, so IAM alone does not enforce this rule.
+Use immutable reviewed declarations/private runner, exact saved-plan approval
+and post-write no-version verification; do not claim IAM proves emptiness.
+This clears the initial-value content-authority decision, not permission to
+supply any value, grant access, issue a session or execute setup. SSM plaintext
+and metadata-policy-content acceptance remain separate, unaccepted decisions.
+The unlocked IAM-only review plan is not an approved execution plan; no
+admission window may be shifted or installed based on this acceptance alone.
 
 ### Limited-access proposal — role-policy trust decision accepted for preparation
 
@@ -214,8 +230,9 @@ Flamur explicitly accepted reliance on the trusted operator and reviewed plan
 for the exact role-permission contents in this chat, then directed preparation
 to proceed. This clears that design decision only: it does not approve a grant,
 credential/session issuance, role/fence installation, production plan/apply or
-deployment. Do not infer separate acceptance of SSM plaintext access, initial
-secret values or metadata-policy content authority from that role-policy decision.
+deployment. Do not infer separate acceptance of SSM plaintext access or
+metadata-policy content authority from that role-policy decision. Initial-value
+authority was separately accepted above, not inferred from it.
 
 This is the proposed permission boundary for the selected owner's future
 phase-limited sessions, **not** a policy grant or an implemented identity.
@@ -416,7 +433,11 @@ only with all of these restrictions:
 
 Metadata-only DescribeKey/DescribeParameters checks on 2026-10-01 identified
 the key and Standard SecureStrings using `alias/aws/ssm`; no values were read.
-An attempted complete metadata-inventory check was throttled and not retried.
+The initial complete-inventory attempt was throttled. A fresh 2026-10-02
+metadata-only inventory found all 36 exact declared names, each Standard
+SecureString using `alias/aws/ssm`; DescribeKey reconfirmed the exact key above.
+No values were retrieved or decryption grants installed. This point-in-time
+metadata mapping is not actual-role authorization or full-refresh evidence.
 Read-only IAM `SimulateCustomPolicy` checked the three generated proposal policy
 documents: exact SSM decrypt/read allowed; missing/wrong service, region or
 context, other key and time-fence cases explicitly denied; unlisted parameter,
@@ -427,7 +448,8 @@ Before activation, reverify the exact inventory's existence, type, tier and key
 mapping and demonstrate the composed policy's positive/negative authorization.
 Key rotation/mapping or root-declaration changes require a reviewed update,
 not a wildcard expansion. The exception is not limited to Terraform by IAM:
-an admitted job can retrieve plaintext values for these exact parameters.
+an admitted job can retrieve plaintext values for these exact parameters,
+including the RDS administrator connection URL and payment/provider API keys.
 Treat the runner, inputs, state and transient plan as privileged; do not print,
 upload or retain setting values. No Secrets Manager value access is introduced.
 The permission proposal does not itself prove a production full refresh works.
