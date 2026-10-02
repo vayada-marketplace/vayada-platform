@@ -220,7 +220,7 @@ case "${mode}" in
       fi
     fi
     ;;
-  --provision-hotel-setup-creation-org|--provision-hotel-setup-creation-reader)
+  --provision-hotel-setup-creation-org|--provision-hotel-setup-creation-reader|--provision-hotel-setup-property-reader)
     if [[ "${mode}" == "--provision-hotel-setup-creation-org" ]]; then
       [[ "$#" -eq 4 && "$2" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ &&
          "$3" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || exit 2
@@ -228,8 +228,14 @@ case "${mode}" in
       creation_task_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-creation-bootstrap"
     else
       [[ "$#" -eq 2 ]] || exit 2
-      creation_purpose="creation_reader"; creation_digest="$2"
-      creation_task_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-creation-reader-bootstrap"
+      creation_digest="$2"
+      if [[ "${mode}" == "--provision-hotel-setup-property-reader" ]]; then
+        creation_purpose="property_reader"
+        creation_task_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-reader-bootstrap"
+      else
+        creation_purpose="creation_reader"
+        creation_task_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-creation-reader-bootstrap"
+      fi
     fi
     [[ "${creation_digest}" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 2
     inventory="$(dirname "${BASH_SOURCE[0]}")/../deployment/hotel-setup-command-images.json"
@@ -289,7 +295,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
+  if [[ "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" ) || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -305,7 +311,7 @@ if [[ "${ca_required}" == true ]]; then
     }
   fi
   ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
-  if [[ ( "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || "${mode}" == --provision-hotel-setup-creation-* ) && "${#ca_payload}" -gt 2100 ]]; then
+  if [[ ( "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" ) ) && "${#ca_payload}" -gt 2100 ]]; then
     echo "Pinned grant CA payload exceeds the reviewed ECS override budget." >&2; exit 1
   fi
 fi
@@ -389,6 +395,28 @@ if [[ "${mode}" == "--audit-financials-readiness" ]]; then
   source_image="$(jq -r '.containerDefinitions[] | select(.name == "vayada-next-api") | .image' <<<"${source_definition}")"
   [[ "${source_image}" == *@"${financials_readiness_image_digest}" ]] || {
     echo "Financials readiness task definition is not pinned to the observed image." >&2; exit 1;
+  }
+fi
+# A missing private service or ordinary local writer is not an admission hold.
+if [[ "${mode}" == "--provision-hotel-setup-property-reader" ]]; then
+  [[ "${EXPECTED_TASK:-}" == "${current_task}" && "${current_task}" == arn:aws:ecs:eu-west-1:269416271598:task-definition/* ]] || {
+    echo "Property reader bootstrap requires the reviewed public task definition." >&2; exit 1;
+  }
+  public_state="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" --query 'services[0]' --output json)"
+  jq -e --arg expected "${current_task}" '.taskDefinition == $expected and
+    .desiredCount == 1 and .runningCount == 1 and .pendingCount == 0 and
+    (.deployments | length) == 1 and .deployments[0].status == "PRIMARY" and
+    .deployments[0].rolloutState == "COMPLETED"' <<<"${public_state}" >/dev/null || exit 1
+  jq -e '[.containerDefinitions[] | select(.name == "vayada-next-api") |
+    .environment[] | select(.name == "HOTEL_SETUP_COMMAND_ADMISSION")] |
+    length == 1 and .[0].value == "blocked"' <<<"${source_definition}" >/dev/null || {
+    echo "Property reader bootstrap requires explicit blocked caller admission." >&2; exit 1;
+  }
+  private_state="$(aws ecs describe-services --cluster "${service_cluster}" --services vayada-hotel-setup-property-service --region "${region}" --query '{services:services,failures:failures}' --output json)"
+  jq -e '(.services | length) == 1 and (.failures | length) == 0 and
+    .services[0].desiredCount == 0 and .services[0].runningCount == 0 and
+    .services[0].pendingCount == 0' <<<"${private_state}" >/dev/null || {
+    echo "Property reader bootstrap requires the staged property service at zero tasks." >&2; exit 1;
   }
 fi
 temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" \

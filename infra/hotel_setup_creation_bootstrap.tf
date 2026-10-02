@@ -49,3 +49,26 @@ resource "aws_iam_role_policy" "hotel_setup_creation_reader_bootstrap" {
     }]
   })
 }
+
+# Property reader bootstrap can access only its two pre-created containers.
+resource "aws_iam_role" "hotel_setup_property_reader_bootstrap" {
+  count = var.enable_hotel_setup_property_credentials ? 1 : 0
+
+  name               = "vayada-hotel-setup-property-reader-bootstrap"
+  assume_role_policy = local.hotel_setup_role_trust
+}
+
+resource "aws_iam_role_policy" "hotel_setup_property_reader_bootstrap" {
+  count = var.enable_hotel_setup_property_credentials ? 1 : 0
+
+  name = "property-reader-and-token-bootstrap-only"
+  role = aws_iam_role.hotel_setup_property_reader_bootstrap[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
+      Resource = [for secret in aws_secretsmanager_secret.hotel_setup_property : secret.arn]
+    }]
+  })
+}

@@ -322,8 +322,22 @@ identity, inventory and secret namespace. Existing identities/secret values
 are rejected; partial publication or uncertain commit disables the fresh
 reader, terminates its sessions and blocks release.
 
-This source-only extension does not add the purpose to the existing creation
-workflow or operational wrapper. A separate reviewed property reader IAM and
-protected runner gate must require zero property-service tasks and blocked
-caller admission before it can run. The native property-role activation,
+The property reader remains separate from the existing creation workflow.
+Its reviewed IAM and protected runner gate require zero property-service tasks
+and blocked caller admission before it can run. The native property-role activation,
 assignment and publication contract remains separate.
+
+
+The separate main-only `hotel-setup-property-reader-bootstrap.yml` entrypoint
+uses the protected `platform-mutations-v2` environment and shared production
+mutation queue. Its wrapper checks the exact stable public task, explicit
+`HOTEL_SETUP_COMMAND_ADMISSION=blocked`, and an existing zero-task property
+service before registering any one-off task. The fixed operational role can
+read/write only the two property reader/token containers and cannot create
+secrets or access native credentials. It never becomes the service role.
+The approved creation image inventory is reused only for its existing compiled
+property reader contract, independently proved on both images and PG16/17 in
+#366; it does not admit native property commands or property service images.
+
+The public task image must independently prove it enforces the admission marker;
+the runner checks configuration and does not infer that behavioral proof.

@@ -20,10 +20,14 @@ root=Path(os.environ['MOCK_CAPTURE'])
 with (root/'calls.jsonl').open('a') as file: file.write(json.dumps(args)+'\\n')
 def value(flag): return args[args.index(flag)+1]
 operation=args[1]
-if operation=='describe-services':
+if operation=='describe-services' and value('--query')=='services[0]':
+ print(json.dumps({'taskDefinition':os.environ['EXPECTED_TASK'],'desiredCount':1,'runningCount':1,'pendingCount':0,'deployments':[{'status':'PRIMARY','rolloutState':'COMPLETED'}]}))
+elif operation=='describe-services' and value('--services')=='vayada-hotel-setup-property-service':
+ print(json.dumps({'services':[{'desiredCount':0,'runningCount':0,'pendingCount':0}], 'failures':[]}))
+elif operation=='describe-services':
  print(json.dumps({'awsvpcConfiguration':{'subnets':['fixture'],'securityGroups':['fixture'],'assignPublicIp':'ENABLED'}}) if 'networkConfiguration' in value('--query') else 'arn:aws:ecs:eu-west-1:269416271598:task-definition/public:1')
 elif operation=='describe-task-definition':
- print(json.dumps({'family':'public','taskRoleArn':'arn:aws:iam::269416271598:role/broad-serving-role','executionRoleArn':'fixture-execution','containerDefinitions':[{'name':'vayada-next-api','image':'ordinary-serving-image','environment':[{'name':'UNSAFE','value':'fixture'}],'secrets':[{'name':'UNSAFE','valueFrom':'fixture'}],'portMappings':[{'containerPort':8003}]}]}))
+ print(json.dumps({'family':'public','taskRoleArn':'arn:aws:iam::269416271598:role/broad-serving-role','executionRoleArn':'fixture-execution','containerDefinitions':[{'name':'vayada-next-api','image':'ordinary-serving-image','environment':[{'name':'HOTEL_SETUP_COMMAND_ADMISSION','value':os.environ.get('MOCK_ADMISSION','blocked')}],'secrets':[{'name':'UNSAFE','valueFrom':'fixture'}],'portMappings':[{'containerPort':8003}]}]}))
 elif operation=='register-task-definition':
  (root/'definition.json').write_text(value('--cli-input-json'))
  print('arn:aws:ecs:eu-west-1:269416271598:task-definition/fixture:1')
@@ -53,6 +57,7 @@ class CreationRunnerTest(unittest.TestCase):
         self.executable('shasum', '#!/bin/sh\ncat >/dev/null\necho 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812\n')
         self.env = {**os.environ, 'PATH': str(self.root / 'bin') + ':' + os.environ['PATH'],
                     'MOCK_CAPTURE': str(self.root / 'capture'),
+                    'EXPECTED_TASK': 'arn:aws:ecs:eu-west-1:269416271598:task-definition/public:1',
                     'MOCK_CA': str(ROOT / 'rehearsal/rds-ca-rsa2048-g1.pem')}
 
     def executable(self, name, content):
@@ -68,12 +73,14 @@ class CreationRunnerTest(unittest.TestCase):
         for purpose, args, suffix in (
             ('organization', ['--provision-hotel-setup-creation-org', ORG, ACTOR, DIGEST], 'bootstrap'),
             ('creation_reader', ['--provision-hotel-setup-creation-reader', DIGEST], 'reader-bootstrap'),
+            ('property_reader', ['--provision-hotel-setup-property-reader', DIGEST], 'reader-bootstrap'),
         ):
             with self.subTest(purpose=purpose):
                 result = self.run_wrapper(*args)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 definition = json.loads((self.root / 'capture/definition.json').read_text())
-                self.assertEqual(definition['taskRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-creation-' + suffix)
+                service = 'property' if purpose == 'property_reader' else 'creation'
+                self.assertEqual(definition['taskRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-' + service + '-' + suffix)
                 container, = definition['containerDefinitions']
                 self.assertEqual(container['image'], '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST)
                 self.assertEqual(container['environment'], [])
@@ -94,12 +101,22 @@ class CreationRunnerTest(unittest.TestCase):
                 self.assertNotIn('update-service', operations)
                 self.assertEqual(operations[-2:], ['stop-task', 'deregister-task-definition'])
 
+    def test_property_reader_requires_admission_hold_before_mutations(self):
+        self.env['MOCK_ADMISSION'] = 'enabled'
+        self.assertNotEqual(self.run_wrapper('--provision-hotel-setup-property-reader', DIGEST).returncode, 0)
+        operations = [json.loads(line)[1] for line in (self.root / 'capture/calls.jsonl').read_text().splitlines()]
+        self.assertNotIn('register-task-definition', operations)
+        self.assertNotIn('run-task', operations)
+
     def test_invalid_and_unapproved_inputs_never_contact_aws(self):
         for args in (
             ['--provision-hotel-setup-creation-org', 'invalid', ACTOR, DIGEST],
             ['--provision-hotel-setup-creation-reader', 'latest'],
             ['--provision-hotel-setup-creation-reader', 'sha256:' + 'c' * 64],
             ['--provision-hotel-setup-creation-reader', DIGEST, ORG],
+            ['--provision-hotel-setup-property-reader', 'latest'],
+            ['--provision-hotel-setup-property-reader', 'sha256:' + 'c' * 64],
+            ['--provision-hotel-setup-property-reader', DIGEST, ORG],
         ):
             self.assertNotEqual(self.run_wrapper(*args).returncode, 0)
             self.assertFalse((self.root / 'capture/calls.jsonl').exists())
