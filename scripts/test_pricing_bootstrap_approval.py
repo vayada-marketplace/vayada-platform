@@ -24,6 +24,13 @@ pricing_fixture = approval.runpy.run_path(str(ROOT / "scripts/test_pricing_boots
 NOW = datetime(2030, 1, 1, tzinfo=timezone.utc)
 
 
+def runtime_result():
+    return subprocess.CompletedProcess([], 0, json.dumps({
+        "terraform_version": "1.5.7", "platform": "linux_amd64", "provider_selections": {
+            "registry.terraform.io/hashicorp/aws": "5.100.0",
+            "registry.terraform.io/cloudflare/cloudflare": "4.52.7"}}), "SECRET_SENTINEL")
+
+
 def context():
     return {"sourceSha": "a" * 40, "runId": 123, "runAttempt": 1,
             "operatorArn": "arn:aws:sts::269416271598:assumed-role/reviewed-fixture/session",
@@ -117,6 +124,40 @@ class ApprovalTests(unittest.TestCase):
         source_patch = patch.object(approval, "verify_checkout_source")
         self.source = source_patch.start()
         self.addCleanup(source_patch.stop)
+
+    def test_incompatible_runtime_rejects_before_show_or_approval(self):
+        gate = approval.ApprovalGate(context(), 344, now=NOW)
+        runtime = json.loads(runtime_result().stdout)
+        bodies = [None, [], {}, runtime | {"terraform_version": "1.5.6"},
+                  runtime | {"platform": "linux_arm64"}, runtime | {"provider_selections": None},
+                  runtime | {"provider_selections": runtime["provider_selections"] | {
+                      "registry.terraform.io/hashicorp/aws": "5.99.0"}},
+                  runtime | {"provider_selections": runtime["provider_selections"] | {"extra": "1.0.0"}}]
+        for field in runtime:
+            bodies.append({key: value for key, value in runtime.items() if key != field})
+        results = [subprocess.CompletedProcess([], 0, json.dumps(body), "SECRET_SENTINEL") for body in bodies]
+        results += [subprocess.CompletedProcess([], 1, "SECRET_SENTINEL", "SECRET_SENTINEL"),
+                    subprocess.CompletedProcess([], 0, "SECRET_SENTINEL", ""),
+                    subprocess.CompletedProcess([], 0, "x" * 16_385, ""),
+                    OSError("SECRET_SENTINEL"), subprocess.TimeoutExpired("SECRET_SENTINEL", 120)]
+        for result in results:
+            with self.subTest(result=type(result).__name__), \
+                    patch.object(approval, "saved_plan_digest", return_value=context()["planSha256"]), \
+                    patch.object(approval.subprocess, "run", side_effect=[result]) as run, \
+                    patch.object(approval, "_github_json") as api, self.assertRaises(ValueError) as error:
+                gate.fetch_and_consume_saved_plan(50, context(), 123)
+            self.assertNotIn("SECRET_SENTINEL", str(error.exception))
+            run.assert_called_once()
+            self.assertEqual(run.call_args.args[0], ["terraform", "version", "-json"])
+            api.assert_not_called()
+            self.assertFalse(gate._consumed)
+
+    def test_runtime_selection_matches_committed_provider_lock(self):
+        lock = (ROOT / "infra/.terraform.lock.hcl").read_text()
+        runtime = json.loads(runtime_result().stdout)
+        for name, version in runtime["provider_selections"].items():
+            declaration = lock.split(f'provider "{name}" {{', 1)[1].split("}", 1)[0]
+            self.assertIn(f'version     = "{version}"', declaration)
 
     def test_saved_plan_custody_requires_linux_before_reading_anything(self):
         with patch.object(approval, "os", spec=["open"]) as platform:
@@ -571,15 +612,16 @@ class SavedPlanTests(unittest.TestCase):
         show = subprocess.CompletedProcess([], 0, json.dumps(pricing_fixture()), "SECRET_SENTINEL")
         success = subprocess.CompletedProcess([], 0, "finance-steady", "")
         with approval.sealed_saved_plan(self.path, self.digest) as fd, \
-                patch.object(approval.subprocess, "run", side_effect=[show, success]) as run, \
+                patch.object(approval.subprocess, "run", side_effect=[runtime_result(), show, success]) as run, \
                 patch.dict(os.environ, {"GH_TOKEN": "SECRET_SENTINEL", "AWS_ACCESS_KEY_ID": "SECRET_SENTINEL",
                                         "TF_VAR_password": "SECRET_SENTINEL", "TF_LOG": "TRACE",
                                         "BASH_ENV": "SECRET_SENTINEL", "TF_CLI_ARGS_show": "SECRET_SENTINEL"}):
             approval.guard_saved_plan(fd, self.digest)
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_count, 3)
             calls = run.call_args_list
-            self.assertEqual(calls[0].args[0], ["terraform", "show", "-json", f"/proc/self/fd/{fd}"])
-            self.assertEqual(calls[1].args[0], ["bash", str(ROOT / "scripts/guard-finance-folio-kms-plan.sh"),
+            self.assertEqual(calls[0].args[0], ["terraform", "version", "-json"])
+            self.assertEqual(calls[1].args[0], ["terraform", "show", "-json", f"/proc/self/fd/{fd}"])
+            self.assertEqual(calls[2].args[0], ["bash", str(ROOT / "scripts/guard-finance-folio-kms-plan.sh"),
                                                f"/proc/self/fd/{fd}", "plan"])
             for call in calls:
                 self.assertEqual(call.kwargs["pass_fds"], (fd,))
@@ -598,17 +640,17 @@ class SavedPlanTests(unittest.TestCase):
         with approval.sealed_saved_plan(self.path, self.digest) as fd:
             for result in outputs:
                 with self.subTest(result=result.returncode), \
-                        patch.object(approval.subprocess, "run", return_value=result) as run, \
+                        patch.object(approval.subprocess, "run", side_effect=[runtime_result(), result]) as run, \
                         patch.object(approval, "_github_json") as api, self.assertRaises(ValueError) as error:
                     gate.fetch_and_consume_saved_plan(50, current, fd)
                 self.assertNotIn("SECRET_SENTINEL", str(error.exception))
-                self.assertEqual(run.call_count, 1)
+                self.assertEqual(run.call_count, 2)
                 api.assert_not_called()
                 self.assertFalse(gate._consumed)
             show = subprocess.CompletedProcess([], 0, json.dumps(pricing_fixture()), "")
             for failure in (subprocess.CompletedProcess([], 1, "SECRET_SENTINEL", "SECRET_SENTINEL"),
                             subprocess.TimeoutExpired("SECRET_SENTINEL", 120), OSError("SECRET_SENTINEL")):
-                with patch.object(approval.subprocess, "run", side_effect=[show, failure]), \
+                with patch.object(approval.subprocess, "run", side_effect=[runtime_result(), show, failure]), \
                         patch.object(approval, "_github_json") as api, self.assertRaises(ValueError) as error:
                     gate.fetch_and_consume_saved_plan(50, current, fd)
                 self.assertNotIn("SECRET_SENTINEL", str(error.exception))

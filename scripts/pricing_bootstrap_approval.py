@@ -189,6 +189,18 @@ def guard_saved_plan(plan_fd, expected_sha256):
                "TF_INPUT": "false", "AWS_EC2_METADATA_DISABLED": "true"}
         options = {"cwd": ROOT / "infra", "env": env, "pass_fds": (plan_fd,),
                    "capture_output": True, "text": True, "timeout": 120}
+        # Compatibility observation only: self-reported metadata does not admit
+        # the executable/provider bytes or establish a trusted immutable runner.
+        result = subprocess.run(["terraform", "version", "-json"], **options)
+        if result.returncode or len(result.stdout) > 16_384:
+            raise ValueError
+        runtime = json.loads(result.stdout)
+        if (not isinstance(runtime, dict) or runtime.get("terraform_version") != "1.5.7"
+                or runtime.get("platform") != "linux_amd64"
+                or runtime.get("provider_selections") != {
+                    "registry.terraform.io/hashicorp/aws": "5.100.0",
+                    "registry.terraform.io/cloudflare/cloudflare": "4.52.7"}):
+            raise ValueError
         path = f"/proc/self/fd/{plan_fd}"
         result = subprocess.run(["terraform", "show", "-json", path], **options)
         if result.returncode or len(result.stdout) > MAX_PLAN_BYTES:

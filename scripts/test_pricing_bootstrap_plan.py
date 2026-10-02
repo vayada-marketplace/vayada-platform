@@ -129,6 +129,12 @@ class BootstrapPlanTest(unittest.TestCase):
                          "assert-platform-writer-boundary-plan.py", "assert-pricing-bootstrap-plan.py",
                          "terraform_wrapper: false", "if: always()", "umask 077", "-lock-timeout=60s"):
             self.assertIn(required, workflow)
+        self.assertEqual(re.findall(r"uses: ([^\s]+)", workflow), [
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd",
+            "hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e"])
+        self.assertIn('terraform_version: "1.5.7"', workflow)
+        self.assertIn("terraform init -input=false -no-color -lockfile=readonly", workflow)
 
     def test_workflow_guard_failures_withhold_private_diagnostics_and_stop(self):
         workflow = (ROOT / ".github/workflows/pricing-command-bootstrap-plan.yml").read_text()

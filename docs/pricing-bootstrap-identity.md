@@ -426,6 +426,21 @@ runtime/provider admission and fresh
 state/session/authorization/whole-writer-hold checks remain required before both
 receipt construction and consumption. The CLI still has no executor/apply lane.
 
+The diagnostic draft freezes its existing three action references to exact
+commit IDs, selects Terraform `1.5.7` and initializes with `-lockfile=readonly`.
+Before saved-plan inspection, the shared guard observes native `terraform
+version -json` and rejects anything other than `1.5.7`, `linux_amd64`, AWS
+`5.100.0` and Cloudflare `4.52.7` (the committed provider selections). A mismatch
+stops before `show` or approval fetching/consumption; output remains private.
+These are compatibility checks, **not trusted runtime admission**: a substituted
+binary can report the expected metadata. Action pinning does not prove reviewed
+provenance, and read-only initialization alone does not verify the extracted
+provider files, backend/workspace initialization or immutable runner. Those
+gates remain unimplemented; no credential loading or setup is authorized by
+passing these observations. Tests mock version mismatches and check committed
+lockfile alignment; Linux CI also exercises the native observation before the
+eight-create negative plan proof.
+
 `verify_checkout_source` now checks the actual checkout against the receipt's
 exact commit and GitHub's authenticated current `main` ref. It runs before
 receipt construction, before saved-plan guards and again after fresh approval

@@ -162,9 +162,16 @@ class IdentityTests(unittest.TestCase):
             with patch.object(approval.subprocess, "run", side_effect=inspect), \
                     self.assertRaisesRegex(ValueError, "guards rejected"):
                 approval.guard_saved_plan(fd, digest)
-            self.assertEqual(len(observed), 1)
-            self.assertEqual(observed[0].returncode, 0, "Native guarded inspection failed")
-            self.assertEqual(len(json.loads(observed[0].stdout)["resource_changes"]), 8)
+            self.assertEqual(len(observed), 2)
+            self.assertEqual(observed[0].returncode, 0, "Native version observation failed")
+            runtime = json.loads(observed[0].stdout)
+            self.assertEqual(runtime["terraform_version"], "1.5.7")
+            self.assertEqual(runtime["platform"], "linux_amd64")
+            self.assertEqual(runtime["provider_selections"], {
+                "registry.terraform.io/hashicorp/aws": "5.100.0",
+                "registry.terraform.io/cloudflare/cloudflare": "4.52.7"})
+            self.assertEqual(observed[1].returncode, 0, "Native guarded inspection failed")
+            self.assertEqual(len(json.loads(observed[1].stdout)["resource_changes"]), 8)
 
     def assert_role_writes_denied(self, statements):
         by_sid = {s["Sid"]: s for s in statements}
