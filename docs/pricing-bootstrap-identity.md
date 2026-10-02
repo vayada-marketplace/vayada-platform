@@ -377,15 +377,44 @@ inventory/drain; STS caller-identity output is not a denial probe. Separate
 phase-limited operator identities and the installer/recovery owner must remain
 outside the reviewed competing-writer target set, with their independent controls.
 
-This candidate alone cannot satisfy the required ordinary hosted no-op: that
-role would still be denied. A separately reviewed transition that admits only
-the no-op verification while keeping competing writers fenced is required
-**before installation or executor connection**. Do not remove the deny merely
-to get a green run, expire it automatically, replay an old attachment snapshot,
-or change the installed VAY-2029 trust/cutoff to improvise recovery. Partial
-installation, failure or cancellation blocks pricing setup and retains installed
-denials pending the explicitly reviewed recovery procedure. Neither that transition
-nor an installation/release executor is implemented here.
+### Pause, verify and resume — proposed order, not an executable lane
+
+The required ordinary hosted no-op is a **plan refresh**, not Terraform Apply.
+The existing `.github/workflows/tf-plan.yml` uses
+`arn:aws:iam::269416271598:role/vayada-github-actions-platform-plan`, not the
+deployment role. Keep this independently reviewed reader outside the competing-
+writer deny target set, with its existing enumerated metadata/state reads and
+exact DynamoDB lock-item access. Do not add state-object writes, decryption,
+role assumption, deployment permissions or exceptions to the deny document.
+Actual RoleId, trust and composed permissions must be reverified; the role's name
+or source declaration alone is not admission evidence.
+
+This reuses the metadata runbook's ordinary hosted **plan** requirement without
+temporarily reopening a deployment identity. Terraform Apply is not a substitute:
+its workflow also runs database preflights, SES writes and possible ECS deployment
+outside Terraform's resource-change summary. Leave it and all other competing
+writers fenced throughout verification.
+
+| Step | Required evidence before advancing |
+| --- | --- |
+| Prepare | Separately approved prerequisite plan: complete writer/reader identity inventory, actual quotas, installer/recovery owner, fence state ownership and exact installation/release scope. Admit immutable runner/source/provider/backend and private inputs independently. No pricing receipt authorizes this step. |
+| Pause and drain | Disable relevant triggers as coordination, install the approved deny attachments, prove actual propagation/session coverage and drain already accepted AWS changes and chained executions. Preserve retained authentication-fenced requests and existing service holds. Any uncovered writer or partial installation blocks setup. |
+| Create, then metadata | Keep the same whole-writer fence. Use the distinct admitted phase roles, exact seven-create then two-update saved plans, separate human receipts and fresh source/state/authorization/hold checks. Recheck metadata version capacity before receipt and consumption; verify actual empty containers, trust/policy contents and exact final mappings. |
+| Retire and refresh | Prove both privileged phase sessions retired. Use the admitted existing plan reader for a fresh full-root locked plan against the final checked-in configuration and actual production backend. Require no managed-resource/output changes, drift, imports or moves, with the existing writer/protected guards. No apply, targeted plan, `-refresh=false`, cached JSON or state publication. |
+| Explicit release | Only after the preceding evidence is accepted, approve a fresh exact fence-removal plan and release the covered workflows explicitly. Recheck actual identities/policies/state/holds immediately before removal; preserve VAY-2029 trust/cutoff and service holds. Do not replay an old attachment snapshot, automatically release on timeout, retry old runs or clear a service hold as a side effect. |
+
+The current PR Plan workflow succeeds even when a plan contains changes and
+publishes plan text. Its green status is **not** the required private no-op
+verification. A reviewed hosted check still needs exact source/backend/input
+binding, private saved-plan inspection and sanitized no-op evidence; this change
+does not dispatch or add that lane. The workflow/allowlist regression tests check
+declarations only, not actual-role permissions, runtime custody or live freshness.
+
+Partial installation, failure, cancellation, drift or unverifiable retirement
+keeps installed denials and blocks release pending the explicitly reviewed recovery
+procedure. No hold installation, verification, release executor or setup runner
+is connected here. These gates still precede any executor connection; the
+ordered proposal is not activation approval or completed rollout evidence.
 
 ### Concrete operator admission/fence templates — unattached, no grants
 
