@@ -132,7 +132,7 @@ class HotelSetupServiceTests(unittest.TestCase):
 
     def test_property_restage_preserves_serving_task_count_and_rejects_removal(self):
         selected = {'mode': 'property_creation', 'property_enabled': True,
-                    'property_credentials': True, 'existing_property_service': True,
+                    'property_credentials': True, 'existing_service': 'property',
                     'property_digests': {'primary': DIGEST, 'rollback': ROLLBACK},
                     'property_inventory': {DIGEST: 'c' * 40, ROLLBACK: 'd' * 40}}
         result = plan(True, service=selected, property_network=True)
@@ -141,7 +141,20 @@ class HotelSetupServiceTests(unittest.TestCase):
         self.assertEqual(service['desired_count'], 1)
         self.assertTrue(service['task_definition'].endswith(':77'))
         with self.assertRaisesRegex(AssertionError, 'cannot be destroyed'):
-            plan(True, service={**selected, 'remove_property_service': True}, property_network=True)
+            plan(True, service={**selected, 'remove_service': True}, property_network=True)
+
+    def test_creation_restage_preserves_serving_task_count_and_rejects_removal(self):
+        selected = {'mode': 'property_creation', 'enabled': True, 'credentials': True,
+                    'existing_service': 'creation',
+                    'digests': {'primary': DIGEST, 'rollback': ROLLBACK},
+                    'inventory': {DIGEST: 'c' * 40, ROLLBACK: 'd' * 40}}
+        result = plan(True, service=selected)
+        service = next(r['values'] for r in result['planned_values']['root_module']['resources']
+                       if r['address'] == 'aws_ecs_service.hotel_setup[0]')
+        self.assertEqual(service['desired_count'], 1)
+        self.assertTrue(service['task_definition'].endswith(':77'))
+        with self.assertRaisesRegex(AssertionError, 'cannot be destroyed'):
+            plan(True, service={**selected, 'remove_service': True})
 
     def test_exact_container_and_verified_rds_trust(self):
         values = {
