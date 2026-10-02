@@ -305,3 +305,25 @@ do not retry blindly or substitute serving/migration credentials.
 Run `python3 scripts/test_hotel_setup_creation_runner.py` to exercise both modes
 and input rejection with an AWS stub. This check also measures the actual ECS
 override size and verifies credential replacement and owned-task cleanup.
+
+## Property reader bootstrap source
+
+The shared operational bootstrap also accepts the fixed `property_reader`
+purpose. It creates only `vayada_next_hotel_setup_reader`, with the existing
+property-mode reader SELECT inventory and rejection-audit INSERT columns, no
+role memberships, and no native property assignments. It cannot select the
+creation reader inventory or native command credentials.
+
+The actual native login must pass `checkHotelSetupReader` in `property_commands`
+mode before literal URL and random token strings are published and read back
+under `hotel-setup-command/prod/reader-database-url` and
+`hotel-setup-command/prod/internal-token`. Creation mode keeps its separate
+identity, inventory and secret namespace. Existing identities/secret values
+are rejected; partial publication or uncertain commit disables the fresh
+reader, terminates its sessions and blocks release.
+
+This source-only extension does not add the purpose to the existing creation
+workflow or operational wrapper. A separate reviewed property reader IAM and
+protected runner gate must require zero property-service tasks and blocked
+caller admission before it can run. The native property-role activation,
+assignment and publication contract remains separate.
