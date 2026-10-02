@@ -91,7 +91,15 @@ class HotelSetupServiceTests(unittest.TestCase):
             target = Path(directory, 'rds-ca.pem')
             self.assertEqual(target.read_text(), ca)
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(json.loads((ROOT / 'deployment/hotel-setup-command-images.json').read_text()), {})
+        inventory = json.loads((ROOT / 'deployment/hotel-setup-command-images.json').read_text())
+        proof = json.loads((ROOT / 'deployment/hotel-setup-creation-image-proof.json').read_text())
+        self.assertEqual(inventory, {proof[key]['digest']: proof[key]['source'] for key in ('primary', 'rollback')})
+        for digest, source in inventory.items():
+            self.assertRegex(digest, r'^sha256:[a-f0-9]{64}$')
+            self.assertRegex(source, r'^[a-f0-9]{40}$')
+        self.assertEqual(proof['purpose'], 'property_creation')
+        self.assertEqual(proof['verification']['postgresVersions'], [16, 17])
+        self.assertTrue(proof['verification']['actualCompiledImage'])
 
 
 if __name__ == '__main__':
