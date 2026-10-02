@@ -1,0 +1,80 @@
+name: Bootstrap isolated hotel creation credentials
+
+on:
+  workflow_dispatch:
+    inputs:
+      purpose:
+        description: "Reviewed bootstrap purpose"
+        required: true
+        type: choice
+        options: [creation_reader, organization]
+      image_digest:
+        description: "Approved immutable private creation image digest"
+        required: true
+      expected_task_definition:
+        description: "Reviewed stable public API task definition ARN"
+        required: true
+      organization_id:
+        description: "Organization UUID (organization purpose only)"
+      actor_user_id:
+        description: "Current owner UUID (organization purpose only)"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+
+jobs:
+  bootstrap:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Require stable public API and disabled private service
+        env:
+          EXPECTED_TASK: ${{ inputs.expected_task_definition }}
+        run: |
+          set -euo pipefail
+          aws ecs describe-services --cluster vayada-backend-cluster \
+            --services vayada-next-api-service --region eu-west-1 \
+            --query 'services[0]' --output json > public-service.json
+          jq -e --arg expected "$EXPECTED_TASK" '
+            .taskDefinition == $expected and .desiredCount == 1 and
+            .runningCount == 1 and .pendingCount == 0 and
+            (.deployments | length) == 1 and .deployments[0].rolloutState == "COMPLETED"
+          ' public-service.json >/dev/null
+          aws ecs describe-services --cluster vayada-backend-cluster \
+            --services vayada-hotel-setup-service --region eu-west-1 \
+            --query '{services:services,failures:failures}' --output json > private-service.json
+          jq -e '(.services | length) == 1 and (.failures | length) == 0 and
+            .services[0].desiredCount == 0 and .services[0].runningCount == 0 and
+            .services[0].pendingCount == 0' private-service.json >/dev/null
+      - name: Run only the approved operational bootstrap
+        env:
+          PURPOSE: ${{ inputs.purpose }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          ORGANIZATION_ID: ${{ inputs.organization_id }}
+          ACTOR_USER_ID: ${{ inputs.actor_user_id }}
+        run: |
+          set -euo pipefail
+          case "$PURPOSE" in
+            creation_reader)
+              [[ -z "$ORGANIZATION_ID" && -z "$ACTOR_USER_ID" ]] || exit 2
+              bash scripts/run-target-database-runtime-preflight.sh --provision-hotel-setup-creation-reader "$IMAGE_DIGEST"
+              ;;
+            organization)
+              bash scripts/run-target-database-runtime-preflight.sh --provision-hotel-setup-creation-org "$ORGANIZATION_ID" "$ACTOR_USER_ID" "$IMAGE_DIGEST"
+              ;;
+            *) exit 2 ;;
+          esac

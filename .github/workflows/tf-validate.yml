@@ -13,6 +13,10 @@ on:
       - "scripts/test_hotel_setup_credentials.py"
       - "scripts/test_hotel_setup_network.py"
       - "scripts/test_hotel_setup_service.py"
+      - "scripts/test_hotel_setup_creation_runner.py"
+      - "scripts/provision-hotel-setup-creation-login.mjs"
+      - "scripts/test-hotel-setup-creation-bootstrap.mjs"
+      - ".github/workflows/hotel-setup-creation-bootstrap.yml"
       - "docs/hotel-setup-private-service.md"
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
@@ -258,6 +262,9 @@ jobs:
           python3 scripts/test-target-database-identity-secret.py
           python3 scripts/test-target-database-runtime-preflight.py
           python3 scripts/test-target-database-runtime-runner.py
+          python3 scripts/test_hotel_setup_creation_runner.py
+          node --check scripts/provision-hotel-setup-creation-login.mjs
+          node --check scripts/test-hotel-setup-creation-bootstrap.mjs
           python3 scripts/test-channex-worker-database.py
           python3 scripts/test-pause-next-api-channex-worker.py
           python3 scripts/test-next-api-split-compatible-image.py
