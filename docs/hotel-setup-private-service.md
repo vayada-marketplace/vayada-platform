@@ -167,3 +167,23 @@ Production caller wiring and private-service release remain separate gates.
 The local fixture requires the owned disposable creation database and a memory
 vault; it does not connect to AWS. It proves failed owner checks, duplicate
 assignment rejection, lost COMMIT cleanup and unchanged hotel/audit counts.
+
+
+## Creation reader bootstrap
+
+The same operational script supports the explicit purpose `creation_reader`.
+It creates only `vayada_next_hotel_setup_creation_reader`, with the exact reader
+columns and rejection-only audit inserts. The login has no parent membership or
+organization assignment. Its real TLS/reader/database-isolation preflight must
+pass before literal URL and random internal-token strings are published to the
+two pre-created creation secret containers. JSON quoting is not added to injected
+secret values. Existing secret versions or an existing reader role are rejected,
+never overwritten or adopted.
+
+Use the separate creation-reader bootstrap IAM role: Get/Put on those exact two
+secret ARNs only, with no native organization-secret access. Partial publication
+fails release and disables the new login; orphaned versions need explicit
+operational cleanup before retry. The native organization bootstrap role remains
+separate. Local fault injection proves partial token publication disables the
+reader, an existing secret blocks creation, and an existing reader stays intact.
+No task caller or service is enabled by this slice.

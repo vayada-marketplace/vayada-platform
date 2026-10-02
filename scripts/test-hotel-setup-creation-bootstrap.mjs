@@ -37,7 +37,7 @@ try {
     (SELECT count(*)::text FROM platform.product_audit_events) AS audits`)).rows;
   const before = await snapshot();
   url.search = "?sslmode=verify-full";
-  const run = (organizationId, actorUserId = actor, lostCommit = false) => {
+  const run = (organizationId, actorUserId = actor, lostCommit = false, purpose = "organization", vaultFault = "") => {
     const preload = `import {createRequire} from "node:module";
       const pg=createRequire(${JSON.stringify(appRoot + "/package.json")})("pg");
       const Client=pg.Client; let lost=false;
@@ -46,11 +46,26 @@ try {
         if(sql==="COMMIT"&&!lost){lost=true;throw new Error("synthetic lost commit acknowledgement");}
         return result;
       }};`;
-    const args = lostCommit ? ["--import", "data:text/javascript," + encodeURIComponent(preload), script] : [script];
+    const vaultPreload = `import {registerHooks} from "node:module";
+      const fault=${JSON.stringify(vaultFault)};
+      registerHooks({load(url,context,next){const result=next(url,context);
+        if(url.endsWith("/platform/providerCredentialVault.js")){
+          let source=result.source.toString();
+          if(fault==="partial") source=source.replace("credentials.set(reference, JSON.stringify(value));",
+            'if(reference.endsWith("/internal-token"))throw new Error("synthetic partial vault failure");credentials.set(reference, JSON.stringify(value));');
+          if(fault==="existing") source=source.replace("const value = credentials.get(reference);",
+            'if(reference.endsWith("/reader-database-url"))return "synthetic-existing-credential";const value = credentials.get(reference);');
+          return {...result,source};
+        }return result;}});`;
+    const args = [];
+    if (lostCommit) args.push("--import", "data:text/javascript," + encodeURIComponent(preload));
+    if (vaultFault) args.push("--import", "data:text/javascript," + encodeURIComponent(vaultPreload));
+    args.push(script);
     const result = spawnSync(process.execPath, args, {
       cwd: appRoot, encoding: "utf8", timeout: 30_000,
       env: { ...process.env, TARGET_DATABASE_ADMIN_URL: url.toString(),
         VAYADA_HOTEL_SETUP_CREATION_LOCAL_FIXTURE: "1",
+        HOTEL_SETUP_BOOTSTRAP_PURPOSE: purpose,
         HOTEL_SETUP_COMMAND_ORGANIZATION_ID: organizationId,
         HOTEL_SETUP_COMMAND_ACTOR_USER_ID: actorUserId,
         PGHOST: "untrusted.invalid", PGPORT: "1", PGOPTIONS: "-c role=postgres" },
@@ -81,12 +96,35 @@ try {
   assert.equal(uncertain.receipt.code, "hotel_setup_creation_provision_failed");
   assert.equal((await admin.query("SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname=$1", [uncertain.receipt.role])).rows[0].rolcanlogin, false);
   assert.equal((await admin.query("SELECT 1 FROM platform.hotel_setup_creation_scopes WHERE database_login=$1", [uncertain.receipt.role])).rowCount, 0);
+  const reader = run(organizations[0], actor, false, "creation_reader");
+  assert.equal(reader.result.status, 0);
+  assert.equal(reader.receipt.role, "vayada_next_hotel_setup_creation_reader");
+  assert.equal(reader.receipt.purpose, "creation_reader");
+  assert.equal((await admin.query("SELECT count(*)::integer AS count FROM pg_catalog.pg_auth_members WHERE member=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=$1)", [reader.receipt.role])).rows[0].count, 0);
+  const existingReader = run(organizations[0], actor, false, "creation_reader");
+  assert.equal(existingReader.result.status, 1);
+  assert.equal(existingReader.receipt.code, "hotel_setup_creation_provision_failed");
+  assert.equal((await admin.query("SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname=$1", [reader.receipt.role])).rows[0].rolcanlogin, true);
+  await admin.query(`DROP OWNED BY ${quote(reader.receipt.role)}`);
+  await admin.query(`DROP ROLE ${quote(reader.receipt.role)}`);
+  const partial = run(organizations[0], actor, false, "creation_reader", "partial");
+  assert.equal(partial.result.status, 1);
+  assert.equal(partial.receipt.code, "hotel_setup_creation_provision_failed");
+  assert.equal((await admin.query("SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname=$1", [partial.receipt.role])).rows[0].rolcanlogin, false);
+  await admin.query(`DROP OWNED BY ${quote(partial.receipt.role)}`);
+  await admin.query(`DROP ROLE ${quote(partial.receipt.role)}`);
+  const existingSecret = run(organizations[0], actor, false, "creation_reader", "existing");
+  assert.equal(existingSecret.result.status, 1);
+  assert.equal(existingSecret.receipt.code, "hotel_setup_creation_provision_failed");
+  assert.equal(existingSecret.receipt.role, undefined);
+  assert.equal((await admin.query("SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='vayada_next_hotel_setup_creation_reader'")).rowCount, 0);
   assert.deepEqual(await snapshot(), before);
   console.log(JSON.stringify({ status: "PASS", scope: "local_creation_bootstrap" }));
 } finally {
   await unlink(script).catch(() => undefined);
   for (const role of new Set(roles)) {
-    assert(/^vayada_next_hotel_setup_org_[a-f0-9]+$/.test(role));
+    assert(/^vayada_next_hotel_setup_org_[a-f0-9]+$/.test(role) || role === "vayada_next_hotel_setup_creation_reader");
+    if (!(await admin.query("SELECT 1 FROM pg_catalog.pg_roles WHERE rolname=$1", [role])).rowCount) continue;
     await admin.query("DELETE FROM platform.hotel_setup_creation_scopes WHERE database_login=$1", [role]);
     await admin.query(`DROP OWNED BY ${quote(role)}`);
     await admin.query(`DROP ROLE ${quote(role)}`);

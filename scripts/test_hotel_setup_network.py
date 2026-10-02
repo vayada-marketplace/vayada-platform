@@ -15,7 +15,7 @@ def plan(enabled, service=None):
         path = Path(directory) / "infra"
         path.mkdir()
         if service is not None:
-            for name in ["hotel_setup_credentials.tf", "hotel_setup_secret_read_policy.json.tftpl", "hotel_setup_service.tf", "hotel_setup_container.json.tftpl"]:
+            for name in ["hotel_setup_creation_bootstrap.tf", "hotel_setup_credentials.tf", "hotel_setup_secret_read_policy.json.tftpl", "hotel_setup_service.tf", "hotel_setup_container.json.tftpl"]:
                 shutil.copy(ROOT / "infra" / name, path)
             (path.parent / "deployment").mkdir()
             (path.parent / "deployment/hotel-setup-command-images.json").write_text(json.dumps(service.get("inventory", {})))

@@ -55,6 +55,11 @@ class HotelSetupServiceTests(unittest.TestCase):
         self.assertEqual(environment['HOTEL_SETUP_COMMAND_SECRET_PREFIX'], 'hotel-setup-command/prod/organization/')
         resources = {r['address']: r['values'] for r in result['planned_values']['root_module']['resources']}
         self.assertEqual(resources['aws_ecs_service.hotel_setup[0]']['desired_count'], 0)
+        configuration = {r['address']: r for r in result['configuration']['root_module']['resources']}
+        reader_policy = configuration['aws_iam_role_policy.hotel_setup_creation_reader_bootstrap']
+        self.assertIn('aws_secretsmanager_secret.hotel_setup', reader_policy['expressions']['policy']['references'])
+        self.assertNotIn('local.hotel_setup_creation_secret_arn', reader_policy['expressions']['policy']['references'])
+        self.assertEqual(resources['aws_iam_role.hotel_setup_creation_reader_bootstrap[0]']['name'], 'vayada-hotel-setup-creation-reader-bootstrap')
         policy = json.loads(resources['aws_iam_role_policy.hotel_setup_property_secrets[0]']['policy'])
         self.assertIn('/organization/vayada_next_hotel_setup_org_', policy['Statement'][0]['Resource'][0])
         for key in ['internal_token', 'reader_database_url']:
