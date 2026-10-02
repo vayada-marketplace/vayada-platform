@@ -22,7 +22,7 @@ def render(enabled):
         expression = 'jsonencode({names=local.hotel_setup_secret_names,trust=jsondecode(local.hotel_setup_role_trust),policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([local.hotel_setup_property_secret_arn])}))})'
         result = subprocess.run(
             ["terraform", "console", "-no-color", f"-var=enable_hotel_setup_credential_infrastructure={str(enabled).lower()}"],
-            input=expression + "\n", text=True, capture_output=True, cwd=directory, check=True)
+            input=expression + "\n", text=True, capture_output=True, cwd=directory, check=True, timeout=30)
         return json.loads(json.loads(result.stdout.strip()))
 
 
