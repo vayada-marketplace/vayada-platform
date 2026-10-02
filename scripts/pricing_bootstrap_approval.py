@@ -1,4 +1,4 @@
-"""Same-process exact-plan approval gate. No AWS, Terraform or apply entry point.
+"""Same-process exact-plan approval gate. No AWS or apply entry point.
 
 The future executor must run all plan/source/identity/hold/authorization guards
 before constructing this gate and again before consuming approval. Receipt
@@ -45,6 +45,65 @@ EDIT_QUERY = """query($id: ID!) {
 
 MAX_PLAN_BYTES = 64 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def verify_checkout_source(expected_sha):
+    """Observe exact current-main bytes; a trusted immutable runner is still required."""
+    if not isinstance(expected_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
+        raise ValueError("Invalid reviewed source")
+    try:
+        # No Git environment overrides, credential helpers, hooks or replacement objects.
+        env = {"PATH": os.environ["PATH"], "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_NO_REPLACE_OBJECTS": "1",
+               "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+        def git(*args):
+            result = subprocess.run(["git", "--no-replace-objects", "-c", "core.fsmonitor=false",
+                                     "-c", "core.untrackedCache=false", "-c", "core.ignoreCase=false",
+                                     *args], cwd=ROOT,
+                                    env=env, capture_output=True, timeout=20)
+            if result.returncode or len(result.stdout) > MAX_PLAN_BYTES:
+                raise ValueError
+            return result.stdout
+        if (Path(os.fsdecode(git("rev-parse", "--show-toplevel")).strip()).resolve() != ROOT
+                or git("rev-parse", "HEAD").strip() != expected_sha.encode()):
+            raise ValueError
+        entries = git("ls-tree", "-r", "-z", expected_sha).split(b"\0")
+        if len(entries) < 2 or entries[-1]:
+            raise ValueError
+        expected_index = []
+        for entry in entries[:-1]:
+            metadata, name = entry.split(b"\t", 1)
+            mode, kind, object_id = metadata.split()
+            if mode not in (b"100644", b"100755") or kind != b"blob":
+                raise ValueError  # No symlinks, submodules or opaque nested source.
+            expected_index.append(mode + b" " + object_id + b" 0\t" + name)
+            path = ROOT / os.fsdecode(name)
+            if any(parent.is_symlink() for parent in path.parents if parent != ROOT):
+                raise ValueError
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
+                info = os.fstat(source.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                        or info.st_size > MAX_PLAN_BYTES
+                        or bool(info.st_mode & stat.S_IXUSR) != (mode == b"100755")):
+                    raise ValueError
+                data = source.read(MAX_PLAN_BYTES + 1)
+            actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+            if len(data) > MAX_PLAN_BYTES or actual.encode() != object_id:
+                raise ValueError  # Inspect bytes even when Git index flags hide edits.
+        if sorted(git("ls-files", "--stage", "-z").split(b"\0")) != sorted(expected_index + [b""]):
+            raise ValueError  # Exact index identity, not configurable diff visibility.
+        for flags in (("--others", "--exclude-standard"),
+                      ("--others", "--ignored", "--exclude-standard")):
+            for name in git("ls-files", "-z", *flags).split(b"\0"):
+                # Provider/backend initialization is admitted separately, not by this check.
+                if name and not name.startswith(b"infra/.terraform/"):
+                    raise ValueError
+        current = _github_json(f"repos/{REPOSITORY}/git/ref/heads/main")
+        if (current.get("ref") != "refs/heads/main" or not isinstance(current.get("object"), dict)
+                or current["object"].get("type") != "commit" or current["object"].get("sha") != expected_sha):
+            raise ValueError
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError, subprocess.TimeoutExpired):
+        raise ValueError("Reviewed source verification rejected; raw output withheld") from None
 
 
 def saved_plan_digest(fd):
@@ -274,12 +333,14 @@ def validate_context(context):
 
 class ApprovalGate:
     def __init__(self, context, issue_number, *, now=None):
+        context = copy.deepcopy(context)
         validate_context(context)
         if type(issue_number) is not int or issue_number < 1:
             raise ValueError("Invalid approval discussion")
         now = now or datetime.now(timezone.utc)
         if now.tzinfo != timezone.utc:
             raise ValueError("Approval clock must be UTC")
+        verify_checkout_source(context["sourceSha"])
         now = now.replace(microsecond=0)
         self._context = copy.deepcopy(context)
         self._issued = now
@@ -382,7 +443,9 @@ class ApprovalGate:
             raise ValueError("No approved humans configured")
         if os.getpid() != self._pid:
             raise ValueError("Approval gate belongs to another process")
-        self.consume(read_github_comment(comment_id), current_context)
+        comment = read_github_comment(comment_id)
+        verify_checkout_source(self._context["sourceSha"])
+        self.consume(comment, current_context)
 
     def fetch_and_consume_saved_plan(self, comment_id, current_context, plan_fd):
         """Future runner must guard/show/apply this same live sealed descriptor.
@@ -392,6 +455,7 @@ class ApprovalGate:
         """
         if os.getpid() != self._pid:
             raise ValueError("Approval gate belongs to another process")
+        verify_checkout_source(self._context["sourceSha"])
         guard_saved_plan(plan_fd, self._context["planSha256"])
         self.fetch_and_consume(comment_id, current_context)
         return f"/proc/self/fd/{plan_fd}"

@@ -113,6 +113,11 @@ class OperatorTemplateTests(unittest.TestCase):
 
 
 class ApprovalTests(unittest.TestCase):
+    def setUp(self):
+        source_patch = patch.object(approval, "verify_checkout_source")
+        self.source = source_patch.start()
+        self.addCleanup(source_patch.stop)
+
     def test_saved_plan_custody_requires_linux_before_reading_anything(self):
         with patch.object(approval, "os", spec=["open"]) as platform:
             with self.assertRaisesRegex(ValueError, "requires Linux"):
@@ -300,6 +305,7 @@ class ApprovalTests(unittest.TestCase):
             self.assertEqual(api.call_args_list[1].args, ("graphql",))
             self.assertEqual(api.call_args_list[1].kwargs, {"node_id": "IC_fixture"})
         self.assertTrue(gate._consumed)
+        self.assertEqual(self.source.call_count, 2)  # Construction and after fresh API evidence.
         empty = approval.ApprovalGate(context(), 344, now=NOW)
         with patch.object(approval, "APPROVED_HUMAN_IDS", frozenset()), \
                 patch.object(approval, "_github_json") as api, self.assertRaises(ValueError):
@@ -420,6 +426,9 @@ class ApprovalTests(unittest.TestCase):
 @unittest.skipUnless(hasattr(os, "memfd_create"), "Requires native Linux sealing")
 class SavedPlanTests(unittest.TestCase):
     def setUp(self):
+        source_patch = patch.object(approval, "verify_checkout_source")
+        self.source = source_patch.start()
+        self.addCleanup(source_patch.stop)
         self.directory = tempfile.TemporaryDirectory(prefix="pricing-plan-test-")
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / "SECRET_SENTINEL.tfplan"
@@ -531,6 +540,7 @@ class SavedPlanTests(unittest.TestCase):
             self.assertTrue(gate._consumed)
             self.assertEqual(api.call_count, 2)
             guard.assert_called_once_with(fd, self.digest)
+            self.assertEqual(self.source.call_count, 3)  # Construction, before guards, after API.
             self.assertNotIn(path, json.dumps(gate.receipt()))
             with self.assertRaises(ValueError):
                 gate.fetch_and_consume_saved_plan(rest["id"], current, fd)
@@ -604,6 +614,171 @@ class SavedPlanTests(unittest.TestCase):
                 self.assertNotIn("SECRET_SENTINEL", str(error.exception))
                 api.assert_not_called()
                 self.assertFalse(gate._consumed)
+
+
+class CheckoutSourceTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="pricing-source-test-")
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name).resolve()
+        self.git("init", "--quiet")
+        self.git("config", "user.email", "fixture@example.invalid")
+        self.git("config", "user.name", "Fixture")
+        (self.root / ".gitignore").write_text("ignored*\ninfra/.terraform/\n")
+        (self.root / "source.py").write_text("reviewed fixture\n")
+        (self.root / "infra").mkdir()
+        (self.root / "infra/main.tf").write_text("# fixture\n")
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "fixture")
+        self.sha = self.git("rev-parse", "HEAD").strip()
+        self.root_patch = patch.object(approval, "ROOT", self.root)
+        self.root_patch.start()
+        self.addCleanup(self.root_patch.stop)
+        api_patch = patch.object(approval, "_github_json", return_value={
+            "ref": "refs/heads/main", "object": {"type": "commit", "sha": self.sha}})
+        self.api = api_patch.start()
+        self.addCleanup(api_patch.stop)
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.root, check=True,
+                              capture_output=True, text=True).stdout
+
+    def reject(self):
+        with self.assertRaisesRegex(ValueError, "raw output withheld") as error:
+            approval.verify_checkout_source(self.sha)
+        self.assertNotIn("SECRET_SENTINEL", str(error.exception))
+
+    def test_actual_checkout_matches_authenticated_main_without_mutation(self):
+        before = self.git("status", "--porcelain=v1")
+        approval.verify_checkout_source(self.sha)
+        self.api.assert_called_once_with(f"repos/{approval.REPOSITORY}/git/ref/heads/main")
+        self.assertEqual(self.git("status", "--porcelain=v1"), before)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.sha)
+
+    def test_hidden_edits_index_changes_missing_modes_links_and_extra_files_reject(self):
+        source = self.root / "source.py"
+        original = source.read_bytes()
+        for flag in ("--assume-unchanged", "--skip-worktree"):
+            self.git("update-index", flag, "source.py")
+            source.write_text("SECRET_SENTINEL\n")
+            self.reject()
+            source.write_bytes(original)
+            self.git("update-index", "--no-" + flag[2:], "source.py")
+        source.write_text("SECRET_SENTINEL\n")
+        self.git("add", "source.py")
+        self.reject()
+        source.write_bytes(original)
+        self.git("add", "source.py")
+        source.chmod(0o755)
+        self.reject()
+        source.chmod(0o644)
+        source.unlink()
+        self.reject()
+        source.symlink_to(self.root / "infra/main.tf")
+        self.reject()
+        source.unlink()
+        source.write_bytes(original)
+        linked = self.root / "hardlink"
+        os.link(source, linked)
+        self.reject()
+        linked.unlink()
+        for name in ("untracked", "ignoredSECRET_SENTINEL", "infra/override.tf"):
+            extra = self.root / name
+            extra.write_text("SECRET_SENTINEL")
+            self.reject()
+            extra.unlink()
+        extra = self.root / "infra/override.tf"
+        extra.write_text("SECRET_SENTINEL")
+        self.git("add", "-N", "infra/override.tf")
+        self.assertEqual(self.git("diff", "--cached", "--name-only", self.sha), "")
+        self.reject()
+        self.git("update-index", "--force-remove", "infra/override.tf")
+        extra.unlink()
+        self.git("config", "diff.ignoreSubmodules", "all")
+        self.git("update-index", "--add", "--cacheinfo", "160000," + self.sha + ",extra-module")
+        self.reject()
+        self.git("update-index", "--force-remove", "extra-module")
+        runtime = self.root / "infra/.terraform"
+        runtime.mkdir()
+        (runtime / "provider-fixture").write_text("not runtime admission evidence")
+        approval.verify_checkout_source(self.sha)
+
+    def test_wrong_head_root_main_or_unavailable_metadata_reject(self):
+        for sha in ("0" * 40, self.sha.upper(), None, "SECRET_SENTINEL"):
+            with self.assertRaises(ValueError):
+                approval.verify_checkout_source(sha)
+        for result in ({}, {"ref": "refs/heads/other", "object": {"type": "commit", "sha": self.sha}},
+                       {"ref": "refs/heads/main", "object": {"type": "tree", "sha": self.sha}},
+                       {"ref": "refs/heads/main", "object": {"type": "commit", "sha": "0" * 40}}):
+            self.api.return_value = result
+            self.reject()
+        self.api.side_effect = ValueError("SECRET_SENTINEL")
+        self.reject()
+        with patch.object(approval, "ROOT", self.root / "infra"):
+            self.reject()
+
+    def test_executable_source_requires_owner_execute_not_only_group_or_other(self):
+        source = self.root / "source.py"
+        source.chmod(0o755)
+        self.git("add", "source.py")
+        self.git("commit", "--quiet", "-m", "executable fixture")
+        self.sha = self.git("rev-parse", "HEAD").strip()
+        self.api.return_value["object"]["sha"] = self.sha
+        approval.verify_checkout_source(self.sha)
+        for mode in (0o654, 0o645, 0o644):
+            source.chmod(mode)
+            self.reject()
+
+    def test_case_only_extra_source_rejects_even_with_ignore_case_configured(self):
+        extra = self.root / "infra/MAIN.tf"
+        if extra.exists():
+            self.skipTest("Requires case-sensitive filesystem")
+        self.git("config", "core.ignoreCase", "true")
+        extra.write_text("SECRET_SENTINEL")
+        self.assertEqual(self.git("ls-files", "--others", "--exclude-standard"), "")
+        self.reject()
+
+    def test_git_environment_is_fixed_and_failures_do_not_expose_private_output(self):
+        native = subprocess.run
+        calls = []
+        def run(*args, **kwargs):
+            self.assertIn("core.ignoreCase=false", args[0])
+            calls.append(kwargs)
+            return native(*args, **kwargs)
+        with patch.dict(os.environ, {"GIT_DIR": "SECRET_SENTINEL", "GIT_WORK_TREE": "SECRET_SENTINEL",
+                                     "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.fsmonitor",
+                                     "GIT_CONFIG_VALUE_0": "SECRET_SENTINEL", "AWS_ACCESS_KEY_ID": "SECRET_SENTINEL"}), \
+                patch.object(approval.subprocess, "run", side_effect=run):
+            approval.verify_checkout_source(self.sha)
+        self.assertEqual(len(calls), 6)
+        for call in calls:
+            self.assertNotIn("SECRET_SENTINEL", json.dumps(call["env"]))
+            self.assertEqual(call["env"]["GIT_NO_REPLACE_OBJECTS"], "1")
+        for error in (OSError("SECRET_SENTINEL"), subprocess.TimeoutExpired("SECRET_SENTINEL", 20)):
+            with patch.object(approval.subprocess, "run", side_effect=error):
+                self.reject()
+
+    def test_source_failure_blocks_receipt_and_late_failure_does_not_consume(self):
+        current = context() | {"sourceSha": self.sha}
+        gate = approval.ApprovalGate(current, 344, now=NOW)
+        with patch.object(approval, "verify_checkout_source", side_effect=lambda _: current.update(sourceSha="0" * 40)):
+            captured = approval.ApprovalGate(current, 344, now=NOW)
+        self.assertEqual(captured.receipt()["receipt"]["context"]["sourceSha"], self.sha)
+        current["sourceSha"] = self.sha
+        with patch.object(approval, "verify_checkout_source", side_effect=ValueError("source rejected")), \
+                self.assertRaises(ValueError):
+            approval.ApprovalGate(current, 344, now=NOW)
+        with patch.object(approval, "read_github_comment", return_value=comment(gate)), \
+                patch.object(approval, "verify_checkout_source", side_effect=ValueError("source rejected")), \
+                self.assertRaises(ValueError):
+            gate.fetch_and_consume(50, current)
+        self.assertFalse(gate._consumed)
+        with patch.object(approval, "verify_checkout_source", side_effect=ValueError("source rejected")), \
+                patch.object(approval, "guard_saved_plan") as guard, \
+                patch.object(approval, "read_github_comment") as read, self.assertRaises(ValueError):
+            gate.fetch_and_consume_saved_plan(50, current, 123)
+        guard.assert_not_called()
+        read.assert_not_called()
 
 
 if __name__ == "__main__":

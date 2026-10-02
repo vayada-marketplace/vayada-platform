@@ -421,10 +421,37 @@ approval; a guard failure cannot consume it. The former eight-create IAM review
 plan is rejected, not treated as the seven-resource pricing plan.
 Tests cover the command/FD/environment boundary with mocked inspection output;
 Linux CI also rejects a genuine native eight-create fixture. This does not prove
-a production full refresh or positive live all-guard admission. Whole-checkout
-source/current-main verification, pinned runtime/provider admission and fresh
+a production full refresh or positive live all-guard admission. Pinned
+runtime/provider admission and fresh
 state/session/authorization/whole-writer-hold checks remain required before both
 receipt construction and consumption. The CLI still has no executor/apply lane.
+
+`verify_checkout_source` now checks the actual checkout against the receipt's
+exact commit and GitHub's authenticated current `main` ref. It runs before
+receipt construction, before saved-plan guards and again after fresh approval
+fetching. It checks every tracked file's raw Git blob identity and executable
+mode (owner execute), even if index flags hide edits; rejects index changes, missing files,
+symlinks/submodules/hardlinks and extra files including ignored overrides.
+Only `infra/.terraform/` initialization files are excluded; their provider,
+backend and workspace admission remains a separate **unimplemented** gate.
+Git inspection has a fixed environment, no replacement objects or filesystem
+monitor/untracked-cache hooks, and case-sensitive enumeration regardless of
+local Git configuration; failures expose only a fixed message. Raw index
+records must exactly match the reviewed tree, rather than trusting diff output
+that can hide intent-to-add entries or configured submodule differences.
+Independent review found those index-visibility and executable-bit gaps;
+the exact comparison and owner-execute check have regression coverage.
+It never fetches or resets
+Git, writes files, changes refs or dispatches a workflow. Tests use actual
+temporary Git repositories and mocked GitHub metadata, not a live setup lane.
+
+This is point-in-time observation, **not filesystem immutability**, source
+review provenance, or a main-branch freeze. A trusted independently admitted
+runtime and immutable checkout remain prerequisites before privileged inputs
+are loaded and through all guard/apply operations. A writable runner could
+modify source after inspection or replace this verifier itself. No receipt or
+passed test admits that runner, its provider/backend initialization or AWS
+session. The private execution lane and whole-writer hold are still absent.
 
 The future executor must run all source/plan/identity/state/hold/authorization
 guards before building the receipt and again before consumption. The component compares their context;
