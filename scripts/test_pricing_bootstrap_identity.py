@@ -32,6 +32,7 @@ class IdentityTests(unittest.TestCase):
         assert count == 1
         (cls.fixture / "main.tf").write_text(source)
         shutil.copyfile(IDENTITY / "operator.tf", cls.fixture / "operator.tf")
+        shutil.copyfile(IDENTITY / "operator_metadata.tf", cls.fixture / "operator_metadata.tf")
         deployment = Path(cls.directory.name) / "deployment"
         deployment.mkdir()
         for name in ("pricing-operator-trust-no-mfa.json.tftpl", "pricing-operator-session-fence.json.tftpl"):
@@ -69,7 +70,8 @@ class IdentityTests(unittest.TestCase):
             raise AssertionError(result.stderr)
         return result
 
-    def inspect(self, window=None, kms=None, decrypt=False, operator=None, operator_decrypt=False):
+    def inspect(self, window=None, kms=None, decrypt=False, operator=None, operator_decrypt=False,
+                metadata=None, metadata_decrypt=False, secret_arns=None):
         args = [] if window is None else ["-var=creation_window=" + json.dumps(window)]
         if operator is not None:
             args += ["-var=operator_creation_window=" + json.dumps(operator)]
@@ -77,6 +79,11 @@ class IdentityTests(unittest.TestCase):
             args += ["-var=refresh_kms_key_arns=" + json.dumps(kms)]
         args += ["-var=enable_ssm_refresh_decryption=" + str(decrypt).lower()]
         args += ["-var=enable_operator_ssm_refresh_decryption=" + str(operator_decrypt).lower()]
+        args += ["-var=enable_metadata_ssm_refresh_decryption=" + str(metadata_decrypt).lower()]
+        if metadata is not None:
+            args += ["-var=operator_metadata_window=" + json.dumps(metadata)]
+        if secret_arns is not None:
+            args += ["-var=metadata_secret_arns=" + json.dumps(secret_arns)]
         self.run_tf("plan", "-refresh=false", "-out=fixture.tfplan", *args)
         plan = json.loads(self.run_tf("show", "-json", "fixture.tfplan").stdout)
         return {item["address"]: item for item in plan.get("resource_changes", [])}
@@ -390,6 +397,101 @@ resource "aws_iam_role" "github_actions_platform_deploy" {
             result = self.run_tf("plan", "-refresh=false", "-var=operator_creation_window=" + json.dumps(WINDOW), extra, ok=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Operator creation cannot overlap", result.stderr)
+
+    def test_metadata_operator_is_distinct_inactive_and_exactly_scoped(self):
+        names = runpy.run_path(str(ROOT / "scripts/assert-pricing-bootstrap-plan.py"))["NAMES"]
+        arns = {key: f"arn:aws:secretsmanager:eu-west-1:269416271598:secret:pricing-command/prod/{name}-AbCd12"
+                for key, name in names.items()}
+        self.assertEqual(self.inspect(metadata_decrypt=True, secret_arns=arns), {})
+        items = self.inspect(metadata=WINDOW, secret_arns=arns)
+        expected = {"aws_iam_role.operator_metadata[0]", "aws_iam_role_policy.operator_metadata[0]",
+                    "aws_iam_policy.metadata_refresh[0]", "aws_iam_role_policy_attachment.metadata_refresh[0]"}
+        self.assertEqual(set(items), expected)
+        self.assertTrue(all(r["change"]["actions"] == ["create"] for r in items.values()))
+        role = items["aws_iam_role.operator_metadata[0]"]["change"]["after"]
+        self.assertEqual(role["name"], "vayada-pricing-operator-metadata")
+        creation = self.inspect(operator=WINDOW)
+        self.assertEqual(role["assume_role_policy"], creation["aws_iam_role.operator_creation[0]"]["change"]["after"]["assume_role_policy"])
+        self.assertEqual(role["max_session_duration"], 3600)
+        def statements(plan, address):
+            item = plan[address]
+            policy = item["change"]["after"]["policy"]
+            self.assertLessEqual(len(policy), 6144 if item["type"] == "aws_iam_policy" else 10240)
+            return json.loads(policy)["Statement"]
+
+        inline = statements(items, "aws_iam_role_policy.operator_metadata[0]")
+        refresh = statements(items, "aws_iam_policy.metadata_refresh[0]")
+        by_sid = {s["Sid"]: s for s in inline + refresh}
+        self.assertEqual(len(by_sid), len(inline + refresh))
+        plan_role = "arn:aws:iam::269416271598:role/vayada-github-actions-platform-plan"
+        boundary = "arn:aws:iam::269416271598:policy/vayada-platform-writer-boundary"
+        self.assertEqual(by_sid["UpdateExistingPlanRolePolicy"], {
+            "Sid": "UpdateExistingPlanRolePolicy", "Effect": "Allow", "Action": ["iam:PutRolePolicy"], "Resource": plan_role})
+        self.assertEqual(by_sid["CreateReviewedBoundaryVersion"], {
+            "Sid": "CreateReviewedBoundaryVersion", "Effect": "Allow", "Action": ["iam:CreatePolicyVersion"], "Resource": boundary})
+        self.assertEqual(by_sid["NeverWriteOtherRolePolicies"], {
+            "Sid": "NeverWriteOtherRolePolicies", "Effect": "Deny", "Action": ["iam:PutRolePolicy"], "NotResource": plan_role})
+        self.assertEqual(by_sid["NeverVersionOtherPolicies"], {
+            "Sid": "NeverVersionOtherPolicies", "Effect": "Deny", "Action": ["iam:CreatePolicyVersion"], "NotResource": boundary})
+        writes = {a for s in inline + refresh if s["Effect"] == "Allow" for a in s["Action"]
+                  if not a.split(":")[1].startswith(("Get", "List", "Describe"))}
+        self.assertEqual(writes, {"iam:PutRolePolicy", "iam:CreatePolicyVersion", "s3:PutObject", "dynamodb:PutItem", "dynamodb:DeleteItem"})
+        self.assertTrue({"iam:DeletePolicyVersion", "iam:SetDefaultPolicyVersion", "iam:CreateRole", "iam:UpdateAssumeRolePolicy",
+                         "iam:AttachRolePolicy", "iam:DeleteRolePolicy"} <= set(by_sid["NeverChangeOtherIAMOrRetireVersions"]["Action"]))
+        self.assertEqual((by_sid["NeverChangeOtherIAMOrRetireVersions"]["Effect"],
+                          by_sid["NeverChangeOtherIAMOrRetireVersions"]["Resource"]), ("Deny", "*"))
+        self.assertEqual(by_sid["NeverCreatePricingContainers"]["Effect"], "Deny")
+        self.assertEqual(by_sid["NeverCreatePricingContainers"]["Resource"], "*")
+        self.assertEqual(by_sid["VerifyFinalPricingSecretMetadata"]["Resource"], [arns[k] for k in sorted(arns)])
+        self.assertEqual(by_sid["DenyAllDecrypt"], {"Sid": "DenyAllDecrypt", "Effect": "Deny", "Action": ["kms:Decrypt"], "Resource": "*"})
+        creation_inline = statements(creation, "aws_iam_role_policy.operator_creation[0]")
+        for sid in ("BeforeWindow", "ExpireIssuedSessions", "RejectEarlierOrMissingSessions", "SelectedSourceIdentityOnly",
+                    "NeverPassOrChainRoles", "NeverReadOrPopulateValuesOrPassRoles", "ExactProductionStateWrite"):
+            self.assertEqual(by_sid[sid], next(s for s in creation_inline if s["Sid"] == sid))
+        opted = self.inspect(metadata=WINDOW, secret_arns=arns, metadata_decrypt=True)
+        self.assertEqual(set(opted), expected | {
+            "aws_iam_policy.metadata_ssm_refresh[0]", "aws_iam_policy.metadata_decrypt[0]",
+            "aws_iam_role_policy_attachment.metadata_ssm_refresh[0]", "aws_iam_role_policy_attachment.metadata_decrypt[0]"})
+        self.assertEqual(statements(opted, "aws_iam_policy.metadata_ssm_refresh[0]"), json.loads(
+            self.inspect(operator=WINDOW, operator_decrypt=True)["aws_iam_policy.operator_ssm_refresh[0]"]["change"]["after"]["policy"])["Statement"])
+        self.assertNotIn("DenyAllDecrypt", {s["Sid"] for s in statements(opted, "aws_iam_role_policy.operator_metadata[0]")})
+        self.assertEqual(statements(opted, "aws_iam_policy.metadata_decrypt[0]"), json.loads(
+            self.inspect(operator=WINDOW, operator_decrypt=True)["aws_iam_policy.operator_decrypt[0]"]["change"]["after"]["policy"])["Statement"])
+        unchanged = self.inspect(operator=WINDOW, metadata_decrypt=True)
+        self.assertEqual(unchanged, creation)
+        source = (IDENTITY / "operator_metadata.tf").read_text()
+        self.assertEqual(source.count("prevent_destroy = true"), 8)
+        for name, dependency in (("metadata_refresh", "[aws_iam_role_policy.operator_metadata]"),
+                                 ("metadata_decrypt", "[aws_iam_role_policy.operator_metadata]"),
+                                 ("metadata_ssm_refresh", "[aws_iam_role_policy.operator_metadata, aws_iam_role_policy_attachment.metadata_decrypt]")):
+            attachment = source.split(f'resource "aws_iam_role_policy_attachment" "{name}" {{', 1)[1].split("\n}", 1)[0]
+            self.assertIn("depends_on = " + dependency, attachment)
+
+    def test_metadata_operator_rejects_unknown_identity_invalid_window_and_overlap(self):
+        names = runpy.run_path(str(ROOT / "scripts/assert-pricing-bootstrap-plan.py"))["NAMES"]
+        arns = {key: f"arn:aws:secretsmanager:eu-west-1:269416271598:secret:pricing-command/prod/{name}-AbCd12"
+                for key, name in names.items()}
+        for invalid in ({}, {**arns, "public": arns["public"].replace("AbCd12", "??????")},
+                        {**arns, "public": arns["owner_read"]}, {**arns, "unreviewed": arns["public"]}):
+            result = self.run_tf("plan", "-refresh=false", "-var=operator_metadata_window=" + json.dumps(WINDOW),
+                                 "-var=metadata_secret_arns=" + json.dumps(invalid), ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("five exact final secret ARNs", result.stderr)
+        for invalid in ({"start": "bad", "end": WINDOW["end"]},
+                        {"start": WINDOW["end"], "end": WINDOW["start"]},
+                        {"start": WINDOW["start"], "end": WINDOW["start"]},
+                        {"start": WINDOW["start"], "end": "2030-01-01T01:00:01Z"}):
+            result = self.run_tf("plan", "-refresh=false", "-var=operator_metadata_window=" + json.dumps(invalid), ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Invalid value for variable", result.stderr)
+        for name in ("creation_window", "operator_creation_window"):
+            result = self.run_tf("plan", "-refresh=false", "-var=operator_metadata_window=" + json.dumps(WINDOW),
+                                 "-var=metadata_secret_arns=" + json.dumps(arns), "-var=" + name + "=" + json.dumps(WINDOW), ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("after both retained creation windows expire", result.stderr)
+        later = {"start": WINDOW["end"], "end": "2030-01-01T02:00:00Z"}
+        combined = self.inspect(operator=WINDOW, metadata=later, secret_arns=arns)
+        self.assertEqual(len(combined), 8)
 
     def test_fences_precede_attachment_and_ci_uses_native_binary(self):
         source = (IDENTITY / "main.tf").read_text()

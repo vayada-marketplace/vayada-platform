@@ -403,6 +403,40 @@ approval only after its phase-specific identity and execution contract are
 reviewed, retaining sealed-plan custody, the exact two-update check, full-root
 guards, source/runtime/backend/state admission and the whole-writer hold.
 
+### Separate metadata operator — inactive permission proposal
+
+`infra/pricing-bootstrap-identity/operator_metadata.tf` proposes
+`vayada-pricing-operator-metadata` in the existing IAM-only root. It is not a
+human-selected/admitted role or execution authorization. Its window defaults
+to null and its independent SSM option defaults to false; ordinary CI creates
+nothing. No approval gate, workflow or executor uses this proposed role.
+
+A reviewed window of at most one hour, after both retained creation windows
+expire, and five exact final secret ARNs are required even to propose its four
+IAM resources. The optional fixed-36 SSM refresh/decrypt policies and fenced
+attachments make eight; this option does not affect either creation identity.
+The candidate reuses the selected-owner no-MFA pilot trust, stable user/source
+identity and request-time session fences. Live composition, role ID, window and
+this phase's admission still require separate review/approval; no installed
+MFA or VAY-2029 trust/cutoff is changed.
+
+Writes are limited to `PutRolePolicy` on the existing platform plan role and
+`CreatePolicyVersion` on the existing writer-boundary policy, plus the exact
+production state/lock bookkeeping. The reviewed plan must still fix the inline
+policy name and both documents: IAM resource scope does not enforce contents.
+Other role-policy targets and managed-policy version targets, self-editing,
+creation/service writes, secret values, PassRole and chaining remain denied.
+Refresh reuses the existing inventory with only the five exact final pricing
+secret ARNs, not creation-time suffix wildcards. Fences precede attachments.
+
+Policy-version deletion and switching to an old default are denied. The pinned
+[AWS provider 5.100.0](https://github.com/hashicorp/terraform-provider-aws/blob/v5.100.0/internal/service/iam/policy.go)
+creates a new default version but first prunes an old version at the five-version
+limit. Admission must confirm fewer than five versions while holding writers;
+stop otherwise and separately review any version retirement. Do not widen this
+role or bypass the check. No production plan, apply or live permission proof
+is supplied by the native offline tests.
+
 ### Same-runner approval component — not an executor
 
 `scripts/pricing_bootstrap_approval.py` implements only the in-process approval

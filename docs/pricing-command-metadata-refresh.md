@@ -20,6 +20,18 @@ receipt, plan, AWS role/session, execution window or policy write. The metadata
 role/session remains unselected and its approval gate is not configured; the
 existing creation gate and role must not authorize this phase.
 
+The existing IAM-only root now contains an inactive
+[`operator_metadata.tf` proposal](../infra/pricing-bootstrap-identity/operator_metadata.tf)
+for a distinct selected-owner role, not an admitted session. Null window and
+false SSM option create nothing. A non-overlapping reviewed window and five
+exact final secret ARNs are required before its four IAM resources (eight with
+the independent fixed-36 SSM option) can be proposed. It grants only the two
+target policy writes and state/lock bookkeeping, denies creation/self-editing,
+policy-version deletion and old-version default switching, and retains the
+existing session fences. Before admission, verify fewer than five boundary
+versions under the writer hold: the pinned provider otherwise attempts pruning.
+No role or metadata gate is activated by this proposal.
+
 The native offline regression test copies these declarations and both real
 policy assemblies into a backend-free fixture with synthetic local state and
 AWS provider 5.100.0. It checks default-off no-op, the guarded two-update plan,
