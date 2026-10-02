@@ -79,37 +79,36 @@ def sealed_saved_plan(path, expected_sha256):
         raise ValueError("Invalid saved plan digest")
     fd = None
     try:
-        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
-            info = os.fstat(source.fileno())
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
-                    or not 0 < info.st_size <= MAX_PLAN_BYTES):
-                raise ValueError
-            fd = os.memfd_create("pricing-plan", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
-            os.fchmod(fd, 0o600)
-            with os.fdopen(os.dup(fd), "wb") as target:
-                remaining = info.st_size
-                while remaining:
-                    chunk = source.read(min(1024 * 1024, remaining))
-                    if not chunk:
-                        raise ValueError
-                    target.write(chunk)
-                    remaining -= len(chunk)
-                if source.read(1):
+        try:
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
+                info = os.fstat(source.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                        or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                        or not 0 < info.st_size <= MAX_PLAN_BYTES):
                     raise ValueError
-        fcntl.fcntl(fd, fcntl.F_ADD_SEALS,
-                    fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
-        if saved_plan_digest(fd) != expected_sha256:
-            raise ValueError
-        os.lseek(fd, 0, os.SEEK_SET)
-    except (OSError, TypeError, ValueError, OverflowError):
-        if fd is not None:
-            os.close(fd)
-        raise ValueError("Saved plan binding rejected") from None
-    try:
+                fd = os.memfd_create("pricing-plan", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+                os.fchmod(fd, 0o600)
+                with os.fdopen(os.dup(fd), "wb") as target:
+                    remaining = info.st_size
+                    while remaining:
+                        chunk = source.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise ValueError
+                        target.write(chunk)
+                        remaining -= len(chunk)
+                    if source.read(1):
+                        raise ValueError
+            fcntl.fcntl(fd, fcntl.F_ADD_SEALS,
+                        fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
+            if saved_plan_digest(fd) != expected_sha256:
+                raise ValueError
+            os.lseek(fd, 0, os.SEEK_SET)
+        except (OSError, TypeError, ValueError, OverflowError):
+            raise ValueError("Saved plan binding rejected") from None
         yield fd
     finally:
-        os.close(fd)
+        if fd is not None:
+            os.close(fd)
 
 
 def _github_json(path, *, node_id=None):

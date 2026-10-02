@@ -479,6 +479,24 @@ class SavedPlanTests(unittest.TestCase):
         self.path.write_bytes(b"")
         reject(digest=hashlib.sha256(b"").hexdigest())
 
+    def test_setup_interruptions_close_private_descriptor_before_yield(self):
+        native_create = os.memfd_create
+        for error in (KeyboardInterrupt(), SystemExit(), RuntimeError("fixture failure")):
+            created = []
+            def create(*args):
+                fd = native_create(*args)
+                created.append(fd)
+                return fd
+            with self.subTest(error=type(error)), \
+                    patch.object(approval.os, "memfd_create", side_effect=create), \
+                    patch.object(approval, "saved_plan_digest", side_effect=error), \
+                    self.assertRaises(type(error)):
+                with approval.sealed_saved_plan(self.path, self.digest):
+                    self.fail("Interrupted setup yielded")
+            self.assertEqual(len(created), 1)
+            with self.assertRaises(OSError):
+                os.fstat(created[0])
+
     def test_reject_unsealed_invalid_and_short_read_descriptors(self):
         for fd in (-1, True, "1", None):
             with self.subTest(fd=fd), self.assertRaises(ValueError):
