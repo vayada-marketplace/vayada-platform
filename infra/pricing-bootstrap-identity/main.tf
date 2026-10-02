@@ -139,7 +139,7 @@ locals {
   ]
   # Separate denies mean ANY failed check denies, including missing context/service.
   # Retain these even though the AWS-managed SSM key already admits SSM requests.
-  decrypt_statements = jsondecode(var.enable_ssm_refresh_decryption ? jsonencode([
+  ssm_decrypt_statements = [
     {
       Sid       = "SSMRefreshDecrypt", Effect = "Allow", Action = ["kms:Decrypt"], Resource = local.ssm_key
       Condition = { StringEquals = { "kms:ViaService" = "ssm.eu-west-1.amazonaws.com" } }
@@ -155,9 +155,11 @@ locals {
       Sid       = "DenyDecryptOutsideManagedParameters", Effect = "Deny", Action = ["kms:Decrypt"], Resource = "*"
       Condition = { StringNotEqualsIfExists = { "kms:EncryptionContext:PARAMETER_ARN" = local.ssm_arns } }
     }
-    ]) : jsonencode([{
-      Sid = "DenyAllDecrypt", Effect = "Deny", Action = ["kms:Decrypt"], Resource = "*"
-  }]))
+  ]
+  deny_all_decrypt_statements = [{
+    Sid = "DenyAllDecrypt", Effect = "Deny", Action = ["kms:Decrypt"], Resource = "*"
+  }]
+  decrypt_statements = jsondecode(var.enable_ssm_refresh_decryption ? jsonencode(local.ssm_decrypt_statements) : jsonencode(local.deny_all_decrypt_statements))
   refresh_policy = jsonencode({ Version = "2012-10-17", Statement = concat([
     for statement in local.refresh : statement if statement.Sid != "ParameterMetadata" && (statement.Sid != "ExactKeyMetadata" || length(var.refresh_kms_key_arns) > 0)
   ], [for statement in local.creation_statements : statement if statement.Sid == "VerifyOnlyFixedSecretMetadata"]) })

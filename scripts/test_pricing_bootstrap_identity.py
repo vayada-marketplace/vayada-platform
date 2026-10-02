@@ -62,13 +62,14 @@ class IdentityTests(unittest.TestCase):
             raise AssertionError(result.stderr)
         return result
 
-    def inspect(self, window=None, kms=None, decrypt=False, operator=None):
+    def inspect(self, window=None, kms=None, decrypt=False, operator=None, operator_decrypt=False):
         args = [] if window is None else ["-var=creation_window=" + json.dumps(window)]
         if operator is not None:
             args += ["-var=operator_creation_window=" + json.dumps(operator)]
         if kms is not None:
             args += ["-var=refresh_kms_key_arns=" + json.dumps(kms)]
         args += ["-var=enable_ssm_refresh_decryption=" + str(decrypt).lower()]
+        args += ["-var=enable_operator_ssm_refresh_decryption=" + str(operator_decrypt).lower()]
         self.run_tf("plan", "-refresh=false", "-out=fixture.tfplan", *args)
         plan = json.loads(self.run_tf("show", "-json", "fixture.tfplan").stdout)
         return {item["address"]: item for item in plan.get("resource_changes", [])}
@@ -204,7 +205,44 @@ class IdentityTests(unittest.TestCase):
             self.assertTrue(all(s in actual for s in expected if s["Effect"] == "Allow"))
         source = (IDENTITY / "operator.tf").read_text()
         self.assertIn("depends_on = [aws_iam_role_policy.operator_creation]", source)
-        self.assertEqual(source.count("prevent_destroy = true"), 4)
+        self.assertEqual(source.count("prevent_destroy = true"), 8)
+
+    def test_operator_ssm_opt_in_reuses_exact_scope_without_widening_other_phases(self):
+        self.assertEqual(self.inspect(operator_decrypt=True, decrypt=True), {})
+        baseline = self.inspect(operator=WINDOW)
+        items = self.inspect(operator=WINDOW, operator_decrypt=True)
+        self.assertEqual(set(items), set(baseline) | {
+            "aws_iam_policy.operator_ssm_refresh[0]", "aws_iam_role_policy_attachment.operator_ssm_refresh[0]",
+            "aws_iam_policy.operator_decrypt[0]", "aws_iam_role_policy_attachment.operator_decrypt[0]"})
+        self.assertTrue(all(item["change"]["actions"] == ["create"] for item in items.values()))
+        hosted = self.inspect(WINDOW, decrypt=True)
+        self.assertEqual(items["aws_iam_policy.operator_ssm_refresh[0]"]["change"]["after"]["policy"],
+                         hosted["aws_iam_policy.ssm_refresh[0]"]["change"]["after"]["policy"])
+        self.assertEqual(items["aws_iam_role.operator_creation[0]"]["change"]["after"],
+                         baseline["aws_iam_role.operator_creation[0]"]["change"]["after"])
+        self.assertEqual(items["aws_iam_policy.operator_refresh[0]"]["change"]["after"],
+                         baseline["aws_iam_policy.operator_refresh[0]"]["change"]["after"])
+        def policy(plan, address):
+            return json.loads(plan[address]["change"]["after"]["policy"])["Statement"]
+
+        actual = policy(items, "aws_iam_role_policy.operator_creation[0]")
+        unchanged = [s for s in policy(baseline, "aws_iam_role_policy.operator_creation[0]") if s["Sid"] != "DenyAllDecrypt"]
+        decrypt = [s for s in policy(hosted, "aws_iam_role_policy.creation[0]") if s["Sid"] in {
+            "SSMRefreshDecrypt", "DenyOtherDecryptKeys", "DenyDecryptOutsideSSM", "DenyDecryptOutsideManagedParameters"}]
+        self.assertEqual(actual, unchanged)
+        self.assertEqual(policy(items, "aws_iam_policy.operator_decrypt[0]"), decrypt)
+        for item in items.values():
+            if "policy" in item["change"]["after"]:
+                self.assertLessEqual(len(item["change"]["after"]["policy"]), 6144 if item["type"] == "aws_iam_policy" else 10240)
+        # The operator opt-in cannot enable SSM access on the hosted role.
+        hosted_without_decrypt = self.inspect(WINDOW, operator_decrypt=True)
+        self.assertEqual(len(hosted_without_decrypt), 4)
+        self.assertIn("DenyAllDecrypt", {s["Sid"] for s in policy(hosted_without_decrypt, "aws_iam_role_policy.creation[0]")})
+        source = (IDENTITY / "operator.tf").read_text()
+        attachment = source.split('resource "aws_iam_role_policy_attachment" "operator_ssm_refresh" {', 1)[1].split("\n}", 1)[0]
+        self.assertIn("depends_on = [aws_iam_role_policy.operator_creation, aws_iam_role_policy_attachment.operator_decrypt]", attachment)
+        decrypt_attachment = source.split('resource "aws_iam_role_policy_attachment" "operator_decrypt" {', 1)[1].split("\n}", 1)[0]
+        self.assertIn("depends_on = [aws_iam_role_policy.operator_creation]", decrypt_attachment)
 
     def test_operator_rejects_invalid_and_mixed_admission(self):
         for window in ({"start": "bad", "end": WINDOW["end"]},

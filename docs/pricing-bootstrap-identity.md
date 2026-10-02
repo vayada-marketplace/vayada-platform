@@ -1,7 +1,8 @@
 # VAY-1543 temporary creation identity — review only
 
-**Blocked for execution:** the scoped SSM read exception below is proposed for
-review, not granted or approved for activation. The temporary identity now has
+**Blocked for execution:** Flamur approved the fixed-36 plaintext SSM refresh
+design for the distinct selected-owner operator only; no permissions are installed
+or approved for activation. The old hosted temporary identity still has
 no IAM write allowances and cannot execute the former seven-create plan.
 The distinct selected-owner creation role below is now concrete Terraform for
 review, not installed or approved for execution. Its executor gates remain absent.
@@ -18,12 +19,15 @@ No workflow provisions or assumes the new role.
 `infra/pricing-bootstrap-identity` owns a separate IAM-only state key. An
 authorized operator must review its own exact four-addition plan and identity
 (one role, its creation/fence inline policy, a managed refresh policy and attachment;
-six additions with the SSM opt-in's separate managed policy and attachment);
+six additions for the old hosted SSM opt-in; eight for the operator opt-in,
+whose SSM read and decrypt policies each need a separate attachment);
 never add it to the seven-create pricing plan, import existing identities,
 apply from normal CI, or populate it with production Terraform inputs.
 Only reviewed exact KMS metadata ARNs may be supplied; default empty inventory
-is not evidence that production-root refresh works. The SSM opt-in is separately
-off by default (`enable_ssm_refresh_decryption=false`).
+is not evidence that production-root refresh works. Both SSM opt-ins remain
+off by default (`enable_ssm_refresh_decryption=false` for the old hosted role,
+`enable_operator_ssm_refresh_decryption=false` for the selected operator).
+The approved operator exception does not approve or enable the hosted exception.
 
 The creation role reuses the enumerated plan-policy refresh/lock allowlist,
 adds writes only to the exact production state object and five fixed secret
@@ -183,7 +187,15 @@ An explicit `operator_creation_window` proposes exactly four additions:
 `vayada-pricing-operator-create`, its creation/fence inline policy,
 `vayada-pricing-operator-create-refresh`, and its attachment. The attachment
 depends on the inline fence. The window must be explicit UTC, positive and at
-most one hour; hosted creation and the SSM opt-in cannot be enabled alongside it.
+most one hour; hosted creation and its `enable_ssm_refresh_decryption` opt-in
+cannot be enabled alongside it. The separately approved operator opt-in
+`enable_operator_ssm_refresh_decryption=true` adds an exact-36 SSM managed
+policy, a decrypt-fence managed policy and their attachments (eight creates
+total). Keeping them separate satisfies IAM policy-size quotas; combining them
+would exceed 6,144 characters. It reuses the existing inventory and exact
+key/service/context decrypt fences. All attachments depend on the inline
+request-time fence; SSM reads additionally depend on the decrypt-fence attachment.
+An opt-in without a window creates nothing.
 The chosen owner's exact ARN/stable ID and source identity remain required.
 MFA is deliberately absent only in this selected pilot candidate.
 
@@ -191,20 +203,23 @@ The policy reuses the fixed five-secret names/tags, exact production state
 object, lock leading keys and enumerated provider metadata from the existing
 proposal. It adds only CreateRole/PutRolePolicy on the exact pricing execution
 role. Explicit denies cover those writes on every other role, all role trust/
-attachment/boundary edits, secret value reads/subsequent writes, KMS decrypt,
+attachment/boundary edits, secret value reads/subsequent writes, KMS decrypt
+outside the separately opted-in fixed SSM scope,
 PassRole and role chaining. No metadata-policy or service writes are granted.
 Request-time fences reject wrong/missing source identity, old/missing token
 issuance context and requests before the start or at/after expiry.
 
-This is the prerequisite identity's four-create configuration, **not** a saved
+This is the prerequisite identity's four-create default or eight-create SSM opt-in
+configuration, **not** a saved
 live plan or permission to install it, issue credentials or apply the seven
 pricing-resource creates. A fresh exact IAM setup plan and composed live
 authorization evidence still need independent review/approval. The owner's
 administrator credentials must never enter the private pricing runner.
 CreateRole/PutRolePolicy still accept caller-supplied documents; CreateSecret
 can carry an initial value. The separate initial-value decision is now accepted
-below; this does not authorize supplying values. SSM plaintext refresh remains blocked
-and this candidate cannot perform full production refresh; do not bypass it.
+below; this does not authorize supplying values. The SSM access-design decision
+is separately accepted below; no actual-role full production refresh has been
+performed or proven. Do not bypass refresh or infer activation from that decision.
 Receipt/executor, durable writer hold, separate metadata phase, retirement and
 deployment remain unimplemented gates. No role, policy, session, secret or
 service was created or changed. Native-console diagnostics may have used
@@ -220,7 +235,8 @@ Use immutable reviewed declarations/private runner, exact saved-plan approval
 and post-write no-version verification; do not claim IAM proves emptiness.
 This clears the initial-value content-authority decision, not permission to
 supply any value, grant access, issue a session or execute setup. SSM plaintext
-and metadata-policy-content acceptance remain separate, unaccepted decisions.
+access is separately accepted below; metadata-policy-content acceptance remains
+an unaccepted decision.
 The unlocked IAM-only review plan is not an approved execution plan; no
 admission window may be shifted or installed based on this acceptance alone.
 
@@ -232,7 +248,7 @@ to proceed. This clears that design decision only: it does not approve a grant,
 credential/session issuance, role/fence installation, production plan/apply or
 deployment. Do not infer separate acceptance of SSM plaintext access or
 metadata-policy content authority from that role-policy decision. Initial-value
-authority was separately accepted above, not inferred from it.
+authority was separately accepted above and SSM access below, not inferred from it.
 
 This is the proposed permission boundary for the selected owner's future
 phase-limited sessions, **not** a policy grant or an implemented identity.
@@ -251,9 +267,10 @@ make that decision.
 
 Both sessions also need the reviewed provider-read inventory, exact admitted
 role/RoleId and owner attribution, independent source/plan guards, and proven
-request-time expiry/revocation. Sensitive SSM/KMS refresh remains a separate
-unaccepted permission gate; no broad read wildcard or decryption exception is
-implied by this table. Neither session may pass/assume roles, launch/change
+request-time expiry/revocation. Sensitive SSM/KMS refresh is separately approved
+for the selected operator's exact fixed-36 configuration, not installed or
+proven; no broad read wildcard or other decryption exception is implied by this
+table. Neither session may pass/assume roles, launch/change
 services, populate/read pricing secret values, change its own permissions or
 perform the other phase's writes. Provider action inventory and actual composed
 permissions must be reviewed before any admission; the table is not executable
@@ -413,11 +430,21 @@ CreateSecret name conditions are separate from TagResource,
 which does not support that key ([AWS action reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_secretsmanager.html)).
 Offline native plans validate declaration/policy structure, not live IAM admission.
 
+### Fixed-36 operator plaintext refresh — separate design decision accepted
+
+Flamur explicitly approved this narrowly scoped access after disclosure that it
+includes database administrator credentials and provider API keys. Approval is
+for refresh on the reviewed private runner without printing values, not use of
+those credentials, granting access, session issuance or execution. The operator's
+default-off opt-in reuses the existing inventory and KMS fences; the old hosted
+opt-in remains unaccepted for activation. The separate metadata-policy-content
+decision and all execution gates remain outstanding.
+
 Independent review found a compatibility blocker: the pinned [SSM resource
 reader](https://github.com/hashicorp/terraform-provider-aws/blob/v5.100.0/internal/service/ssm/parameter.go)
 requests `GetParameter` with decryption. The explicit `kms:Decrypt` denial
 therefore blocks refresh of existing SecureString settings, including those
-using the AWS-managed SSM key. The proposed opt-in replaces that blanket denial
+using the AWS-managed SSM key. The explicit opt-in replaces that blanket denial
 only with all of these restrictions:
 
 - Exact 36 parameter ARNs from `infra/ssm.tf`, including conditional declarations;
@@ -438,6 +465,17 @@ metadata-only inventory found all 36 exact declared names, each Standard
 SecureString using `alias/aws/ssm`; DescribeKey reconfirmed the exact key above.
 No values were retrieved or decryption grants installed. This point-in-time
 metadata mapping is not actual-role authorization or full-refresh evidence.
+Native offline tests verify the operator opt-in's eight creates, unchanged
+default-deny/hosted scope, exact policy reuse, quotas and fence-first attachments.
+Read-only `SimulateCustomPolicy` on the four generated operator documents passed
+20 cases, including all 36 names for both GetParameter/GetParameters (72 resource
+decisions), exact decrypt, wrong/missing service or parameter context, other key,
+before-start/at-expiry, old/missing token and wrong/missing source identity.
+Unlisted/history/by-path reads remain implicitly denied; pricing value reads,
+self-edit and other-role writes are explicitly denied. Exact execution-role
+creation/inline-policy writes are allowed only in the synthetic admitted context.
+No actual reads, decryption, sessions or grants ran. These are simulated policy
+documents, not actual-role, key-policy/SCP or production-refresh proof.
 Read-only IAM `SimulateCustomPolicy` checked the three generated proposal policy
 documents: exact SSM decrypt/read allowed; missing/wrong service, region or
 context, other key and time-fence cases explicitly denied; unlisted parameter,
