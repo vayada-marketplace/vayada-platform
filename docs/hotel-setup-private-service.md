@@ -78,8 +78,14 @@ affected writes blocked, without falling back to ordinary API credentials.
 The creation owner retains its existing creation reader/organization bootstrap
 and owns the creation-specific release/caller/rollback implementation. The
 Financials owner owns property-reader lifecycle and this shared composition
-contract. This document does not implement the two-service Terraform resources;
-agree that implementation's owner before adding another deployment slice.
+contract. The Financials owner implements the separate property-service Terraform slices;
+the creation owner retains its existing bootstrap and creation release work.
+`enable_hotel_setup_property_credentials=false` stages nothing. Enabling it
+creates only the separate empty property reader/token containers and unattached
+execution/task roles. The original credential slice must be off or explicitly
+select `property_creation`; a reviewed plan rejects reuse of the same property
+containers by both identities. This flag creates no versions, grants, database
+logins, tasks or service. Network and service staging remain later slices.
 
 Acceptance must cover the actual wizard Save: property creation, optional logo,
 launch-settings save, status reload, and subsequent native PMS first-currency

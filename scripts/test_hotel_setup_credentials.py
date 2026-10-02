@@ -11,11 +11,12 @@ SOURCE = ROOT / "infra/hotel_setup_credentials.tf"
 TEMPLATE = ROOT / "infra/hotel_setup_secret_read_policy.json.tftpl"
 
 
-def render(enabled, mode="property_commands"):
+def render(enabled, mode="property_commands", property_enabled=False):
     with tempfile.TemporaryDirectory() as directory:
         # Only locals/variables: no provider, backend, AWS access or state.
         text = SOURCE.read_text().split('resource "', 1)[0]
         text += (ROOT / "infra/hotel_setup_creation_bootstrap.tf").read_text().split('resource "', 1)[0]
+        text += (ROOT / "infra/hotel_setup_property_credentials.tf").read_text().split('resource "', 1)[0]
         text += '\nvariable "aws_region" { default = "eu-west-1" }\n'
         text += '\nvariable "aws_account_id" { default = "269416271598" }\n'
         Path(directory, "main.tf").write_text(text)
@@ -25,12 +26,13 @@ def render(enabled, mode="property_commands"):
           bootstrap_enabled=local.hotel_setup_creation_bootstrap_enabled,
           bootstrap_policy=jsondecode(local.hotel_setup_creation_bootstrap_policy),
           names=local.hotel_setup_secret_names,
+          property_names=local.hotel_setup_property_secret_names,
           trust=jsondecode(local.hotel_setup_role_trust),
           policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([local.hotel_setup_native_secret_arn])})),
           execution_policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([for name in values(local.hotel_setup_secret_names): "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${name}-AbCd12"])}))
         })'''.replace("\n", " ")
         result = subprocess.run(
-            ["terraform", "console", "-no-color", f"-var=enable_hotel_setup_credential_infrastructure={str(enabled).lower()}", f"-var=hotel_setup_command_mode={mode}"],
+            ["terraform", "console", "-no-color", f"-var=enable_hotel_setup_credential_infrastructure={str(enabled).lower()}", f"-var=hotel_setup_command_mode={mode}", f"-var=enable_hotel_setup_property_credentials={str(property_enabled).lower()}"],
             input=expression + "\n", text=True, capture_output=True, cwd=directory, check=True, timeout=30)
         return json.loads(json.loads(result.stdout.strip()))
 
@@ -48,12 +50,27 @@ class HotelSetupCredentialsTests(unittest.TestCase):
         for forbidden in ['aws_secretsmanager_secret_version', 'aws_ecs_', 'aws_iam_role_policy_attachment', 'ssm:', 'kms:', 'PassRole']:
             self.assertNotIn(forbidden, source)
         for path in (ROOT / "infra").glob("*.tf"):
-            if path != SOURCE and path.name not in ["hotel_setup_service.tf", "hotel_setup_creation_bootstrap.tf"]:
+            if path != SOURCE and path.name not in ["hotel_setup_service.tf", "hotel_setup_creation_bootstrap.tf", "hotel_setup_property_credentials.tf"]:
                 self.assertNotIn('aws_iam_role.hotel_setup_', path.read_text(), str(path))
 
     def test_unknown_mode_fails_closed(self):
         with self.assertRaises((subprocess.CalledProcessError, ValueError)):
             render(True, "unreviewed")
+
+    def test_separate_property_credentials_retain_fixed_default_off_names(self):
+        self.assertEqual(render(False)["property_names"], {})
+        separate = render(True, "property_creation", True)
+        self.assertEqual(separate["property_names"], {
+            "reader_database_url": "hotel-setup-command/prod/reader-database-url",
+            "internal_token": "hotel-setup-command/prod/internal-token"})
+        self.assertFalse(set(separate["names"].values()) & set(separate["property_names"].values()))
+        source = (ROOT / "infra/hotel_setup_property_credentials.tf").read_text()
+        self.assertIn('prevent_destroy = true', source)
+        self.assertIn('var.hotel_setup_command_mode == "property_creation"', source)
+        self.assertIn('jsonencode([local.hotel_setup_property_secret_arn])', source)
+        self.assertIn('jsonencode([for secret in aws_secretsmanager_secret.hotel_setup_property : secret.arn])', source)
+        for forbidden in ['aws_secretsmanager_secret_version', 'aws_ecs_', 'ssm:', 'kms:', 'PassRole']:
+            self.assertNotIn(forbidden, source)
 
     def test_creation_reads_exclude_property_and_injected_credentials(self):
         rendered = render(True, "property_creation")
