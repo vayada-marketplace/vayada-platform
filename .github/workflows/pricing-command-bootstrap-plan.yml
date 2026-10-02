@@ -119,9 +119,15 @@ jobs:
             exit 1
           fi
           terraform show -json "$PLAN_DIR/tfplan" > "$PLAN_DIR/plan.json" 2>> "$PLAN_DIR/terraform.log"
-          python3 ../scripts/assert-platform-writer-boundary-plan.py "$PLAN_DIR/plan.json"
-          bash ../scripts/guard-finance-folio-kms-plan.sh "$PLAN_DIR/tfplan" plan
-          python3 ../scripts/assert-pricing-bootstrap-plan.py "$PLAN_DIR/plan.json"
+          if ! {
+            python3 ../scripts/assert-platform-writer-boundary-plan.py "$PLAN_DIR/plan.json" &&
+            bash ../scripts/guard-finance-folio-kms-plan.sh "$PLAN_DIR/tfplan" plan &&
+            python3 ../scripts/assert-pricing-bootstrap-plan.py "$PLAN_DIR/plan.json"
+          } >> "$PLAN_DIR/terraform.log" 2>&1; then
+            echo 'Pricing bootstrap guard failed; raw output withheld.' >&2
+            exit 1
+          fi
+          echo 'Reviewed pricing and platform plan guards passed; no apply.'
           echo "Reviewed source: $REVIEWED_SHA"
           sha256sum "$PLAN_DIR/tfplan" | cut -d' ' -f1
           echo 'Diagnostic plan only. No apply; saved plan will be discarded.'

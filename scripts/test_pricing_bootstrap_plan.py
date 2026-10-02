@@ -1,11 +1,13 @@
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -127,6 +129,28 @@ class BootstrapPlanTest(unittest.TestCase):
                          "assert-platform-writer-boundary-plan.py", "assert-pricing-bootstrap-plan.py",
                          "terraform_wrapper: false", "if: always()", "umask 077", "-lock-timeout=60s"):
             self.assertIn(required, workflow)
+
+    def test_workflow_guard_failures_withhold_private_diagnostics_and_stop(self):
+        workflow = (ROOT / ".github/workflows/pricing-command-bootstrap-plan.yml").read_text()
+        block = workflow.split("          if ! {\n", 1)[1].split('          echo "Reviewed source:', 1)[0]
+        block = textwrap.dedent("          if ! {\n" + block)
+        functions = '''set -euo pipefail
+umask 077
+run_guard() { printf 'SECRET_SENTINEL\n'; printf 'SECRET_SENTINEL\n' >&2; [[ "$1" != *"$FAIL_GUARD"* ]]; }
+python3() { run_guard "$1"; }
+bash() { run_guard "$1"; }
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "terraform.log"
+            for index, failed in enumerate(("writer-boundary", "finance-folio", "pricing-bootstrap", "none"), 1):
+                with self.subTest(failed=failed):
+                    log.unlink(missing_ok=True)
+                    result = subprocess.run(["bash", "-c", functions + block], capture_output=True, text=True,
+                                            env={"PATH": os.environ["PATH"], "PLAN_DIR": directory, "FAIL_GUARD": failed})
+                    self.assertEqual(result.returncode, 0 if failed == "none" else 1)
+                    self.assertNotIn("SECRET_SENTINEL", result.stdout + result.stderr)
+                    self.assertEqual(log.read_text().count("SECRET_SENTINEL"), 2 * min(index, 3))
+                    self.assertEqual(log.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

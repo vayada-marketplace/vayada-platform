@@ -406,6 +406,11 @@ there is no apply call or AWS operation in this custody slice.
 
 The draft now incorporates #343's existing guard and plan-only files as a code
 dependency; neither PR is merged and no workflow is dispatched or activated.
+The imported diagnostic workflow's guard output is now redirected to its private
+temporary log; failed guard diagnostics cannot publish raw container/environment
+plan data. A synthetic shell regression checks all three guard failures,
+short-circuiting, successful status and private log mode. The older #343 head
+without this repair must not be dispatched or treated as the reviewed lane.
 `guard_saved_plan` runs native `terraform show` on the sealed descriptor, then
 the unchanged writer-boundary and seven-create/source checks, followed by the
 existing Finance/protected-resource guard on that same inherited FD. All output
