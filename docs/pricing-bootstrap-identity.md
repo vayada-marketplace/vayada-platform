@@ -335,9 +335,57 @@ Any IAM/GitHub access or fence installation needs its own separately approved
 prerequisite configuration/plan; it cannot be bundled into either the seven-
 create or two-update plan. Failure/timeout keeps the hold, with no automatic
 release or cancellation/retry of retained authentication-fenced requests.
-The concrete fence policy, identity inventory, installation/rollback plan and
-live evidence are still absent. This proposal neither implements nor activates
-the pause and preserves the installed VAY-2029 trust/cutoff unchanged.
+The uninstalled policy candidate below does not supply the reviewed identity
+inventory, installation/rollback plan or live enforcement evidence. This proposal
+does not activate the pause and preserves the installed VAY-2029 trust/cutoff unchanged.
+
+### Whole-writer hold policy candidate — uninstalled, not executor admission
+
+`deployment/pricing-writer-hold.json` is a standalone **deny-only** identity-policy
+document: all actions, all resources, no conditions, exceptions or expiry. No
+Terraform root, workflow or executor loads it. Its offline shape test is not
+AWS enforcement proof. The proposed installation is a separate managed policy
+and reviewed attachments, not another inline policy or an update to the existing
+VAY-2029 boundary. Do not install it under approval for either pricing phase.
+
+A read-only account authorization inventory on 2026-10-03 found 54 roles and
+three users. The platform deploy role has 11 managed attachments and 10,175
+compact JSON characters across its inline policies; even this 84-character
+document would exceed the 10,240-character aggregate inline quota. Recovery
+scenario/state-denial roles also have nearly full inline policy inventories.
+The account's read-only IAM Service Quotas response reports 20 managed policies
+per role (`L-0DA4ABF3`). Reverify actual attachment
+capacity for every proposed target before any installation. These observations
+do not select target roles or prove effective
+permissions, complete writer coverage, admission, propagation or drain.
+
+The inventory includes allow statements for security-group changes on the older
+app deployment role, ECS/SSM changes on the coordinated role, and task/service
+changes on recovery roles. Review their resources, denies, trust, chaining and
+active executions; inspecting only the ordinary platform workflow is insufficient.
+Do not attach this policy indiscriminately to all 54 roles: running application
+and AWS service-linked roles are not a safe default target inventory. Complete
+the cross-repository/out-of-band writer and administrator non-interference review,
+including non-AWS provider credentials, before claiming a whole-writer hold.
+
+If separately installed on reviewed writer identities, the unconditional deny
+has no older/newer-session escape or timeout release. It also denies their
+metadata, state and lock operations; obtain observations through separately
+reviewed read-only identities, not a new exception in this document. Already
+accepted operations and chained sessions under other identities still require
+inventory/drain; STS caller-identity output is not a denial probe. Separate
+phase-limited operator identities and the installer/recovery owner must remain
+outside the reviewed competing-writer target set, with their independent controls.
+
+This candidate alone cannot satisfy the required ordinary hosted no-op: that
+role would still be denied. A separately reviewed transition that admits only
+the no-op verification while keeping competing writers fenced is required
+**before installation or executor connection**. Do not remove the deny merely
+to get a green run, expire it automatically, replay an old attachment snapshot,
+or change the installed VAY-2029 trust/cutoff to improvise recovery. Partial
+installation, failure or cancellation blocks pricing setup and retains installed
+denials pending the explicitly reviewed recovery procedure. Neither that transition
+nor an installation/release executor is implemented here.
 
 ### Concrete operator admission/fence templates — unattached, no grants
 

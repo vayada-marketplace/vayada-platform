@@ -75,6 +75,11 @@ def paused_workflows():
 class OperatorTemplateTests(unittest.TestCase):
     """Offline declaration checks, not actual-role admission/enforcement proof."""
 
+    def test_writer_hold_has_no_exceptions_or_automatic_expiry(self):
+        policy = json.loads((ROOT / "deployment/pricing-writer-hold.json").read_text())
+        self.assertEqual(policy, {"Version": "2012-10-17", "Statement": [
+            {"Effect": "Deny", "Action": "*", "Resource": "*"}]})
+
     def render(self, name):
         source = (ROOT / "deployment" / name).read_text()
         self.assertEqual(source.count("${window_start}"), 1 if "trust" in name else 2)
