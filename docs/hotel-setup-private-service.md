@@ -47,7 +47,7 @@ until the private service's authenticated preflights pass.
 
 ## Credential and release gates
 
-1. Review the composed app migrations through 0452, immutable image containing
+1. Review the composed app migrations through 0453, immutable image containing
    the private executable, and exact reader/native-login/function ownership.
    A separate provisioner must satisfy the app's credential-lifecycle contract:
    no arbitrary role adoption/retargeting, exact purpose/owner assignment,
@@ -71,7 +71,7 @@ until the private service's authenticated preflights pass.
 
 App contract: `engineering/hotel-setup-command-credential-lifecycle.md` in
 `vayada-marketplace/vayada`; reader/audit drafts #2746/#2747 and native/compiled
-credential checks #2752/#2757. No production
+credential checks #2752/#2757 and completion-scope correction #2761. No production
 release, provisioning or property activation is authorized by this document.
 
 ## Staged private connection
