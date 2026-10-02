@@ -8,6 +8,9 @@ ECS roles. It creates no secret version, database login/grant, task, service,
 public route, forwarding configuration or hotel change. Disabling the flag after
 creation is not a rollback: secret containers have `prevent_destroy`.
 
+The following credential table describes `property_commands` only. Creation
+uses its separate reader/token containers and organization prefix shown below.
+
 | Consumer | Secret name | Required contents |
 | --- | --- | --- |
 | Private ECS execution role | `hotel-setup-command/prod/reader-database-url` | URL for `vayada_next_hotel_setup_reader`, >=32-byte password, TLS verify-full |
@@ -36,13 +39,73 @@ live access before publishing credentials or launching the service.
 
 ## Deployment contract
 
-Launch only the app's `start:hotel-setup-command` executable on port 8011. This
-version supports currency PUT and Feature Hub module-list GET / Financials PATCH;
-property creation is not implemented by this executable. Use dedicated
+### Composed creation and Financials release
+
+The complete new-hotel flow needs two services at the same time. The public API
+already accepts separate creation and property-command origins/tokens. A single
+`hotel_setup_command_mode` switch on the current singleton Terraform resources
+does not deploy both. Do not change a serving service's mode or combine its
+privileged adapters to cover this gap.
+
+Reserve the current `vayada-hotel-setup-service`, task families,
+`vayada-hotel-setup-execution` / `vayada-hotel-setup-task`, and
+`hotel-setup-command.vayada.com` for the creation release, selecting
+`property_creation` explicitly in its reviewed plan. Stage the Financials
+property-command service under separate identities:
+
+| Boundary | Creation | Property commands |
+| --- | --- | --- |
+| Service | `vayada-hotel-setup-service` | `vayada-hotel-setup-property-service` |
+| Primary / rollback task families | `vayada-hotel-setup-primary` / `vayada-hotel-setup-rollback` | `vayada-hotel-setup-property-primary` / `vayada-hotel-setup-property-rollback` |
+| Execution / task roles | Current creation roles above | `vayada-hotel-setup-property-execution` / `vayada-hotel-setup-property-task` |
+| Private HTTPS host | `hotel-setup-command.vayada.com` | `hotel-setup-property-command.vayada.com` |
+| Executable mode | `property_creation` | `property_commands` |
+| Injected reader / token names | `hotel-setup-creation/prod/*` exact reader/token ARNs | `hotel-setup-command/prod/*` exact reader/token ARNs |
+| Native secret read prefix | `hotel-setup-command/prod/organization/` | `hotel-setup-command/prod/property/` |
+| Ordinary API origin / token | `HOTEL_SETUP_CREATION_COMMAND_ORIGIN` / `HOTEL_SETUP_CREATION_COMMAND_INTERNAL_TOKEN` | `HOTEL_SETUP_COMMAND_ORIGIN` / `HOTEL_SETUP_COMMAND_INTERNAL_TOKEN` |
+
+An implementation may reuse the internal ALB and reviewed wildcard certificate
+with two fixed host rules. Each host needs its own target group and task security
+group, immutable primary/rollback tasks, internal token, reader and task IAM.
+Neither service may read the other's injected credentials or native secrets.
+Ingress remains limited to the ordinary API caller group; both destinations
+verify the original WorkOS session and current database authorization themselves.
+Independent default-off staging and release ownership must prevent a creation
+apply from resetting or replacing an activated property-command service, or vice
+versa. Review the exact rollback for each service; stopping either leaves its
+affected writes blocked, without falling back to ordinary API credentials.
+
+The creation owner retains its existing creation reader/organization bootstrap
+and owns the creation-specific release/caller/rollback implementation. The
+Financials owner owns property-reader lifecycle and this shared composition
+contract. This document does not implement the two-service Terraform resources;
+agree that implementation's owner before adding another deployment slice.
+
+Acceptance must cover the actual wizard Save: property creation, optional logo,
+launch-settings save, status reload, and subsequent native PMS first-currency
+completion. The current launch-settings PUT still uses the ordinary booking
+settings repository; its default currency is not the PMS completion command.
+Prove a reviewed narrow write boundary for that save and the connection to
+first-currency completion before claiming the full flow is ready. Do not grant
+broad ordinary API writes, skip the save, or treat successful POST creation as
+complete onboarding. The first native currency transaction must create the seven
+starter categories and enable Financials once; replay and later edits must
+preserve Owner-off and base/billing/global restrictions.
+
+All existing live-authority, exact credential/catalog/IAM, migration-history,
+image/rollback, clean enabled-service Plan and authenticated acceptance gates
+remain. No service activation or live provisioning is approved by this contract.
+
+Launch the app's `start:hotel-setup-command` executable on port 8011 for each
+service. For `HOTEL_SETUP_COMMAND_MODE=property_commands`, it supports currency
+PUT and Feature Hub module-list GET / Financials PATCH. Use dedicated
 `HOTEL_SETUP_COMMAND_READER_DATABASE_URL`, `HOTEL_SETUP_COMMAND_INTERNAL_TOKEN`,
 `HOTEL_SETUP_COMMAND_DATABASE_ENDPOINT` (password-free),
 `HOTEL_SETUP_COMMAND_SECRET_PREFIX=hotel-setup-command/prod/property/` and its own
-WorkOS JWKS/issuer/audience settings. Do not inject general API/admin database URLs,
+WorkOS JWKS/issuer/audience settings. For `property_creation`, select that mode
+explicitly, inject the separate creation reader and token, and use
+`HOTEL_SETUP_COMMAND_SECRET_PREFIX=hotel-setup-command/prod/organization/`; follow
+the creation reader/bootstrap contract below. Do not inject general API/admin database URLs,
 provider credentials, unrelated task policies or secret-write permissions.
 
 Use an internal HTTPS listener with certificate verification and a dedicated
@@ -56,8 +119,10 @@ until the private service's authenticated preflights pass.
 
 ## Credential and release gates
 
-1. Review the composed app migrations through 0453, immutable image containing
-   the private executable, and exact reader/native-login/function ownership.
+1. Review the exact composed app source and migration manifest (currently through
+   0461), immutable image containing the private executable, and exact
+   reader/native-login/function ownership. Verify actual migration history before
+   replacing any superseded source migration; do not rewrite applied history.
    A separate provisioner must satisfy the app's credential-lifecycle contract:
    no arbitrary role adoption/retargeting, exact purpose/owner assignment,
    positive and cross-hotel denial proof, rotation and ownership-transfer proof.
