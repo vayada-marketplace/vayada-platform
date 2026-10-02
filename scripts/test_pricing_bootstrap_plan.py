@@ -110,7 +110,8 @@ class BootstrapPlanTest(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/pricing-command-bootstrap-plan.yml").read_text()
         ordinary = (ROOT / ".github/workflows/tf-apply.yml").read_text().split("      - name: Terraform plan\n", 1)[1]
         ordinary = ordinary.split("      - name: Preserve installed", 1)[0]
-        bindings = lambda text: re.findall(r"^          TF_VAR_.*$", text, re.MULTILINE)
+        def bindings(text):
+            return re.findall(r"^          TF_VAR_.*$", text, re.MULTILINE)
         self.assertEqual(bindings(workflow), bindings(ordinary))
         checkout, verification = workflow.split("      - name: Require exact reviewed current main\n", 1)
         verification, later_steps = verification.split("      - name: Allocate private transient plan directory\n", 1)

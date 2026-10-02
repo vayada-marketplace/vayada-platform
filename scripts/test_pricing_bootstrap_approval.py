@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("approval", ROOT / "scripts/pricing_bootstrap_approval.py")
 approval = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(approval)
+pricing_fixture = approval.runpy.run_path(str(ROOT / "scripts/test_pricing_bootstrap_plan.py"))["fixture"]
 NOW = datetime(2030, 1, 1, tzinfo=timezone.utc)
 
 
@@ -521,6 +522,7 @@ class SavedPlanTests(unittest.TestCase):
         rest, graphql = api_comment(gate)
         rest["user"]["id"] = 120040061
         with approval.sealed_saved_plan(self.path, self.digest) as fd, \
+                patch.object(approval, "guard_saved_plan") as guard, \
                 patch.object(approval, "_github_json", side_effect=[rest, graphql, rest, graphql]) as api, \
                 patch.object(approval, "datetime", wraps=datetime) as clock:
             clock.now.return_value = NOW + timedelta(seconds=2)
@@ -528,6 +530,7 @@ class SavedPlanTests(unittest.TestCase):
             self.assertEqual(path, f"/proc/self/fd/{fd}")
             self.assertTrue(gate._consumed)
             self.assertEqual(api.call_count, 2)
+            guard.assert_called_once_with(fd, self.digest)
             self.assertNotIn(path, json.dumps(gate.receipt()))
             with self.assertRaises(ValueError):
                 gate.fetch_and_consume_saved_plan(rest["id"], current, fd)
@@ -546,12 +549,61 @@ class SavedPlanTests(unittest.TestCase):
         rest, graphql = api_comment(gate)
         rest["user"]["id"] = 120040061
         with approval.sealed_saved_plan(self.path, self.digest) as fd, \
+                patch.object(approval, "guard_saved_plan"), \
                 patch.object(approval, "_github_json", side_effect=[rest, graphql]), \
                 patch.object(approval, "datetime", wraps=datetime) as clock:
             clock.now.return_value = NOW + timedelta(seconds=2)
             with self.assertRaises(ValueError):
                 gate.fetch_and_consume_saved_plan(rest["id"], current | {"stateSerial": 8}, fd)
         self.assertFalse(gate._consumed)
+
+    def test_plan_guards_use_same_fd_and_do_not_inherit_credentials_or_log_output(self):
+        show = subprocess.CompletedProcess([], 0, json.dumps(pricing_fixture()), "SECRET_SENTINEL")
+        success = subprocess.CompletedProcess([], 0, "finance-steady", "")
+        with approval.sealed_saved_plan(self.path, self.digest) as fd, \
+                patch.object(approval.subprocess, "run", side_effect=[show, success]) as run, \
+                patch.dict(os.environ, {"GH_TOKEN": "SECRET_SENTINEL", "AWS_ACCESS_KEY_ID": "SECRET_SENTINEL",
+                                        "TF_VAR_password": "SECRET_SENTINEL", "TF_LOG": "TRACE",
+                                        "BASH_ENV": "SECRET_SENTINEL", "TF_CLI_ARGS_show": "SECRET_SENTINEL"}):
+            approval.guard_saved_plan(fd, self.digest)
+            self.assertEqual(run.call_count, 2)
+            calls = run.call_args_list
+            self.assertEqual(calls[0].args[0], ["terraform", "show", "-json", f"/proc/self/fd/{fd}"])
+            self.assertEqual(calls[1].args[0], ["bash", str(ROOT / "scripts/guard-finance-folio-kms-plan.sh"),
+                                               f"/proc/self/fd/{fd}", "plan"])
+            for call in calls:
+                self.assertEqual(call.kwargs["pass_fds"], (fd,))
+                self.assertEqual(call.kwargs["cwd"], ROOT / "infra")
+                self.assertNotIn("SECRET_SENTINEL", json.dumps(call.kwargs["env"]))
+                self.assertNotIn("TF_LOG", call.kwargs["env"])
+
+    def test_guard_failure_never_consumes_approval_or_exposes_plan(self):
+        current = context() | {"planSha256": self.digest}
+        gate = approval.ApprovalGate(current, 344, now=NOW)
+        invalid = pricing_fixture()
+        invalid["resource_changes"].pop()
+        outputs = [subprocess.CompletedProcess([], 1, "SECRET_SENTINEL", "SECRET_SENTINEL"),
+                   subprocess.CompletedProcess([], 0, "SECRET_SENTINEL", ""),
+                   subprocess.CompletedProcess([], 0, json.dumps(invalid), "")]
+        with approval.sealed_saved_plan(self.path, self.digest) as fd:
+            for result in outputs:
+                with self.subTest(result=result.returncode), \
+                        patch.object(approval.subprocess, "run", return_value=result) as run, \
+                        patch.object(approval, "_github_json") as api, self.assertRaises(ValueError) as error:
+                    gate.fetch_and_consume_saved_plan(50, current, fd)
+                self.assertNotIn("SECRET_SENTINEL", str(error.exception))
+                self.assertEqual(run.call_count, 1)
+                api.assert_not_called()
+                self.assertFalse(gate._consumed)
+            show = subprocess.CompletedProcess([], 0, json.dumps(pricing_fixture()), "")
+            for failure in (subprocess.CompletedProcess([], 1, "SECRET_SENTINEL", "SECRET_SENTINEL"),
+                            subprocess.TimeoutExpired("SECRET_SENTINEL", 120), OSError("SECRET_SENTINEL")):
+                with patch.object(approval.subprocess, "run", side_effect=[show, failure]), \
+                        patch.object(approval, "_github_json") as api, self.assertRaises(ValueError) as error:
+                    gate.fetch_and_consume_saved_plan(50, current, fd)
+                self.assertNotIn("SECRET_SENTINEL", str(error.exception))
+                api.assert_not_called()
+                self.assertFalse(gate._consumed)
 
 
 if __name__ == "__main__":

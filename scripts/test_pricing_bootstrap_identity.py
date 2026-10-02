@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = ROOT / "infra/pricing-bootstrap-identity"
@@ -150,6 +151,20 @@ class IdentityTests(unittest.TestCase):
             actual = {item["address"]: item for item in json.loads(result.stdout)["resource_changes"]}
             self.assertEqual(actual, expected)
             self.assertEqual(len(actual), 8)
+            # A genuine native saved plan is not enough: these eight IAM
+            # prerequisite additions must fail the pricing seven-create guard.
+            native_run = subprocess.run
+            observed = []
+            def inspect(*args, **kwargs):
+                result = native_run(*args, **kwargs)
+                observed.append(result)
+                return result
+            with patch.object(approval.subprocess, "run", side_effect=inspect), \
+                    self.assertRaisesRegex(ValueError, "guards rejected"):
+                approval.guard_saved_plan(fd, digest)
+            self.assertEqual(len(observed), 1)
+            self.assertEqual(observed[0].returncode, 0, "Native guarded inspection failed")
+            self.assertEqual(len(json.loads(observed[0].stdout)["resource_changes"]), 8)
 
     def assert_role_writes_denied(self, statements):
         by_sid = {s["Sid"]: s for s in statements}

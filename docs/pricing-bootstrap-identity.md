@@ -398,11 +398,28 @@ The future executor must keep that context open and pass the **same live FD**
 to native Terraform show/guard/apply using `/proc/self/fd/<fd>` and `pass_fds`.
 It must not close/reuse the FD, reopen the original file, or use the older
 metadata-only consumption method as execution authorization. This is only
-artifact custody, not an executor: #343's full seven-create/source guards and
-every admission/state/hold/authorization check still need actual integration.
+artifact custody, not an executor. Plan-guard integration is described below;
+every admission/state/hold/authorization check still needs actual integration.
 Tests use synthetic bytes and offline Terraform fixtures. Native Linux CI
 checks that Terraform can read the sealed plan after its original is removed;
 there is no apply call or AWS operation in this custody slice.
+
+The draft now incorporates #343's existing guard and plan-only files as a code
+dependency; neither PR is merged and no workflow is dispatched or activated.
+`guard_saved_plan` runs native `terraform show` on the sealed descriptor, then
+the unchanged writer-boundary and seven-create/source checks, followed by the
+existing Finance/protected-resource guard on that same inherited FD. All output
+is captured privately and failures are sanitized. Inspection processes receive
+no inherited credentials, TF_VAR values, logging/CLI overrides or shell hooks.
+The saved-plan approval path runs these checks before fetching/consuming human
+approval; a guard failure cannot consume it. The former eight-create IAM review
+plan is rejected, not treated as the seven-resource pricing plan.
+Tests cover the command/FD/environment boundary with mocked inspection output;
+Linux CI also rejects a genuine native eight-create fixture. This does not prove
+a production full refresh or positive live all-guard admission. Whole-checkout
+source/current-main verification, pinned runtime/provider admission and fresh
+state/session/authorization/whole-writer-hold checks remain required before both
+receipt construction and consumption. The CLI still has no executor/apply lane.
 
 The future executor must run all source/plan/identity/state/hold/authorization
 guards before building the receipt and again before consumption. The component compares their context;

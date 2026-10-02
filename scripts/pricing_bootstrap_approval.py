@@ -11,7 +11,9 @@ import fcntl
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
+import runpy
 import secrets
 import stat
 import subprocess
@@ -42,6 +44,7 @@ EDIT_QUERY = """query($id: ID!) {
 }"""
 
 MAX_PLAN_BYTES = 64 * 1024 * 1024
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def saved_plan_digest(fd):
@@ -109,6 +112,40 @@ def sealed_saved_plan(path, expected_sha256):
     finally:
         if fd is not None:
             os.close(fd)
+
+
+def guard_saved_plan(plan_fd, expected_sha256):
+    """Read-only guards on the sealed bytes; not source/session admission or apply."""
+    if saved_plan_digest(plan_fd) != expected_sha256:
+        raise ValueError("Saved plan differs from receipt")
+    try:
+        pricing = runpy.run_path(str(ROOT / "scripts/assert-pricing-bootstrap-plan.py"))
+        writer = runpy.run_path(str(ROOT / "scripts/assert-platform-writer-boundary-plan.py"))
+        source = pricing["SOURCE"].read_bytes()
+        pricing["check_source"](source, pricing["SOURCE"].parent)
+        # Inspection needs no runner credentials, TF_VAR values, logging,
+        # CLI injections, shell startup hooks or user Terraform configuration.
+        env = {"PATH": os.environ["PATH"], "HOME": "/nonexistent",
+               "TF_CLI_CONFIG_FILE": os.devnull, "TF_IN_AUTOMATION": "true",
+               "TF_INPUT": "false", "AWS_EC2_METADATA_DISABLED": "true"}
+        options = {"cwd": ROOT / "infra", "env": env, "pass_fds": (plan_fd,),
+                   "capture_output": True, "text": True, "timeout": 120}
+        path = f"/proc/self/fd/{plan_fd}"
+        result = subprocess.run(["terraform", "show", "-json", path], **options)
+        if result.returncode or len(result.stdout) > MAX_PLAN_BYTES:
+            raise ValueError
+        plan = json.loads(result.stdout)
+        if not isinstance(plan, dict):
+            raise ValueError
+        writer["check"](plan)
+        pricing["check"](plan, source)
+        result = subprocess.run(["bash", str(ROOT / "scripts/guard-finance-folio-kms-plan.sh"),
+                                 path, "plan"], **options)
+        if result.returncode:
+            raise ValueError
+    except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError, StopIteration,
+            UnicodeError, subprocess.TimeoutExpired):
+        raise ValueError("Saved pricing plan guards rejected; raw output withheld") from None
 
 
 def _github_json(path, *, node_id=None):
@@ -355,8 +392,7 @@ class ApprovalGate:
         """
         if os.getpid() != self._pid:
             raise ValueError("Approval gate belongs to another process")
-        if saved_plan_digest(plan_fd) != self._context["planSha256"]:
-            raise ValueError("Saved plan differs from receipt")
+        guard_saved_plan(plan_fd, self._context["planSha256"])
         self.fetch_and_consume(comment_id, current_context)
         return f"/proc/self/fd/{plan_fd}"
 
