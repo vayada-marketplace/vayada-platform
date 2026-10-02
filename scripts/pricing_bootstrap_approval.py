@@ -24,11 +24,14 @@ REPOSITORY = "vayada-marketplace/vayada-platform"
 # Stable IAM ID was read with GetUser; never infer ownership from credentials.
 SELECTED_OPERATOR_ARN = "arn:aws:iam::269416271598:user/VayadaUser"
 SELECTED_OPERATOR_ID = "AIDAT5OTWB3XLUEYGCQ56"
-# Creation receipt metadata only; actual caller/role ID and admission remain required.
+# Receipt metadata only; actual caller/role ID and admission remain required.
 CREATION_OPERATOR_ROLE = "vayada-pricing-operator-create"
+METADATA_OPERATOR_ROLE = "vayada-pricing-operator-metadata"
 # Flamur explicitly selected GitHub User FlamurMaliqi; bind its stable ID, not login.
 # Never load approvers from dispatch inputs, comments or the process environment.
 APPROVED_HUMAN_IDS = frozenset({120040061})
+# Separately selected for the metadata phase, never inherited from creation.
+METADATA_APPROVED_HUMAN_IDS = frozenset({120040061})
 CONTEXT_FIELDS = frozenset({
     "sourceSha", "runId", "runAttempt", "operatorArn", "stateLineage", "stateSerial",
     "planSha256", "writerHoldSha256", "authorizationSha256",
@@ -175,8 +178,10 @@ def sealed_saved_plan(path, expected_sha256):
             os.close(fd)
 
 
-def guard_saved_plan(plan_fd, expected_sha256):
+def guard_saved_plan(plan_fd, expected_sha256, *, phase="creation"):
     """Read-only guards on the sealed bytes; not source/session admission or apply."""
+    if type(phase) is not str or phase not in ("creation", "metadata"):
+        raise ValueError("Invalid approval phase")
     if saved_plan_digest(plan_fd) != expected_sha256:
         raise ValueError("Saved plan differs from receipt")
     try:
@@ -211,7 +216,10 @@ def guard_saved_plan(plan_fd, expected_sha256):
         if not isinstance(plan, dict):
             raise ValueError
         writer["check"](plan)
-        pricing["check"](plan, source)
+        if phase == "metadata":
+            pricing["check_metadata"](plan)
+        else:
+            pricing["check"](plan, source)
         result = subprocess.run(["bash", str(ROOT / "scripts/guard-finance-folio-kms-plan.sh"),
                                  path, "plan"], **options)
         if result.returncode:
@@ -326,7 +334,9 @@ def timestamp(value):
     return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
-def validate_context(context):
+def validate_context(context, *, phase="creation"):
+    if type(phase) is not str or phase not in ("creation", "metadata"):
+        raise ValueError("Invalid approval phase")
     if not isinstance(context, dict) or set(context) != CONTEXT_FIELDS:
         raise ValueError("Incomplete approval context")
     for field, length in (("sourceSha", 40), ("planSha256", 64), ("writerHoldSha256", 64),
@@ -339,16 +349,17 @@ def validate_context(context):
     if not isinstance(context["stateLineage"], str) or not re.fullmatch(
             r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", context["stateLineage"]):
         raise ValueError("Invalid state lineage")
+    role = CREATION_OPERATOR_ROLE if phase == "creation" else METADATA_OPERATOR_ROLE
     if not isinstance(context["operatorArn"], str) or not re.fullmatch(
-            rf"arn:aws:sts::269416271598:assumed-role/{CREATION_OPERATOR_ROLE}/[A-Za-z0-9+=,.@_-]+",
+            rf"arn:aws:sts::269416271598:assumed-role/{role}/[A-Za-z0-9+=,.@_-]+",
             context["operatorArn"]):
         raise ValueError("Invalid operator session metadata")
 
 
 class ApprovalGate:
-    def __init__(self, context, issue_number, *, now=None):
+    def __init__(self, context, issue_number, *, now=None, phase="creation"):
         context = copy.deepcopy(context)
-        validate_context(context)
+        validate_context(context, phase=phase)
         if type(issue_number) is not int or issue_number < 1:
             raise ValueError("Invalid approval discussion")
         now = now or datetime.now(timezone.utc)
@@ -356,12 +367,13 @@ class ApprovalGate:
             raise ValueError("Approval clock must be UTC")
         verify_checkout_source(context["sourceSha"])
         now = now.replace(microsecond=0)
+        self._phase = phase
         self._context = copy.deepcopy(context)
         self._issued = now
         self._expires = now + timedelta(minutes=15)
         self._issue_url = f"https://api.github.com/repos/{REPOSITORY}/issues/{issue_number}"
         self._receipt = {
-            "schemaVersion": 1, "phase": "creation", "repository": REPOSITORY,
+            "schemaVersion": 1, "phase": phase, "repository": REPOSITORY,
             "operatorOwner": {"arn": SELECTED_OPERATOR_ARN, "userId": SELECTED_OPERATOR_ID},
             "accountId": "269416271598", "region": "eu-west-1",
             "stateObject": "s3://vayada-terraform-state/platform/terraform.tfstate",
@@ -385,6 +397,19 @@ class ApprovalGate:
             "expiresAt": self._expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "nonce": secrets.token_hex(32),
         }
+        if phase == "metadata":
+            self._receipt["guard"] = "exact-two-pricing-metadata-updates"
+            self._receipt["expectedSecurity"] = {
+                "additions": 0, "updates": 2, "deletions": 0,
+                "inlinePolicy": {"address": "aws_iam_role_policy.platform_plan[0]",
+                                 "role": "vayada-github-actions-platform-plan", "name": "vayada-platform-plan"},
+                "managedPolicy": {"address": "aws_iam_policy.platform_writer_boundary[0]",
+                                  "arn": "arn:aws:iam::269416271598:policy/vayada-platform-writer-boundary"},
+                "policyResources": "Only unchanged final five secret ARNs and execution role in the sealed plan",
+                "existingStatementsUnchanged": True, "writerTrustAndCutoffUnchanged": True,
+                "secretValuesManaged": False, "metadataPhaseEnabled": True,
+                "policyVersionDeletionAllowed": False,
+            }
         self._digest = hashlib.sha256(json.dumps(self._receipt, sort_keys=True,
                                                 separators=(",", ":")).encode()).hexdigest()
         self._consumed = False
@@ -401,7 +426,11 @@ class ApprovalGate:
         return {"receipt": copy.deepcopy(self._receipt), "receiptSha256": self._digest}
 
     def approval_text(self):
-        return f"approve-vay1543-bootstrap {self._digest} {self._receipt['nonce']}"
+        prefix = "approve-vay1543-bootstrap" if self._phase == "creation" else "approve-vay1543-metadata"
+        return f"{prefix} {self._digest} {self._receipt['nonce']}"
+
+    def _approved_humans(self):
+        return APPROVED_HUMAN_IDS if self._phase == "creation" else METADATA_APPROVED_HUMAN_IDS
 
     def check_comment(self, comment, *, now=None):
         now = now or datetime.now(timezone.utc)
@@ -422,7 +451,7 @@ class ApprovalGate:
                 or edit["lastEditedAt"] is not None or edit["editor"] is not None
                 or edit["isMinimized"] is not False):
             raise ValueError("Missing or inconsistent GitHub edit evidence")
-        if (type(user.get("id")) is not int or user["id"] not in APPROVED_HUMAN_IDS
+        if (type(user.get("id")) is not int or user["id"] not in self._approved_humans()
                 or user.get("type") != "User" or comment.get("performed_via_github_app") is not None
                 or type(comment.get("id")) is not int or comment["id"] < 1
                 or comment.get("issue_url") != self._issue_url
@@ -445,7 +474,7 @@ class ApprovalGate:
         if os.getpid() != self._pid:
             raise ValueError("Approval gate belongs to another process")
         with self._lock:
-            validate_context(current_context)
+            validate_context(current_context, phase=self._phase)
             if current_context != self._context:
                 raise ValueError("Source, plan, session, state or guard evidence changed")
             self.check_comment(comment, now=now)
@@ -453,7 +482,7 @@ class ApprovalGate:
 
     def fetch_and_consume(self, comment_id, current_context):
         """Fresh authenticated evidence; caller must first rerun real guards."""
-        if not APPROVED_HUMAN_IDS:
+        if not self._approved_humans():
             raise ValueError("No approved humans configured")
         if os.getpid() != self._pid:
             raise ValueError("Approval gate belongs to another process")
@@ -470,7 +499,7 @@ class ApprovalGate:
         if os.getpid() != self._pid:
             raise ValueError("Approval gate belongs to another process")
         verify_checkout_source(self._context["sourceSha"])
-        guard_saved_plan(plan_fd, self._context["planSha256"])
+        guard_saved_plan(plan_fd, self._context["planSha256"], phase=self._phase)
         self.fetch_and_consume(comment_id, current_context)
         return f"/proc/self/fd/{plan_fd}"
 

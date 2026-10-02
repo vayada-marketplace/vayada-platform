@@ -17,8 +17,17 @@ root/protected guards and distinct metadata approval remain required.
 The separately selected metadata receipt approver is GitHub User `FlamurMaliqi`,
 stable numeric ID `120040061`. This is a human selection only, not approval of a
 receipt, plan, AWS role/session, execution window or policy write. The metadata
-role/session remains unselected and its approval gate is not configured; the
-existing creation gate and role must not authorize this phase.
+actual role/session remains unselected and there is no executor. The shared
+approval component now supports an explicit reviewed `phase="metadata"`, with
+its own selected-human ID set, proposed role-name binding, two-update receipt
+and distinct `approve-vay1543-metadata` command. Creation remains the default
+and cannot authorize this phase. Neither phase may be chosen from dispatch
+inputs/comments/environment or switched at consumption. The metadata saved-plan
+path reuses sealed-FD custody/native decoding and the writer/Finance guards,
+running the exact two-update check before fresh approval consumption. Actual
+source/runtime/backend/state/session/authorization/whole-writer-hold admission
+and the boundary version-count preflight are still required; this is not a
+configured or authorized execution lane.
 
 The existing IAM-only root now contains an inactive
 [`operator_metadata.tf` proposal](../infra/pricing-bootstrap-identity/operator_metadata.tf)

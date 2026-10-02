@@ -228,6 +228,29 @@ resource "aws_iam_role" "github_actions_platform_deploy" {
             enabled = plan(True)
             self.assertIs(enabled["variables"]["enable_pricing_command_metadata_refresh"]["value"], True)
             guard(enabled)
+            if hasattr(os, "memfd_create"):
+                # Native sealed bytes pass writer/metadata checks. This partial
+                # fixture lacks Finance state, so the full-root guard must reject.
+                saved = fixture / "fixture.tfplan"
+                saved.chmod(0o600)
+                digest = hashlib.sha256(saved.read_bytes()).hexdigest()
+                with approval.sealed_saved_plan(saved, digest) as fd:
+                    native = subprocess.run
+                    calls = []
+                    def inspect(*args, **kwargs):
+                        result = native(*args, **kwargs)
+                        calls.append(result)
+                        return result
+                    with patch.object(approval.subprocess, "run", side_effect=inspect):
+                        with self.assertRaisesRegex(ValueError, "guards rejected"):
+                            approval.guard_saved_plan(fd, digest, phase="metadata")
+                    self.assertEqual(len(calls), 3)
+                    self.assertTrue(all(result.returncode == 0 for result in calls[:2]))
+                    self.assertEqual(json.loads(calls[1].stdout), enabled)
+                    self.assertNotEqual(calls[2].returncode, 0)
+                    self.assertIn("Cannot prove a unique Finance KMS plan phase.", calls[2].stderr)
+                    with self.assertRaisesRegex(ValueError, "guards rejected"):
+                        approval.guard_saved_plan(fd, digest)
             template = fixture / "pricing_command_metadata_policy.json.tftpl"
             template.write_text(template.read_text().replace(
                 '"secretsmanager:DescribeSecret"', '"secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"'))

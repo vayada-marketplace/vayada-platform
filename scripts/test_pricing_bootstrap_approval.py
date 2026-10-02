@@ -21,6 +21,7 @@ spec = importlib.util.spec_from_file_location("approval", ROOT / "scripts/pricin
 approval = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(approval)
 pricing_fixture = approval.runpy.run_path(str(ROOT / "scripts/test_pricing_bootstrap_plan.py"))["fixture"]
+metadata_fixture = approval.runpy.run_path(str(ROOT / "scripts/test_pricing_command_metadata_refresh.py"))["fixture"]
 NOW = datetime(2030, 1, 1, tzinfo=timezone.utc)
 
 
@@ -36,6 +37,10 @@ def context():
             "operatorArn": "arn:aws:sts::269416271598:assumed-role/vayada-pricing-operator-create/session",
             "stateLineage": "00000000-0000-0000-0000-000000000001", "stateSerial": 7,
             "planSha256": "b" * 64, "writerHoldSha256": "c" * 64, "authorizationSha256": "d" * 64}
+
+
+def metadata_context():
+    return context() | {"operatorArn": "arn:aws:sts::269416271598:assumed-role/vayada-pricing-operator-metadata/session"}
 
 
 def comment(gate):
@@ -223,7 +228,8 @@ class ApprovalTests(unittest.TestCase):
         invalid = [approval.SELECTED_OPERATOR_ARN, "arn:aws:iam::269416271598:root"]
         invalid += [f"arn:aws:sts::269416271598:assumed-role/{role}/session" for role in (
             "reviewed-fixture", "vayada-github-actions-platform-deploy", "vayada-pricing-command-execution",
-            "vayada-pricing-bootstrap-create", "vayada-pricing-operator-create-extra", "Vayada-pricing-operator-create")]
+            "vayada-pricing-bootstrap-create", "vayada-pricing-operator-metadata",
+            "vayada-pricing-operator-create-extra", "Vayada-pricing-operator-create")]
         invalid += [context()["operatorArn"].replace("269416271598", "111111111111"),
                     context()["operatorArn"] + "/extra", context()["operatorArn"].replace("/session", "/")]
         with patch.object(approval, "_github_json") as api:
@@ -239,6 +245,141 @@ class ApprovalTests(unittest.TestCase):
                     gate.consume(comment(gate), context() | {"operatorArn": arn}, now=NOW + timedelta(seconds=2))
                 self.assertFalse(gate._consumed)
             gate.consume(comment(gate), context(), now=NOW + timedelta(seconds=2))
+
+    def test_metadata_phase_binds_only_its_fixed_role_and_rejects_arbitrary_phases(self):
+        self.assertEqual(approval.METADATA_OPERATOR_ROLE, "vayada-pricing-operator-metadata")
+        source = (ROOT / "infra/pricing-bootstrap-identity/operator_metadata.tf").read_text()
+        self.assertRegex(source, r'name\s*=\s*"' + approval.METADATA_OPERATOR_ROLE + '"')
+        invalid = [context()["operatorArn"], approval.SELECTED_OPERATOR_ARN,
+                   metadata_context()["operatorArn"].replace("269416271598", "111111111111"),
+                   metadata_context()["operatorArn"].replace("metadata/", "metadata-extra/"),
+                   metadata_context()["operatorArn"] + "/extra"]
+        for arn in invalid:
+            with self.subTest(arn=arn), self.assertRaises(ValueError):
+                approval.ApprovalGate(metadata_context() | {"operatorArn": arn}, 344, now=NOW, phase="metadata")
+        for phase in ("other", "Metadata", None, True, []):
+            with self.subTest(phase=phase), self.assertRaises(ValueError):
+                approval.ApprovalGate(metadata_context(), 344, now=NOW, phase=phase)
+            with patch.object(approval, "saved_plan_digest") as digest, self.assertRaises(ValueError):
+                approval.guard_saved_plan(123, "b" * 64, phase=phase)
+            digest.assert_not_called()
+        self.source.assert_not_called()
+        with self.assertRaises(ValueError):
+            approval.ApprovalGate(metadata_context(), 344, now=NOW)
+        gate = approval.ApprovalGate(metadata_context(), 344, now=NOW, phase="metadata")
+        receipt = gate.receipt()["receipt"]
+        self.assertEqual(receipt["phase"], "metadata")
+        self.assertEqual(receipt["guard"], "exact-two-pricing-metadata-updates")
+        security = receipt["expectedSecurity"]
+        self.assertEqual((security["additions"], security["updates"], security["deletions"]), (0, 2, 0))
+        self.assertEqual(security["inlinePolicy"], {"address": "aws_iam_role_policy.platform_plan[0]",
+                                                  "role": "vayada-github-actions-platform-plan", "name": "vayada-platform-plan"})
+        self.assertEqual(security["managedPolicy"], {"address": "aws_iam_policy.platform_writer_boundary[0]",
+                                                   "arn": "arn:aws:iam::269416271598:policy/vayada-platform-writer-boundary"})
+        self.assertFalse(security["secretValuesManaged"])
+        self.assertFalse(security["policyVersionDeletionAllowed"])
+        evidence = comment(gate) | {"user": {"id": 120040061, "type": "User"}}
+        with self.assertRaises(ValueError):
+            gate.consume(evidence, context(), now=NOW + timedelta(seconds=2))
+        self.assertFalse(gate._consumed)
+
+    def test_creation_and_metadata_receipts_and_comments_are_not_interchangeable(self):
+        with patch.object(approval.secrets, "token_hex", return_value="e" * 64):
+            creation = approval.ApprovalGate(context(), 344, now=NOW)
+            metadata = approval.ApprovalGate(metadata_context(), 344, now=NOW, phase="metadata")
+        self.assertNotEqual(creation.receipt()["receiptSha256"], metadata.receipt()["receiptSha256"])
+        for gate, current, other in ((creation, context(), metadata), (metadata, metadata_context(), creation)):
+            prefix = gate.approval_text().split()[0]
+            for body in (other.approval_text(), prefix + " " + " ".join(other.approval_text().split()[1:])):
+                with self.subTest(body=body), self.assertRaises(ValueError):
+                    gate.consume(comment(gate) | {"body": body, "user": {"id": 120040061, "type": "User"}},
+                                 current, now=NOW + timedelta(seconds=2))
+            self.assertFalse(gate._consumed)
+            gate.consume(comment(gate) | {"user": {"id": 120040061, "type": "User"}}, current,
+                         now=NOW + timedelta(seconds=2))
+            with self.assertRaises(ValueError):
+                gate.consume(comment(gate), current, now=NOW + timedelta(seconds=3))
+
+    def test_metadata_approver_selection_is_independent_and_shared_rejections_remain(self):
+        self.assertEqual(approval.METADATA_APPROVED_HUMAN_IDS, frozenset({120040061}))
+        gate = approval.ApprovalGate(metadata_context(), 344, now=NOW, phase="metadata")
+        evidence = comment(gate) | {"user": {"id": 120040061, "type": "User"}}
+        with patch.object(approval, "APPROVED_HUMAN_IDS", frozenset({42})):
+            with self.assertRaises(ValueError):
+                gate.consume(comment(gate), metadata_context(), now=NOW + timedelta(seconds=2))
+            for changed in (evidence | {"performed_via_github_app": {"id": 1}},
+                            evidence | {"user": {"id": 120040061, "type": "Bot"}},
+                            evidence | {"editEvidence": evidence["editEvidence"] | {"isMinimized": True}},
+                            evidence | {"updated_at": "2030-01-01T00:00:02Z"}):
+                with self.assertRaises(ValueError):
+                    gate.consume(changed, metadata_context(), now=NOW + timedelta(seconds=2))
+            with self.assertRaises(ValueError):
+                gate.consume(evidence, metadata_context(), now=NOW + timedelta(minutes=15))
+            with patch.object(approval, "METADATA_APPROVED_HUMAN_IDS", frozenset()), \
+                    patch.object(approval, "_github_json") as api, self.assertRaises(ValueError):
+                gate.fetch_and_consume(50, metadata_context())
+            api.assert_not_called()
+            gate.consume(evidence, metadata_context(), now=NOW + timedelta(seconds=2))
+
+    def test_metadata_saved_plan_path_runs_all_guards_on_same_fd_before_fresh_approval(self):
+        current = metadata_context()
+        gate = approval.ApprovalGate(current, 344, now=NOW, phase="metadata")
+        rest, graph = api_comment(gate)
+        rest["user"]["id"] = 120040061
+        show = subprocess.CompletedProcess([], 0, json.dumps(metadata_fixture()), "SECRET_SENTINEL")
+        with patch.object(approval, "saved_plan_digest", return_value=current["planSha256"]), \
+                patch.object(approval.subprocess, "run", side_effect=[runtime_result(), show,
+                    subprocess.CompletedProcess([], 0, "", "")]) as run, \
+                patch.object(approval, "_github_json", side_effect=[rest, graph]) as api, \
+                patch.object(approval, "datetime", wraps=datetime) as clock, \
+                patch.dict(os.environ, {"AWS_ACCESS_KEY_ID": "SECRET_SENTINEL", "TF_LOG": "TRACE"}):
+            clock.now.return_value = NOW + timedelta(seconds=2)
+            path = gate.fetch_and_consume_saved_plan(rest["id"], current, 123)
+        self.assertEqual(path, "/proc/self/fd/123")
+        self.assertTrue(gate._consumed)
+        self.assertEqual(api.call_count, 2)
+        self.assertEqual(self.source.call_count, 3)
+        self.assertEqual([call.args[0][0] for call in run.call_args_list], ["terraform", "terraform", "bash"])
+        self.assertEqual(run.call_args_list[1].args[0], ["terraform", "show", "-json", path])
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs["pass_fds"], (123,))
+            self.assertNotIn("SECRET_SENTINEL", json.dumps(call.kwargs["env"]))
+            self.assertNotIn("TF_LOG", call.kwargs["env"])
+
+    def test_wrong_phase_plan_guard_failures_never_fetch_or_consume_metadata_approval(self):
+        current = metadata_context()
+        gate = approval.ApprovalGate(current, 344, now=NOW, phase="metadata")
+        invalid = metadata_fixture()
+        policy = invalid["resource_changes"][-1]["change"]["after"]
+        document = json.loads(policy["policy"])
+        document["Statement"].append({"Effect": "Allow", "Action": "*", "Resource": "*"})
+        policy["policy"] = json.dumps(document)
+        for plan in (pricing_fixture(), invalid):
+            with patch.object(approval, "saved_plan_digest", return_value=current["planSha256"]), \
+                    patch.object(approval.subprocess, "run", side_effect=[runtime_result(),
+                        subprocess.CompletedProcess([], 0, json.dumps(plan), "SECRET_SENTINEL")]) as run, \
+                    patch.object(approval, "_github_json") as api, self.assertRaises(ValueError) as error:
+                gate.fetch_and_consume_saved_plan(50, current, 123)
+            self.assertNotIn("SECRET_SENTINEL", str(error.exception))
+            self.assertEqual(run.call_count, 2)
+            api.assert_not_called()
+            self.assertFalse(gate._consumed)
+        show = subprocess.CompletedProcess([], 0, json.dumps(metadata_fixture()), "")
+        with patch.object(approval, "saved_plan_digest", return_value=current["planSha256"]), \
+                patch.object(approval.subprocess, "run", side_effect=[runtime_result(), show,
+                    subprocess.CompletedProcess([], 1, "SECRET_SENTINEL", "SECRET_SENTINEL")]), \
+                patch.object(approval, "_github_json") as api, self.assertRaises(ValueError) as error:
+            gate.fetch_and_consume_saved_plan(50, current, 123)
+        self.assertNotIn("SECRET_SENTINEL", str(error.exception))
+        api.assert_not_called()
+        self.assertFalse(gate._consumed)
+        creation = approval.ApprovalGate(context(), 344, now=NOW)
+        with patch.object(approval, "saved_plan_digest", return_value=context()["planSha256"]), \
+                patch.object(approval.subprocess, "run", side_effect=[runtime_result(), show]), \
+                patch.object(approval, "_github_json") as api, self.assertRaises(ValueError):
+            creation.fetch_and_consume_saved_plan(50, context(), 123)
+        api.assert_not_called()
+        self.assertFalse(creation._consumed)
 
     def test_context_and_receipt_cannot_smuggle_or_mutate_fields(self):
         private = context() | {"privatePlan": "SECRET_SENTINEL"}
@@ -605,11 +746,29 @@ class SavedPlanTests(unittest.TestCase):
             self.assertEqual(path, f"/proc/self/fd/{fd}")
             self.assertTrue(gate._consumed)
             self.assertEqual(api.call_count, 2)
-            guard.assert_called_once_with(fd, self.digest)
+            guard.assert_called_once_with(fd, self.digest, phase="creation")
             self.assertEqual(self.source.call_count, 3)  # Construction, before guards, after API.
             self.assertNotIn(path, json.dumps(gate.receipt()))
             with self.assertRaises(ValueError):
                 gate.fetch_and_consume_saved_plan(rest["id"], current, fd)
+
+    def test_actual_metadata_snapshot_binds_its_fresh_receipt_on_same_sealed_fd(self):
+        current = metadata_context() | {"planSha256": self.digest}
+        gate = approval.ApprovalGate(current, 344, now=NOW, phase="metadata")
+        rest, graphql = api_comment(gate)
+        rest["user"]["id"] = 120040061
+        with approval.sealed_saved_plan(self.path, self.digest) as fd, \
+                patch.object(approval.subprocess, "run", side_effect=[runtime_result(),
+                    subprocess.CompletedProcess([], 0, json.dumps(metadata_fixture()), ""),
+                    subprocess.CompletedProcess([], 0, "", "")]), \
+                patch.object(approval, "_github_json", side_effect=[rest, graphql]), \
+                patch.object(approval, "datetime", wraps=datetime) as clock:
+            self.path.unlink()
+            clock.now.return_value = NOW + timedelta(seconds=2)
+            self.assertEqual(gate.fetch_and_consume_saved_plan(rest["id"], current, fd), f"/proc/self/fd/{fd}")
+            self.assertTrue(gate._consumed)
+        with self.assertRaises(OSError):
+            os.fstat(fd)
 
     def test_mismatched_snapshot_rejects_before_api_and_context_change_rejects(self):
         current = context() | {"planSha256": self.digest}

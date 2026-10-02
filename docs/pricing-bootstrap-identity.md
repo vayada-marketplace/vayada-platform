@@ -387,7 +387,7 @@ preparation or the pilot exception as authorization to change user credentials.
 See [AWS source identity](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html)
 and [MFA with AssumeRole](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html).
 
-### Metadata-phase human selected — no gate or execution admission
+### Metadata-phase human selected — component only, no execution admission
 
 Flamur subsequently selected the same GitHub User `FlamurMaliqi`, stable numeric
 ID `120040061`, for the separate two-policy metadata approval. Read-only GitHub
@@ -395,13 +395,29 @@ account metadata reconfirmed the ID and User type. This records who may approve
 a future exact metadata receipt; it approves no receipt, plan, execution window,
 AWS role/session, permission grant, policy update, setup or deployment.
 
-The implemented `ApprovalGate` and `APPROVED_HUMAN_IDS` remain creation-only.
-Do not reuse a creation receipt or the creation operator role to admit metadata
-updates. The metadata AWS role/session and execution window remain unselected;
-no metadata approval gate or executor is configured. Connect distinct metadata
-approval only after its phase-specific identity and execution contract are
-reviewed, retaining sealed-plan custody, the exact two-update check, full-root
-guards, source/runtime/backend/state admission and the whole-writer hold.
+`ApprovalGate` keeps creation as its default; an explicit literal
+`phase="metadata"` selects the separate metadata receipt and its independently
+selected `METADATA_APPROVED_HUMAN_IDS`. `APPROVED_HUMAN_IDS` remains creation-only.
+The two reviewed phases are the only accepted values; never take the phase from
+dispatch inputs, comments or the environment. This component validates only
+the proposed metadata role name, not an actual caller or RoleId. No actual
+metadata role/session or execution window is selected/admitted, and there is
+no metadata executor. Live admission and the reviewed execution contract must
+still connect source/runtime/backend/state, authorization and whole-writer hold
+checks before constructing or consuming a receipt.
+
+The metadata receipt says zero additions, two updates and zero deletions,
+identifies the fixed inline-policy and managed-policy targets, and requires
+unchanged existing statements, writer trust/cutoff and secret values. Its
+`approve-vay1543-metadata` text and digest/nonce cannot substitute for a creation
+receipt, even though the human is the same. Context validation rejects creation
+and unrelated operator roles. Both phases retain fresh REST/GraphQL edit proof,
+expiry, single-process/single-use, copy/fork rejection and atomic consumption.
+The saved-plan path always selects the receipt's phase, never a per-call switch.
+Metadata uses the same native sealed-FD inspection, writer-boundary and Finance
+guards, but the exact two-update check instead of the seven-create check.
+Guard failure stops before approval fetching/consumption. No CLI, workflow or
+apply lane is added; the policy-version count preflight remains unimplemented.
 
 ### Separate metadata operator — inactive permission proposal
 
@@ -409,7 +425,8 @@ guards, source/runtime/backend/state admission and the whole-writer hold.
 `vayada-pricing-operator-metadata` in the existing IAM-only root. It is not a
 human-selected/admitted role or execution authorization. Its window defaults
 to null and its independent SSM option defaults to false; ordinary CI creates
-nothing. No approval gate, workflow or executor uses this proposed role.
+nothing. The metadata receipt component binds this candidate name only;
+no workflow or executor installs, assumes or admits the proposed role.
 
 A reviewed window of at most one hour, after both retained creation windows
 expire, and five exact final secret ARNs are required even to propose its four
@@ -494,7 +511,7 @@ plan data. A synthetic shell regression checks all three guard failures,
 short-circuiting, successful status and private log mode. The older #343 head
 without this repair must not be dispatched or treated as the reviewed lane.
 `guard_saved_plan` runs native `terraform show` on the sealed descriptor, then
-the unchanged writer-boundary and seven-create/source checks, followed by the
+the unchanged writer-boundary and phase-specific pricing/source checks, followed by the
 existing Finance/protected-resource guard on that same inherited FD. All output
 is captured privately and failures are sanitized. Inspection processes receive
 no inherited credentials, TF_VAR values, logging/CLI overrides or shell hooks.
