@@ -1,0 +1,136 @@
+name: Pricing bootstrap plan (no apply)
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact reviewed current-main SHA; not approval to create resources
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+
+env:
+  AWS_REGION: eu-west-1
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  plan:
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout reviewed code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require exact reviewed current main
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_main_sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$WORKFLOW_REF" = refs/heads/main
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_SHA" = "$WORKFLOW_SHA"
+          test "$EXPECTED_SHA" = "$(git rev-parse HEAD)"
+          test "$EXPECTED_SHA" = "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          python3 scripts/assert-pricing-bootstrap-plan.py --check-source
+      - name: Allocate private transient plan directory
+        id: files
+        run: |
+          umask 077
+          plan_dir="$(mktemp -d "$RUNNER_TEMP/pricing-bootstrap-plan.XXXXXX")"
+          echo "directory=$plan_dir" >> "$GITHUB_OUTPUT"
+      - name: Configure existing protected AWS access
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 900
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.5"
+          terraform_wrapper: false
+      - name: Prepare and validate only the seven-create plan
+        working-directory: infra
+        env:
+          TF_VAR_db_master_password: ${{ secrets.TF_VAR_DB_MASTER_PASSWORD }}
+          TF_VAR_db_booking_password: ${{ secrets.TF_VAR_DB_BOOKING_PASSWORD }}
+          TF_VAR_db_pms_password: ${{ secrets.TF_VAR_DB_PMS_PASSWORD }}
+          TF_VAR_db_auth_password: ${{ secrets.TF_VAR_DB_AUTH_PASSWORD }}
+          TF_VAR_jwt_secret_key: ${{ secrets.TF_VAR_JWT_SECRET_KEY }}
+          TF_VAR_smtp_username: ${{ secrets.TF_VAR_SMTP_USERNAME }}
+          TF_VAR_smtp_password: ${{ secrets.TF_VAR_SMTP_PASSWORD }}
+          TF_VAR_resend_api_key: ${{ secrets.TF_VAR_RESEND_API_KEY }}
+          TF_VAR_marketplace_communication_unsubscribe_keys: ${{ secrets.TF_VAR_MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_KEYS }}
+          TF_VAR_resend_webhook_secret: ${{ secrets.TF_VAR_RESEND_WEBHOOK_SECRET }}
+          TF_VAR_stripe_secret_key: ${{ secrets.TF_VAR_STRIPE_SECRET_KEY }}
+          TF_VAR_next_stripe_test_secret_key: ${{ secrets.TF_VAR_NEXT_STRIPE_TEST_SECRET_KEY }}
+          TF_VAR_stripe_publishable_key: ${{ secrets.TF_VAR_STRIPE_PUBLISHABLE_KEY }}
+          TF_VAR_stripe_webhook_secret: ${{ secrets.TF_VAR_STRIPE_WEBHOOK_SECRET }}
+          TF_VAR_stripe_connect_webhook_secret: ${{ secrets.TF_VAR_STRIPE_CONNECT_WEBHOOK_SECRET }}
+          TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
+          TF_VAR_legacy_booking_api_desired_count: ${{ secrets.TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT || '1' }}
+          TF_VAR_legacy_marketplace_api_desired_count: ${{ secrets.TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT || '1' }}
+          TF_VAR_legacy_pms_api_desired_count: ${{ secrets.TF_VAR_LEGACY_PMS_API_DESIRED_COUNT || '1' }}
+          TF_VAR_enable_staging_pms_runtime: ${{ secrets.TF_VAR_ENABLE_STAGING_PMS_RUNTIME || 'false' }}
+          TF_VAR_staging_pms_database_url: ${{ secrets.TF_VAR_STAGING_PMS_DATABASE_URL }}
+          TF_VAR_staging_pms_auth_database_url: ${{ secrets.TF_VAR_STAGING_PMS_AUTH_DATABASE_URL }}
+          TF_VAR_staging_pms_booking_engine_database_url: ${{ secrets.TF_VAR_STAGING_PMS_BOOKING_ENGINE_DATABASE_URL }}
+          TF_VAR_target_database_url: ${{ secrets.TF_VAR_TARGET_DATABASE_URL }}
+          TF_VAR_workos_api_key: ${{ secrets.TF_VAR_WORKOS_API_KEY }}
+          TF_VAR_workos_webhook_secret: ${{ secrets.TF_VAR_WORKOS_WEBHOOK_SECRET }}
+          TF_VAR_workos_client_id: ${{ secrets.TF_VAR_WORKOS_CLIENT_ID }}
+          TF_VAR_workos_audience: ${{ secrets.TF_VAR_WORKOS_AUDIENCE }}
+          TF_VAR_workos_issuer: ${{ secrets.TF_VAR_WORKOS_ISSUER }}
+          TF_VAR_workos_jwks_url: ${{ secrets.TF_VAR_WORKOS_JWKS_URL }}
+          TF_VAR_auth_cookie_secret: ${{ secrets.TF_VAR_AUTH_COOKIE_SECRET }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.TF_VAR_CLOUDFLARE_API_TOKEN }}
+          TF_VAR_enable_cloudflare_dns: ${{ secrets.TF_VAR_ENABLE_CLOUDFLARE_DNS || 'false' }}
+          TF_VAR_channex_api_key: ${{ secrets.TF_VAR_CHANNEX_API_KEY }}
+          TF_VAR_channex_webhook_secret: ${{ secrets.TF_VAR_CHANNEX_WEBHOOK_SECRET }}
+          TF_VAR_anthropic_api_key: ${{ secrets.TF_VAR_ANTHROPIC_API_KEY }}
+          TF_VAR_firecrawl_api_key: ${{ secrets.TF_VAR_FIRECRAWL_API_KEY }}
+          PLAN_DIR: ${{ steps.files.outputs.directory }}
+          REVIEWED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          unset TF_LOG TF_LOG_PATH
+          operator_arn="$(aws sts get-caller-identity --query Arn --output text)"
+          [[ "$operator_arn" == arn:aws:sts::269416271598:assumed-role/vayada-github-actions-platform-deploy/* ]]
+          if ! terraform init -input=false -no-color > "$PLAN_DIR/terraform.log" 2>&1; then
+            echo 'Terraform init failed; raw output withheld to protect inputs.' >&2
+            exit 1
+          fi
+          if ! terraform plan -input=false -lock-timeout=60s -no-color -out="$PLAN_DIR/tfplan" >> "$PLAN_DIR/terraform.log" 2>&1; then
+            echo 'Terraform plan failed; raw output withheld to protect inputs.' >&2
+            exit 1
+          fi
+          terraform show -json "$PLAN_DIR/tfplan" > "$PLAN_DIR/plan.json" 2>> "$PLAN_DIR/terraform.log"
+          python3 ../scripts/assert-platform-writer-boundary-plan.py "$PLAN_DIR/plan.json"
+          bash ../scripts/guard-finance-folio-kms-plan.sh "$PLAN_DIR/tfplan" plan
+          python3 ../scripts/assert-pricing-bootstrap-plan.py "$PLAN_DIR/plan.json"
+          echo "Reviewed source: $REVIEWED_SHA"
+          sha256sum "$PLAN_DIR/tfplan" | cut -d' ' -f1
+          echo 'Diagnostic plan only. No apply; saved plan will be discarded.'
+      - name: Remove sensitive transient files
+        if: always()
+        env:
+          PLAN_DIR: ${{ steps.files.outputs.directory }}
+        run: |
+          if [[ -n "$PLAN_DIR" && "$PLAN_DIR" == "$RUNNER_TEMP"/pricing-bootstrap-plan.* ]]; then
+            rm -f -- "$PLAN_DIR/tfplan" "$PLAN_DIR/plan.json" "$PLAN_DIR/terraform.log"
+            rmdir -- "$PLAN_DIR"
+          fi

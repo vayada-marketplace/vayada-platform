@@ -13,6 +13,9 @@ on:
       - "scripts/test_pricing_bootstrap_identity.py"
       - "scripts/pricing_bootstrap_approval.py"
       - "scripts/test_pricing_bootstrap_approval.py"
+      - "scripts/assert-pricing-bootstrap-plan.py"
+      - "scripts/test_pricing_bootstrap_plan.py"
+      - ".github/workflows/pricing-command-bootstrap-plan.yml"
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
       - "scripts/test_coordinated_recovery.py"
@@ -194,6 +197,7 @@ jobs:
           python3 -m unittest scripts/test_platform_writer_boundary.py -v
           python3 -m unittest scripts/test_pricing_command_metadata_refresh.py -v
           python3 -m unittest scripts/test_pricing_bootstrap_approval.py -v
+          python3 -m unittest scripts/test_pricing_bootstrap_plan.py -v
           python3 -m py_compile scripts/coordinated_release.py
           python3 -m unittest scripts/test_coordinated_release.py -v
           python3 -m unittest scripts/test_coordinated_recovery.py -v
