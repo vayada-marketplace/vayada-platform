@@ -4,6 +4,16 @@
 change therefore adds no permissions to either platform role. It supplies the
 second operator phase described in [platform contract PR #251](https://github.com/vayada-marketplace/vayada-platform/pull/251).
 
+Flamur accepted reliance on the reviewed plan and trusted operator for these two
+policy contents, after disclosure of unintended-grant risk. This is preparation
+only, not activation or approval of a session, execution window or saved plan.
+The offline `scripts/assert-pricing-bootstrap-plan.py --metadata <private-plan-json>`
+check rejects anything except the two intended document updates, preserves the
+reviewed cutoff and existing statements, and requires unchanged known final
+secret identities. It neither applies nor authenticates its input. No workflow
+or creation receipt admits this later phase; trusted sealed-plan decoding, full
+root/protected guards and distinct metadata approval remain required.
+
 After the seven empty pricing resources have been created through their
 reviewed saved operator plan, keep competing platform writers paused. A separate
 reviewed activation must set `enable_pricing_command_metadata_refresh=true` in

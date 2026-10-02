@@ -236,10 +236,35 @@ Use immutable reviewed declarations/private runner, exact saved-plan approval
 and post-write no-version verification; do not claim IAM proves emptiness.
 This clears the initial-value content-authority decision, not permission to
 supply any value, grant access, issue a session or execute setup. SSM plaintext
-access is separately accepted below; metadata-policy-content acceptance remains
-an unaccepted decision.
+access and metadata-policy-content enforcement are separately accepted below.
+Those decisions do not authorize activation or policy writes.
 The unlocked IAM-only review plan is not an approved execution plan; no
 admission window may be shifted or installed based on this acceptance alone.
+
+### Metadata-policy contents — separate decision accepted for preparation
+
+Flamur explicitly accepted reviewed-plan/trusted-operator enforcement of the
+contents of the two existing metadata-policy targets after disclosure that a
+faulty operator could add unintended access. This decision is for preparation
+only: no grant, session, policy update, setup, deployment or hotel test is
+authorized. It does not select a metadata-phase receipt approver or execution
+window, approve any saved plan, or prove the runner, authorization or writer hold.
+The two-policy phase still requires its own separately admitted session and
+exact approval; the existing creation receipt cannot authorize it.
+
+The offline `assert-pricing-bootstrap-plan.py --metadata` check allows exactly
+two known policy-document updates. It preserves all existing statements and
+the installed reviewed cutoff, and adds only the fingerprinted narrow metadata
+statements on the five known final secret ARNs and execution-role ARN. Existing
+pricing resources must be unchanged; unrelated writes, unknowns, imports/moves,
+drift and output changes reject. The seven-create check and its approval path
+remain unchanged. This is a content check on supplied plan JSON, **not an
+executor or authenticated live evidence**. No workflow calls the metadata mode.
+Trusted native decoding of the sealed saved plan, source/runtime/backend/state
+admission, actual ARN/role and authorization evidence, all root/protected guards,
+whole-writer hold, metadata-specific approval and post-write verification still
+must be connected before execution. Tests use synthetic plans only; no positive
+production metadata plan or actual-role authorization is proven.
 
 ### Limited-access proposal — role-policy trust decision accepted for preparation
 
@@ -527,7 +552,8 @@ for refresh on the reviewed private runner without printing values, not use of
 those credentials, granting access, session issuance or execution. The operator's
 default-off opt-in reuses the existing inventory and KMS fences; the old hosted
 opt-in remains unaccepted for activation. The separate metadata-policy-content
-decision and all execution gates remain outstanding.
+decision is now accepted for preparation above; all execution gates remain
+outstanding.
 
 Independent review found a compatibility blocker: the pinned [SSM resource
 reader](https://github.com/hashicorp/terraform-provider-aws/blob/v5.100.0/internal/service/ssm/parameter.go)
