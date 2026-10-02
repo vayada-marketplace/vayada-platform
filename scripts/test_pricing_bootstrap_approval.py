@@ -85,7 +85,6 @@ class OperatorTemplateTests(unittest.TestCase):
         expected["Statement"][0]["Sid"] = "SelectedOwnerNoMFAPilotOnly"
         del expected["Statement"][0]["Condition"]["Bool"]
         self.assertEqual(self.render("pricing-operator-trust-no-mfa.json.tftpl"), expected)
-        self.assertEqual(approval.APPROVED_HUMAN_IDS, frozenset())
 
     def test_fence_is_deny_only_and_rejects_missing_session_attribution(self):
         policy = self.render("pricing-operator-session-fence.json.tftpl")
@@ -120,10 +119,26 @@ class ApprovalTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 fresh.consume(comment(gate), context(), now=NOW + timedelta(seconds=3))
 
-    def test_no_human_is_authorized_by_default(self):
-        self.assertEqual(approval.APPROVED_HUMAN_IDS, frozenset())
+    def test_only_explicit_selected_github_user_can_approve(self):
+        self.assertEqual(approval.APPROVED_HUMAN_IDS, frozenset({120040061}))
+        for user in ({"id": 42, "type": "User", "login": "FlamurMaliqi"},
+                     {"id": "120040061", "type": "User"}, {"id": True, "type": "User"},
+                     {"id": 120040061, "type": "Bot"}):
+            gate = approval.ApprovalGate(context(), 344, now=NOW)
+            with self.subTest(user=user), self.assertRaises(ValueError):
+                gate.consume(comment(gate) | {"user": user}, context(), now=NOW + timedelta(seconds=2))
+            self.assertFalse(gate._consumed)
         gate = approval.ApprovalGate(context(), 344, now=NOW)
+        evidence = comment(gate) | {"user": {"id": 120040061, "type": "User"}}
         with self.assertRaises(ValueError):
+            gate.consume(evidence | {"performed_via_github_app": {"id": 1}}, context(), now=NOW + timedelta(seconds=2))
+        gate.consume(evidence, context(), now=NOW + timedelta(seconds=2))
+        with self.assertRaises(ValueError):
+            gate.consume(evidence, context(), now=NOW + timedelta(seconds=3))
+
+    def test_empty_approver_configuration_still_fails_closed(self):
+        gate = approval.ApprovalGate(context(), 344, now=NOW)
+        with patch.object(approval, "APPROVED_HUMAN_IDS", frozenset()), self.assertRaises(ValueError):
             gate.consume(comment(gate), context(), now=NOW + timedelta(seconds=2))
 
     def test_selected_owner_is_receipt_metadata_not_session_authorization(self):
@@ -139,7 +154,6 @@ class ApprovalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gate.consume(comment(gate), changed, now=NOW + timedelta(seconds=2))
         self.assertFalse(gate._consumed)
-        self.assertEqual(approval.APPROVED_HUMAN_IDS, frozenset())
 
     def test_context_and_receipt_cannot_smuggle_or_mutate_fields(self):
         private = context() | {"privatePlan": "SECRET_SENTINEL"}
@@ -273,7 +287,8 @@ class ApprovalTests(unittest.TestCase):
             self.assertEqual(api.call_args_list[1].kwargs, {"node_id": "IC_fixture"})
         self.assertTrue(gate._consumed)
         empty = approval.ApprovalGate(context(), 344, now=NOW)
-        with patch.object(approval, "_github_json") as api, self.assertRaises(ValueError):
+        with patch.object(approval, "APPROVED_HUMAN_IDS", frozenset()), \
+                patch.object(approval, "_github_json") as api, self.assertRaises(ValueError):
             empty.fetch_and_consume(rest["id"], context())
         api.assert_not_called()
 

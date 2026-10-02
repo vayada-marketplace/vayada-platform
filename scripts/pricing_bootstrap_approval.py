@@ -19,9 +19,9 @@ REPOSITORY = "vayada-marketplace/vayada-platform"
 # Stable IAM ID was read with GetUser; never infer ownership from credentials.
 SELECTED_OPERATOR_ARN = "arn:aws:iam::269416271598:user/VayadaUser"
 SELECTED_OPERATOR_ID = "AIDAT5OTWB3XLUEYGCQ56"
-# Empty until the human identities are explicitly chosen and reviewed in code.
+# Flamur explicitly selected GitHub User FlamurMaliqi; bind its stable ID, not login.
 # Never load approvers from dispatch inputs, comments or the process environment.
-APPROVED_HUMAN_IDS = frozenset()
+APPROVED_HUMAN_IDS = frozenset({120040061})
 CONTEXT_FIELDS = frozenset({
     "sourceSha", "runId", "runAttempt", "operatorArn", "stateLineage", "stateSerial",
     "planSha256", "writerHoldSha256", "authorizationSha256",
@@ -277,4 +277,4 @@ class ApprovalGate:
 
 
 if __name__ == "__main__":
-    raise SystemExit("Approval component only; no setup executor or approved sessions/approvers configured")
+    raise SystemExit("Approval component only; no setup executor or approved sessions configured")

@@ -146,7 +146,8 @@ This resolves operator ownership only. It does not authorize using the current
 administrator credentials for apply, changing permissions, issuing sessions,
 loading production settings or modifying GitHub protections. It does not accept
 residual arbitrary trust/policy or initial-secret-value authority and does not
-choose the separate GitHub receipt approvers. Those remain explicit gates.
+choose the separate GitHub receipt approver; that identity was subsequently
+selected explicitly below. Session admission and exact receipt approval remain gates.
 
 The receipt records this owner separately from `context.operatorArn`, which
 still requires an assumed-role session. Owner metadata does not prove that a
@@ -357,9 +358,13 @@ and [MFA with AssumeRole](https://docs.aws.amazon.com/STS/latest/APIReference/AP
 ### Same-runner approval component — not an executor
 
 `scripts/pricing_bootstrap_approval.py` implements only the in-process approval
-boundary. The selected AWS owner is receipt metadata only. No human GitHub IDs
-are authorized by default; selecting them requires
-explicit approval and a reviewed code change, never a dispatch/environment input.
+boundary. The selected AWS owner is receipt metadata only. Flamur subsequently
+explicitly selected GitHub User `FlamurMaliqi` as the creation-plan receipt
+approver. Read-only GitHub account metadata reconfirmed stable numeric ID
+`120040061`; `APPROVED_HUMAN_IDS` now contains only that reviewed ID, not a login
+match or dispatch/environment input. Selecting this approver is not approval
+of any receipt/plan, AWS setup, credentials, session or deployment. No workflow
+or executor is activated; other phases/approvers require their own reviewed selection.
 It generates an allowlisted receipt with source/run/attempt, operator session,
 state lineage/serial, saved-plan digest, writer-hold and authorization-evidence
 digests, a random nonce and a 15-minute expiry. An unedited later GitHub comment
