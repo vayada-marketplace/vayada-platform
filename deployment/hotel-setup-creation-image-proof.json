@@ -28,7 +28,7 @@
     ],
     "publicDeploymentDispatch": "skipped in both build runs",
     "migration": "0461_hotel_setup_completion_role_scope.sql",
-    "composedCiRun": "https://github.com/vayada-marketplace/vayada/actions/runs/37019083282"
+    "composedCiRun": "https://github.com/vayada-marketplace/vayada/actions/runs/37020851514"
   },
   "releaseStatus": "candidate images only; composed CI, live plan, credentials, IAM, readiness and owner smoke still required"
 }
