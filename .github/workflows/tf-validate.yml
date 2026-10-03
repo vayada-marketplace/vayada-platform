@@ -27,6 +27,7 @@ on:
       - ".github/workflows/hotel-setup-property-bootstrap.yml"
       - ".github/workflows/hotel-setup-owner-audit.yml"
       - "docs/hotel-setup-private-service.md"
+      - "scripts/test_pricing_infrastructure_opt_in.py"
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
       - "scripts/test_coordinated_recovery.py"
@@ -323,6 +324,9 @@ jobs:
 
       - name: Verify private hotel setup service staging (offline)
         run: python3 -m unittest scripts/test_hotel_setup_service.py -v
+
+      - name: Prove pricing infrastructure opt-in with native offline plans
+        run: python3 -m unittest scripts/test_pricing_infrastructure_opt_in.py -v
 
       - name: Terraform validate
         run: terraform validate
