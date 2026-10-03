@@ -14,7 +14,7 @@ variable "hotel_setup_property_image_digests" {
 
 locals {
   hotel_setup_property_images = var.enable_hotel_setup_property_service_staging ? var.hotel_setup_property_image_digests : {}
-  # An empty reviewed inventory intentionally blocks staging unverified images.
+  # Only independently verified immutable images may be staged.
   hotel_setup_property_image_inventory = jsondecode(file("${path.module}/../deployment/hotel-setup-property-images.json"))
   hotel_setup_property_environment = [for entry in local.hotel_setup_environment : {
     name = entry.name
