@@ -38,6 +38,9 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertIn('code === "runtime_relation_read_missing"', CHECK)
         self.assertIn("'platform.channex_management_worker_properties'", CHECK)
         self.assertIn("'platform.pricing_runtime_property_scopes'", CHECK)
+        self.assertIn('"platform.hotel_setup_property_scopes"', CHECK)
+        self.assertIn("to_regclass('platform.hotel_setup_property_scopes')", CHECK)
+        self.assertIn("'platform.hotel_setup_property_scopes',", CHECK)
         for code in (
             "runtime_schema_usage_missing",
             "runtime_relation_read_missing",

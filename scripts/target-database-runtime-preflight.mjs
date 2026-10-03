@@ -52,6 +52,7 @@ const requiredColumnPrivileges = {
   "hotel_catalog.properties": { UPDATE: ["id"] },
 };
 const protectedRelations = [
+  "platform.hotel_setup_property_scopes",
   "platform.hotel_setup_creation_scopes",
   "platform.hotel_setup_linked_properties",
   "hotel_catalog.hotel_setup_effective_creation_scopes",
@@ -223,6 +224,7 @@ try {
     client,
     `SELECT oid FROM pg_class
       WHERE oid IN (
+        to_regclass('platform.hotel_setup_property_scopes'),
         to_regclass('platform.hotel_setup_creation_scopes'),
         to_regclass('platform.hotel_setup_linked_properties'),
         to_regclass('hotel_catalog.hotel_setup_effective_creation_scopes')
@@ -554,6 +556,7 @@ try {
           'platform.channex_management_worker_properties',
           'platform.finance_export_worker_properties',
           'platform.finance_expense_worker_properties',
+          'platform.hotel_setup_property_scopes',
           'platform.hotel_setup_creation_scopes',
           'platform.hotel_setup_linked_properties',
           'hotel_catalog.hotel_setup_effective_creation_scopes',
