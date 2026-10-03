@@ -60,9 +60,10 @@ CREATE SCHEMA finance AUTHORIZATION legacy_owner;
 CREATE SCHEMA pms AUTHORIZATION legacy_owner;
 CREATE SCHEMA marketplace AUTHORIZATION legacy_owner;
 CREATE SCHEMA hotel_catalog AUTHORIZATION legacy_owner;
+CREATE SCHEMA identity AUTHORIZATION legacy_owner;
 CREATE SCHEMA vayada_migration_evidence AUTHORIZATION legacy_owner;
-REVOKE ALL ON SCHEMA platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence FROM PUBLIC;
-GRANT USAGE ON SCHEMA platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence
+REVOKE ALL ON SCHEMA identity, platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence FROM PUBLIC;
+GRANT USAGE ON SCHEMA identity, platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence
   TO vayada_next_api_runtime;
 
 SET ROLE legacy_owner;
@@ -99,6 +100,24 @@ CREATE TABLE marketplace.affiliate_click_occurrences (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_discrepancy_claims (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_discrepancy_resolutions (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_click_quota_windows (link_id uuid PRIMARY KEY, consumed integer);
+CREATE TABLE hotel_catalog.organization_setup_track_intents (
+  organization_id uuid PRIMARY KEY, selected_tracks text[], revision integer, updated_at timestamptz
+);
+CREATE TABLE identity.product_entitlements (
+  id uuid DEFAULT gen_random_uuid(), organization_id uuid, product text, entitlement_key text,
+  status text, starts_at timestamptz, expires_at timestamptz, metadata jsonb, updated_at timestamptz,
+  resource_product text
+);
+CREATE TABLE identity.organization_resource_links (
+  id uuid DEFAULT gen_random_uuid(), organization_id uuid, product text, resource_type text,
+  resource_id text, relationship text, status text
+);
+CREATE TABLE finance.billing_entitlements (id uuid DEFAULT gen_random_uuid(), billing_status text);
+CREATE TABLE booking.booking_settings (property_id uuid PRIMARY KEY, published boolean DEFAULT false);
+CREATE TABLE marketplace.marketplace_hotel_profiles (
+  property_id uuid PRIMARY KEY, organization_id uuid, source_system text, source_hotel_profile_id text,
+  status text DEFAULT 'draft'
+);
 CREATE TABLE hotel_catalog.properties (id uuid PRIMARY KEY, profile_revision integer NOT NULL DEFAULT 1);
 CREATE TABLE booking.affiliate_click_contexts (id uuid PRIMARY KEY);
 CREATE TABLE booking.affiliate_click_admissions (id uuid PRIMARY KEY);
@@ -143,6 +162,9 @@ GRANT SELECT ON platform.product_audit_events
   TO vayada_next_api_runtime;
 GRANT SELECT ON platform.jobs TO vayada_next_api_runtime;
 GRANT SELECT, UPDATE (id) ON hotel_catalog.properties TO vayada_next_api_runtime;
+GRANT SELECT ON hotel_catalog.organization_setup_track_intents, identity.product_entitlements,
+  identity.organization_resource_links, finance.billing_entitlements,
+  booking.booking_settings, marketplace.marketplace_hotel_profiles TO vayada_next_api_runtime;
 GRANT SELECT ON platform.legacy_owner_approval_records,
   platform.legacy_owner_approval_revocations TO vayada_next_api_runtime;
 GRANT EXECUTE ON FUNCTION app.hotel_count() TO vayada_next_api_runtime;
@@ -157,6 +179,7 @@ docker run --rm \
 cp "${root}/scripts/target-database-runtime-preflight.mjs" "${work}/preflight.mjs"
 cp "${root}/scripts/provision-hotel-setup-scope-role.mjs" "${work}/hotel-setup-scope.mjs"
 cp "${root}/scripts/grant-target-database-product-audit-insert.mjs" "${work}/grant.mjs"
+cp "${root}/scripts/grant-target-database-hotel-setup-tracks.mjs" "${work}/setup-grant.mjs"
 cp "${root}/scripts/grant-target-database-folio-command.mjs" "${work}/folio-grant.mjs"
 
 run_hotel_setup_scope() {
@@ -211,6 +234,7 @@ run_grant() {
   local grant_scope="${4:-audit_insert}"
   local grant_file="grant.mjs"
   [[ "${grant_scope}" == "folio_command" ]] && grant_file="folio-grant.mjs"
+  [[ "${grant_scope}" == "hotel_setup_tracks" ]] && grant_file="setup-grant.mjs"
   docker run --rm \
     --network "${network}" \
     --volume "${node_modules_container}:/work" \
@@ -244,6 +268,83 @@ expect_failure() {
   fi
   grep -F "${expected}" <<<"${output}" >/dev/null
 }
+
+# VAY-965: exact column grants must unblock row locks and provisioning, atomically.
+if setup_non_owner="$(run_grant vayada_next_api_runtime runtime 1 hotel_setup_tracks 2>&1)"; then
+  echo "setup grant accepted a non-owner" >&2; exit 1
+fi
+grep -F '"code":"42501"' <<<"${setup_non_owner}" >/dev/null
+if setup_untrusted="$(run_grant legacy_owner owner 0 hotel_setup_tracks 2>&1)"; then
+  echo "setup grant accepted an untrusted endpoint" >&2; exit 1
+fi
+grep -F '"code":"unexpected_database_host"' <<<"${setup_untrusted}" >/dev/null
+docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'GRANT SELECT(metadata) ON identity.product_entitlements TO vayada_next_api_runtime WITH GRANT OPTION' >/dev/null
+if setup_delegation="$(run_grant legacy_owner owner 1 hotel_setup_tracks 2>&1)"; then
+  echo "setup grant accepted column delegation" >&2; exit 1
+fi
+grep -F '"code":"setup_runtime_scope_too_broad"' <<<"${setup_delegation}" >/dev/null
+[[ "$(docker exec "${database_container}" psql -U postgres -Atqc \
+  "SELECT has_column_privilege('vayada_next_api_runtime','hotel_catalog.organization_setup_track_intents','selected_tracks','UPDATE')")" == f ]]
+docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'REVOKE GRANT OPTION FOR SELECT(metadata) ON identity.product_entitlements FROM vayada_next_api_runtime' >/dev/null
+if [[ "${postgres_version}" == 17 ]]; then
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    'GRANT MAINTAIN ON finance.billing_entitlements TO vayada_next_api_runtime' >/dev/null
+  if setup_maintain="$(run_grant legacy_owner owner 1 hotel_setup_tracks 2>&1)"; then
+    echo "setup grant accepted MAINTAIN" >&2; exit 1
+  fi
+  grep -F '"code":"setup_runtime_scope_too_broad"' <<<"${setup_maintain}" >/dev/null
+  [[ "$(docker exec "${database_container}" psql -U postgres -Atqc \
+    "SELECT has_column_privilege('vayada_next_api_runtime','hotel_catalog.organization_setup_track_intents','selected_tracks','UPDATE')")" == f ]]
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    'REVOKE MAINTAIN ON finance.billing_entitlements FROM vayada_next_api_runtime' >/dev/null
+fi
+docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'ALTER TABLE marketplace.marketplace_hotel_profiles OWNER TO postgres' >/dev/null
+if setup_partial="$(run_grant legacy_owner owner 1 hotel_setup_tracks 2>&1)"; then
+  echo "setup grant accepted mixed ownership" >&2; exit 1
+fi
+grep -F '"code":"42501"' <<<"${setup_partial}" >/dev/null
+[[ "$(docker exec "${database_container}" psql -U postgres -Atqc \
+  "SELECT has_column_privilege('vayada_next_api_runtime','hotel_catalog.organization_setup_track_intents','selected_tracks','UPDATE')")" == f ]]
+docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'ALTER TABLE marketplace.marketplace_hotel_profiles OWNER TO legacy_owner' >/dev/null
+run_grant legacy_owner owner 1 hotel_setup_tracks | grep -F '"grant":"hotel_setup_tracks:columns"' >/dev/null
+run_grant legacy_owner owner 1 hotel_setup_tracks | grep -F '"grant":"hotel_setup_tracks:columns"' >/dev/null
+docker exec -i "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+BEGIN;
+SET LOCAL ROLE vayada_next_api_runtime;
+INSERT INTO hotel_catalog.organization_setup_track_intents (organization_id,selected_tracks,revision)
+  VALUES ('00000000-0000-4000-8000-000000000001',ARRAY['hotel_operations'],1);
+SELECT * FROM hotel_catalog.organization_setup_track_intents FOR UPDATE;
+UPDATE hotel_catalog.organization_setup_track_intents SET selected_tracks=ARRAY['hotel_operations','creator_marketplace'], revision=2, updated_at=now();
+INSERT INTO identity.product_entitlements (organization_id,product,entitlement_key,status,starts_at,expires_at,metadata)
+  VALUES ('00000000-0000-4000-8000-000000000001','pms','property-management','active',now(),null,'{}');
+SELECT * FROM identity.product_entitlements FOR UPDATE;
+UPDATE identity.product_entitlements SET status='active', starts_at=now(), expires_at=null, updated_at=now();
+INSERT INTO identity.organization_resource_links (organization_id,product,resource_type,resource_id,relationship,status)
+  VALUES ('00000000-0000-4000-8000-000000000001','pms','pms_property','00000000-0000-4000-8000-000000000002','owner','active');
+SELECT * FROM identity.organization_resource_links FOR UPDATE;
+SELECT * FROM finance.billing_entitlements FOR UPDATE;
+INSERT INTO booking.booking_settings (property_id) VALUES ('00000000-0000-4000-8000-000000000002');
+INSERT INTO marketplace.marketplace_hotel_profiles (property_id,organization_id,source_system,source_hotel_profile_id)
+  VALUES ('00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001','marketplace','fixture');
+SELECT * FROM marketplace.marketplace_hotel_profiles FOR UPDATE;
+DO $$ BEGIN
+  BEGIN UPDATE identity.product_entitlements SET resource_product='pms';
+    RAISE EXCEPTION 'unlisted entitlement column allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE identity.organization_resource_links SET status='active';
+    RAISE EXCEPTION 'link status mutation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE finance.billing_entitlements SET billing_status='active';
+    RAISE EXCEPTION 'billing mutation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE booking.booking_settings SET published=true;
+    RAISE EXCEPTION 'publication allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM hotel_catalog.organization_setup_track_intents;
+    RAISE EXCEPTION 'setup deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+END $$;
+ROLLBACK;
+SQL
 
 if untrusted_host_output="$(run_grant legacy_owner owner 0 2>&1)"; then
   echo "non-RDS grant without explicit test fixture unexpectedly passed" >&2
