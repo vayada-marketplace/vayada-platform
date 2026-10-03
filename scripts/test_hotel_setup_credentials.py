@@ -53,6 +53,51 @@ class HotelSetupCredentialsTests(unittest.TestCase):
             if path != SOURCE and path.name not in ["hotel_setup_service.tf", "hotel_setup_property_service.tf", "hotel_setup_creation_bootstrap.tf", "hotel_setup_property_bootstrap.tf", "hotel_setup_property_bootstrap_execution.tf", "hotel_setup_property_credentials.tf", "hotel_setup_public_caller.tf", "ecs.tf"]:
                 self.assertNotIn('aws_iam_role.hotel_setup_', path.read_text(), str(path))
 
+    def test_actual_plan_metadata_is_default_off_and_exact_container_reads(self):
+        source = (ROOT / 'infra/hotel_setup_platform_deploy.tf').read_text().split('data "', 1)[0]
+        source = source.replace('aws_secretsmanager_secret.hotel_setup_property', 'local.property_secrets')
+        source = source.replace('aws_secretsmanager_secret.hotel_setup', 'local.creation_secrets')
+        creation = [f'arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-creation/prod/{name}-AbCd12'
+                    for name in ['reader-database-url', 'internal-token']]
+        property_arns = [arn.replace('hotel-setup-creation', 'hotel-setup-command') for arn in creation]
+        fixture = '''
+variable "enable_hotel_setup_credential_infrastructure" { default = false }
+variable "enable_hotel_setup_property_credentials" { default = false }
+locals {
+  hotel_setup_caller_configured = {}
+  hotel_setup_secret_names = var.enable_hotel_setup_credential_infrastructure ? {reader="reader",token="token"} : {}
+  hotel_setup_property_secret_names = var.enable_hotel_setup_property_credentials ? {reader="reader",token="token"} : {}
+  creation_secrets = [for arn in (var.enable_hotel_setup_credential_infrastructure ? CREATION : []) : {arn=arn}]
+  property_secrets = [for arn in (var.enable_hotel_setup_property_credentials ? PROPERTY : []) : {arn=arn}]
+}
+'''.replace('CREATION', json.dumps(creation)).replace('PROPERTY', json.dumps(property_arns))
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'main.tf').write_text(source + fixture)
+            for creation_enabled, property_enabled in [(False, False), (True, False), (False, True), (True, True)]:
+                with self.subTest(creation=creation_enabled, property=property_enabled):
+                    result = subprocess.run(['terraform', 'console', '-no-color',
+                        f'-var=enable_hotel_setup_credential_infrastructure={str(creation_enabled).lower()}',
+                        f'-var=enable_hotel_setup_property_credentials={str(property_enabled).lower()}'],
+                        input='jsonencode(local.hotel_setup_plan_metadata_statements)\n', cwd=directory,
+                        capture_output=True, text=True, check=True, timeout=30)
+                    statements = json.loads(json.loads(result.stdout.strip()))
+                    expected = (creation if creation_enabled else []) + (property_arns if property_enabled else [])
+                    if not expected:
+                        self.assertEqual(statements, [])
+                        continue
+                    self.assertEqual(statements, [{'Sid': 'HotelSetupSecretMetadata', 'Effect': 'Allow',
+                        'Action': ['secretsmanager:DescribeSecret', 'secretsmanager:GetResourcePolicy'],
+                        'Resource': expected}])
+                    text = (ROOT / 'infra/platform_plan_policy.json.tftpl').read_text()
+                    for key, value in {'account_id': '269416271598', 'region': 'eu-west-1',
+                                      'kms_resources': '[]'}.items():
+                        text = text.replace('${' + key + '}', value)
+                    base = json.loads(text)
+                    base['Statement'] += statements
+                    self.assertLess(len(json.dumps(base, separators=(',', ':'))), 10240)
+        assembly = (ROOT / 'infra/platform_writer_boundary.tf').read_text()
+        self.assertEqual(assembly.count('local.hotel_setup_plan_metadata_statements'), 1)
+
     def test_property_bootstrap_is_operational_and_native_prefix_only(self):
         source = (ROOT / 'infra/hotel_setup_property_bootstrap.tf').read_text()
         self.assertIn('var.enable_hotel_setup_property_credentials ? 1 : 0', source)

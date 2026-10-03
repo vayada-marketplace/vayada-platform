@@ -2,6 +2,14 @@
 # already near the role-wide 10,240-byte limit. Permission scope is unchanged.
 locals {
   hotel_setup_platform_deploy_enabled = var.enable_hotel_setup_credential_infrastructure || var.enable_hotel_setup_property_credentials || length(local.hotel_setup_caller_configured) > 0
+  # The PR planner refreshes only the four staged containers, never their values.
+  hotel_setup_plan_metadata_statements = jsondecode(length(local.hotel_setup_secret_names) + length(local.hotel_setup_property_secret_names) > 0 ? jsonencode({ Statement = [{
+    Sid      = "HotelSetupSecretMetadata"
+    Effect   = "Allow"
+    Action   = ["secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy"]
+    Resource = concat([for secret in aws_secretsmanager_secret.hotel_setup : secret.arn], [for secret in aws_secretsmanager_secret.hotel_setup_property : secret.arn])
+  }] }) : jsonencode({ Statement = [] })).Statement
+
 }
 
 data "aws_iam_policy_document" "hotel_setup_platform_deploy" {
