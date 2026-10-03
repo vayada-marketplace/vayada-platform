@@ -15,10 +15,14 @@ uses its separate reader/token containers and organization prefix shown below.
 | --- | --- | --- |
 | Private ECS execution role | `hotel-setup-command/prod/reader-database-url` | URL for `vayada_next_hotel_setup_reader`, >=32-byte password, TLS verify-full |
 | Private ECS execution role | `hotel-setup-command/prod/internal-token` | Random >=32-byte internal authentication token |
-| Private ECS task role | `hotel-setup-command/prod/property/<database_login>` | Exactly `{username,password}` for the database-selected native property login |
+| Private ECS task role | `hotel-setup-command/prod/property/<vayada_next_hotel_setup_property_...>` | Exactly `{username,password}` for the database-selected native property login |
 
 Terraform never receives passwords or tokens. Execution reads only the two exact
-container ARNs. The application task can only `GetSecretValue` for native property
+container ARNs. Native property login provisioning must enforce the
+`vayada_next_hotel_setup_property_` prefix; arbitrary database login names are
+not admitted by this service policy. The trailing ARN wildcard intentionally
+covers purpose-specific native logins and the generated Secrets Manager suffix.
+The application task can only `GetSecretValue` for native property
 logins under the fixed property prefix; it cannot read the reader URL/internal
 token from Secrets Manager, write/rotate secrets or read unrelated credentials.
 The service receives its reader and token through ECS secret injection. Native
