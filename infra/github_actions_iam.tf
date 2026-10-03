@@ -243,6 +243,28 @@ data "aws_iam_policy_document" "github_actions_platform_deploy" {
     resources = ["*"]
   }
 
+  # After the separate reviewed bootstrap, ordinary refresh needs metadata only.
+  # This neither creates roles nor changes trust, policy contents or attachments.
+  statement {
+    effect = "Allow"
+    actions = [
+      "iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies", "iam:ListRoleTags",
+    ]
+    resources = [for name in [
+      "vayada-hotel-setup-execution",
+      "vayada-hotel-setup-task",
+      "vayada-hotel-setup-creation-bootstrap",
+      "vayada-hotel-setup-creation-reader-bootstrap",
+      "vayada-hotel-setup-property-reader-bootstrap",
+      "vayada-hotel-setup-property-bootstrap",
+      "vayada-hotel-setup-property-bootstrap-execution",
+      "vayada-hotel-setup-property-execution",
+      "vayada-hotel-setup-property-task",
+      "vayada-next-api-setup-caller-execution",
+    ] : "arn:aws:iam::${var.aws_account_id}:role/${name}"]
+  }
+
   statement {
     effect = "Allow"
     actions = [
