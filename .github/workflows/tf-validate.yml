@@ -14,6 +14,7 @@ on:
       - "scripts/test_hotel_setup_network.py"
       - "scripts/test_hotel_setup_service.py"
       - "docs/hotel-setup-private-service.md"
+      - "scripts/test_pricing_infrastructure_opt_in.py"
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
       - "scripts/test_coordinated_recovery.py"
@@ -40,6 +41,7 @@ on:
       - "scripts/financials-activation-readiness.mjs"
       - "scripts/grant-target-database-product-audit-insert.mjs"
       - "scripts/grant-target-database-folio-command.mjs"
+      - "scripts/grant-target-database-hotel-setup-tracks.mjs"
       - "scripts/finance-expense-worker-database.mjs"
       - "scripts/finance-export-worker-database.mjs"
       - "scripts/grant-target-database-identity-runtime.mjs"
@@ -244,6 +246,7 @@ jobs:
           node --check scripts/financials-activation-readiness.mjs
           node --check scripts/grant-target-database-product-audit-insert.mjs
           node --check scripts/grant-target-database-folio-command.mjs
+          node --check scripts/grant-target-database-hotel-setup-tracks.mjs
           node --check scripts/finance-expense-worker-database.mjs
           node --check scripts/finance-export-worker-database.mjs
           node --check scripts/grant-target-database-identity-runtime.mjs
@@ -299,6 +302,8 @@ jobs:
 
       - name: Verify hotel setup credential isolation (offline)
         run: python3 -m unittest scripts/test_hotel_setup_credentials.py -v
+      - name: Prove pricing infrastructure opt-in with native offline plans
+        run: python3 -m unittest scripts/test_pricing_infrastructure_opt_in.py -v
 
       - name: Verify private hotel setup network (offline)
         run: python3 -m unittest scripts/test_hotel_setup_network.py -v
