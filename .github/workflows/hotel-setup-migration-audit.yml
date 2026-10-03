@@ -1,0 +1,37 @@
+name: Read failed hotel setup migration diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: Reviewed operational image digest
+        required: true
+      expected_task_definition:
+        description: Exact stable public task after captured-task recovery
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+jobs:
+  audit:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Read only the fixed failed migration ledger
+        env:
+          EXPECTED_TASK: ${{ inputs.expected_task_definition }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: bash scripts/run-target-database-runtime-preflight.sh --audit-hotel-setup-migration "$IMAGE_DIGEST"
