@@ -1,7 +1,9 @@
 import copy
+from contextlib import contextmanager, redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import io
 import fcntl
 import hashlib
 import json
@@ -740,6 +742,82 @@ class ApprovalTests(unittest.TestCase):
             approval.observe_workflow_pause()
 
 
+class PrivateInspectionCliTests(unittest.TestCase):
+    def test_cli_only_connects_source_checks_and_sealed_no_op_guard(self):
+        events = []
+        @contextmanager
+        def sealed(path, digest):
+            self.assertEqual((path, digest), ("SECRET_SENTINEL.tfplan", "b" * 64))
+            events.append("open")
+            try:
+                yield 123
+            finally:
+                events.append("close")
+        def source(sha):
+            self.assertEqual(sha, "a" * 40)
+            events.append("source")
+        def guard(fd, digest, *, phase):
+            self.assertEqual((fd, digest, phase), (123, "b" * 64, "no-op"))
+            events.append("guard")
+        output = io.StringIO()
+        with patch.object(approval.os, "memfd_create", create=True), \
+                patch.object(approval, "verify_checkout_source", side_effect=source), \
+                patch.object(approval, "sealed_saved_plan", side_effect=sealed), \
+                patch.object(approval, "guard_saved_plan", side_effect=guard), \
+                patch.object(approval, "ApprovalGate") as gate, \
+                patch.object(approval, "_github_json") as api, redirect_stdout(output):
+            approval.main(["--inspect-no-op", "a" * 40, "b" * 64, "SECRET_SENTINEL.tfplan"])
+        self.assertEqual(events, ["source", "open", "guard", "source", "close"])
+        self.assertEqual(output.getvalue(), "Saved pricing plan has no changes; content inspection only, no execution or hold release\n")
+        gate.assert_not_called()
+        api.assert_not_called()
+
+    def test_cli_failure_and_interrupt_close_custody_without_success_or_raw_output(self):
+        for failing in ("source", "open", "guard", "late-source", "interrupt", "recursion"):
+            events = []
+            @contextmanager
+            def sealed(*args):
+                events.append("open")
+                if failing == "open":
+                    raise OSError("SECRET_SENTINEL")
+                try:
+                    yield 123
+                finally:
+                    events.append("close")
+            def source(*args):
+                if failing == "source" or (failing == "late-source" and events):
+                    raise ValueError("SECRET_SENTINEL")
+            def guard(*args, **kwargs):
+                if failing == "interrupt":
+                    raise KeyboardInterrupt
+                if failing == "recursion":
+                    raise RecursionError("SECRET_SENTINEL")
+                if failing == "guard":
+                    raise ValueError("SECRET_SENTINEL")
+            output = io.StringIO()
+            with self.subTest(failing=failing), patch.object(approval.os, "memfd_create", create=True), \
+                    patch.object(approval, "verify_checkout_source", side_effect=source), \
+                    patch.object(approval, "sealed_saved_plan", side_effect=sealed), \
+                    patch.object(approval, "guard_saved_plan", side_effect=guard), \
+                    redirect_stdout(output), self.assertRaises(SystemExit) as error:
+                approval.main(["--inspect-no-op", "a" * 40, "b" * 64, "SECRET_SENTINEL.tfplan"])
+            self.assertEqual(str(error.exception), "Private no-op inspection rejected; raw output withheld; no hold release")
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(events, [] if failing == "source" else ["open"] if failing == "open" else ["open", "close"])
+
+    def test_real_cli_rejects_unsupported_or_invalid_arguments_without_echo(self):
+        for args in ([], ["--apply", "SECRET_SENTINEL"],
+                     ["--inspect-no-op", "a" * 40, "b" * 64, "SECRET_SENTINEL", "extra"],
+                     ["--inspect-no-op", "SECRET_SENTINEL", "b" * 64, "missing"],
+                     ["--inspect-no-op", "a" * 40, "SECRET_SENTINEL", "missing"]):
+            result = subprocess.run([sys.executable, str(ROOT / "scripts/pricing_bootstrap_approval.py"), *args],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            self.assertNotIn("SECRET_SENTINEL", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+
 @unittest.skipUnless(hasattr(os, "memfd_create"), "Requires native Linux sealing")
 class SavedPlanTests(unittest.TestCase):
     def setUp(self):
@@ -936,13 +1014,35 @@ class SavedPlanTests(unittest.TestCase):
             for call in run.call_args_list:
                 self.assertEqual(call.kwargs["pass_fds"], (fd,))
                 self.assertNotIn("AWS_ACCESS_KEY_ID", call.kwargs["env"])
-        for malformed in ('{"resource_changes":[],"resource_changes":[]}', '{"terraform_version":"1.5.7",'):
+        nested = '{"SECRET_SENTINEL":' + '[' * 10_000 + '0' + ']' * 10_000 + '}'
+        for malformed in ('{"resource_changes":[],"resource_changes":[]}', '{"terraform_version":"1.5.7",', nested):
             with approval.sealed_saved_plan(self.path, self.digest) as fd, \
                     patch.object(approval.subprocess, "run", side_effect=[runtime_result(),
                                  subprocess.CompletedProcess([], 0, malformed, "SECRET_SENTINEL")]) as run, \
                     self.assertRaisesRegex(ValueError, "raw output withheld"):
                 approval.guard_saved_plan(fd, self.digest, phase="no-op")
             self.assertEqual(run.call_count, 2)
+
+        output = io.StringIO()
+        with patch.object(approval.subprocess, "run", side_effect=[runtime_result(), show, success]) as run, \
+                redirect_stdout(output):
+            approval.main(["--inspect-no-op", "a" * 40, self.digest, str(self.path)])
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual(self.source.call_count, 2)
+        fd = run.call_args_list[0].kwargs["pass_fds"][0]
+        with self.assertRaises(OSError):
+            os.fstat(fd)
+        self.assertNotIn("SECRET_SENTINEL", output.getvalue())
+        output = io.StringIO()
+        with patch.object(approval.subprocess, "run", side_effect=[runtime_result(),
+                          subprocess.CompletedProcess([], 0, nested, "SECRET_SENTINEL")]) as run, \
+                redirect_stdout(output), self.assertRaises(SystemExit) as error:
+            approval.main(["--inspect-no-op", "a" * 40, self.digest, str(self.path)])
+        self.assertEqual(str(error.exception), "Private no-op inspection rejected; raw output withheld; no hold release")
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(run.call_count, 2)
+        with self.assertRaises(OSError):
+            os.fstat(run.call_args_list[0].kwargs["pass_fds"][0])
 
     def test_guard_failure_never_consumes_approval_or_exposes_plan(self):
         current = context() | {"planSha256": self.digest}

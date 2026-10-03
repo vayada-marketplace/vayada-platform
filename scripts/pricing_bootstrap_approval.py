@@ -17,6 +17,7 @@ import runpy
 import secrets
 import stat
 import subprocess
+import sys
 import threading
 
 REPOSITORY = "vayada-marketplace/vayada-platform"
@@ -234,7 +235,7 @@ def guard_saved_plan(plan_fd, expected_sha256, *, phase="creation"):
         if result.returncode:
             raise ValueError
     except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError, StopIteration,
-            UnicodeError, subprocess.TimeoutExpired):
+            UnicodeError, RecursionError, subprocess.TimeoutExpired):
         raise ValueError("Saved pricing plan guards rejected; raw output withheld") from None
 
 
@@ -571,5 +572,24 @@ class ApprovalGate:
         return f"/proc/self/fd/{plan_fd}"
 
 
+def main(args):
+    """Private no-op inspection only; no planning, approval, AWS or apply lane."""
+    if len(args) != 4 or args[0] != "--inspect-no-op":
+        raise SystemExit("Approval component only; no setup executor or approved sessions configured")
+    source_sha, plan_sha256, path = args[1:]
+    try:
+        if (not re.fullmatch(r"[0-9a-f]{40}", source_sha)
+                or not re.fullmatch(r"[0-9a-f]{64}", plan_sha256)
+                or not hasattr(os, "memfd_create")):
+            raise ValueError
+        verify_checkout_source(source_sha)
+        with sealed_saved_plan(path, plan_sha256) as fd:
+            guard_saved_plan(fd, plan_sha256, phase="no-op")
+            verify_checkout_source(source_sha)
+    except (ValueError, OSError, TypeError, RecursionError, KeyboardInterrupt):
+        raise SystemExit("Private no-op inspection rejected; raw output withheld; no hold release") from None
+    print("Saved pricing plan has no changes; content inspection only, no execution or hold release")
+
+
 if __name__ == "__main__":
-    raise SystemExit("Approval component only; no setup executor or approved sessions configured")
+    main(sys.argv[1:])

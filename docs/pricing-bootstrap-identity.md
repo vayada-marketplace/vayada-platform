@@ -429,6 +429,31 @@ Synthetic native fixtures use `-refresh=false` and no backend only for offline
 compatibility tests; they are not acceptable production verification evidence.
 Successful inspection never authorizes activation or fence removal.
 
+The same module now has a narrowly read-only command:
+
+```text
+python3 scripts/pricing_bootstrap_approval.py --inspect-no-op <reviewed-main-sha> <saved-plan-sha256> <private-plan-file>
+```
+
+It checks argument shape and Linux sealing API presence before source/API access,
+verifies the actual checkout against authenticated current main, seals and hashes
+the private file, runs only the no-op inspection on that descriptor, then checks
+the checkout/current-main binding again before emitting one fixed content-only
+success message. Keep the plan outside the checkout in private transient storage;
+no plan bytes, path or user-supplied argument is printed. Unsupported commands,
+source/custody/guard failure or interruption fail without a success message; the
+descriptor closes on failure and no approval or release path is connected.
+Actual syscall/seal availability is checked during custody, not by API presence;
+deeply nested native JSON is also rejected with fixed sanitized output.
+
+This command does not plan, initialize, call AWS, acquire deployment access or
+establish that the file came from this source/backend. GitHub ref reads are its
+only external observations. All independently admitted runtime, full-root fresh
+locked planning/input/state and whole-writer/session gates above still apply.
+It cannot run successfully from this unmerged draft as an admitted main checkout.
+It is a private verification entry point, not the missing hosted planning lane,
+pricing setup executor or authorization to run production verification.
+
 Partial installation, failure, cancellation, drift or unverifiable retirement
 keeps installed denials and blocks release pending the explicitly reviewed recovery
 procedure. No hold installation, verification, release executor or setup runner
