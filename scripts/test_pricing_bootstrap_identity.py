@@ -179,9 +179,11 @@ resource "aws_iam_role" "github_actions_platform_deploy" {
             schemas = json.loads(self.run_tf("providers", "schema", "-json").stdout)[
                 "provider_schemas"]["registry.terraform.io/hashicorp/aws"]["resource_schemas"]
 
-            def plan(enabled=False):
-                (fixture / "pricing_stage.auto.tfvars.json").write_text(json.dumps({
-                    "enable_pricing_command_metadata_refresh": enabled}))
+            def plan(enabled=False, reader=False):
+                settings = {"enable_pricing_command_metadata_refresh": enabled}
+                if reader:
+                    settings["enable_pricing_verification_reader"] = True
+                (fixture / "pricing_stage.auto.tfvars.json").write_text(json.dumps(settings))
                 self.run_tf("plan", "-refresh=false", "-out=fixture.tfplan")
                 return json.loads(self.run_tf("show", "-json", "fixture.tfplan").stdout)
 
@@ -224,6 +226,26 @@ resource "aws_iam_role" "github_actions_platform_deploy" {
                     "lineage": "00000000-0000-0000-0000-000000000000", "outputs": {}, "resources": list(resources.values())}))
             self.assertEqual([(r["address"], r["change"]) for r in plan()["resource_changes"]
                               if r["change"]["actions"] != ["no-op"]], [])
+            reader = plan(reader=True)
+            changes = [r for r in reader["resource_changes"] if r["change"]["actions"] != ["no-op"]]
+            self.assertEqual([(r["address"], r["change"]["actions"]) for r in changes],
+                             [("aws_iam_role.platform_plan[0]", ["update"])])
+            before, after = changes[0]["change"]["before"], changes[0]["change"]["after"]
+            self.assertEqual({k: v for k, v in before.items() if k != "assume_role_policy"},
+                             {k: v for k, v in after.items() if k != "assume_role_policy"})
+            old, new = json.loads(before["assume_role_policy"]), json.loads(after["assume_role_policy"])
+            subject = "repo:vayada-marketplace/vayada-platform:environment:vay1543-pricing-verification"
+            expected = json.loads(json.dumps(old["Statement"][0]))
+            expected["Condition"]["StringEquals"]["token.actions.githubusercontent.com:sub"] = subject
+            self.assertEqual(new, dict(old, Statement=old["Statement"] + [expected]))
+            runpy.run_path(str(ROOT / "scripts/assert-platform-writer-boundary-plan.py"))["check"](reader)
+            self.assertIs(plan()["variables"]["enable_pricing_verification_reader"]["value"], False)
+            for enforce in (False, True):
+                rejected = self.run_tf("plan", "-refresh=false", "-var=enable_pricing_verification_reader=true",
+                                       "-var=platform_writer_boundary=" + json.dumps({
+                                           "bootstrap_plan_role": True, "enforce_trust": enforce}), ok=False)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("Pricing verification reader requires enforced writer trust", rejected.stderr)
             guard = runpy.run_path(str(ROOT / "scripts/assert-pricing-bootstrap-plan.py"))["check_metadata"]
             enabled = plan(True)
             self.assertIs(enabled["variables"]["enable_pricing_command_metadata_refresh"]["value"], True)

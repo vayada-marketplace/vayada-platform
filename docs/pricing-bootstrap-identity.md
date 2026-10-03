@@ -426,6 +426,15 @@ actual environment restrictions and composed reader permissions independently;
 the OIDC environment subject itself does not prove branch, reviewer or source.
 Do not broaden trust to a repository wildcard or add setup/deployment grants.
 
+`enable_pricing_verification_reader` now prepares this exact additional trust
+statement in the normal root, defaulting to false. No checked-in activation
+setting enables it. The existing PR trust, reader permission policy and writer
+boundary/cutoff remain unchanged by default. Enabling it requires enforced writer
+trust with a reviewed session cutoff and a separately reviewed exact trust-update plan, fresh
+environment/RoleId/permission admission and explicit installation approval.
+This option does not create a workflow, privately generate a plan or install a
+writer fence; environment approval does not authorize those AWS operations.
+
 The reviewed prerequisite must specify policy/attachment ownership and an exact
 saved plan, actual capacity, complete admitted target set, human-selected window,
 private runner/backend/input binding, failure recovery and separate release
