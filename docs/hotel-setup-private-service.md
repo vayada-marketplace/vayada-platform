@@ -147,3 +147,32 @@ preflights, isolated credential provisioning and normal CI release/rollback
 remain activation gates. A mode change after staging can replace protected secret
 containers and requires its own clean Terraform plan; do not use it as a live
 service-purpose switch.
+
+
+## Organization credential bootstrap
+
+`provision-hotel-setup-creation-login.mjs` is an operational one-off task, never
+a private service entrypoint. Run only in an approved composed application image:
+it imports that image's exact creation grant inventory and native release check.
+The fixed admin secret references the known RDS admin on `/postgres`; the client
+uses the reviewed CA with verified TLS and the fixed target database. Supply only
+the organization's and current owner's UUIDs. Existing organization assignments
+are rejected; roles and passwords are never adopted or silently rotated.
+
+The script creates a fresh native login, exact column grants and organization
+assignment, writes and rereads its two-field vault credential, then independently
+proves the native connection and current owner. It saves no hotel or business
+audit. A failure disables only the newly created role, removes its assignment and
+terminates its sessions; this also covers a lost COMMIT acknowledgement. A
+`hotel_setup_creation_provision_cleanup_required` receipt blocks release until
+that named role is verified disabled. Failed secret values can remain orphaned,
+but are not selected by any organization registry entry.
+
+The separately staged bootstrap IAM role can create/read/write only native
+organization secrets. It cannot access reader/token, ordinary API, owner or
+migration secret values. The one-off execution role injects the exact operational
+admin secret; never attach the bootstrap role or admin secret to the service.
+Production caller wiring and private-service release remain separate gates.
+The local fixture requires the owned disposable creation database and a memory
+vault; it does not connect to AWS. It proves failed owner checks, duplicate
+assignment rejection, lost COMMIT cleanup and unchanged hotel/audit counts.

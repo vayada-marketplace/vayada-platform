@@ -15,11 +15,12 @@ def render(enabled, mode="property_commands"):
     with tempfile.TemporaryDirectory() as directory:
         # Only locals/variables: no provider, backend, AWS access or state.
         text = SOURCE.read_text().split('resource "', 1)[0]
+        text += (ROOT / "infra/hotel_setup_creation_bootstrap.tf").read_text().split('resource "', 1)[0]
         text += '\nvariable "aws_region" { default = "eu-west-1" }\n'
         text += '\nvariable "aws_account_id" { default = "269416271598" }\n'
         Path(directory, "main.tf").write_text(text)
         Path(directory, TEMPLATE.name).write_text(TEMPLATE.read_text())
-        expression = 'jsonencode({names=local.hotel_setup_secret_names,trust=jsondecode(local.hotel_setup_role_trust),policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([local.hotel_setup_native_secret_arn])}))})'
+        expression = 'jsonencode({bootstrap_enabled=local.hotel_setup_creation_bootstrap_enabled,bootstrap_policy=jsondecode(local.hotel_setup_creation_bootstrap_policy),names=local.hotel_setup_secret_names,trust=jsondecode(local.hotel_setup_role_trust),policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([local.hotel_setup_native_secret_arn])}))})'
         result = subprocess.run(
             ["terraform", "console", "-no-color", f"-var=enable_hotel_setup_credential_infrastructure={str(enabled).lower()}", f"-var=hotel_setup_command_mode={mode}"],
             input=expression + "\n", text=True, capture_output=True, cwd=directory, check=True, timeout=30)
@@ -29,6 +30,8 @@ def render(enabled, mode="property_commands"):
 class HotelSetupCredentialsTests(unittest.TestCase):
     def test_default_off_and_no_service_or_values(self):
         self.assertEqual(render(False)["names"], {})
+        self.assertFalse(render(False, "property_creation")["bootstrap_enabled"])
+        self.assertFalse(render(True)["bootstrap_enabled"])
         source = SOURCE.read_text()
         self.assertRegex(source, r'default\s*=\s*false')
         self.assertEqual(source.count('count = var.enable_hotel_setup_credential_infrastructure ? 1 : 0'), 4)
@@ -37,7 +40,7 @@ class HotelSetupCredentialsTests(unittest.TestCase):
         for forbidden in ['aws_secretsmanager_secret_version', 'aws_ecs_', 'aws_iam_role_policy_attachment', 'ssm:', 'kms:', 'PassRole']:
             self.assertNotIn(forbidden, source)
         for path in (ROOT / "infra").glob("*.tf"):
-            if path != SOURCE and path.name != "hotel_setup_service.tf":
+            if path != SOURCE and path.name not in ["hotel_setup_service.tf", "hotel_setup_creation_bootstrap.tf"]:
                 self.assertNotIn('aws_iam_role.hotel_setup_', path.read_text(), str(path))
 
     def test_unknown_mode_fails_closed(self):
@@ -46,6 +49,9 @@ class HotelSetupCredentialsTests(unittest.TestCase):
 
     def test_creation_reads_exclude_property_and_injected_credentials(self):
         rendered = render(True, "property_creation")
+        self.assertTrue(rendered["bootstrap_enabled"])
+        bootstrap, = rendered["bootstrap_policy"]["Statement"]
+        self.assertEqual(bootstrap["Action"], ["secretsmanager:CreateSecret", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"])
         self.assertEqual(rendered["names"], {
             "reader_database_url": "hotel-setup-creation/prod/reader-database-url",
             "internal_token": "hotel-setup-creation/prod/internal-token"})
@@ -54,6 +60,7 @@ class HotelSetupCredentialsTests(unittest.TestCase):
         pattern, = statement["Resource"]
         prefix = "arn:aws:secretsmanager:eu-west-1:269416271598:secret:"
         self.assertEqual(pattern, prefix + "hotel-setup-command/prod/organization/vayada_next_hotel_setup_org_*")
+        self.assertEqual(bootstrap["Resource"], [pattern])
         self.assertTrue(fnmatch.fnmatchcase(prefix + "hotel-setup-command/prod/organization/vayada_next_hotel_setup_org_abc-AbCd12", pattern))
         for name in [*rendered["names"].values(), "hotel-setup-command/prod/property/vayada_next_hotel_setup_property_abc", "pricing-command/prod/owner-manage-database-url", "hotel-setup-command/prod/organization/postgres"]:
             self.assertFalse(fnmatch.fnmatchcase(prefix + name + "-AbCd12", pattern), name)
