@@ -51,7 +51,7 @@ until the private service's authenticated preflights pass.
 
 ## Credential and release gates
 
-1. Review the composed app migrations through 0450, immutable image containing
+1. Review the composed app migrations through 0453, immutable image containing
    the private executable, and exact reader/native-login/function ownership.
    A separate provisioner must satisfy the app's credential-lifecycle contract:
    no arbitrary role adoption/retargeting, exact purpose/owner assignment,
@@ -79,7 +79,8 @@ until the private service's authenticated preflights pass.
    check. Off preserves data. Existing hotels use their separate rollout.
 
 App contract: `engineering/hotel-setup-command-credential-lifecycle.md` in
-`vayada-marketplace/vayada`; reader/audit drafts #2746 and #2747. No production
+`vayada-marketplace/vayada`; reader/audit drafts #2746/#2747 and native/compiled
+credential checks #2752/#2757 and completion-scope correction #2761. No production
 release, provisioning or property activation is authorized by this document.
 
 ## Staged private connection
@@ -124,3 +125,25 @@ approved change; do not apply this zero-count staging configuration over an
 activated service. Automated circuit rollback uses ECS's last completed service
 deployment, not the separately registered rollback family. A future release must
 select and verify that exact rollback task explicitly before activation.
+
+
+## Creation-only staged runtime
+
+Set `hotel_setup_command_mode=property_creation` for the reviewed creation image.
+The executable receives that fixed mode and constructs no currency or Feature Hub
+adapter. The execution role reads only the separately named
+`hotel-setup-creation/prod/reader-database-url` and
+`hotel-setup-creation/prod/internal-token` secret containers. The reader URL must
+use `vayada_next_hotel_setup_creation_reader`; the app rejects the property reader.
+The task role reads only organization secrets below
+`hotel-setup-command/prod/organization/vayada_next_hotel_setup_org_` and cannot
+read property-command, ordinary API, owner or migration credentials.
+
+This reuses the disabled private deployment contract. Default mode remains
+`property_commands`, all infrastructure flags remain false and staged capacity
+remains zero. No secret value, role grant, approved image, public API forwarding
+or deployment is introduced here. Native creation and creation-reader release
+preflights, isolated credential provisioning and normal CI release/rollback
+remain activation gates. A mode change after staging can replace protected secret
+containers and requires its own clean Terraform plan; do not use it as a live
+service-purpose switch.
