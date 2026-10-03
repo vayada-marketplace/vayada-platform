@@ -118,7 +118,11 @@ class HotelSetupServiceTests(unittest.TestCase):
         self.assertIn('aws_iam_role.hotel_setup_property_task', task['task_role_arn']['references'])
         for slot in ['primary', 'rollback']:
             self.assertEqual(resources[f'aws_ecs_task_definition.hotel_setup_property["{slot}"]']['family'], 'vayada-hotel-setup-property-' + slot)
-        self.assertEqual(json.loads((ROOT / 'deployment/hotel-setup-property-images.json').read_text()), {})
+        inventory = json.loads((ROOT / 'deployment/hotel-setup-property-images.json').read_text())
+        proof = json.loads((ROOT / 'deployment/hotel-setup-property-image-proof.json').read_text())
+        self.assertEqual(inventory, {proof[slot]['digest']: proof[slot]['source'] for slot in ('primary', 'rollback')})
+        self.assertNotEqual(proof['primary']['digest'], proof['rollback']['digest'])
+        self.assertEqual(proof['verification']['postgresVersions'], [16, 17])
         source = (ROOT / 'infra/hotel_setup_property_service.tf').read_text()
         self.assertIn('prevent_destroy = true', source)
         self.assertIn('ignore_changes = [desired_count, task_definition]', source)
