@@ -93,8 +93,15 @@ logins, tasks or service. `enable_hotel_setup_property_network=false` adds no de
 opt-in uses the shared internal HTTPS ALB/certificate with a separate property
 host rule, target group, task security group and VPC-only DNS zone. The creation
 host keeps its own target; unknown hosts receive403. It requires the shared
-network flag and neither attaches the caller group nor creates tasks. Service
-staging remains a later slice.
+network flag and neither attaches the caller group nor creates tasks. Property service staging uses its own default-off
+`enable_hotel_setup_property_service_staging` flag and primary/rollback digest
+inputs. Its separate reviewed image inventory is empty until exact compiled
+property-command proofs are supplied. Staging requires both images, isolated
+credentials/network and WorkOS configuration; it creates a zero-task service.
+Normal CI owns activation and task selection: later Terraform staging preserves
+the serving task/count and cannot destroy the service by resetting the flag.
+Creation-specific release handling must likewise protect its serving task/count
+before a combined apply. No caller attachment or activation is part of staging.
 
 Acceptance must cover the actual wizard Save: property creation, optional logo,
 launch-settings save, status reload, and subsequent native PMS first-currency

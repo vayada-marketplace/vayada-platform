@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,10 +16,11 @@ def plan(enabled, service=None, property_network=False):
         path = Path(directory) / "infra"
         path.mkdir()
         if service is not None:
-            for name in ["hotel_setup_creation_bootstrap.tf", "hotel_setup_credentials.tf", "hotel_setup_property_credentials.tf", "hotel_setup_secret_read_policy.json.tftpl", "hotel_setup_service.tf", "hotel_setup_container.json.tftpl"]:
+            for name in ["hotel_setup_creation_bootstrap.tf", "hotel_setup_credentials.tf", "hotel_setup_property_credentials.tf", "hotel_setup_secret_read_policy.json.tftpl", "hotel_setup_service.tf", "hotel_setup_property_service.tf", "hotel_setup_container.json.tftpl"]:
                 shutil.copy(ROOT / "infra" / name, path)
             (path.parent / "deployment").mkdir()
             (path.parent / "deployment/hotel-setup-command-images.json").write_text(json.dumps(service.get("inventory", {})))
+            (path.parent / "deployment/hotel-setup-property-images.json").write_text(json.dumps(service.get("property_inventory", {})))
             (path.parent / "rehearsal").mkdir()
             shutil.copy(ROOT / "rehearsal/rds-ca-rsa2048-g1.pem", path.parent / "rehearsal")
         shutil.copy(ROOT / 'infra/hotel_setup_network.tf', path)
@@ -59,12 +61,15 @@ variable "workos_jwks_url" { default = "https://api.workos.com/jwks/client_fixtu
 variable "workos_issuer" { default = "https://api.workos.com/" }
 variable "workos_audience" { default = "client_fixture" }
 output "setup_environment" { value = local.hotel_setup_environment }
+output "property_environment" { value = local.hotel_setup_property_environment }
 ''')
             (path / 'fixture.auto.tfvars.json').write_text(json.dumps({
                 'enable_hotel_setup_service_staging': service.get('enabled', False),
                 'enable_hotel_setup_credential_infrastructure': service.get('credentials', False),
                 'hotel_setup_command_mode': service.get('mode', 'property_commands'),
                 'enable_hotel_setup_property_credentials': service.get('property_credentials', False),
+                'enable_hotel_setup_property_service_staging': service.get('property_enabled', False),
+                'hotel_setup_property_image_digests': service.get('property_digests', {'primary': '', 'rollback': ''}),
                 'hotel_setup_image_digests': service.get('digests', {'primary': '', 'rollback': ''})}))
         env = {**os.environ, 'AWS_EC2_METADATA_DISABLED': 'true'}
         env.pop('AWS_PROFILE', None)
@@ -75,7 +80,29 @@ output "setup_environment" { value = local.hotel_setup_environment }
             if completed.returncode:
                 raise AssertionError(completed.stdout + completed.stderr)
         result = subprocess.run(['terraform', 'show', '-json', 'fixture.plan'], cwd=path, env=env, capture_output=True, text=True, check=True)
-        return json.loads(result.stdout)
+        rendered = json.loads(result.stdout)
+        if service and service.get('existing_property_service'):
+            resource = next(r for r in rendered['planned_values']['root_module']['resources']
+                            if r['address'] == 'aws_ecs_service.hotel_setup_property[0]')
+            values = resource['values']
+            values.update(id='arn:aws:ecs:eu-west-1:269416271598:service/offline-cluster/vayada-hotel-setup-property-service',
+                          desired_count=1, task_definition='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-hotel-setup-property-primary:77')
+            (path / 'terraform.tfstate').write_text(json.dumps({
+                'version': 4, 'serial': 1, 'lineage': str(uuid4()), 'outputs': {},
+                'resources': [{'mode': 'managed', 'type': 'aws_ecs_service', 'name': 'hotel_setup_property',
+                               'provider': 'provider["registry.terraform.io/hashicorp/aws"]',
+                               'instances': [{'index_key': 0, 'schema_version': resource['schema_version'], 'attributes': values}]}]}))
+            overrides = ['-var=enable_hotel_setup_property_service_staging=false'] if service.get('remove_property_service') else []
+            resumed = subprocess.run(['terraform', 'plan', '-input=false', '-refresh=false', '-no-color',
+                                      '-out=resumed.plan', f'-var=enable_hotel_setup_private_network={str(enabled).lower()}',
+                                      f'-var=enable_hotel_setup_property_network={str(property_network).lower()}', *overrides],
+                                     cwd=path, env=env, capture_output=True, text=True)
+            if resumed.returncode:
+                raise AssertionError(resumed.stdout + resumed.stderr)
+            result = subprocess.run(['terraform', 'show', '-json', 'resumed.plan'], cwd=path, env=env,
+                                    capture_output=True, text=True, check=True)
+            rendered = json.loads(result.stdout)
+        return rendered
 
 
 class HotelSetupNetworkTests(unittest.TestCase):
