@@ -131,6 +131,7 @@ class CreationRunnerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         definition = json.loads((self.root / 'capture/definition.json').read_text())
         self.assertEqual(definition['taskRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap')
+        self.assertEqual(definition['executionRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution')
         item, = definition['containerDefinitions']
         self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
         raw = (self.root / 'capture/overrides.json').read_text()

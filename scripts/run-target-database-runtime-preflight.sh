@@ -25,6 +25,7 @@ creation_purpose=""
 creation_org=""
 creation_actor=""
 creation_task_role=""
+creation_execution_role=""
 property_id=""
 property_operation=""
 helper_file=""
@@ -238,6 +239,7 @@ case "${mode}" in
     secret_parameter="/vayada/prod/db-marketplace-url"
     task_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$6"
     creation_task_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap"
+    creation_execution_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution"
     ;;
   --provision-hotel-setup-creation-org|--provision-hotel-setup-creation-reader|--provision-hotel-setup-property-reader)
     if [[ "${mode}" == "--provision-hotel-setup-creation-org" ]]; then
@@ -453,10 +455,11 @@ PYCODE
 fi
 temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" \
   --arg secret_name "${secret_name}" --arg secret_parameter "${secret_parameter}" \
-  --arg extra_secret_name "${extra_secret_name}" --arg extra_secret_parameter "${extra_secret_parameter}" --arg channex_image "${channex_image}" --arg task_image "${task_image}" --arg creation_task_role "${creation_task_role}" '
+  --arg extra_secret_name "${extra_secret_name}" --arg extra_secret_parameter "${extra_secret_parameter}" --arg channex_image "${channex_image}" --arg task_image "${task_image}" --arg creation_task_role "${creation_task_role}" --arg creation_execution_role "${creation_execution_role}" '
   del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
   | del(.taskRoleArn)
   | if $creation_task_role == "" then . else .taskRoleArn=$creation_task_role end
+  | if $creation_execution_role == "" then . else .executionRoleArn=$creation_execution_role end
   | .family=$family
   | .containerDefinitions=[.containerDefinitions[]|select(.name==$container)
       | .secrets=[{name:$secret_name,valueFrom:$secret_parameter}]
