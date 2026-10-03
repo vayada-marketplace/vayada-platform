@@ -12,6 +12,9 @@ on:
       - "scripts/test_pricing_command_metadata_refresh.py"
       - "scripts/test_hotel_setup_credentials.py"
       - "scripts/test_hotel_setup_public_caller.py"
+      - "scripts/test_hotel_setup_release.py"
+      - "scripts/release-hotel-setup.py"
+      - ".github/workflows/hotel-setup-release.yml"
       - "scripts/test_hotel_setup_network.py"
       - "scripts/test_hotel_setup_service.py"
       - "scripts/test_hotel_setup_creation_runner.py"
@@ -307,7 +310,7 @@ jobs:
         working-directory: infra
 
       - name: Verify hotel setup credential isolation (offline)
-        run: python3 -m unittest scripts/test_hotel_setup_credentials.py scripts/test_hotel_setup_public_caller.py -v
+        run: python3 -m unittest scripts/test_hotel_setup_credentials.py scripts/test_hotel_setup_public_caller.py scripts/test_hotel_setup_release.py -v
 
       - name: Verify private hotel setup network (offline)
         run: python3 -m unittest scripts/test_hotel_setup_network.py -v
