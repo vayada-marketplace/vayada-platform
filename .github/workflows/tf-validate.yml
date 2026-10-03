@@ -10,6 +10,7 @@ on:
       - "scripts/assert-platform-writer-boundary-plan.py"
       - "scripts/test_platform_writer_boundary.py"
       - "scripts/test_pricing_command_metadata_refresh.py"
+      - "scripts/test_pricing_infrastructure_opt_in.py"
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
       - "scripts/test_coordinated_recovery.py"
@@ -190,7 +191,7 @@ jobs:
       - name: Validate operations scripts
         run: |
           python3 -m unittest scripts/test_platform_writer_boundary.py -v
-          python3 -m unittest scripts/test_pricing_command_metadata_refresh.py -v
+          python3 -m unittest scripts/test_pricing_command_metadata_refresh.py scripts/test_pricing_infrastructure_opt_in.py -v
           python3 -m py_compile scripts/coordinated_release.py
           python3 -m unittest scripts/test_coordinated_release.py -v
           python3 -m unittest scripts/test_coordinated_recovery.py -v
