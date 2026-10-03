@@ -130,6 +130,7 @@ CREATE TABLE platform.channex_management_worker_properties (property_id uuid PRI
 CREATE TABLE platform.finance_expense_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.finance_export_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.pricing_runtime_property_scopes (database_login name PRIMARY KEY);
+CREATE TABLE platform.hotel_setup_property_scopes (database_login name PRIMARY KEY, property_id uuid, organization_id uuid);
 CREATE TABLE platform.hotel_setup_creation_scopes (database_login name PRIMARY KEY, organization_id uuid);
 CREATE TABLE platform.hotel_setup_linked_properties (property_id uuid PRIMARY KEY);
 CREATE VIEW hotel_catalog.hotel_setup_effective_creation_scopes WITH (security_barrier = true) AS
@@ -922,6 +923,7 @@ run_preflight | grep -F '"status":"PASS"' >/dev/null
 
 # Exact hotel setup exclusions must reject leaked direct, PUBLIC and inherited reads.
 for entry in \
+  platform.hotel_setup_property_scopes:database_login \
   platform.hotel_setup_creation_scopes:database_login \
   platform.hotel_setup_linked_properties:property_id \
   hotel_catalog.hotel_setup_effective_creation_scopes:organization_id; do

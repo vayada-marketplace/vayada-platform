@@ -16,6 +16,23 @@ on:
       - "scripts/assert-pricing-bootstrap-plan.py"
       - "scripts/test_pricing_bootstrap_plan.py"
       - ".github/workflows/pricing-command-bootstrap-plan.yml"
+      - "scripts/test_hotel_setup_credentials.py"
+      - "scripts/test_hotel_setup_public_caller.py"
+      - "scripts/test_hotel_setup_release.py"
+      - "scripts/release-hotel-setup.py"
+      - "scripts/run-hotel-setup-property-bootstrap.mjs"
+      - "scripts/audit-hotel-setup-owner.mjs"
+      - ".github/workflows/hotel-setup-release.yml"
+      - "scripts/test_hotel_setup_network.py"
+      - "scripts/test_hotel_setup_service.py"
+      - "scripts/test_hotel_setup_creation_runner.py"
+      - "scripts/provision-hotel-setup-creation-login.mjs"
+      - "scripts/test-hotel-setup-creation-bootstrap.mjs"
+      - ".github/workflows/hotel-setup-creation-bootstrap.yml"
+      - ".github/workflows/hotel-setup-property-reader-bootstrap.yml"
+      - ".github/workflows/hotel-setup-property-bootstrap.yml"
+      - ".github/workflows/hotel-setup-owner-audit.yml"
+      - "docs/hotel-setup-private-service.md"
       - "scripts/test_pricing_infrastructure_opt_in.py"
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
@@ -265,6 +282,9 @@ jobs:
           python3 scripts/test-target-database-identity-secret.py
           python3 scripts/test-target-database-runtime-preflight.py
           python3 scripts/test-target-database-runtime-runner.py
+          python3 scripts/test_hotel_setup_creation_runner.py
+          node --check scripts/provision-hotel-setup-creation-login.mjs
+          node --check scripts/test-hotel-setup-creation-bootstrap.mjs
           python3 scripts/test-channex-worker-database.py
           python3 scripts/test-pause-next-api-channex-worker.py
           python3 scripts/test-next-api-split-compatible-image.py
@@ -297,14 +317,24 @@ jobs:
         uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "~1.5"
+          # Offline console fixtures send stdin; the action wrapper does not forward it.
           terraform_wrapper: false
 
       - name: Terraform init (no backend)
         run: terraform init -backend=false
         working-directory: infra
 
+      - name: Verify hotel setup credential isolation (offline)
+        run: python3 -m unittest scripts/test_hotel_setup_credentials.py scripts/test_hotel_setup_public_caller.py scripts/test_hotel_setup_release.py scripts/test_hotel_setup_caller_retained.py -v
+
       - name: Prove pricing infrastructure opt-in with native offline plans
         run: python3 -m unittest scripts/test_pricing_infrastructure_opt_in.py -v
+
+      - name: Verify private hotel setup network (offline)
+        run: python3 -m unittest scripts/test_hotel_setup_network.py -v
+
+      - name: Verify private hotel setup service staging (offline)
+        run: python3 -m unittest scripts/test_hotel_setup_service.py -v
 
       - name: Terraform validate
         run: terraform validate

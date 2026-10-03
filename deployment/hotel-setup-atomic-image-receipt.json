@@ -1,0 +1,131 @@
+{
+  "status": "PASS",
+  "scope": "distinct_actual_immutable_API_images_owned_local_TLS_PG16_PG17",
+  "images": {
+    "primary": {
+      "status": "PASS",
+      "scope": "actual_immutable_image_local_TLS_only",
+      "imageDigest": "sha256:c2fbba1a4d3f8f7bc4c46d0816f125d3598cd1c1a4880dd3b103feb0d3aa67d2",
+      "source": "6f903db20554e38b522c848667875744fc673ed3",
+      "ociRevisionMatched": true,
+      "compiledFinanceConfig": "PASS",
+      "actualLauncherOwnerPresent": "PASS",
+      "actualLauncherOwnerUnset": "PASS",
+      "postgresVersions": {
+        "16": {
+          "digest": "sha256:c2fbba1a4d3f8f7bc4c46d0816f125d3598cd1c1a4880dd3b103feb0d3aa67d2",
+          "source": "6f903db20554e38b522c848667875744fc673ed3",
+          "statuses": [
+            {
+              "step": "migrate",
+              "exit": 0
+            },
+            {
+              "step": "hotelSetupCreationPrivileges.integration.test.mjs",
+              "exit": 0
+            },
+            {
+              "step": "hotelSetupCreationProducts.integration.test.mjs",
+              "exit": 0
+            },
+            {
+              "step": "bootstrap",
+              "exit": 0
+            }
+          ]
+        },
+        "17": {
+          "digest": "sha256:c2fbba1a4d3f8f7bc4c46d0816f125d3598cd1c1a4880dd3b103feb0d3aa67d2",
+          "source": "6f903db20554e38b522c848667875744fc673ed3",
+          "statuses": [
+            {
+              "step": "migrate",
+              "exit": 0
+            },
+            {
+              "step": "hotelSetupCreationPrivileges.integration.test.mjs",
+              "exit": 0
+            },
+            {
+              "step": "hotelSetupCreationProducts.integration.test.mjs",
+              "exit": 0
+            },
+            {
+              "step": "bootstrap",
+              "exit": 0
+            }
+          ]
+        }
+      },
+      "operationalSourceSHA256": {
+        "test-hotel-setup-creation-bootstrap.mjs": "e4c0e95ed30e4c4451cc127ad0643ce21abd6522cc96a11185ba75ed06076e4c",
+        "provision-hotel-setup-creation-login.mjs": "418a5fa6750796d246888939328083c0f9912f510ac3704f9323f6d90536d9e5"
+      },
+      "productionMutation": false
+    },
+    "rollback": {
+      "status": "PASS",
+      "scope": "actual_immutable_image_local_TLS_only",
+      "imageDigest": "sha256:ac29c768aca69f1f0710e4278340f06031fc7f619b6c67d0cbc221b539ac2bac",
+      "source": "e966028dfdaec63ff40dd75d043b800295071668",
+      "ociRevisionMatched": true,
+      "compiledFinanceConfig": "PASS",
+      "actualLauncherOwnerPresent": "PASS",
+      "actualLauncherOwnerUnset": "PASS",
+      "postgresVersions": {
+        "16": {
+          "digest": "sha256:ac29c768aca69f1f0710e4278340f06031fc7f619b6c67d0cbc221b539ac2bac",
+          "source": "e966028dfdaec63ff40dd75d043b800295071668",
+          "statuses": [
+            {
+              "step": "migrate",
+              "exit": 0
+            },
+            {
+              "step": "hotelSetupCreationPrivileges.integration.test.mjs",
+              "exit": 0
+            },
+            {
+              "step": "hotelSetupCreationProducts.integration.test.mjs",
+              "exit": 0
+            },
+            {
+              "step": "bootstrap",
+              "exit": 0
+            }
+          ]
+        },
+        "17": {
+          "digest": "sha256:ac29c768aca69f1f0710e4278340f06031fc7f619b6c67d0cbc221b539ac2bac",
+          "source": "e966028dfdaec63ff40dd75d043b800295071668",
+          "statuses": [
+            {
+              "step": "migrate",
+              "exit": 0
+            },
+            {
+              "step": "hotelSetupCreationPrivileges.integration.test.mjs",
+              "exit": 0
+            },
+            {
+              "step": "hotelSetupCreationProducts.integration.test.mjs",
+              "exit": 0
+            },
+            {
+              "step": "bootstrap",
+              "exit": 0
+            }
+          ]
+        }
+      },
+      "operationalSourceSHA256": {
+        "test-hotel-setup-creation-bootstrap.mjs": "e4c0e95ed30e4c4451cc127ad0643ce21abd6522cc96a11185ba75ed06076e4c",
+        "provision-hotel-setup-creation-login.mjs": "418a5fa6750796d246888939328083c0f9912f510ac3704f9323f6d90536d9e5"
+      },
+      "productionMutation": false
+    }
+  },
+  "dualImagePass": true,
+  "productionMutation": false,
+  "limitations": "No production server/worker startup, live AWS secret vault publication, or customer writes. Operational publication faults use local memory vault."
+}
