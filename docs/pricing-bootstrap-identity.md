@@ -399,6 +399,45 @@ window and installer/recovery responsibility are required, not an assumption
 that deployment-role attachments restrict that owner. Non-AWS writers,
 resource policies/SCPs and accepted/chained executions remain review gates.
 
+#### Installation design for review — no live plan or activation
+
+Use the existing separate operator-owned Terraform state at
+`vay1543/bootstrap-identity/terraform.tfstate` for a future managed hold policy
+and its attachments. Do not put them in the ordinary platform root, change the
+VAY-2029 boundary, or add installation permissions to either pricing-phase
+identity. This is a proposed ownership choice, not implemented configuration.
+
+The smallest implementation should default to an empty explicit target set:
+no hold resources and no target-role lookups. Activation must name each reviewed
+target, read its actual IAM `RoleId`, and reject a mismatch with the approved
+inventory before creating the policy or attachments. The four candidates above
+are not automatically selected. Additional overlapping writers require review;
+an implementation restricted to those four cannot claim complete coverage.
+
+For an approved four-target inventory, the expected installation is one new
+managed deny-only policy and four attachments, with no role, trust, existing
+policy or service updates. This is an expected shape, **not a saved plan**.
+Keep both pricing-phase provisioning windows disabled for that installation;
+sharing a state root does not authorize bundling their identity resources.
+Native provider planning must prove the actual shape against fresh state and
+reviewed source. Recheck attachment capacity and existing attachments first;
+reject imports, replacements, deletes and unrelated changes. Preserve the
+separate approved reader-trust update as a distinct prerequisite plan.
+
+Protect hold resources from normal Terraform destruction. A failed or partial
+installation must not detach already installed denials. Do not add automatic
+expiry, an exception for verification, or an apply-time cleanup handler.
+Installation is not admission: separately prove full writer coverage, reader
+non-interference, propagation, and accepted/chained execution drain before
+either pricing phase. The selected administrator remains capable of undoing
+the hold; record the human non-interference window and recovery owner explicitly.
+
+Release requires a separately reviewed exact removal plan and fresh human
+approval after privileged sessions are retired and the full-root private no-op
+check passes. Changing the target input back to empty is not release approval.
+Until the missing inventory and admission evidence is complete, keep this design
+uninstalled and do not dispatch a setup or deployment run.
+
 For hosted verification, Flamur explicitly approved a separate GitHub environment named
 `vay1543-pricing-verification`: only the `main` branch, required reviewer numeric
 ID `120040061`, no administrator bypass, and only the private read-only check.
