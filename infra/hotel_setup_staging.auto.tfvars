@@ -8,8 +8,8 @@ hotel_setup_command_mode                     = "property_creation"
 enable_hotel_setup_service_staging           = true
 enable_hotel_setup_property_service_staging  = true
 hotel_setup_image_digests = {
-  primary  = "sha256:29d50e0373685f881916c5be93525db178c087ce5e7a53124e6429519ff583f1"
-  rollback = "sha256:87c174a77842fda075b6c4784054f95bcc685d6f3d35c91d7b8bd08f174eafb8"
+  primary  = "sha256:c2fbba1a4d3f8f7bc4c46d0816f125d3598cd1c1a4880dd3b103feb0d3aa67d2"
+  rollback = "sha256:ac29c768aca69f1f0710e4278340f06031fc7f619b6c67d0cbc221b539ac2bac"
 }
 hotel_setup_property_image_digests = {
   primary  = "sha256:b673453b253fac2e94822c24158f6d599696d0fb71a2bc68c7f4a3be0f98f38a"
