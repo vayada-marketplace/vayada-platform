@@ -10,6 +10,12 @@ on:
       - "scripts/assert-platform-writer-boundary-plan.py"
       - "scripts/test_platform_writer_boundary.py"
       - "scripts/test_pricing_command_metadata_refresh.py"
+      - "scripts/test_pricing_bootstrap_identity.py"
+      - "scripts/pricing_bootstrap_approval.py"
+      - "scripts/test_pricing_bootstrap_approval.py"
+      - "scripts/assert-pricing-bootstrap-plan.py"
+      - "scripts/test_pricing_bootstrap_plan.py"
+      - ".github/workflows/pricing-command-bootstrap-plan.yml"
       - "scripts/test_hotel_setup_credentials.py"
       - "scripts/test_hotel_setup_public_caller.py"
       - "scripts/test_hotel_setup_release.py"
@@ -209,6 +215,8 @@ jobs:
         run: |
           python3 -m unittest scripts/test_platform_writer_boundary.py -v
           python3 -m unittest scripts/test_pricing_command_metadata_refresh.py -v
+          python3 -m unittest scripts/test_pricing_bootstrap_approval.py -v
+          python3 -m unittest scripts/test_pricing_bootstrap_plan.py -v
           python3 -m py_compile scripts/coordinated_release.py
           python3 -m unittest scripts/test_coordinated_release.py -v
           python3 -m unittest scripts/test_coordinated_recovery.py -v
@@ -343,3 +351,9 @@ jobs:
       - name: Validate isolated VAY-2043 Terraform root
         run: terraform validate
         working-directory: infra/vay2017-metadata-runner
+
+      - name: Validate temporary pricing identity without backend or AWS
+        run: |
+          terraform -chdir=infra/pricing-bootstrap-identity init -backend=false
+          terraform -chdir=infra/pricing-bootstrap-identity validate
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_pricing_bootstrap_identity.py

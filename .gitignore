@@ -1,6 +1,12 @@
 # Terraform
 infra/.terraform/
 infra/vay2017-metadata-runner/.terraform/
+infra/pricing-bootstrap-identity/.terraform/
+infra/pricing-bootstrap-identity/*.tfstate*
+infra/pricing-bootstrap-identity/*.tfplan
+infra/pricing-bootstrap-identity/*.tfvars*
+infra/pricing-bootstrap-identity/.terraform.tfstate.lock.info
+infra/pricing-bootstrap-identity/crash.log
 infra/terraform.tfvars
 infra/*.tfstate
 infra/*.tfstate.backup

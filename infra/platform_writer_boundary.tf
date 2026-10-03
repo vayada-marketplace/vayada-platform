@@ -18,6 +18,12 @@ variable "platform_writer_boundary" {
   }
 }
 
+variable "enable_pricing_verification_reader" {
+  description = "Separately reviewed opt-in for the approved pricing-verification environment; false leaves reader trust unchanged."
+  type        = bool
+  default     = false
+}
+
 locals {
   platform_mutation_subject    = "repo:vayada-marketplace/vayada-platform:environment:platform-mutations-v2"
   platform_plan_role_arn       = "arn:aws:iam::${var.aws_account_id}:role/vayada-github-actions-platform-plan"
@@ -46,7 +52,7 @@ resource "aws_iam_role" "platform_plan" {
   description = "Terraform PR resource refresh and exact backend lock; no resource mutation"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
+    Statement = concat([{
       Effect    = "Allow"
       Action    = "sts:AssumeRoleWithWebIdentity"
       Principal = { Federated = "arn:aws:iam::${var.aws_account_id}:oidc-provider/token.actions.githubusercontent.com" }
@@ -54,10 +60,26 @@ resource "aws_iam_role" "platform_plan" {
         "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         "token.actions.githubusercontent.com:sub" = "repo:vayada-marketplace/vayada-platform:pull_request"
       } }
-    }]
+      }], var.enable_pricing_verification_reader ? [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Principal = { Federated = "arn:aws:iam::${var.aws_account_id}:oidc-provider/token.actions.githubusercontent.com" }
+      Condition = { StringEquals = {
+        "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+        "token.actions.githubusercontent.com:sub" = "repo:vayada-marketplace/vayada-platform:environment:vay1543-pricing-verification"
+      } }
+    }] : [])
   })
   max_session_duration = 3600
-  lifecycle { prevent_destroy = true }
+  lifecycle {
+    prevent_destroy = true
+    precondition {
+      condition = !var.enable_pricing_verification_reader || (
+        var.platform_writer_boundary.enforce_trust && var.platform_writer_boundary.revoke_before != null
+      )
+      error_message = "Pricing verification reader requires enforced writer trust and a reviewed session cutoff."
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "platform_plan" {

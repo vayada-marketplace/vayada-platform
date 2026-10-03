@@ -1,0 +1,595 @@
+"""Same-process exact-plan approval gate. No AWS or apply entry point.
+
+The future executor must run all plan/source/identity/hold/authorization guards
+before constructing this gate and again before consuming approval. Receipt
+metadata and comment evidence alone do not establish those prerequisites.
+"""
+import copy
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import runpy
+import secrets
+import stat
+import subprocess
+import sys
+import threading
+
+REPOSITORY = "vayada-marketplace/vayada-platform"
+# Human-selected accountable owner, not authorization for a runner/session.
+# Stable IAM ID was read with GetUser; never infer ownership from credentials.
+SELECTED_OPERATOR_ARN = "arn:aws:iam::269416271598:user/VayadaUser"
+SELECTED_OPERATOR_ID = "AIDAT5OTWB3XLUEYGCQ56"
+# Receipt metadata only; actual caller/role ID and admission remain required.
+CREATION_OPERATOR_ROLE = "vayada-pricing-operator-create"
+METADATA_OPERATOR_ROLE = "vayada-pricing-operator-metadata"
+# Flamur explicitly selected GitHub User FlamurMaliqi; bind its stable ID, not login.
+# Never load approvers from dispatch inputs, comments or the process environment.
+APPROVED_HUMAN_IDS = frozenset({120040061})
+# Separately selected for the metadata phase, never inherited from creation.
+METADATA_APPROVED_HUMAN_IDS = frozenset({120040061})
+CONTEXT_FIELDS = frozenset({
+    "sourceSha", "runId", "runAttempt", "operatorArn", "stateLineage", "stateSerial",
+    "planSha256", "writerHoldSha256", "authorizationSha256",
+})
+# Only these reviewed read/validation workflows may remain active in this
+# diagnostic. No setup-runner exception is configured or silently inferred.
+READ_WORKFLOWS = frozenset({".github/workflows/tf-plan.yml", ".github/workflows/tf-validate.yml"})
+EDIT_QUERY = """query($id: ID!) {
+  node(id: $id) {
+    ... on IssueComment {
+      id fullDatabaseId body createdAt updatedAt lastEditedAt
+      editor { id } isMinimized author { id __typename }
+    }
+  }
+}"""
+
+MAX_PLAN_BYTES = 64 * 1024 * 1024
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def verify_checkout_source(expected_sha):
+    """Observe exact current-main bytes; a trusted immutable runner is still required."""
+    if not isinstance(expected_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
+        raise ValueError("Invalid reviewed source")
+    try:
+        # No Git environment overrides, credential helpers, hooks or replacement objects.
+        env = {"PATH": os.environ["PATH"], "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_NO_REPLACE_OBJECTS": "1",
+               "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+        def git(*args):
+            result = subprocess.run(["git", "--no-replace-objects", "-c", "core.fsmonitor=false",
+                                     "-c", "core.untrackedCache=false", "-c", "core.ignoreCase=false",
+                                     *args], cwd=ROOT,
+                                    env=env, capture_output=True, timeout=20)
+            if result.returncode or len(result.stdout) > MAX_PLAN_BYTES:
+                raise ValueError
+            return result.stdout
+        if (Path(os.fsdecode(git("rev-parse", "--show-toplevel")).strip()).resolve() != ROOT
+                or git("rev-parse", "HEAD").strip() != expected_sha.encode()):
+            raise ValueError
+        entries = git("ls-tree", "-r", "-z", expected_sha).split(b"\0")
+        if len(entries) < 2 or entries[-1]:
+            raise ValueError
+        expected_index = []
+        for entry in entries[:-1]:
+            metadata, name = entry.split(b"\t", 1)
+            mode, kind, object_id = metadata.split()
+            if mode not in (b"100644", b"100755") or kind != b"blob":
+                raise ValueError  # No symlinks, submodules or opaque nested source.
+            expected_index.append(mode + b" " + object_id + b" 0\t" + name)
+            path = ROOT / os.fsdecode(name)
+            if any(parent.is_symlink() for parent in path.parents if parent != ROOT):
+                raise ValueError
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
+                info = os.fstat(source.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                        or info.st_size > MAX_PLAN_BYTES
+                        or bool(info.st_mode & stat.S_IXUSR) != (mode == b"100755")):
+                    raise ValueError
+                data = source.read(MAX_PLAN_BYTES + 1)
+            actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+            if len(data) > MAX_PLAN_BYTES or actual.encode() != object_id:
+                raise ValueError  # Inspect bytes even when Git index flags hide edits.
+        if sorted(git("ls-files", "--stage", "-z").split(b"\0")) != sorted(expected_index + [b""]):
+            raise ValueError  # Exact index identity, not configurable diff visibility.
+        for flags in (("--others", "--exclude-standard"),
+                      ("--others", "--ignored", "--exclude-standard")):
+            for name in git("ls-files", "-z", *flags).split(b"\0"):
+                # Provider/backend initialization is admitted separately, not by this check.
+                if name and not name.startswith(b"infra/.terraform/"):
+                    raise ValueError
+        current = _github_json(f"repos/{REPOSITORY}/git/ref/heads/main")
+        if (current.get("ref") != "refs/heads/main" or not isinstance(current.get("object"), dict)
+                or current["object"].get("type") != "commit" or current["object"].get("sha") != expected_sha):
+            raise ValueError
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError, subprocess.TimeoutExpired):
+        raise ValueError("Reviewed source verification rejected; raw output withheld") from None
+
+
+def saved_plan_digest(fd):
+    """Hash only a private, anonymous, kernel-sealed Linux plan descriptor."""
+    if not hasattr(os, "memfd_create"):
+        raise ValueError("Saved plan custody requires Linux sealing")
+    try:
+        if type(fd) is not int or fd < 0:
+            raise ValueError
+        info = os.fstat(fd)
+        seals = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 0
+                or not 0 < info.st_size <= MAX_PLAN_BYTES
+                or fcntl.fcntl(fd, fcntl.F_GET_SEALS) & seals != seals):
+            raise ValueError
+        digest = hashlib.sha256()
+        for offset in range(0, info.st_size, 1024 * 1024):
+            size = min(1024 * 1024, info.st_size - offset)
+            chunk = os.pread(fd, size, offset)
+            if len(chunk) != size:
+                raise ValueError
+            digest.update(chunk)
+        return digest.hexdigest()
+    except (OSError, ValueError, OverflowError):
+        raise ValueError("Saved plan binding rejected") from None
+
+
+@contextmanager
+def sealed_saved_plan(path, expected_sha256):
+    """Keep exact approved bytes private and immutable; no Terraform/AWS call."""
+    if not hasattr(os, "memfd_create"):
+        raise ValueError("Saved plan custody requires Linux sealing")
+    if not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+        raise ValueError("Invalid saved plan digest")
+    fd = None
+    try:
+        try:
+            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
+                info = os.fstat(source.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                        or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                        or not 0 < info.st_size <= MAX_PLAN_BYTES):
+                    raise ValueError
+                fd = os.memfd_create("pricing-plan", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+                os.fchmod(fd, 0o600)
+                with os.fdopen(os.dup(fd), "wb") as target:
+                    remaining = info.st_size
+                    while remaining:
+                        chunk = source.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise ValueError
+                        target.write(chunk)
+                        remaining -= len(chunk)
+                    if source.read(1):
+                        raise ValueError
+            fcntl.fcntl(fd, fcntl.F_ADD_SEALS,
+                        fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
+            if saved_plan_digest(fd) != expected_sha256:
+                raise ValueError
+            os.lseek(fd, 0, os.SEEK_SET)
+        except (OSError, TypeError, ValueError, OverflowError):
+            raise ValueError("Saved plan binding rejected") from None
+        yield fd
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def unique_fields(pairs):
+    data = dict(pairs)
+    if len(data) != len(pairs):
+        raise ValueError("Duplicate JSON fields rejected")
+    return data
+
+
+def guard_saved_plan(plan_fd, expected_sha256, *, phase="creation"):
+    """Read-only guards on the sealed bytes; not source/session admission or apply."""
+    if type(phase) is not str or phase not in ("creation", "metadata", "no-op"):
+        raise ValueError("Invalid approval phase")
+    if saved_plan_digest(plan_fd) != expected_sha256:
+        raise ValueError("Saved plan differs from receipt")
+    try:
+        pricing = runpy.run_path(str(ROOT / "scripts/assert-pricing-bootstrap-plan.py"))
+        writer = runpy.run_path(str(ROOT / "scripts/assert-platform-writer-boundary-plan.py"))
+        source = pricing["SOURCE"].read_bytes()
+        pricing["check_source"](source, pricing["SOURCE"].parent)
+        # Inspection needs no runner credentials, TF_VAR values, logging,
+        # CLI injections, shell startup hooks or user Terraform configuration.
+        env = {"PATH": os.environ["PATH"], "HOME": "/nonexistent",
+               "TF_CLI_CONFIG_FILE": os.devnull, "TF_IN_AUTOMATION": "true",
+               "TF_INPUT": "false", "AWS_EC2_METADATA_DISABLED": "true"}
+        options = {"cwd": ROOT / "infra", "env": env, "pass_fds": (plan_fd,),
+                   "capture_output": True, "text": True, "timeout": 120}
+        # Compatibility observation only: self-reported metadata does not admit
+        # the executable/provider bytes or establish a trusted immutable runner.
+        result = subprocess.run(["terraform", "version", "-json"], **options)
+        if result.returncode or len(result.stdout) > 16_384:
+            raise ValueError
+        runtime = json.loads(result.stdout, object_pairs_hook=unique_fields)
+        if (not isinstance(runtime, dict) or runtime.get("terraform_version") != "1.5.7"
+                or runtime.get("platform") != "linux_amd64"
+                or runtime.get("provider_selections") != {
+                    "registry.terraform.io/hashicorp/aws": "5.100.0",
+                    "registry.terraform.io/cloudflare/cloudflare": "4.52.7"}):
+            raise ValueError
+        path = f"/proc/self/fd/{plan_fd}"
+        result = subprocess.run(["terraform", "show", "-json", path], **options)
+        if result.returncode or len(result.stdout) > MAX_PLAN_BYTES:
+            raise ValueError
+        plan = json.loads(result.stdout, object_pairs_hook=unique_fields)
+        if not isinstance(plan, dict):
+            raise ValueError
+        writer["check"](plan)
+        if phase == "no-op":
+            pricing["check_no_changes"](plan)
+        elif phase == "metadata":
+            pricing["check_metadata"](plan)
+        else:
+            pricing["check"](plan, source)
+        result = subprocess.run(["bash", str(ROOT / "scripts/guard-finance-folio-kms-plan.sh"),
+                                 path, "plan"], **options)
+        if result.returncode:
+            raise ValueError
+    except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError, StopIteration,
+            UnicodeError, RecursionError, subprocess.TimeoutExpired):
+        raise ValueError("Saved pricing plan guards rejected; raw output withheld") from None
+
+
+def _github_json(path, *, node_id=None):
+    """Fixed-host GETs or the fixed read-only GraphQL query; no raw error output."""
+    args = ["gh", "api", "--hostname", "github.com"]
+    if node_id is not None:
+        if path != "graphql":
+            raise ValueError("Invalid approval API endpoint")
+        args += ["graphql", "--method", "POST", "-f", "query=" + EDIT_QUERY, "-f", "id=" + node_id]
+    else:
+        if not path.startswith(f"repos/{REPOSITORY}/"):
+            raise ValueError("Invalid approval API endpoint")
+        args += [path, "--method", "GET"]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=20)
+        if result.returncode or len(result.stdout) > 2_000_000:
+            raise ValueError("Approval API evidence unavailable")
+        data = json.loads(result.stdout)
+        if not isinstance(data, dict) or data.get("errors"):
+            raise ValueError("Invalid approval API evidence")
+        return data
+    except (OSError, subprocess.TimeoutExpired, UnicodeError, json.JSONDecodeError):
+        raise ValueError("Approval API evidence unavailable") from None
+
+
+def read_github_comment(comment_id):
+    if type(comment_id) is not int or comment_id < 1:
+        raise ValueError("Invalid approval comment ID")
+    comment = _github_json(f"repos/{REPOSITORY}/issues/comments/{comment_id}")
+    node_id = comment.get("node_id")
+    user = comment.get("user")
+    if (type(comment.get("id")) is not int or comment["id"] != comment_id
+            or not isinstance(node_id, str) or not re.fullmatch(r"[A-Za-z0-9_=-]{1,200}", node_id)
+            or not isinstance(user, dict) or not isinstance(user.get("node_id"), str)
+            or not re.fullmatch(r"[A-Za-z0-9_=-]{1,200}", user["node_id"])):
+        raise ValueError("Invalid approval comment identity")
+    response = _github_json("graphql", node_id=node_id)
+    data = response.get("data")
+    node = data.get("node") if isinstance(data, dict) else None
+    if (not isinstance(node, dict) or node.get("id") != node_id
+            or type(node.get("fullDatabaseId")) not in (int, str)
+            or str(node["fullDatabaseId"]) != str(comment_id)
+            or node.get("author") != {"id": user["node_id"], "__typename": user.get("type")}
+            or any(field not in node or node[field] != comment.get(rest) for field, rest in (
+                ("body", "body"), ("createdAt", "created_at"), ("updatedAt", "updated_at")))):
+        raise ValueError("Approval API snapshots disagree")
+    try:
+        comment["editEvidence"] = {field: node[field] for field in
+                                   ("id", "fullDatabaseId", "lastEditedAt", "editor", "isMinimized")}
+    except KeyError:
+        raise ValueError("Missing approval edit evidence") from None
+    return comment
+
+
+def observe_workflow_pause():
+    """Observe manual disable/drain only; not an enforced all-writer hold."""
+    response = _github_json(f"repos/{REPOSITORY}/actions/workflows?per_page=100")
+    workflows = response.get("workflows")
+    if (not isinstance(workflows, list) or type(response.get("total_count")) is not int
+            or not 1 <= response["total_count"] <= 100 or len(workflows) != response["total_count"]):
+        raise ValueError("Incomplete workflow inventory")
+    seen_ids, seen_paths, inventory, read_ids = set(), set(), [], set()
+    for workflow in workflows:
+        if not isinstance(workflow, dict):
+            raise ValueError("Invalid workflow inventory")
+        identity, path, state = (workflow.get(field) for field in ("id", "path", "state"))
+        if (type(identity) is not int or identity < 1 or identity in seen_ids
+                or not isinstance(path, str) or path in seen_paths
+                or not re.fullmatch(r"\.github/workflows/[A-Za-z0-9_-]+\.ya?ml", path)):
+            raise ValueError("Invalid workflow inventory")
+        seen_ids.add(identity)
+        seen_paths.add(path)
+        if path in READ_WORKFLOWS:
+            if state not in ("active", "disabled_manually"):
+                raise ValueError("Unreviewed validation workflow state")
+            read_ids.add(identity)
+        elif state != "disabled_manually":
+            raise ValueError("Writer workflow is not manually paused")
+        inventory.append({"id": identity, "path": path, "state": state})
+    if not READ_WORKFLOWS <= seen_paths:
+        raise ValueError("Required workflow inventory missing")
+    # All nonterminal statuses, without a main/date filter that could hide an
+    # old waiting or queued writer. Large/truncated responses fail closed.
+    seen_runs = set()
+    for status in ("queued", "in_progress", "waiting", "pending", "requested"):
+        response = _github_json(f"repos/{REPOSITORY}/actions/runs?status={status}&per_page=100")
+        runs = response.get("workflow_runs")
+        if (not isinstance(runs, list) or type(response.get("total_count")) is not int
+                or not 0 <= response["total_count"] <= 100 or len(runs) != response["total_count"]):
+            raise ValueError("Incomplete workflow-run inventory")
+        for run in runs:
+            if (not isinstance(run, dict) or type(run.get("id")) is not int
+                    or run["id"] < 1 or run["id"] in seen_runs
+                    or type(run.get("workflow_id")) is not int
+                    or run["workflow_id"] not in read_ids or run.get("status") != status):
+                raise ValueError("Invalid run inventory or a nonterminal writer remains")
+            seen_runs.add(run["id"])
+    return {"repository": REPOSITORY, "scope": "workflow-disable-observation-only",
+            "workflows": sorted(inventory, key=lambda item: item["id"])}
+
+
+def timestamp(value):
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value):
+        raise ValueError("Invalid approval timestamp")
+    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
+def validate_context(context, *, phase="creation"):
+    if type(phase) is not str or phase not in ("creation", "metadata"):
+        raise ValueError("Invalid approval phase")
+    if not isinstance(context, dict) or set(context) != CONTEXT_FIELDS:
+        raise ValueError("Incomplete approval context")
+    for field, length in (("sourceSha", 40), ("planSha256", 64), ("writerHoldSha256", 64),
+                          ("authorizationSha256", 64)):
+        if not isinstance(context[field], str) or not re.fullmatch(r"[0-9a-f]{" + str(length) + "}", context[field]):
+            raise ValueError("Invalid approval digest")
+    for field in ("runId", "runAttempt", "stateSerial"):
+        if type(context[field]) is not int or context[field] < (0 if field == "stateSerial" else 1):
+            raise ValueError("Invalid approval run or state metadata")
+    if not isinstance(context["stateLineage"], str) or not re.fullmatch(
+            r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", context["stateLineage"]):
+        raise ValueError("Invalid state lineage")
+    role = CREATION_OPERATOR_ROLE if phase == "creation" else METADATA_OPERATOR_ROLE
+    if not isinstance(context["operatorArn"], str) or not re.fullmatch(
+            rf"arn:aws:sts::269416271598:assumed-role/{role}/[A-Za-z0-9+=,.@_-]+",
+            context["operatorArn"]):
+        raise ValueError("Invalid operator session metadata")
+
+
+def observe_metadata_policy_capacity(context, expected_role_id):
+    """Read-only observation for an admitted private runner under its writer hold.
+
+    The reviewed RoleId must not come from dispatch/environment or this API.
+    This does not admit the runner, session/window, policy composition or hold.
+    No executor calls this component; rerun before receipt and consumption.
+    """
+    try:
+        context = copy.deepcopy(context)
+        validate_context(context, phase="metadata")
+        if not isinstance(expected_role_id, str) or not re.fullmatch(r"AROA[A-Z0-9]{17}", expected_role_id):
+            raise ValueError
+        credentials = {key: os.environ[key] for key in
+                       ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")}
+        if (not re.fullmatch(r"ASIA[A-Z0-9]{16}", credentials["AWS_ACCESS_KEY_ID"])
+                or not all(credentials.values())):
+            raise ValueError
+        env = {"PATH": os.environ["PATH"], "HOME": "/nonexistent",
+               "AWS_CONFIG_FILE": os.devnull, "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
+               "AWS_EC2_METADATA_DISABLED": "true", "AWS_MAX_ATTEMPTS": "1", **credentials}
+        def read(*args):
+            result = subprocess.run(["aws", "--region", "eu-west-1", "--output", "json",
+                                     "--no-cli-pager", "--no-cli-auto-prompt", *args],
+                                    cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
+            if result.returncode or len(result.stdout) > 16_384:
+                raise ValueError
+            data = json.loads(result.stdout, object_pairs_hook=unique_fields)
+            if not isinstance(data, dict):
+                raise ValueError
+            return data
+        caller = read("sts", "get-caller-identity")
+        session = context["operatorArn"].rsplit("/", 1)[1]
+        if (caller.get("Account") != "269416271598" or caller.get("Arn") != context["operatorArn"]
+                or caller.get("UserId") != expected_role_id + ":" + session):
+            raise ValueError
+        policy = "arn:aws:iam::269416271598:policy/vayada-platform-writer-boundary"
+        data = read("iam", "list-policy-versions", "--policy-arn", policy, "--no-paginate")
+        versions = data.get("Versions")
+        if (data.get("IsTruncated") is not False or "Marker" in data or "NextToken" in data
+                or not isinstance(versions, list) or not 1 <= len(versions) < 5):
+            raise ValueError
+        ids, defaults = [], []
+        for version in versions:
+            if (not isinstance(version, dict) or not isinstance(version.get("VersionId"), str)
+                    or not re.fullmatch(r"v[1-9][0-9]*(\.[A-Za-z0-9-]*)?", version["VersionId"])
+                    or type(version.get("IsDefaultVersion")) is not bool):
+                raise ValueError
+            ids.append(version["VersionId"])
+            if version["IsDefaultVersion"]:
+                defaults.append(version["VersionId"])
+        if len(set(ids)) != len(ids) or len(defaults) != 1:
+            raise ValueError
+        return {"policyArn": policy, "operatorArn": caller["Arn"], "roleId": expected_role_id,
+                "versionIds": sorted(ids), "defaultVersionId": defaults[0]}
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError, subprocess.TimeoutExpired):
+        raise ValueError("Metadata policy capacity observation rejected; raw output withheld") from None
+
+
+class ApprovalGate:
+    def __init__(self, context, issue_number, *, now=None, phase="creation"):
+        context = copy.deepcopy(context)
+        validate_context(context, phase=phase)
+        if type(issue_number) is not int or issue_number < 1:
+            raise ValueError("Invalid approval discussion")
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo != timezone.utc:
+            raise ValueError("Approval clock must be UTC")
+        verify_checkout_source(context["sourceSha"])
+        now = now.replace(microsecond=0)
+        self._phase = phase
+        self._context = copy.deepcopy(context)
+        self._issued = now
+        self._expires = now + timedelta(minutes=15)
+        self._issue_url = f"https://api.github.com/repos/{REPOSITORY}/issues/{issue_number}"
+        self._receipt = {
+            "schemaVersion": 1, "phase": phase, "repository": REPOSITORY,
+            "operatorOwner": {"arn": SELECTED_OPERATOR_ARN, "userId": SELECTED_OPERATOR_ID},
+            "accountId": "269416271598", "region": "eu-west-1",
+            "stateObject": "s3://vayada-terraform-state/platform/terraform.tfstate",
+            "guard": "exact-seven-empty-pricing-creates", "context": copy.deepcopy(context),
+            "expectedSecurity": {
+                "additions": 7, "updates": 0, "deletions": 0,
+                "secretNames": ["pricing-command/prod/" + name for name in (
+                    "identity-read-database-url", "owner-read-database-url",
+                    "owner-manage-database-url", "public-database-url", "internal-token")],
+                "secretValuesManaged": False,
+                "executionRole": "vayada-pricing-command-execution",
+                "trustService": "ecs-tasks.amazonaws.com", "trustAction": "sts:AssumeRole",
+                "sourceAccount": "269416271598",
+                "sourceArn": "arn:aws:ecs:eu-west-1:269416271598:*",
+                "inlinePolicy": "pricing-command-exact-secret-read",
+                "policyAction": "secretsmanager:GetSecretValue",
+                "policyResources": "Only the five generated exact secret ARNs",
+                "extraRolePolicies": False, "metadataPhaseEnabled": False,
+            },
+            "issueNumber": issue_number, "issuedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "expiresAt": self._expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "nonce": secrets.token_hex(32),
+        }
+        if phase == "metadata":
+            self._receipt["guard"] = "exact-two-pricing-metadata-updates"
+            self._receipt["expectedSecurity"] = {
+                "additions": 0, "updates": 2, "deletions": 0,
+                "inlinePolicy": {"address": "aws_iam_role_policy.platform_plan[0]",
+                                 "role": "vayada-github-actions-platform-plan", "name": "vayada-platform-plan"},
+                "managedPolicy": {"address": "aws_iam_policy.platform_writer_boundary[0]",
+                                  "arn": "arn:aws:iam::269416271598:policy/vayada-platform-writer-boundary"},
+                "policyResources": "Only unchanged final five secret ARNs and execution role in the sealed plan",
+                "existingStatementsUnchanged": True, "writerTrustAndCutoffUnchanged": True,
+                "secretValuesManaged": False, "metadataPhaseEnabled": True,
+                "policyVersionDeletionAllowed": False,
+            }
+        self._digest = hashlib.sha256(json.dumps(self._receipt, sort_keys=True,
+                                                separators=(",", ":")).encode()).hexdigest()
+        self._consumed = False
+        self._pid = os.getpid()
+        self._lock = threading.Lock()
+
+    def _not_copyable(self, *args):
+        raise TypeError("Approval gate cannot be copied or serialized")
+
+    __copy__ = __deepcopy__ = __reduce_ex__ = _not_copyable
+
+    def receipt(self):
+        # Only the allowlisted metadata above can be published, never raw plans.
+        return {"receipt": copy.deepcopy(self._receipt), "receiptSha256": self._digest}
+
+    def approval_text(self):
+        prefix = "approve-vay1543-bootstrap" if self._phase == "creation" else "approve-vay1543-metadata"
+        return f"{prefix} {self._digest} {self._receipt['nonce']}"
+
+    def _approved_humans(self):
+        return APPROVED_HUMAN_IDS if self._phase == "creation" else METADATA_APPROVED_HUMAN_IDS
+
+    def check_comment(self, comment, *, now=None):
+        now = now or datetime.now(timezone.utc)
+        if os.getpid() != self._pid:
+            raise ValueError("Approval gate belongs to another process")
+        if now.tzinfo != timezone.utc or self._consumed or not self._issued <= now < self._expires:
+            raise ValueError("Approval expired or consumed")
+        if not isinstance(comment, dict) or not isinstance(comment.get("user"), dict):
+            raise ValueError("Invalid approval API evidence")
+        user = comment.get("user") or {}
+        edit = comment.get("editEvidence")
+        if (not isinstance(edit, dict)
+                or set(edit) != {"id", "fullDatabaseId", "lastEditedAt", "editor", "isMinimized"}
+                or not isinstance(comment.get("node_id"), str) or not comment["node_id"]
+                or edit["id"] != comment["node_id"]
+                or type(edit["fullDatabaseId"]) not in (int, str)
+                or str(edit["fullDatabaseId"]) != str(comment.get("id"))
+                or edit["lastEditedAt"] is not None or edit["editor"] is not None
+                or edit["isMinimized"] is not False):
+            raise ValueError("Missing or inconsistent GitHub edit evidence")
+        if (type(user.get("id")) is not int or user["id"] not in self._approved_humans()
+                or user.get("type") != "User" or comment.get("performed_via_github_app") is not None
+                or type(comment.get("id")) is not int or comment["id"] < 1
+                or comment.get("issue_url") != self._issue_url
+                or comment.get("body") != self.approval_text()
+                or comment.get("created_at") != comment.get("updated_at")
+                or "performed_via_github_app" not in comment):
+            raise ValueError("Approval does not match the reviewed human and receipt")
+        # GitHub timestamps have second resolution: require a later second,
+        # never a pre-existing or same-second approval.
+        if not self._issued < timestamp(comment.get("created_at")) <= now:
+            raise ValueError("Approval must follow the receipt")
+
+    def consume(self, comment, current_context, *, now=None):
+        """Use fresh API comment + guarded context immediately before any apply.
+
+        Consume before attempting apply. Failure must not retry with this gate.
+        There is intentionally no serialization/resume or apply implementation.
+        """
+        # Check PID before acquiring: a fork can inherit a parent-held lock.
+        if os.getpid() != self._pid:
+            raise ValueError("Approval gate belongs to another process")
+        with self._lock:
+            validate_context(current_context, phase=self._phase)
+            if current_context != self._context:
+                raise ValueError("Source, plan, session, state or guard evidence changed")
+            self.check_comment(comment, now=now)
+            self._consumed = True
+
+    def fetch_and_consume(self, comment_id, current_context):
+        """Fresh authenticated evidence; caller must first rerun real guards."""
+        if not self._approved_humans():
+            raise ValueError("No approved humans configured")
+        if os.getpid() != self._pid:
+            raise ValueError("Approval gate belongs to another process")
+        comment = read_github_comment(comment_id)
+        verify_checkout_source(self._context["sourceSha"])
+        self.consume(comment, current_context)
+
+    def fetch_and_consume_saved_plan(self, comment_id, current_context, plan_fd):
+        """Future runner must guard/show/apply this same live sealed descriptor.
+
+        Other source/session/state/hold/authorization guards are still required.
+        The caller must keep sealed_saved_plan open and pass this FD to Terraform.
+        """
+        if os.getpid() != self._pid:
+            raise ValueError("Approval gate belongs to another process")
+        verify_checkout_source(self._context["sourceSha"])
+        guard_saved_plan(plan_fd, self._context["planSha256"], phase=self._phase)
+        self.fetch_and_consume(comment_id, current_context)
+        return f"/proc/self/fd/{plan_fd}"
+
+
+def main(args):
+    """Private no-op inspection only; no planning, approval, AWS or apply lane."""
+    if len(args) != 4 or args[0] != "--inspect-no-op":
+        raise SystemExit("Approval component only; no setup executor or approved sessions configured")
+    source_sha, plan_sha256, path = args[1:]
+    try:
+        if (not re.fullmatch(r"[0-9a-f]{40}", source_sha)
+                or not re.fullmatch(r"[0-9a-f]{64}", plan_sha256)
+                or not hasattr(os, "memfd_create")):
+            raise ValueError
+        verify_checkout_source(source_sha)
+        with sealed_saved_plan(path, plan_sha256) as fd:
+            guard_saved_plan(fd, plan_sha256, phase="no-op")
+            verify_checkout_source(source_sha)
+    except (ValueError, OSError, TypeError, RecursionError, KeyboardInterrupt):
+        raise SystemExit("Private no-op inspection rejected; raw output withheld; no hold release") from None
+    print("Saved pricing plan has no changes; content inspection only, no execution or hold release")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

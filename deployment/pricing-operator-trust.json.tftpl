@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "SelectedOwnerWithMFAOnly",
+    "Effect": "Allow",
+    "Principal": {"AWS": "arn:aws:iam::269416271598:user/VayadaUser"},
+    "Action": ["sts:AssumeRole", "sts:SetSourceIdentity"],
+    "Condition": {
+      "StringEquals": {
+        "aws:userid": "AIDAT5OTWB3XLUEYGCQ56",
+        "sts:SourceIdentity": "AIDAT5OTWB3XLUEYGCQ56"
+      },
+      "Bool": {"aws:MultiFactorAuthPresent": "true"},
+      "DateGreaterThanEquals": {"aws:CurrentTime": "${window_start}"},
+      "DateLessThan": {"aws:CurrentTime": "${window_end}"}
+    }
+  }]
+}
