@@ -499,7 +499,7 @@ the API hold, never release it or replay stale requests as part of pricing
 fence removal. Hotel prerequisite IAM creation is outside the pricing role/
 secret allowlist and needs its own exact reviewed authority and plan.
 
-A narrower **source option, not implemented here**, is to make the seven pricing
+A narrower source option is to make the seven pricing
 resources explicit opt-in/default-off in their existing normal root, avoiding
 unrelated plans proposing their unauthorized creation. Preserve secret keys;
 add indexed IAM moved blocks and destruction protection for both IAM resources;
@@ -511,6 +511,24 @@ not admission as fresh seven-create or reuse of previous receipts. This option
 does not create an installation mechanism, grant permissions, or remove any
 pricing/hotel setup gates. No target selection, installation or release follows
 from its read-only assessment.
+
+The setup owner subsequently prepared that source in PR #380 (source commit
+`1b657c0f90be8f888140bdd84131ffc610023d65`; follow-up
+`7259e056e2ab0d53b429979653188c200f1a34bd` changes CI ordering only).
+This proposal mirrors its exact `pricing_command_secrets.tf` bytes, SHA256
+`ca3f4b9555a678f6ae0ed68eb5860ecdd850254146008f129324e34cfa5d5bdc`,
+for compatibility verification; source ownership remains with PR #380.
+Creation, metadata and final no-op content guards require literal boolean true
+for `enable_pricing_command_credential_infrastructure`. IAM plan identities are
+`aws_iam_role.pricing_command_execution[0]` and
+`aws_iam_role_policy.pricing_command_secrets[0]`; Terraform configuration
+declarations retain their unindexed addresses and role references name the
+indexed instance. The creation guard validates both representations. Old source,
+missing/false/non-boolean opt-in, legacy identities and moved-resource plans are
+not accepted by these phase guards. Migration remains a separate state-only
+approval, never a creation/metadata receipt. No old receipt or source commit is
+rebound automatically. The new source must be reviewed and current main before
+any source-bound receipt can be admitted. No activation input is enabled here.
 
 For hosted verification, Flamur explicitly approved a separate GitHub environment named
 `vay1543-pricing-verification`: only the `main` branch, required reviewer numeric

@@ -40,10 +40,12 @@ def fixture():
     }) for key, name in guard.NAMES.items()]
     return {"variables": {"aws_account_id": {"value": guard.ACCOUNT},
                           "aws_region": {"value": guard.REGION},
+                          "enable_pricing_command_credential_infrastructure": {"value": True},
                           "enable_pricing_command_metadata_refresh": {"value": False}},
             "resource_changes": resources, "configuration": {"root_module": {"resources": [{
-                "address": guard.POLICY, "expressions": {"role": {"references": [
-                    "aws_iam_role.pricing_command_execution.id", "aws_iam_role.pricing_command_execution",
+                "address": guard.POLICY.removesuffix("[0]"), "expressions": {"role": {"references": [
+                    "aws_iam_role.pricing_command_execution[0].id", guard.ROLE,
+                    "aws_iam_role.pricing_command_execution",
                 ]}, "policy": {
                     "references": ["aws_secretsmanager_secret.pricing_command"],
                 }},
@@ -68,10 +70,18 @@ class BootstrapPlanTest(unittest.TestCase):
         changed("move", lambda p: p["resource_changes"][0].update(previous_address="aws_iam_role.existing"))
         changed("account", lambda p: p["variables"]["aws_account_id"].update(value="111111111111"))
         changed("stage", lambda p: p["variables"]["enable_pricing_command_metadata_refresh"].update(value=True))
+        for value in (False, 1, "true", None):
+            changed("opt-in " + repr(value), lambda p, value=value: p["variables"]["enable_pricing_command_credential_infrastructure"].update(value=value))
+        changed("missing opt-in", lambda p: p["variables"].pop("enable_pricing_command_credential_infrastructure"))
+        changed("legacy role", lambda p: p["resource_changes"][0].update(address=guard.ROLE.removesuffix("[0]")))
+        changed("legacy policy", lambda p: p["resource_changes"][1].update(address=guard.POLICY.removesuffix("[0]")))
         changed("shared prefix", lambda p: p["resource_changes"][2]["change"]["after"].update(name="vayada/pricing-command/prod/private"))
         changed("resource policy", lambda p: p["resource_changes"][2]["change"]["after"].update(policy='{"Statement": []}'))
         changed("trust", lambda p: p["resource_changes"][0]["change"]["after"].update(assume_role_policy='{"Statement": []}'))
         changed("policy reference", lambda p: p["configuration"]["root_module"]["resources"][0]["expressions"]["policy"].update(references=["var.arbitrary_policy"]))
+        changed("legacy role reference", lambda p: p["configuration"]["root_module"]["resources"][0]["expressions"]["role"].update(references=[
+            "aws_iam_role.pricing_command_execution.id", "aws_iam_role.pricing_command_execution"]))
+        changed("indexed configuration declaration", lambda p: p["configuration"]["root_module"]["resources"][0].update(address=guard.POLICY))
         changed("drift", lambda p: p.update(resource_drift=[{"change": {"actions": ["update"]}}]))
         changed("output", lambda p: p.update(output_changes={"x": {"actions": ["create"]}}))
         changed("no-op import", lambda p: p["resource_changes"].append({
@@ -86,7 +96,7 @@ class BootstrapPlanTest(unittest.TestCase):
         changed("shared role", lambda p: p["configuration"]["root_module"]["resources"][0]["expressions"]["role"].update(references=["data.aws_iam_role.ecs_task_execution.name"]))
         changed("managed policy", lambda p: p["resource_changes"][0]["change"]["after"].update(managed_policy_arns=["arn:aws:iam::aws:policy/AdministratorAccess"]))
         for label, plan in cases:
-            with self.subTest(label=label), self.assertRaises((ValueError, KeyError, TypeError)):
+            with self.subTest(label=label), self.assertRaises((ValueError, KeyError, TypeError, StopIteration)):
                 guard.check(plan, SOURCE)
         with self.assertRaises(ValueError):
             guard.check(fixture(), SOURCE + b"\n")

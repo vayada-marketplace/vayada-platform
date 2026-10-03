@@ -297,12 +297,22 @@ resource "aws_iam_role" "github_actions_platform_deploy" {
                 "provider_schemas"]["registry.terraform.io/hashicorp/aws"]["resource_schemas"]
 
             def plan(enabled=False, reader=False):
-                settings = {"enable_pricing_command_metadata_refresh": enabled}
+                settings = {"enable_pricing_command_metadata_refresh": enabled,
+                            "enable_pricing_command_credential_infrastructure": True}
                 if reader:
                     settings["enable_pricing_verification_reader"] = True
                 (fixture / "pricing_stage.auto.tfvars.json").write_text(json.dumps(settings))
                 self.run_tf("plan", "-refresh=false", "-out=fixture.tfplan")
                 return json.loads(self.run_tf("show", "-json", "fixture.tfplan").stdout)
+
+            # Native indexed addresses/configuration references must match the
+            # content guard. This sliced synthetic plan is not full-root admission.
+            creation = plan()
+            pricing = runpy.run_path(str(ROOT / "scripts/assert-pricing-bootstrap-plan.py"))
+            expected = {pricing["ROLE"], pricing["POLICY"]} | {
+                f'aws_secretsmanager_secret.pricing_command["{key}"]' for key in pricing["NAMES"]}
+            creation["resource_changes"] = [r for r in creation["resource_changes"] if r["address"] in expected]
+            pricing["check"](creation, pricing["SOURCE"].read_bytes())
 
             # Populate only synthetic provider-computed identities. A second native
             # plan resolves the real policy expressions against those identities.

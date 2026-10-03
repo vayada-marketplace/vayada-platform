@@ -57,6 +57,7 @@ def fixture():
                                   fields | {"policy": json.dumps(new, sort_keys=True)}))
     return {"variables": {"aws_account_id": {"value": "269416271598"},
                           "aws_region": {"value": "eu-west-1"},
+                          "enable_pricing_command_credential_infrastructure": {"value": True},
                           "enable_pricing_command_metadata_refresh": {"value": True},
                           "platform_writer_boundary": {"value": {
                               "bootstrap_plan_role": True, "enforce_trust": True,
@@ -73,6 +74,29 @@ def no_op_fixture():
 
 
 class PricingMetadataTests(unittest.TestCase):
+    def test_all_final_stages_require_persisted_opt_in_and_indexed_identities(self):
+        for factory, check in ((fixture, guard["check_metadata"]),
+                               (no_op_fixture, guard["check_no_changes"])):
+            for value in (False, 1, "true", None, "missing"):
+                plan = factory()
+                if value == "missing":
+                    plan["variables"].pop("enable_pricing_command_credential_infrastructure")
+                else:
+                    plan["variables"]["enable_pricing_command_credential_infrastructure"]["value"] = value
+                with self.subTest(stage=factory.__name__, value=value), self.assertRaises((ValueError, KeyError)):
+                    check(plan)
+            for index in (5, 6):
+                for moved in (False, True):
+                    plan = factory()
+                    resource = plan["resource_changes"][index]
+                    legacy = resource["address"].removesuffix("[0]")
+                    if moved:
+                        resource["previous_address"] = legacy
+                    else:
+                        resource["address"] = legacy
+                    with self.subTest(stage=factory.__name__, index=index, moved=moved), self.assertRaises((ValueError, KeyError)):
+                        check(plan)
+
     def test_final_no_op_requires_known_unchanged_inventory_and_exact_metadata_additions(self):
         guard["check_no_changes"](no_op_fixture())
         cases = [{}, no_op_fixture() | {"resource_changes": []},
@@ -252,7 +276,7 @@ class PricingMetadataTests(unittest.TestCase):
         self.assertIn("jsondecode(var.enable_pricing_command_metadata_refresh ? templatefile(", source)
         self.assertIn("}) : jsonencode({ Statement = [] })).Statement", source)
         self.assertIn("secret_arns = jsonencode([for secret in aws_secretsmanager_secret.pricing_command : secret.arn])", source)
-        self.assertIn("role_arn    = jsonencode(aws_iam_role.pricing_command_execution.arn)", source)
+        self.assertIn("role_arn    = jsonencode(aws_iam_role.pricing_command_execution[0].arn)", source)
         assembly = (ROOT / "infra/platform_writer_boundary.tf").read_text()
         self.assertEqual(assembly.count("local.pricing_command_metadata_statements"), 2)
         self.assertIn("RevokeSessionsBeforeReviewedCutover", assembly)

@@ -466,7 +466,11 @@ class ApprovalTests(unittest.TestCase):
         document = json.loads(policy["policy"])
         document["Statement"].append({"Effect": "Allow", "Action": "*", "Resource": "*"})
         policy["policy"] = json.dumps(document)
-        for plan in (pricing_fixture(), invalid):
+        missing_opt_in = metadata_fixture()
+        missing_opt_in["variables"].pop("enable_pricing_command_credential_infrastructure")
+        disabled_opt_in = metadata_fixture()
+        disabled_opt_in["variables"]["enable_pricing_command_credential_infrastructure"]["value"] = False
+        for plan in (pricing_fixture(), invalid, missing_opt_in, disabled_opt_in):
             with patch.object(approval, "saved_plan_digest", return_value=current["planSha256"]), \
                     patch.object(approval.subprocess, "run", side_effect=[runtime_result(),
                         subprocess.CompletedProcess([], 0, json.dumps(plan), "SECRET_SENTINEL")]) as run, \

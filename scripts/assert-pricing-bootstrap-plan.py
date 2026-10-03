@@ -8,8 +8,8 @@ import sys
 
 ACCOUNT = "269416271598"
 REGION = "eu-west-1"
-ROLE = "aws_iam_role.pricing_command_execution"
-POLICY = "aws_iam_role_policy.pricing_command_secrets"
+ROLE = "aws_iam_role.pricing_command_execution[0]"
+POLICY = "aws_iam_role_policy.pricing_command_secrets[0]"
 NAMES = {
     "identity_read": "identity-read-database-url",
     "owner_read": "owner-read-database-url",
@@ -17,7 +17,7 @@ NAMES = {
     "public": "public-database-url",
     "internal_token": "internal-token",
 }
-SOURCE_HASH = "eba9a173e39661a761edbd6ad283f7111bfba4dfc42b19d4c29f18ca8202b39a"
+SOURCE_HASH = "ca3f4b9555a678f6ae0ed68eb5860ecdd850254146008f129324e34cfa5d5bdc"
 SOURCE = Path(__file__).resolve().parents[1] / "infra/pricing_command_secrets.tf"
 METADATA_HASH = "3137c89b74dd2f059226f3f6c94c9fc6f11b335fd84240f3ed945fa398bed42f"
 
@@ -33,6 +33,8 @@ def check_source(source, directory):
 def check(plan, source):
     check_source(source, SOURCE.parent)
     variables = plan["variables"]
+    if variables["enable_pricing_command_credential_infrastructure"]["value"] is not True:
+        raise ValueError("Pricing infrastructure opt-in must be explicit")
     for name, value in (("aws_account_id", ACCOUNT), ("aws_region", REGION),
                         ("enable_pricing_command_metadata_refresh", False)):
         if variables[name]["value"] != value:
@@ -79,14 +81,15 @@ def check(plan, source):
         raise ValueError("Unexpected execution role or trust")
     policy = by_address[POLICY]
     declarations = plan["configuration"]["root_module"]["resources"]
-    expression = next(r for r in declarations if r["address"] == POLICY)["expressions"]
+    expression = next(r for r in declarations if r["address"] == POLICY.removesuffix("[0]"))["expressions"]
     if (policy["after"]["name"] != "pricing-command-exact-secret-read"
             or policy["after"].get("policy") is not None
             or policy["after"].get("role") is not None
             or policy.get("after_unknown", {}).get("policy") is not True
             or policy.get("after_unknown", {}).get("role") is not True
             or set(expression["role"]["references"]) != {
-                "aws_iam_role.pricing_command_execution.id", "aws_iam_role.pricing_command_execution"}
+                "aws_iam_role.pricing_command_execution[0].id", ROLE,
+                "aws_iam_role.pricing_command_execution"}
             or set(expression["policy"]["references"]) != {"aws_secretsmanager_secret.pricing_command"}):
         raise ValueError("Unknown policy must come only from the reviewed five secret ARNs")
 
@@ -130,6 +133,8 @@ def check_metadata(plan, *, no_changes=False):
             raise ValueError("Unexpected account or region")
     if plan["variables"]["enable_pricing_command_metadata_refresh"]["value"] is not True:
         raise ValueError("Metadata stage must be explicit")
+    if plan["variables"]["enable_pricing_command_credential_infrastructure"]["value"] is not True:
+        raise ValueError("Pricing infrastructure opt-in must remain explicit")
     boundary = json.loads((SOURCE.parent / "platform_writer_boundary.auto.tfvars.json").read_text())["platform_writer_boundary"]
     if (plan["variables"]["platform_writer_boundary"]["value"] != boundary
             or boundary.get("bootstrap_plan_role") is not True or boundary.get("enforce_trust") is not True
