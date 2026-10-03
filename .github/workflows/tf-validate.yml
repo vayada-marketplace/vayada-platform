@@ -317,7 +317,7 @@ jobs:
         working-directory: infra
 
       - name: Verify hotel setup credential isolation (offline)
-        run: python3 -m unittest scripts/test_hotel_setup_credentials.py scripts/test_hotel_setup_public_caller.py scripts/test_hotel_setup_release.py -v
+        run: python3 -m unittest scripts/test_hotel_setup_credentials.py scripts/test_hotel_setup_public_caller.py scripts/test_hotel_setup_release.py scripts/test_hotel_setup_caller_retained.py -v
 
       - name: Prove pricing infrastructure opt-in with native offline plans
         run: python3 -m unittest scripts/test_pricing_infrastructure_opt_in.py -v
