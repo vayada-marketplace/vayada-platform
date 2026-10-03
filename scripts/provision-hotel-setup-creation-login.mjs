@@ -6,9 +6,11 @@ const host = "vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com";
 const prefix = "hotel-setup-command/prod/organization/";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const purpose = process.env.HOTEL_SETUP_BOOTSTRAP_PURPOSE ?? "organization";
+const readerMode = purpose === "property_reader" ? "property_commands" : "property_creation";
+const isReader = purpose === "creation_reader" || purpose === "property_reader";
 const role = purpose === "organization"
   ? "vayada_next_hotel_setup_org_" + randomUUID().replaceAll("-", "")
-  : "vayada_next_hotel_setup_creation_reader";
+  : purpose === "property_reader" ? "vayada_next_hotel_setup_reader" : "vayada_next_hotel_setup_creation_reader";
 let admin;
 let native;
 let createdRole = false;
@@ -16,7 +18,7 @@ let connectionFailed = false;
 try {
   const organizationId = process.env.HOTEL_SETUP_COMMAND_ORGANIZATION_ID ?? "";
   const actorUserId = process.env.HOTEL_SETUP_COMMAND_ACTOR_USER_ID ?? "";
-  if (!["organization", "creation_reader"].includes(purpose) ||
+  if (!["organization", "creation_reader", "property_reader"].includes(purpose) ||
       (purpose === "organization" && (!uuid.test(organizationId) || !uuid.test(actorUserId))))
     throw new Error();
   const url = new URL(process.env.TARGET_DATABASE_ADMIN_URL ?? "");
@@ -38,17 +40,18 @@ try {
     await import(`${appRoot}/apps/api/dist/platform/providerCredentialVault.js`);
   const vault = local ? createMemoryProviderCredentialVault() :
     createSecretsManagerProviderCredentialVault({ region: "eu-west-1" });
-  const { HOTEL_SETUP_CREATION_READER_READ_COLUMNS, HOTEL_SETUP_READER_AUDIT_COLUMNS } =
+  const { HOTEL_SETUP_CREATION_READER_READ_COLUMNS, HOTEL_SETUP_READER_READ_COLUMNS, HOTEL_SETUP_READER_AUDIT_COLUMNS } =
     await import(`${appRoot}/apps/api/dist/hotelSetupReaderPrivileges.js`);
   const { checkHotelSetupReader } = await import(`${appRoot}/apps/api/dist/cli/hotelSetupReaderPreflight.js`);
   const inventory = purpose === "organization" ? HOTEL_SETUP_CREATION_PRIVILEGES :
-    Object.fromEntries(Object.entries(HOTEL_SETUP_CREATION_READER_READ_COLUMNS)
+    Object.fromEntries(Object.entries(readerMode === "property_commands" ? HOTEL_SETUP_READER_READ_COLUMNS : HOTEL_SETUP_CREATION_READER_READ_COLUMNS)
       .map(([relation, SELECT]) => [relation, { SELECT }]));
-  if (purpose === "creation_reader")
+  if (isReader)
     inventory["platform.product_audit_events"].INSERT = HOTEL_SETUP_READER_AUDIT_COLUMNS;
-  const readerSecrets = ["hotel-setup-creation/prod/reader-database-url", "hotel-setup-creation/prod/internal-token"];
+  const readerSecretPrefix = purpose === "property_reader" ? "hotel-setup-command/prod/" : "hotel-setup-creation/prod/";
+  const readerSecrets = [readerSecretPrefix + "reader-database-url", readerSecretPrefix + "internal-token"];
   let rawSecrets;
-  if (!local && purpose === "creation_reader") {
+  if (!local && isReader) {
     const sdk = await import("@aws-sdk/client-secrets-manager");
     const client = new sdk.SecretsManagerClient({ region: "eu-west-1" });
     rawSecrets = {
@@ -69,7 +72,7 @@ try {
       },
     };
   } else rawSecrets = vault;
-  if (purpose === "creation_reader")
+  if (isReader)
     for (const reference of readerSecrets) if (await rawSecrets.get(reference) !== null) throw new Error();
   const password = randomBytes(48).toString("base64url");
   const connection = (user, credential) => new pg.Client({
@@ -127,7 +130,7 @@ try {
   if (purpose === "organization")
     await checkHotelSetupCreationCredential(native, { organizationId, actorUserId });
   else {
-    await checkHotelSetupReader(native, "property_creation");
+    await checkHotelSetupReader(native, readerMode);
     const credentialUrl = new URL(url);
     credentialUrl.username = role;
     credentialUrl.password = password;
