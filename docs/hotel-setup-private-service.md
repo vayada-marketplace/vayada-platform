@@ -196,3 +196,25 @@ operational cleanup before retry. The native organization bootstrap role remains
 separate. Local fault injection proves partial token publication disables the
 reader, an existing secret blocks creation, and an existing reader stays intact.
 No task caller or service is enabled by this slice.
+
+
+### Creation credential bootstrap
+
+The main-only `hotel-setup-creation-bootstrap.yml` workflow provisions either the
+isolated reader or one organization's native login. It requires the reviewed
+public task definition to remain stable and the private service to exist with
+zero desired, running, and pending tasks. The immutable image must be in
+`deployment/hotel-setup-command-images.json`; an unlisted digest is rejected
+before any AWS call. Reader runs reject organization/actor inputs.
+
+The existing ephemeral-task runner replaces inherited serving credentials and
+task permissions with one operational admin secret and the exact purpose's
+bootstrap IAM role. It clears serving environment and ports, uses the approved
+image digest and pinned RDS CA, then stops its task and deregisters its temporary
+definition. It never updates an ECS service. The bootstrap role is not attached
+to the private service. A failure or cleanup-required report blocks activation;
+do not retry blindly or substitute serving/migration credentials.
+
+Run `python3 scripts/test_hotel_setup_creation_runner.py` to exercise both modes
+and input rejection with an AWS stub. This check also measures the actual ECS
+override size and verifies credential replacement and owned-task cleanup.
