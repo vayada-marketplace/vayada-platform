@@ -1,4 +1,4 @@
-# Reviewed VAY-965 prerequisite infrastructure. Services remain at zero tasks.
+# Reviewed VAY-965 prerequisite infrastructure and admitted setup callers.
 # Keep these prerequisites enabled after activation; lifecycle guards retain live tasks.
 enable_hotel_setup_private_network           = true
 enable_hotel_setup_property_network          = true
@@ -15,7 +15,6 @@ hotel_setup_property_image_digests = {
   primary  = "sha256:b673453b253fac2e94822c24158f6d599696d0fb71a2bc68c7f4a3be0f98f38a"
   rollback = "sha256:9c6ad66294c188ff16b141922cc3cc57d0fc7dd7dfd45eda59e4c4492bb51f79"
 }
-# Retain private token references while admission remains blocked.
-# The protected release enables admission after native proofs and service readiness.
+# Retain both admitted callers after the protected activation and native proofs.
 # Later applies reject removal of installed origin/token pairs or enabled admission.
-hotel_setup_public_caller = { creation = "blocked", property = "blocked" }
+hotel_setup_public_caller = { creation = "enabled", property = "enabled" }
