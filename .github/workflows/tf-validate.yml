@@ -10,6 +10,7 @@ on:
       - "scripts/assert-platform-writer-boundary-plan.py"
       - "scripts/test_platform_writer_boundary.py"
       - "scripts/test_pricing_command_metadata_refresh.py"
+      - "scripts/test_pricing_infrastructure_opt_in.py"
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
       - "scripts/test_coordinated_recovery.py"
@@ -288,10 +289,14 @@ jobs:
         uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "~1.5"
+          terraform_wrapper: false
 
       - name: Terraform init (no backend)
         run: terraform init -backend=false
         working-directory: infra
+
+      - name: Prove pricing infrastructure opt-in with native offline plans
+        run: python3 -m unittest scripts/test_pricing_infrastructure_opt_in.py -v
 
       - name: Terraform validate
         run: terraform validate
