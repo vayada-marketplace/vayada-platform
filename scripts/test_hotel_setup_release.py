@@ -103,7 +103,8 @@ class ReleaseTest(unittest.TestCase):
         candidate = release.prepare_public(captured, 'creation', 'hold', DIGEST)
         public = {'taskDefinition': new, 'desiredCount': 1, 'deployments': [
             {'taskDefinition': old, 'runningCount': 1, 'rolloutState': 'COMPLETED'}]}
-        hold = {'status': 'active', 'service': 'next-target-backend', 'operationId': 'setup-123',
+        hold = {'schemaVersion': 1, 'manifestId': None, 'dependentFrontendsCompatible': False,
+            'createdAt': '2026-10-03T17:19:28.000Z', 'status': 'active', 'service': 'next-target-backend', 'operationId': 'setup-123',
             'reason': 'reviewed hotel setup caller release',
             'physicalIdentity': {'accountId': '269416271598', 'region': release.REGION,
                 'cluster': release.CLUSTER, 'ecsService': release.PUBLIC},
@@ -112,8 +113,12 @@ class ReleaseTest(unittest.TestCase):
         for key, value in [('status', 'cleared'), ('operationId', 'unrelated-123'),
                            ('capturedTaskDefinitionArn', new), ('capturedImage', 'wrong-image'),
                            ('physicalIdentity', {'accountId': 'other-account'})]:
-            with self.subTest(key=key), self.assertRaises(RuntimeError):
+            with self.subTest(key=key), self.assertRaises((RuntimeError, SystemExit)):
                 release.initial_restore_target(public, new, DIGEST, {**hold, key: value}, captured, candidate)
+        for patch in ({'schemaVersion': 2}, {'createdAt': 'invalid'},
+                      {'clearedAt': '2026-10-03T18:00:00.000Z'}, {'dependentFrontendsCompatible': 'false'}):
+            with self.assertRaises(SystemExit):
+                release.initial_restore_target(public, new, DIGEST, {**hold, **patch}, captured, candidate)
         for state in ({**public, 'taskDefinition': old}, {**public, 'desiredCount': 0},
                       {**public, 'deployments': []}):
             with self.assertRaises(RuntimeError):

@@ -23,10 +23,10 @@ docker run --detach --rm --name "${database}" --network "${network}" \
   --network-alias vayada-cluster-acl-db --env POSTGRES_PASSWORD=postgres \
   "postgres:${version}" >/dev/null
 for _ in {1..30}; do
-  docker exec "${database}" pg_isready -U postgres >/dev/null 2>&1 && break
+  docker exec "${database}" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
   sleep 1
 done
-docker exec "${database}" pg_isready -U postgres >/dev/null
+docker exec "${database}" pg_isready -h 127.0.0.1 -U postgres >/dev/null
 docker exec -i "${database}" psql -U postgres -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 CREATE ROLE cluster_admin LOGIN CREATEDB CREATEROLE PASSWORD 'admin';
 ALTER DATABASE postgres OWNER TO cluster_admin;

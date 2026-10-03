@@ -3,6 +3,7 @@
 import argparse
 import copy
 import json
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -10,6 +11,9 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+_spec = importlib.util.spec_from_file_location('setup_coordinated_release', ROOT / 'scripts/coordinated_release.py')
+coordinated = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(coordinated)
 REGION = 'eu-west-1'
 CLUSTER = 'vayada-backend-cluster'
 REPOSITORY = '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api'
@@ -102,6 +106,7 @@ def approved(digest, inventory):
 
 def initial_restore_target(public, expected, digest, hold, captured, candidate):
     """Restore only the captured pre-cutover task after an initial caller failure."""
+    coordinated.validate_hold(hold, coordinated.load_config(), 'next-target-backend')
     require(public['taskDefinition'] == expected and public['desiredCount'] == 1,
             'Failed deployment changed before recovery')
     require(hold.get('status') == 'active' and hold.get('service') == 'next-target-backend'
@@ -136,6 +141,7 @@ def restore_initial_public(args, public):
     result = aws('ssm', 'get-parameter', '--name',
                  '/vayada/prod/coordinated-deployments/v1/services/next-target-backend/hold')
     hold = json.loads(result['Parameter']['Value'])
+    coordinated.validate_hold(hold, coordinated.load_config(), 'next-target-backend')
     captured = aws('ecs', 'describe-task-definition', '--task-definition', hold['capturedTaskDefinitionArn'])['taskDefinition']
     candidate = aws('ecs', 'describe-task-definition', '--task-definition', args.expected_public_task)['taskDefinition']
     target = initial_restore_target(public, args.expected_public_task, args.image_digest, hold, captured, candidate)
