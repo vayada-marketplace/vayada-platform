@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def plan(enabled, service=None):
+def plan(enabled, service=None, property_network=False):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "infra"
         path.mkdir()
@@ -22,6 +22,7 @@ def plan(enabled, service=None):
             (path.parent / "rehearsal").mkdir()
             shutil.copy(ROOT / "rehearsal/rds-ca-rsa2048-g1.pem", path.parent / "rehearsal")
         shutil.copy(ROOT / 'infra/hotel_setup_network.tf', path)
+        shutil.copy(ROOT / 'infra/hotel_setup_property_network.tf', path)
         shutil.copy(ROOT / 'infra/.terraform.lock.hcl', path)
         # Reuse init's providers; do not download another copy on small local disks.
         (path / '.terraform').symlink_to(ROOT / 'infra/.terraform', target_is_directory=True)
@@ -69,7 +70,7 @@ output "setup_environment" { value = local.hotel_setup_environment }
         env.pop('AWS_PROFILE', None)
         for command in [
             ['init', '-backend=false', '-input=false', '-no-color'],
-            ['plan', '-input=false', '-refresh=false', '-no-color', '-out=fixture.plan', f'-var=enable_hotel_setup_private_network={str(enabled).lower()}']]:
+            ['plan', '-input=false', '-refresh=false', '-no-color', '-out=fixture.plan', f'-var=enable_hotel_setup_private_network={str(enabled).lower()}', f'-var=enable_hotel_setup_property_network={str(property_network).lower()}']]:
             completed = subprocess.run(['terraform', *command], cwd=path, env=env, capture_output=True, text=True)
             if completed.returncode:
                 raise AssertionError(completed.stdout + completed.stderr)
@@ -89,6 +90,9 @@ class HotelSetupNetworkTests(unittest.TestCase):
         listener = resources['aws_lb_listener.hotel_setup[0]']
         self.assertEqual((listener['port'], listener['protocol']), (443, 'HTTPS'))
         self.assertEqual(listener['ssl_policy'], 'ELBSecurityPolicy-TLS13-1-2-2021-06')
+        self.assertEqual(listener['default_action'][0]['type'], 'fixed-response')
+        self.assertEqual(listener['default_action'][0]['fixed_response'][0]['status_code'], '403')
+        self.assertEqual(resources['aws_lb_listener_rule.hotel_setup_creation[0]']['condition'][0]['host_header'][0]['values'], ['hotel-setup-command.vayada.com'])
         self.assertEqual(resources['aws_route53_zone.hotel_setup[0]']['name'], 'hotel-setup-command.vayada.com')
         self.assertEqual(len(resources['aws_route53_zone.hotel_setup[0]']['vpc']), 1)
         rules = result['planned_values']['outputs']['rules']['value']
@@ -113,6 +117,26 @@ class HotelSetupNetworkTests(unittest.TestCase):
         self.assertEqual((egress['type'], egress['from_port'], egress['to_port']), ('egress', 443, 443))
         self.assertEqual(egress['cidr_blocks'], ['0.0.0.0/0'])
         self.assertEqual(resources['aws_lb_target_group.hotel_setup[0]']['health_check'][0]['matcher'], '401')
+
+    def test_property_host_and_task_are_isolated_on_shared_tls(self):
+        with self.assertRaisesRegex(AssertionError, 'requires the shared private'):
+            plan(False, property_network=True)
+        result = plan(True, property_network=True)
+        resources = {r['address']: r['values'] for r in result['planned_values']['root_module']['resources']}
+        self.assertEqual(len([r for r in resources if r.startswith('aws_lb.')]), 1)
+        self.assertEqual(resources['aws_route53_zone.hotel_setup_property[0]']['name'], 'hotel-setup-property-command.vayada.com')
+        self.assertEqual(resources['aws_security_group.hotel_setup_property_task[0]']['name'], 'vayada-hotel-setup-property-task')
+        rule = resources['aws_lb_listener_rule.hotel_setup_property[0]']
+        self.assertEqual(rule['condition'][0]['host_header'][0]['values'], ['hotel-setup-property-command.vayada.com'])
+        configuration = {r['address']: r for r in result['configuration']['root_module']['resources']}
+        self.assertIn('aws_lb_target_group.hotel_setup_property', configuration['aws_lb_listener_rule.hotel_setup_property']['expressions']['action'][0]['target_group_arn']['references'])
+        self.assertEqual(resources['aws_security_group_rule.hotel_setup_property_database["ingress"]']['security_group_id'], 'sg-0123456789abcdef0')
+        self.assertEqual(resources['aws_security_group_rule.hotel_setup_property_database["egress"]']['source_security_group_id'], 'sg-0123456789abcdef0')
+        for address, value in resources.items():
+            if value.get('type') == 'ingress':
+                self.assertFalse(value.get('cidr_blocks'), address)
+                self.assertFalse(value.get('ipv6_cidr_blocks'), address)
+            self.assertFalse(address.startswith('aws_ecs_'))
 
 
 if __name__ == '__main__':

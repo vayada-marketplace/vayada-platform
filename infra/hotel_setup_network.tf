@@ -100,8 +100,25 @@ resource "aws_lb_listener" "hotel_setup" {
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
   certificate_arn   = aws_acm_certificate_validation.wildcard_vayada.certificate_arn
   default_action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      status_code  = "403"
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "hotel_setup_creation" {
+  count = var.enable_hotel_setup_private_network ? 1 : 0
+
+  listener_arn = aws_lb_listener.hotel_setup[0].arn
+  priority     = 1
+  action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.hotel_setup[0].arn
+  }
+  condition {
+    host_header { values = [local.hotel_setup_hostname] }
   }
 }
 

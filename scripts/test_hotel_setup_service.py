@@ -32,6 +32,8 @@ class HotelSetupServiceTests(unittest.TestCase):
         self.assertEqual(environment['HOTEL_SETUP_COMMAND_SECRET_PREFIX'], 'hotel-setup-command/prod/property/')
         self.assertEqual(environment['NODE_EXTRA_CA_CERTS'], '/runtime/rds-ca.pem')
         service = resources['aws_ecs_service.hotel_setup[0]']
+        configuration = {r['address']: r for r in result['configuration']['root_module']['resources']}
+        self.assertIn('aws_lb_listener_rule.hotel_setup_creation', configuration['aws_ecs_service.hotel_setup']['depends_on'])
         self.assertEqual(service['desired_count'], 0)
         self.assertFalse(service['enable_execute_command'])
         self.assertTrue(service['network_configuration'][0]['assign_public_ip'])
