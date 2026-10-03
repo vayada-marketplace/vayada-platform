@@ -24,7 +24,7 @@ data "aws_iam_policy_document" "hotel_setup_platform_deploy" {
     for_each = length(local.hotel_setup_secret_names) + length(local.hotel_setup_property_secret_names) > 0 ? [true] : []
     content {
       effect  = "Allow"
-      actions = ["secretsmanager:CreateSecret", "secretsmanager:DescribeSecret", "secretsmanager:TagResource", "secretsmanager:UntagResource"]
+      actions = ["secretsmanager:CreateSecret", "secretsmanager:DescribeSecret", "secretsmanager:GetResourcePolicy", "secretsmanager:TagResource", "secretsmanager:UntagResource"]
       resources = [for name in concat(values(local.hotel_setup_secret_names), values(local.hotel_setup_property_secret_names)) :
       "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${name}-??????"]
     }
