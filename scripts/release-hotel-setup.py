@@ -170,7 +170,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--service', choices=['public', 'creation', 'property'], required=True)
     parser.add_argument('--purpose', choices=['creation', 'property'], required=True)
-    parser.add_argument('--state', choices=['hold', 'blocked', 'enabled', 'start', 'restore_initial'], required=True)
+    parser.add_argument('--state', choices=['hold', 'blocked', 'enabled', 'start', 'stop', 'restore_initial'], required=True)
     parser.add_argument('--image-digest', required=True)
     parser.add_argument('--expected-public-task', required=True)
     parser.add_argument('--private-task', default='')
@@ -185,7 +185,7 @@ def main():
     require(stable(public, args.expected_public_task), 'Public service is not the reviewed stable task')
     current = aws('ecs', 'describe-task-definition', '--task-definition', args.expected_public_task)['taskDefinition']
     if args.service == 'public':
-        require(args.state != 'start' and not args.private_task, 'Invalid public release')
+        require(args.state not in ('start', 'stop') and not args.private_task, 'Invalid public release')
         approved(args.image_digest, 'hotel-setup-caller-images.json')
         # Keep the same split-launcher/ongoing-export guard as normal API deployment.
         with tempfile.TemporaryDirectory() as directory:
@@ -211,7 +211,9 @@ def main():
             target = aws('ecs', 'register-task-definition', '--cli-input-json', 'file://' + str(path))['taskDefinition']['taskDefinitionArn']
         destination = PUBLIC
     else:
-        require(args.service == args.purpose and args.state == 'start' and TASK.fullmatch(args.private_task), 'Invalid private release')
+        require(args.service == args.purpose and args.state in ('start', 'stop'), 'Invalid private release')
+        require((args.state == 'start' and TASK.fullmatch(args.private_task)) or
+                (args.state == 'stop' and not args.private_task), 'Invalid private task selection')
         approved(args.image_digest, 'hotel-setup-command-images.json' if args.service == 'creation' else 'hotel-setup-property-images.json')
         public_image = container(current, 'vayada-next-api')['image']
         require(public_image.startswith(REPOSITORY + '@'), 'Public image must be immutable')
@@ -219,8 +221,14 @@ def main():
         require(environment(container(current, 'vayada-next-api')).get(PREFIX[args.purpose] + '_ADMISSION') == 'blocked', 'Caller admission must be blocked')
         destination = PRIVATE[args.service]
         private = service(destination)
-        require(private['desiredCount'] == private['runningCount'] == private['pendingCount'] == 0, 'Private initial start requires zero tasks')
-        target = args.private_task
+        if args.state == 'stop':
+            prepare_public(current, args.purpose, 'blocked', public_image.split('@')[1])
+            require(stable(private), 'Private stop requires one stable task')
+            target = private['taskDefinition']
+            require(TASK.fullmatch(target), 'Invalid serving private task')
+        else:
+            require(private['desiredCount'] == private['runningCount'] == private['pendingCount'] == 0, 'Private initial start requires zero tasks')
+            target = args.private_task
         definition = aws('ecs', 'describe-task-definition', '--task-definition', target)['taskDefinition']
         item = container(definition, 'hotel-setup')
         marker = 'property-' if args.service == 'property' else ''
@@ -238,11 +246,59 @@ def main():
         require(definition['family'] in (('vayada-hotel-setup-primary', 'vayada-hotel-setup-rollback') if args.service == 'creation' else ('vayada-hotel-setup-property-primary', 'vayada-hotel-setup-property-rollback')), 'Wrong staged family')
     # Recheck immediately before the only service mutation.
     require(stable(service(PUBLIC), args.expected_public_task), 'Public task changed before release')
-    aws('ecs', 'update-service', '--cluster', CLUSTER, '--service', destination, '--task-definition', target, '--desired-count', '1')
+    if args.state == 'stop':
+        require(stable(service(destination), target), 'Private task changed before stop')
+        serving = aws('ecs', 'list-tasks', '--cluster', CLUSTER, '--service-name', destination,
+                      '--desired-status', 'RUNNING')['taskArns']
+        require(len(serving) == 1 and re.fullmatch(r'arn:aws:ecs:eu-west-1:269416271598:task/'
+                + re.escape(CLUSTER) + r'/[a-f0-9]{32}', serving[0]), 'Expected one serving private task ARN')
+        captured = aws('ecs', 'describe-tasks', '--cluster', CLUSTER, '--tasks', *serving)
+        require(not captured.get('failures') and len(captured['tasks']) == 1, 'Serving private task is missing')
+        physical = captured['tasks'][0]
+        require(physical.get('taskArn') == serving[0] and physical.get('taskDefinitionArn') == target
+                and physical.get('clusterArn') == 'arn:aws:ecs:eu-west-1:269416271598:cluster/' + CLUSTER
+                and physical.get('group') == 'service:' + destination
+                and physical.get('desiredStatus') == physical.get('lastStatus') == 'RUNNING',
+                'Serving private task differs from reviewed service')
+        # Desired STOPPED includes tasks still draining, even when service runningCount is zero.
+        history = aws('ecs', 'list-tasks', '--cluster', CLUSTER, '--service-name', destination,
+                      '--desired-status', 'STOPPED')['taskArns']
+        require(len(history) <= 100, 'Too many stopped private tasks to verify')
+        if history:
+            stopped = aws('ecs', 'describe-tasks', '--cluster', CLUSTER, '--tasks', *history)
+            require(not stopped.get('failures') and len(stopped['tasks']) == len(history)
+                    and {task['taskArn'] for task in stopped['tasks']} == set(history)
+                    and all(task.get('lastStatus') == 'STOPPED' for task in stopped['tasks']),
+                    'Private service still has draining tasks')
+        aws('ecs', 'update-service', '--cluster', CLUSTER, '--service', destination, '--desired-count', '0')
+    else:
+        aws('ecs', 'update-service', '--cluster', CLUSTER, '--service', destination, '--task-definition', target, '--desired-count', '1')
     subprocess.run(['aws', 'ecs', 'wait', 'services-stable', '--cluster', CLUSTER, '--services', destination, '--region', REGION], check=True)
+    if args.state == 'stop':
+        subprocess.run(['aws', 'ecs', 'wait', 'tasks-stopped', '--cluster', CLUSTER,
+                        '--tasks', *serving, '--region', REGION], check=True)
+        stopped = aws('ecs', 'describe-tasks', '--cluster', CLUSTER, '--tasks', *serving)
+        require(not stopped.get('failures') and len(stopped['tasks']) == 1
+                and stopped['tasks'][0].get('taskArn') == serving[0]
+                and stopped['tasks'][0].get('lastStatus') == 'STOPPED', 'Serving private task did not stop')
+        require(not aws('ecs', 'list-tasks', '--cluster', CLUSTER, '--service-name', destination,
+                        '--desired-status', 'RUNNING')['taskArns'], 'Private service still has serving tasks')
+        history = aws('ecs', 'list-tasks', '--cluster', CLUSTER, '--service-name', destination,
+                      '--desired-status', 'STOPPED')['taskArns']
+        require(len(history) <= 100, 'Too many stopped private tasks to verify')
+        if history:
+            stopped = aws('ecs', 'describe-tasks', '--cluster', CLUSTER, '--tasks', *history)
+            require(not stopped.get('failures') and len(stopped['tasks']) == len(history)
+                    and {task['taskArn'] for task in stopped['tasks']} == set(history)
+                    and all(task.get('lastStatus') == 'STOPPED' for task in stopped['tasks']),
+                    'Private service still has draining tasks')
     final = service(destination)
-    require(stable(final, target), 'Selected service failed stability; admission remains unconfirmed')
-    healthy(final)
+    if args.state == 'stop':
+        require(final['desiredCount'] == final['runningCount'] == final['pendingCount'] == 0
+                and final['taskDefinition'] == target, 'Private stop did not retain its task at zero count')
+    else:
+        require(stable(final, target), 'Selected service failed stability; admission remains unconfirmed')
+        healthy(final)
     print(json.dumps({'status':'PASS', 'service':destination, 'taskDefinition':target, 'admission':args.state}))
 
 

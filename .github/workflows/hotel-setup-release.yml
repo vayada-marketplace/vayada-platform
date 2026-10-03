@@ -13,14 +13,14 @@ on:
         required: true
       state:
         type: choice
-        options: [hold, blocked, enabled, start, restore_initial]
+        options: [hold, blocked, enabled, start, stop, restore_initial]
         required: true
       image_digest:
         required: true
       expected_public_task:
         required: true
       private_task:
-        description: "Reviewed staged task definition (private start only)"
+        description: "Reviewed staged task definition (private start only; empty for stop)"
 
 permissions:
   contents: read
