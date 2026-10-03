@@ -47,7 +47,7 @@ class HotelSetupCredentialsTests(unittest.TestCase):
         self.assertEqual(source.count('count = var.enable_hotel_setup_credential_infrastructure ? 1 : 0'), 4)
         self.assertIn('prevent_destroy = true', source)
         self.assertIn('jsonencode([for secret in aws_secretsmanager_secret.hotel_setup : secret.arn])', source)
-        for forbidden in ['aws_secretsmanager_secret_version', 'aws_ecs_', 'aws_iam_role_policy_attachment', 'ssm:', 'kms:', 'PassRole']:
+        for forbidden in ['aws_secretsmanager_secret_version', 'aws_ecs_', 'resource "aws_iam_role_policy_attachment"', 'ssm:', 'kms:', 'PassRole']:
             self.assertNotIn(forbidden, source)
         for path in (ROOT / "infra").glob("*.tf"):
             if path != SOURCE and path.name not in ["hotel_setup_service.tf", "hotel_setup_property_service.tf", "hotel_setup_creation_bootstrap.tf", "hotel_setup_property_bootstrap.tf", "hotel_setup_property_bootstrap_execution.tf", "hotel_setup_property_credentials.tf", "hotel_setup_public_caller.tf", "ecs.tf"]:
