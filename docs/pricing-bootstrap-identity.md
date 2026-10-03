@@ -377,6 +377,53 @@ inventory/drain; STS caller-identity output is not a denial probe. Separate
 phase-limited operator identities and the installer/recovery owner must remain
 outside the reviewed competing-writer target set, with their independent controls.
 
+### Concrete prerequisite scope — proposal, not installation approval
+
+The expanded 2026-10-03 read-only IAM audit identifies these four overlapping
+deployment identities for the prerequisite review. They are **candidates**, not
+a complete or approved fence target list:
+
+| Existing role | Observed stable RoleId | Relevant overlap |
+| --- | --- | --- |
+| `vayada-github-actions-platform-deploy` | `AROAT5OTWB3XLPYHBY43Y` | Platform infrastructure, production state/parameters, exact RDS modification and coordinated-receiver IAM management |
+| `vayada-github-actions-coordinated-deploy` | `AROAT5OTWB3XD5SXH5GJW` | Six normal-next services and deployment-control records |
+| `vayada-github-actions-deploy` | `AROAT5OTWB3XPZT47OHGB` | Exact database security group and account repository image uploads |
+| `vayada-github-actions-finance-export` | `AROAT5OTWB3XMKMLBCNMM` | Region-restricted `ecs:DeregisterTaskDefinition` on `*`, despite isolated RunTask/StopTask scopes |
+
+Re-observe each identity, trust and full permission composition before producing
+the installation plan. Classify additional writers by overlapping resources and
+execution capabilities, not role-name matching. Do not fence runtime logging,
+service-linked or unrelated rehearsal roles merely because they have writes.
+The selected owner inherits AdministratorAccess; an explicit non-interference
+window and installer/recovery responsibility are required, not an assumption
+that deployment-role attachments restrict that owner. Non-AWS writers,
+resource policies/SCPs and accepted/chained executions remain review gates.
+
+For hosted verification, propose a separate GitHub environment named
+`vay1543-pricing-verification`: only the `main` branch, required reviewer numeric
+ID `120040061`, no administrator bypass, and only the private read-only check.
+This environment/reviewer selection is **proposed**, not human-selected or
+created. The existing `platform-mutations-v2` environment currently admits only
+`main` but has no required-reviewer rule; it is not human-approval evidence.
+Human approval must precede any environment or trust installation.
+
+Reuse the existing Plan role `AROAT5OTWB3XFQWPINYTU`; propose adding only the
+exact OIDC subject
+`repo:vayada-marketplace/vayada-platform:environment:vay1543-pricing-verification`
+with audience `sts.amazonaws.com`, preserving its existing PR subject and
+permission policy. The reader's trust remains owned by the normal Terraform
+root: do not import or manage that role in the operator-identity root. Verify
+actual environment restrictions and composed reader permissions independently;
+the OIDC environment subject itself does not prove branch, reviewer or source.
+Do not broaden trust to a repository wildcard or add setup/deployment grants.
+
+The reviewed prerequisite must specify policy/attachment ownership and an exact
+saved plan, actual capacity, complete admitted target set, human-selected window,
+private runner/backend/input binding, failure recovery and separate release
+approval. Keep the existing VAY-2029 boundary and cutoff unchanged. None of
+these proposed identities, environment settings or scope choices authorizes
+installation, setup, a hosted dispatch or the hotel test.
+
 ### Pause, verify and resume — proposed order, not an executable lane
 
 The required ordinary hosted no-op is a **plan refresh**, not Terraform Apply.
