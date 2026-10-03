@@ -154,8 +154,13 @@ is a design dependency, not a provisioner or permission to run one.
    positive and cross-hotel denial proof, rotation and ownership-transfer proof.
    Do not run the existing scope-role script as if it provisioned these logins.
 2. Review a clean platform plan for only the four staged resources plus inline
-   policies. Populate values outside Terraform using the separately authorized
-   provisioner. Run actual reader ACL/RLS/audit and native purpose preflights on
+   policies. Enabling this opt-in requires a separately authorized operator
+   apply of the exact reviewed saved plan in the existing platform root/state.
+   The normal `vayada-github-actions-platform-deploy` role cannot create or
+   configure these IAM roles; a passing plan does not authorize installation.
+   Do not broaden that role to bypass the operator gate. Populate values outside
+   Terraform using the separately authorized provisioner.
+   Run actual reader ACL/RLS/audit and native purpose preflights on
    PG16/17 and the exact live credentials; names or ECS 1/1 are not proof.
 3. Review dedicated task/execution IAM, internal TLS/network, exact image and
    rollback task definitions, and exclusive release ownership. Never roll back
