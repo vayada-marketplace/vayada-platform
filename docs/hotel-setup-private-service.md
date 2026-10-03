@@ -12,10 +12,14 @@ creation is not a rollback: secret containers have `prevent_destroy`.
 | --- | --- | --- |
 | Private ECS execution role | `hotel-setup-command/prod/reader-database-url` | URL for `vayada_next_hotel_setup_reader`, >=32-byte password, TLS verify-full |
 | Private ECS execution role | `hotel-setup-command/prod/internal-token` | Random >=32-byte internal authentication token |
-| Private ECS task role | `hotel-setup-command/prod/property/<database_login>` | Exactly `{username,password}` for the database-selected native property login |
+| Private ECS task role | `hotel-setup-command/prod/property/<vayada_next_hotel_setup_property_...>` | Exactly `{username,password}` for the database-selected native property login |
 
 Terraform never receives passwords or tokens. Execution reads only the two exact
-container ARNs. The application task can only `GetSecretValue` for native property
+container ARNs. Native property login provisioning must enforce the
+`vayada_next_hotel_setup_property_` prefix; arbitrary database login names are
+not admitted by this service policy. The trailing ARN wildcard intentionally
+covers purpose-specific native logins and the generated Secrets Manager suffix.
+The application task can only `GetSecretValue` for native property
 logins under the fixed property prefix; it cannot read the reader URL/internal
 token from Secrets Manager, write/rotate secrets or read unrelated credentials.
 The service receives its reader and token through ECS secret injection. Native
@@ -53,8 +57,13 @@ until the private service's authenticated preflights pass.
    positive and cross-hotel denial proof, rotation and ownership-transfer proof.
    Do not run the existing scope-role script as if it provisioned these logins.
 2. Review a clean platform plan for only the four staged resources plus inline
-   policies. Populate values outside Terraform using the separately authorized
-   provisioner. Run actual reader ACL/RLS/audit and native purpose preflights on
+   policies. Enabling this opt-in requires a separately authorized operator
+   apply of the exact reviewed saved plan in the existing platform root/state.
+   The normal `vayada-github-actions-platform-deploy` role cannot create or
+   configure these IAM roles; a passing plan does not authorize installation.
+   Do not broaden that role to bypass the operator gate. Populate values outside
+   Terraform using the separately authorized provisioner.
+   Run actual reader ACL/RLS/audit and native purpose preflights on
    PG16/17 and the exact live credentials; names or ECS 1/1 are not proof.
 3. Review dedicated task/execution IAM, internal TLS/network, exact image and
    rollback task definitions, and exclusive release ownership. Never roll back
