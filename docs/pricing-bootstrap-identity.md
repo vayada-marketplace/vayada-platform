@@ -463,6 +463,55 @@ check passes. Changing the target input back to empty is not release approval.
 Until the missing inventory and admission evidence is complete, keep this design
 uninstalled and do not dispatch a setup or deployment run.
 
+#### Expanded composition review and shared-release dependency
+
+The 2026-10-03 read-only follow-up loaded all 54 role detail records through
+14 explicitly completed raw pages, and the user/group/managed-policy inventory
+through 31 explicitly completed raw pages. All 27 returned default-version
+policy documents were loaded, including the 15 AWS-managed documents. Large
+action arrays were read in bounded slices against the same explicit version;
+truncated command output was rejected, not treated as a complete document.
+Canonical comparison found no change to the 54 observed RoleIds, role trusts or
+inline documents since the earlier audit. This is identity-policy metadata,
+not an effective-permission simulation or atomic account snapshot.
+
+The four deployment candidates remain supported by their direct control-plane
+overlaps. Other writers must not be indiscriminately fenced: recovery roles
+have explicit fixture/resource restrictions and denies; runtime media/logging
+roles and isolated credential publishers retain their distinct scopes. AWS
+service-linked ECS/ELB/RDS identities have service-mediated network/target/DNS
+mutation permissions. Their trust names AWS services, not the GitHub subjects,
+and deployment-role attachments do not fence those downstream continuations.
+Review accepted operations and relevant controller activity before declaring
+drain complete; do not attach a new deny policy to service-linked identities as
+a shortcut. The selected user's AdministratorAccess and the existing Plan
+reader's lock writes remain explicit non-interference gates. Resource policies,
+SCPs, non-AWS provider authority and active/chained executions are not admitted
+by this composition review.
+
+Human-authorized coordination with the setup release owner confirmed a shared
+dependency: its dormant normal-root plan also proposes the seven uninstalled
+pricing additions. That owner retains the active API hold and exclusive setup
+release queue. The pricing deny-all hold would also block the coordinated
+role's SSM deployment-control writes. Agree an installation/recovery window
+and separately admitted outside installer/reader before any attachment; preserve
+the API hold, never release it or replay stale requests as part of pricing
+fence removal. Hotel prerequisite IAM creation is outside the pricing role/
+secret allowlist and needs its own exact reviewed authority and plan.
+
+A narrower **source option, not implemented here**, is to make the seven pricing
+resources explicit opt-in/default-off in their existing normal root, avoiding
+unrelated plans proposing their unauthorized creation. Preserve secret keys;
+add indexed IAM moved blocks and destruction protection for both IAM resources;
+prove native default-zero, exact-seven, legacy-state no-replacement migration
+and rejection of disabling installed resources. Creation, metadata and final
+no-op guards must require the persisted opt-in and updated reviewed source/
+indexed addresses. Legacy moves need their own reviewed state-only transition,
+not admission as fresh seven-create or reuse of previous receipts. This option
+does not create an installation mechanism, grant permissions, or remove any
+pricing/hotel setup gates. No target selection, installation or release follows
+from its read-only assessment.
+
 For hosted verification, Flamur explicitly approved a separate GitHub environment named
 `vay1543-pricing-verification`: only the `main` branch, required reviewer numeric
 ID `120040061`, no administrator bypass, and only the private read-only check.
