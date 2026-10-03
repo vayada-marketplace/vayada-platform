@@ -30,39 +30,39 @@ Do not widen database grants or attach private task security groups to it.
 2. Complete migration 0462 and the final-source catalog/native credential checks.
    Verify both immutable image revisions and their compatible rollback behavior.
    Creation/reader image proof alone does not prove a property-purpose command.
-3. Provision the creation reader/token and organization login through the guarded
-   main-only release. Create or recover each canonical property UUID before
-   manual property-purpose provisioning. Keep property tasks at zero and caller
-   admission blocked during initial property bootstrap, as required by that
-   contract. Prove launch, currency_ready and FeatureHub credentials separately.
-4. Start and verify each private service using its separate reader, token, native
-   credential prefix and image. Then enable its origin/token pair on the public
-   API through the normal reviewed release. Compare the exact new public task
-   definition and network change; never alter it with a manual ECS update.
-5. Test the original authenticated wizard sequence for both reported accounts:
-   create/recover, optional logo, launch settings, status reload and selection.
-   A settings failure must retry the saved canonical property, not create another.
-   Prove first native currency creates seven starter categories and Financials
+3. Provision the creation reader/token and each canonical organization login
+   through the guarded main-only bootstrap. Start and verify the creation
+   service, then enable creation admission with the reviewed atomic public
+   caller image through the protected release.
+4. Test the original authenticated wizard for both reported accounts. First
+   Save creates the canonical property and selected HotelOps initial launch
+   settings atomically, then reloads status without a property-purpose command.
+   Before successful creation there is no property UUID to provision. Ambiguous
+   failures must retry the same payload/key, never create another property.
+5. After successful Save provides the canonical property UUID, provision and
+   prove its launch, currency_ready and FeatureHub credentials separately.
+   Property service startup and admission require their separately reviewed
+   reader/token, image and native purpose proofs. Prove later settings edits
+   and first native currency creation of seven starter categories and Financials
    once, retaining Owner-off and global restrictions. Do not report recovery
-   from POST success, static IAM, health checks or provisioning receipts alone.
+   from POST success, health checks or provisioning receipts alone.
 
 ## Rollback without the ordinary Save writer
 
-The reviewed rollback source `7615180847bce85853127c9e117d8a7f60b1827a`
-has the final 0462 contracts and creation/currency/FeatureHub handlers but no
-launch-settings endpoint. It therefore cannot satisfy successful final Save.
-Block launch admission for this rollback while preserving private forwarding
-for the remaining reviewed commands. If the rollout relies on the absent
-private endpoint to reject Save, verify that rejection through the public route.
+The reviewed creation primary source
+`6f903db20554e38b522c848667875744fc673ed3` and rollback source
+`e966028dfdaec63ff40dd75d043b800295071668` both support atomic initial launch
+settings. Select only their inventoried immutable digests and verify the exact
+public caller/private creation image pair. Creation/reader proof does not prove
+property-purpose commands; retain the separately reviewed property image and
+credential requirements.
 
-Do not remove the property origin/token pair as a rollback shortcut: that
-would select the ordinary launch-settings writer. Do not skip launch settings
-in the wizard or compensate by granting the ordinary API write permissions.
-A frozen caller must reject before any ordinary writer executes. Any public
-application rollback must retain that behavior or have explicit admission
-blocked before switching. Verify the exact public caller/private image pair
-and status after rollback, and leave account recovery unconfirmed while Save
-is blocked.
+Block affected admission before switching images, retaining its private
+origin/token pair. Re-enable only after exact task stability, health and
+compatibility checks. Never remove either pair to select an ordinary writer,
+grant the ordinary API setup writes, or skip selected HotelOps initial settings.
+Preserve same-key retry behavior across rollback and leave Owner acceptance
+unconfirmed until authenticated Save and status reload succeed.
 
 
 ## Staged caller configuration
