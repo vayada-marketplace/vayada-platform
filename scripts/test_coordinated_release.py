@@ -841,6 +841,71 @@ class ActivationTests(unittest.TestCase):
         self.aws.update_service.assert_not_called()
 
 
+class TerraformHoldTests(unittest.TestCase):
+    def test_actual_drift_step_retains_active_hold_and_fails_closed(self):
+        workflow = (ROOT / '.github/workflows/tf-apply.yml').read_text()
+        step = workflow.split('      - name: Check next-api task definition drift\n', 1)[1]
+        script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('\n      - name:', 1)[0])
+        script = script.replace('${{ env.AWS_REGION }}', 'eu-west-1')
+        config = release.load_config()
+        hold = release.write_hold(mock.Mock(), config, 'next-target-backend', {
+            'taskDefinitionArn': 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1178',
+            'image': '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@sha256:' + 'a' * 64,
+        }, reason='reviewed installation', operation_id='test-hold', manifest_id=None)
+        cleared = dict(hold, status='cleared', clearedAt=release.iso_now(),
+                       clearedByOperationId='test-clear', resumedManifestId='test-resume')
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            aws = directory / 'aws'
+            aws.write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with Path(os.environ['CALL_LOG']).open('a') as log:
+    log.write(json.dumps(args) + '\\n')
+if args[:2] == ['ssm', 'get-parameter']:
+    mode = os.environ['HOLD_MODE']
+    if mode in ['missing', 'denied']:
+        print('ParameterNotFound' if mode == 'missing' else 'AccessDenied', file=sys.stderr)
+        sys.exit(1)
+    value = os.environ['HOLD_VALUE'] if mode != 'malformed' else '{}'
+    print(json.dumps({'Parameter': {'Value': value}}))
+elif args[:2] == ['ecs', 'describe-services']:
+    print('live-task')
+elif args[:2] == ['ecs', 'describe-task-definition']:
+    print('latest-task')
+elif args[:2] == ['ecs', 'list-tasks']:
+    print('running-task')
+elif args[:2] == ['ecs', 'describe-tasks']:
+    print('sha256:' + 'a' * 64)
+else:
+    sys.exit('Unexpected AWS call')
+''')
+            aws.chmod(0o700)
+            for mode in ['active', 'cleared', 'missing', 'malformed', 'denied']:
+                with self.subTest(mode=mode):
+                    output, calls = directory / 'outputs', directory / 'calls'
+                    output.write_text('')
+                    calls.write_text('')
+                    env = dict(os.environ, PATH=str(directory) + os.pathsep + os.environ['PATH'],
+                               GITHUB_OUTPUT=str(output), CALL_LOG=str(calls), HOLD_MODE=mode,
+                               HOLD_VALUE=json.dumps(cleared if mode == 'cleared' else hold),
+                               PYTHONDONTWRITEBYTECODE='1')
+                    result = subprocess.run(['bash', '-c', script], cwd=ROOT, env=env,
+                                            capture_output=True, text=True, timeout=15)
+                    if mode in ['malformed', 'denied']:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertNotIn('deploy_required=', output.read_text())
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn('deploy_required=' + ('false' if mode == 'active' else 'true'),
+                                      output.read_text())
+                    if mode not in ['cleared', 'missing']:
+                        self.assertNotIn('list-tasks', calls.read_text())
+                    self.assertNotIn('update-service', calls.read_text())
+                    self.assertNotIn('put-parameter', calls.read_text())
+
+
 class WorkflowContractTests(unittest.TestCase):
     def test_dispatch_artifact_id_is_extracted_from_the_captured_envelope(self):
         workflow = (ROOT / ".github/workflows/deploy-coordinated-release.yml").read_text()
