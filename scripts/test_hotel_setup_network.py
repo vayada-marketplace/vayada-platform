@@ -60,6 +60,11 @@ variable "rds_endpoint" { default = "db.internal" }
 variable "workos_jwks_url" { default = "https://api.workos.com/jwks/client_fixture" }
 variable "workos_issuer" { default = "https://api.workos.com/" }
 variable "workos_audience" { default = "client_fixture" }
+resource "aws_iam_role_policy" "github_actions_platform_deploy" {
+  count = 0
+  role = "offline-deploy-role"
+  policy = jsonencode({ Version = "2012-10-17", Statement = [] })
+}
 output "setup_environment" { value = local.hotel_setup_environment }
 output "property_environment" { value = local.hotel_setup_property_environment }
 ''')
