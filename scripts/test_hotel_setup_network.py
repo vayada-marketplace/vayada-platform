@@ -10,9 +10,17 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def plan(enabled):
+def plan(enabled, service=None):
     with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory)
+        path = Path(directory) / "infra"
+        path.mkdir()
+        if service is not None:
+            for name in ["hotel_setup_credentials.tf", "hotel_setup_secret_read_policy.json.tftpl", "hotel_setup_service.tf", "hotel_setup_container.json.tftpl"]:
+                shutil.copy(ROOT / "infra" / name, path)
+            (path.parent / "deployment").mkdir()
+            (path.parent / "deployment/hotel-setup-command-images.json").write_text(json.dumps(service.get("inventory", {})))
+            (path.parent / "rehearsal").mkdir()
+            shutil.copy(ROOT / "rehearsal/rds-ca-rsa2048-g1.pem", path.parent / "rehearsal")
         shutil.copy(ROOT / 'infra/hotel_setup_network.tf', path)
         shutil.copy(ROOT / 'infra/.terraform.lock.hcl', path)
         # Reuse init's providers; do not download another copy on small local disks.
@@ -39,6 +47,22 @@ resource "aws_acm_certificate_validation" "wildcard_vayada" {
 }
 output "rules" { value = local.hotel_setup_network_rules }
 ''')
+        if service is not None:
+            with (path / 'fixture.tf').open('a') as fixture:
+                fixture.write('''
+variable "aws_region" { default = "eu-west-1" }
+variable "aws_account_id" { default = "269416271598" }
+variable "ecs_cluster_name" { default = "offline-cluster" }
+variable "rds_endpoint" { default = "db.internal" }
+variable "workos_jwks_url" { default = "https://api.workos.com/jwks/client_fixture" }
+variable "workos_issuer" { default = "https://api.workos.com/" }
+variable "workos_audience" { default = "client_fixture" }
+output "setup_environment" { value = local.hotel_setup_environment }
+''')
+            (path / 'fixture.auto.tfvars.json').write_text(json.dumps({
+                'enable_hotel_setup_service_staging': service.get('enabled', False),
+                'enable_hotel_setup_credential_infrastructure': service.get('credentials', False),
+                'hotel_setup_image_digests': service.get('digests', {'primary': '', 'rollback': ''})}))
         env = {**os.environ, 'AWS_EC2_METADATA_DISABLED': 'true'}
         env.pop('AWS_PROFILE', None)
         for command in [

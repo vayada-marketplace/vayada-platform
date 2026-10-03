@@ -12,6 +12,7 @@ on:
       - "scripts/test_pricing_command_metadata_refresh.py"
       - "scripts/test_hotel_setup_credentials.py"
       - "scripts/test_hotel_setup_network.py"
+      - "scripts/test_hotel_setup_service.py"
       - "docs/hotel-setup-private-service.md"
       - "scripts/test_pricing_infrastructure_opt_in.py"
       - "scripts/coordinated_release.py"
@@ -306,6 +307,9 @@ jobs:
 
       - name: Verify private hotel setup network (offline)
         run: python3 -m unittest scripts/test_hotel_setup_network.py -v
+
+      - name: Verify private hotel setup service staging (offline)
+        run: python3 -m unittest scripts/test_hotel_setup_service.py -v
 
       - name: Terraform validate
         run: terraform validate

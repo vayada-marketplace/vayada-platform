@@ -37,7 +37,7 @@ class HotelSetupCredentialsTests(unittest.TestCase):
         for forbidden in ['aws_secretsmanager_secret_version', 'aws_ecs_', 'aws_iam_role_policy_attachment', 'ssm:', 'kms:', 'PassRole']:
             self.assertNotIn(forbidden, source)
         for path in (ROOT / "infra").glob("*.tf"):
-            if path != SOURCE:
+            if path != SOURCE and path.name != "hotel_setup_service.tf":
                 self.assertNotIn('aws_iam_role.hotel_setup_', path.read_text(), str(path))
 
     def test_native_reads_are_isolated_from_injected_and_unrelated_secrets(self):
