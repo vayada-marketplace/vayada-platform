@@ -65,6 +65,27 @@ class HotelSetupServiceTests(unittest.TestCase):
         for key in ['internal_token', 'reader_database_url']:
             self.assertTrue(resources[f'aws_secretsmanager_secret.hotel_setup["{key}"]']['name'].startswith('hotel-setup-creation/'))
 
+    def test_separate_property_credentials_do_not_adopt_creation_or_start_tasks(self):
+        with self.assertRaisesRegex(AssertionError, 'off or reserved for property_creation'):
+            plan(False, service={'credentials': True, 'property_credentials': True})
+        for original_enabled in [False, True]:
+            result = plan(False, service={'credentials': original_enabled,
+                                         'property_credentials': True, 'mode': 'property_creation'})
+            resources = {r['address']: r['values'] for r in result['planned_values']['root_module']['resources']}
+            self.assertFalse(any(r.startswith('aws_ecs_') for r in resources))
+            self.assertEqual(resources['aws_iam_role.hotel_setup_property_task[0]']['name'], 'vayada-hotel-setup-property-task')
+            self.assertEqual(resources['aws_iam_role.hotel_setup_property_execution[0]']['name'], 'vayada-hotel-setup-property-execution')
+            native = json.loads(resources['aws_iam_role_policy.hotel_setup_property_native_secrets[0]']['policy'])
+            statement, = native['Statement']
+            self.assertEqual(statement['Action'], ['secretsmanager:GetSecretValue'])
+            self.assertEqual(statement['Resource'], ['arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-command/prod/property/vayada_next_hotel_setup_property_*'])
+            for key in ['reader_database_url', 'internal_token']:
+                self.assertEqual(resources[f'aws_secretsmanager_secret.hotel_setup_property["{key}"]']['name'], 'hotel-setup-command/prod/' + key.replace('_', '-'))
+            configuration = {r['address']: r for r in result['configuration']['root_module']['resources']}
+            references = configuration['aws_iam_role_policy.hotel_setup_property_execution_secrets']['expressions']['policy']['references']
+            self.assertIn('aws_secretsmanager_secret.hotel_setup_property', references)
+            self.assertNotIn('aws_secretsmanager_secret.hotel_setup', references)
+
     def test_exact_container_and_verified_rds_trust(self):
         values = {
             'image_json': json.dumps('fixture@' + DIGEST),
