@@ -1,0 +1,32 @@
+{
+  "purpose": "property_creation",
+  "repository": "269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api",
+  "primary": {
+    "digest": "sha256:aec0324da4b83ea454a252faf819c1e9be6f1ccba2a968b77db9d82855c03292",
+    "source": "615bfe0f4a089bd922e639b2bae862345395de06",
+    "buildRun": "https://github.com/vayada-marketplace/vayada/actions/runs/37011973992"
+  },
+  "rollback": {
+    "digest": "sha256:846fb0dffd1499c68fa57e5aeeaee9fbfb545850d2385b5a91d65309b083853f",
+    "source": "1872cb214e7f85ea80975b9cc547cfeba8dd08df",
+    "buildRun": "https://github.com/vayada-marketplace/vayada/actions/runs/37011977950"
+  },
+  "verification": {
+    "actualCompiledImage": true,
+    "postgresVersions": [
+      16,
+      17
+    ],
+    "bootstrapChecks": [
+      "verified TLS native reader and organization login",
+      "exact privileges and current owner",
+      "duplicate provisioning denied",
+      "wrong actor denied",
+      "uncertain commit cleanup disables fresh role",
+      "partial reader secret publication disables fresh role",
+      "existing reader secret denied before role creation"
+    ],
+    "publicDeploymentDispatch": "skipped in both build runs"
+  },
+  "releaseStatus": "candidate images only; composed CI, live plan, credentials, IAM, readiness and owner smoke still required"
+}
