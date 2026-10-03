@@ -63,3 +63,19 @@ application rollback must retain that behavior or have explicit admission
 blocked before switching. Verify the exact public caller/private image pair
 and status after rollback, and leave account recovery unconfirmed while Save
 is blocked.
+
+
+## Staged caller configuration
+
+`hotel_setup_public_caller` has separate creation/property states. `off` preserves
+pre-cutover configuration. `hold` injects only the admission marker for initial
+bootstrap, without requiring an unpublished token. `enabled` injects the fixed
+private origin and exact token reference; `blocked` retains that pair with the
+hold. After activation, rollback uses `blocked`, never `off` or `hold`.
+
+Configured callers use a dedicated public execution identity with the existing
+ECS execution managed policy, the public task's existing exact SSM references
+and only the configured internal-token container reads. No setup native or
+reader references are added. The supplemental caller group attaches only to
+next-target-backend. Terraform stages task definitions; the normal protected
+release must select the reviewed definition/image and validate admission behavior.
