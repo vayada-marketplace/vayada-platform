@@ -520,7 +520,7 @@ resource "aws_ecs_task_definition" "services" {
   cpu                      = each.value.cpu
   memory                   = each.value.memory
   enable_fault_injection   = false
-  execution_role_arn       = each.key == "next-target-backend" && length(local.hotel_setup_caller_configured) > 0 ? aws_iam_role.hotel_setup_public_execution[0].arn : data.aws_iam_role.ecs_task_execution.arn
+  execution_role_arn       = each.key == "next-target-backend" && length(local.hotel_setup_caller_configured) > 0 ? "arn:aws:iam::${var.aws_account_id}:role/${aws_iam_role.hotel_setup_public_execution[0].name}" : data.aws_iam_role.ecs_task_execution.arn
   task_role_arn            = try(each.value.task_role_arn, data.aws_iam_role.ecs_task.arn)
 
   container_definitions = jsonencode([
