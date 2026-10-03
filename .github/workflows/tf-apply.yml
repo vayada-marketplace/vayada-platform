@@ -176,6 +176,12 @@ jobs:
           fi
           rm planned-export-runtime.json
 
+      - name: Preserve installed hotel setup caller
+        run: |
+          terraform -chdir=infra show -json tfplan > planned-setup-caller.json
+          python3 scripts/assert-hotel-setup-caller-retained.py current-next-api-task-definition.json planned-setup-caller.json
+          rm planned-setup-caller.json
+
       - name: Terraform apply
         run: terraform apply -no-color tfplan
         working-directory: infra

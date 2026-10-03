@@ -16,5 +16,6 @@ hotel_setup_property_image_digests = {
   rollback = "sha256:9c6ad66294c188ff16b141922cc3cc57d0fc7dd7dfd45eda59e4c4492bb51f79"
 }
 # Initial bootstrap blocks writes without injecting empty secret values.
-# Protected ECS release retains exact origin/token pairs at later blocked/enabled stages.
+# Transition these states to blocked/enabled before the corresponding protected release.
+# Later applies reject removal of installed origin/token pairs or enabled admission.
 hotel_setup_public_caller = { creation = "hold", property = "hold" }
