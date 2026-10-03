@@ -15,7 +15,7 @@ hotel_setup_property_image_digests = {
   primary  = "sha256:b673453b253fac2e94822c24158f6d599696d0fb71a2bc68c7f4a3be0f98f38a"
   rollback = "sha256:9c6ad66294c188ff16b141922cc3cc57d0fc7dd7dfd45eda59e4c4492bb51f79"
 }
-# Initial bootstrap blocks writes without injecting empty secret values.
-# Transition these states to blocked/enabled before the corresponding protected release.
+# Retain private token references while admission remains blocked.
+# The protected release enables admission after native proofs and service readiness.
 # Later applies reject removal of installed origin/token pairs or enabled admission.
-hotel_setup_public_caller = { creation = "hold", property = "hold" }
+hotel_setup_public_caller = { creation = "blocked", property = "blocked" }
