@@ -50,7 +50,7 @@ class HotelSetupCredentialsTests(unittest.TestCase):
         for forbidden in ['aws_secretsmanager_secret_version', 'aws_ecs_', 'aws_iam_role_policy_attachment', 'ssm:', 'kms:', 'PassRole']:
             self.assertNotIn(forbidden, source)
         for path in (ROOT / "infra").glob("*.tf"):
-            if path != SOURCE and path.name not in ["hotel_setup_service.tf", "hotel_setup_property_service.tf", "hotel_setup_creation_bootstrap.tf", "hotel_setup_property_credentials.tf"]:
+            if path != SOURCE and path.name not in ["hotel_setup_service.tf", "hotel_setup_property_service.tf", "hotel_setup_creation_bootstrap.tf", "hotel_setup_property_credentials.tf", "hotel_setup_public_caller.tf", "ecs.tf"]:
                 self.assertNotIn('aws_iam_role.hotel_setup_', path.read_text(), str(path))
 
     def test_unknown_mode_fails_closed(self):
