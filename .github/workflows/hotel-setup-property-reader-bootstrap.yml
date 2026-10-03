@@ -1,0 +1,41 @@
+name: Bootstrap isolated hotel property reader
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: "Reviewed immutable reader-compatible image digest"
+        required: true
+      expected_task_definition:
+        description: "Reviewed stable public API task with explicit blocked admission"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+
+jobs:
+  bootstrap:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Require staged zero-task service and blocked caller before reader bootstrap
+        env:
+          EXPECTED_TASK: ${{ inputs.expected_task_definition }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          bash scripts/run-target-database-runtime-preflight.sh --provision-hotel-setup-property-reader "$IMAGE_DIGEST"

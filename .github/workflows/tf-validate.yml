@@ -17,6 +17,7 @@ on:
       - "scripts/provision-hotel-setup-creation-login.mjs"
       - "scripts/test-hotel-setup-creation-bootstrap.mjs"
       - ".github/workflows/hotel-setup-creation-bootstrap.yml"
+      - ".github/workflows/hotel-setup-property-reader-bootstrap.yml"
       - "docs/hotel-setup-private-service.md"
       - "scripts/test_pricing_infrastructure_opt_in.py"
       - "scripts/coordinated_release.py"
