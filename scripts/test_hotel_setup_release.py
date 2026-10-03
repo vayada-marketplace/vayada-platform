@@ -94,5 +94,46 @@ class ReleaseTest(unittest.TestCase):
     def test_empty_caller_inventory_blocks_unproved_images(self):
         with self.assertRaises(RuntimeError): release.approved(DIGEST, 'hotel-setup-caller-images.json')
 
+    def test_initial_recovery_binds_hold_candidate_and_retained_task(self):
+        old = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1'
+        new = old[:-1] + '2'
+        captured = copy.deepcopy(self.task)
+        captured['taskDefinitionArn'] = old
+        captured['containerDefinitions'][0]['image'] = release.REPOSITORY + '@sha256:' + 'b' * 64
+        candidate = release.prepare_public(captured, 'creation', 'hold', DIGEST)
+        public = {'taskDefinition': new, 'desiredCount': 1, 'deployments': [
+            {'taskDefinition': old, 'runningCount': 1, 'rolloutState': 'COMPLETED'}]}
+        hold = {'schemaVersion': 1, 'manifestId': None, 'dependentFrontendsCompatible': False,
+            'createdAt': '2026-10-03T17:19:28.000Z', 'status': 'active', 'service': 'next-target-backend', 'operationId': 'setup-123',
+            'reason': 'reviewed hotel setup caller release',
+            'physicalIdentity': {'accountId': '269416271598', 'region': release.REGION,
+                'cluster': release.CLUSTER, 'ecsService': release.PUBLIC},
+            'capturedTaskDefinitionArn': old, 'capturedImage': captured['containerDefinitions'][0]['image']}
+        self.assertEqual(release.initial_restore_target(public, new, DIGEST, hold, captured, candidate), old)
+        for key, value in [('status', 'cleared'), ('operationId', 'unrelated-123'),
+                           ('capturedTaskDefinitionArn', new), ('capturedImage', 'wrong-image'),
+                           ('physicalIdentity', {'accountId': 'other-account'})]:
+            with self.subTest(key=key), self.assertRaises((RuntimeError, SystemExit)):
+                release.initial_restore_target(public, new, DIGEST, {**hold, key: value}, captured, candidate)
+        for patch in ({'schemaVersion': 2}, {'createdAt': 'invalid'},
+                      {'clearedAt': '2026-10-03T18:00:00.000Z'}, {'dependentFrontendsCompatible': 'false'}):
+            with self.assertRaises(release.coordinated.ReleaseError):
+                release.initial_restore_target(public, new, DIGEST, {**hold, **patch}, captured, candidate)
+        for state in ({**public, 'taskDefinition': old}, {**public, 'desiredCount': 0},
+                      {**public, 'deployments': []}):
+            with self.assertRaises(RuntimeError):
+                release.initial_restore_target(state, new, DIGEST, hold, captured, candidate)
+        for definition in (captured, candidate):
+            for pair in ('origin', 'token'):
+                altered = copy.deepcopy(definition)
+                item = altered['containerDefinitions'][0]
+                if pair == 'origin':
+                    item['environment'].append({'name': 'HOTEL_SETUP_COMMAND_ORIGIN', 'value': release.ORIGIN['property']})
+                else:
+                    item['secrets'].append({'name': 'HOTEL_SETUP_COMMAND_INTERNAL_TOKEN', 'valueFrom': TOKEN})
+                args = (altered, candidate) if definition is captured else (captured, altered)
+                with self.assertRaises(RuntimeError):
+                    release.initial_restore_target(public, new, DIGEST, hold, *args)
+
 
 if __name__ == '__main__': unittest.main()
