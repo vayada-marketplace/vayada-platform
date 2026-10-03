@@ -251,6 +251,20 @@ resource "aws_iam_role" "github_actions_platform_deploy" {
                     self.assertIn("Cannot prove a unique Finance KMS plan phase.", calls[2].stderr)
                     with self.assertRaisesRegex(ValueError, "guards rejected"):
                         approval.guard_saved_plan(fd, digest)
+            # Local synthetic state only: resolve the final installed metadata
+            # expressions without apply, refresh, a backend or AWS calls.
+            state_path = fixture / "terraform.tfstate"
+            state = json.loads(state_path.read_text())
+            for resource in state["resources"]:
+                for instance in resource["instances"]:
+                    address = resource["type"] + "." + resource["name"]
+                    if "index_key" in instance:
+                        address += "[" + json.dumps(instance["index_key"]) + "]"
+                    instance["attributes"] = next(r["change"]["after"] for r in enabled["resource_changes"]
+                                                   if r["address"] == address)
+            state_path.write_text(json.dumps(state))
+            final = plan(True)
+            runpy.run_path(str(ROOT / "scripts/assert-pricing-bootstrap-plan.py"))["check_no_changes"](final)
             template = fixture / "pricing_command_metadata_policy.json.tftpl"
             template.write_text(template.read_text().replace(
                 '"secretsmanager:DescribeSecret"', '"secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"'))

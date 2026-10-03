@@ -178,9 +178,16 @@ def sealed_saved_plan(path, expected_sha256):
             os.close(fd)
 
 
+def unique_fields(pairs):
+    data = dict(pairs)
+    if len(data) != len(pairs):
+        raise ValueError("Duplicate JSON fields rejected")
+    return data
+
+
 def guard_saved_plan(plan_fd, expected_sha256, *, phase="creation"):
     """Read-only guards on the sealed bytes; not source/session admission or apply."""
-    if type(phase) is not str or phase not in ("creation", "metadata"):
+    if type(phase) is not str or phase not in ("creation", "metadata", "no-op"):
         raise ValueError("Invalid approval phase")
     if saved_plan_digest(plan_fd) != expected_sha256:
         raise ValueError("Saved plan differs from receipt")
@@ -201,7 +208,7 @@ def guard_saved_plan(plan_fd, expected_sha256, *, phase="creation"):
         result = subprocess.run(["terraform", "version", "-json"], **options)
         if result.returncode or len(result.stdout) > 16_384:
             raise ValueError
-        runtime = json.loads(result.stdout)
+        runtime = json.loads(result.stdout, object_pairs_hook=unique_fields)
         if (not isinstance(runtime, dict) or runtime.get("terraform_version") != "1.5.7"
                 or runtime.get("platform") != "linux_amd64"
                 or runtime.get("provider_selections") != {
@@ -212,11 +219,13 @@ def guard_saved_plan(plan_fd, expected_sha256, *, phase="creation"):
         result = subprocess.run(["terraform", "show", "-json", path], **options)
         if result.returncode or len(result.stdout) > MAX_PLAN_BYTES:
             raise ValueError
-        plan = json.loads(result.stdout)
+        plan = json.loads(result.stdout, object_pairs_hook=unique_fields)
         if not isinstance(plan, dict):
             raise ValueError
         writer["check"](plan)
-        if phase == "metadata":
+        if phase == "no-op":
+            pricing["check_no_changes"](plan)
+        elif phase == "metadata":
             pricing["check_metadata"](plan)
         else:
             pricing["check"](plan, source)
@@ -376,11 +385,6 @@ def observe_metadata_policy_capacity(context, expected_role_id):
         env = {"PATH": os.environ["PATH"], "HOME": "/nonexistent",
                "AWS_CONFIG_FILE": os.devnull, "AWS_SHARED_CREDENTIALS_FILE": os.devnull,
                "AWS_EC2_METADATA_DISABLED": "true", "AWS_MAX_ATTEMPTS": "1", **credentials}
-        def unique_fields(pairs):
-            data = dict(pairs)
-            if len(data) != len(pairs):
-                raise ValueError
-            return data
         def read(*args):
             result = subprocess.run(["aws", "--region", "eu-west-1", "--output", "json",
                                      "--no-cli-pager", "--no-cli-auto-prompt", *args],

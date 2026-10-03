@@ -410,6 +410,25 @@ binding, private saved-plan inspection and sanitized no-op evidence; this change
 does not dispatch or add that lane. The workflow/allowlist regression tests check
 declarations only, not actual-role permissions, runtime custody or live freshness.
 
+`guard_saved_plan(..., phase="no-op")` now provides the offline inspection
+component for that future lane. It uses the same sealed descriptor, pinned native
+`version`/`show`, credential-free environment and writer/Finance guards. It rejects
+duplicate JSON fields, any resource or output change, unknown values, drift,
+imports, moves, failed/unknown checks, missing pricing identities and
+missing/altered metadata additions.
+The final pricing metadata stage and existing reviewed cutoff must be present.
+It does not consume an approval receipt, generate a plan, call AWS, apply, retire
+sessions or release a hold. `ApprovalGate` still permits only creation and
+metadata receipts; `no-op` is inspection, not a third mutation phase.
+
+This is saved-plan content evidence only. A targeted, unrefreshed, stale or
+incomplete plan can still contain these resources; the future admitted hosted
+lane must independently prove full-root fresh locked planning, exact source,
+backend/input/state binding, immutable runtime and continued writer/session holds.
+Synthetic native fixtures use `-refresh=false` and no backend only for offline
+compatibility tests; they are not acceptable production verification evidence.
+Successful inspection never authorizes activation or fence removal.
+
 Partial installation, failure, cancellation, drift or unverifiable retirement
 keeps installed denials and blocks release pending the explicitly reviewed recovery
 procedure. No hold installation, verification, release executor or setup runner

@@ -91,8 +91,36 @@ def check(plan, source):
         raise ValueError("Unknown policy must come only from the reviewed five secret ARNs")
 
 
-def check_metadata(plan):
-    """Offline two-update content check; not live evidence, approval or execution."""
+def check_no_changes(plan):
+    """Inspect final saved-plan content only; never admit a runner or release holds."""
+    if plan["format_version"] != "1.2" or plan["terraform_version"] != "1.5.7":
+        raise ValueError("Unexpected saved-plan format")
+    resources = plan["resource_changes"]
+    if not isinstance(resources, list) or not resources:
+        raise ValueError("Resource inventory is required")
+    for resource in resources + plan.get("resource_drift", []):
+        change = resource["change"]
+        if (resource["mode"] not in ("managed", "data") or "previous_address" in resource
+                or "importing" in change or change["actions"] != ["no-op"]
+                or not isinstance(change["before"], dict) or not change["before"]
+                or json.dumps(change["before"], sort_keys=True, allow_nan=False) !=
+                json.dumps(change["after"], sort_keys=True, allow_nan=False) or change.get("after_unknown")):
+            raise ValueError("Changes, unknowns, imports, moves and drift rejected")
+    for change in plan.get("output_changes", {}).values():
+        if (change["actions"] != ["no-op"]
+                or json.dumps(change["before"], sort_keys=True, allow_nan=False) !=
+                json.dumps(change["after"], sort_keys=True, allow_nan=False)
+                or change.get("after_unknown")):
+            raise ValueError("Output changes rejected")
+    if plan.get("errored") or any(check["status"] != "pass" or any(
+            instance["status"] != "pass" for instance in check["instances"])
+            for check in plan.get("checks", [])):
+        raise ValueError("Unproven plan checks rejected")
+    check_metadata(plan, no_changes=True)
+
+
+def check_metadata(plan, *, no_changes=False):
+    """Offline two-update or final no-op content check; not approval or execution."""
     check_source(SOURCE.read_bytes(), SOURCE.parent)
     template = (SOURCE.parent / "pricing_command_metadata_policy.json.tftpl").read_bytes()
     if hashlib.sha256(template).hexdigest() != METADATA_HASH:
@@ -114,7 +142,9 @@ def check_metadata(plan):
         raise ValueError("Duplicate resources, moves and imports rejected")
     targets = {"aws_iam_role_policy.platform_plan[0]", "aws_iam_policy.platform_writer_boundary[0]"}
     changes = [r for r in resources if r["mode"] == "managed" and r["change"]["actions"] != ["no-op"]]
-    if len(changes) != 2 or {r["address"] for r in changes} != targets:
+    if no_changes and changes:
+        raise ValueError("Final metadata verification cannot change resources")
+    if not no_changes and (len(changes) != 2 or {r["address"] for r in changes} != targets):
         raise ValueError("Expected exactly two metadata updates")
     if any(r["change"]["actions"] != ["no-op"] for r in plan.get("resource_drift", [])) or any(
             c["actions"] != ["no-op"] for c in plan.get("output_changes", {}).values()):
@@ -153,10 +183,12 @@ def check_metadata(plan):
             "arn": f"arn:aws:iam::{ACCOUNT}:policy/vayada-platform-writer-boundary",
             "id": f"arn:aws:iam::{ACCOUNT}:policy/vayada-platform-writer-boundary"},
     }
-    for resource in changes:
+    for resource in [by_address[address] for address in sorted(targets)]:
         change = resource["change"]
         before, after = change["before"], change["after"]
-        if (change["actions"] != ["update"] or change.get("after_unknown")
+        if (resource["mode"] != "managed"
+                or change["actions"] != (["no-op"] if no_changes else ["update"])
+                or (no_changes and before != after) or change.get("after_unknown")
                 or any(before.get(k) != v for k, v in identities[resource["address"]].items())
                 or {k: v for k, v in before.items() if k != "policy"} != {
                     k: v for k, v in after.items() if k != "policy"}):
@@ -167,6 +199,10 @@ def check_metadata(plan):
             if revoke != [{"Sid": "RevokeSessionsBeforeReviewedCutover", "Effect": "Deny", "Action": "*",
                            "Resource": "*", "Condition": {"DateLessThan": {"aws:TokenIssueTime": boundary["revoke_before"]}}}]:
                 raise ValueError("Installed reviewed cutoff must be present")
+        if no_changes:
+            # Reuse the exact addition comparison without fabricating an update.
+            old = dict(old, Statement=[s for s in old["Statement"]
+                                       if s.get("Sid") not in {a["Sid"] for a in addition}])
         if (not isinstance(old["Statement"], list) or not isinstance(new["Statement"], list)
                 or any(s.get("Sid") in {a["Sid"] for a in addition} for s in old["Statement"])
                 or {k: v for k, v in old.items() if k != "Statement"} != {

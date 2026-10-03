@@ -373,6 +373,8 @@ class ApprovalTests(unittest.TestCase):
             digest.assert_not_called()
         self.source.assert_not_called()
         with self.assertRaises(ValueError):
+            approval.ApprovalGate(metadata_context(), 344, now=NOW, phase="no-op")
+        with self.assertRaises(ValueError):
             approval.ApprovalGate(metadata_context(), 344, now=NOW)
         gate = approval.ApprovalGate(metadata_context(), 344, now=NOW, phase="metadata")
         receipt = gate.receipt()["receipt"]
@@ -920,6 +922,27 @@ class SavedPlanTests(unittest.TestCase):
                 self.assertEqual(call.kwargs["cwd"], ROOT / "infra")
                 self.assertNotIn("SECRET_SENTINEL", json.dumps(call.kwargs["env"]))
                 self.assertNotIn("TF_LOG", call.kwargs["env"])
+
+    def test_no_op_inspection_has_no_approval_or_mutation_entry_point(self):
+        plan = approval.runpy.run_path(str(ROOT / "scripts/test_pricing_command_metadata_refresh.py"))["no_op_fixture"]()
+        show = subprocess.CompletedProcess([], 0, json.dumps(plan), "SECRET_SENTINEL")
+        success = subprocess.CompletedProcess([], 0, "", "")
+        with approval.sealed_saved_plan(self.path, self.digest) as fd, \
+                patch.object(approval.subprocess, "run", side_effect=[runtime_result(), show, success]) as run, \
+                patch.object(approval, "_github_json") as api:
+            approval.guard_saved_plan(fd, self.digest, phase="no-op")
+            self.assertEqual(run.call_count, 3)
+            api.assert_not_called()
+            for call in run.call_args_list:
+                self.assertEqual(call.kwargs["pass_fds"], (fd,))
+                self.assertNotIn("AWS_ACCESS_KEY_ID", call.kwargs["env"])
+        for malformed in ('{"resource_changes":[],"resource_changes":[]}', '{"terraform_version":"1.5.7",'):
+            with approval.sealed_saved_plan(self.path, self.digest) as fd, \
+                    patch.object(approval.subprocess, "run", side_effect=[runtime_result(),
+                                 subprocess.CompletedProcess([], 0, malformed, "SECRET_SENTINEL")]) as run, \
+                    self.assertRaisesRegex(ValueError, "raw output withheld"):
+                approval.guard_saved_plan(fd, self.digest, phase="no-op")
+            self.assertEqual(run.call_count, 2)
 
     def test_guard_failure_never_consumes_approval_or_exposes_plan(self):
         current = context() | {"planSha256": self.digest}

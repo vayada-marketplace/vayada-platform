@@ -64,7 +64,59 @@ def fixture():
             "resource_changes": resources}
 
 
+def no_op_fixture():
+    plan = fixture() | {"format_version": "1.2", "terraform_version": "1.5.7"}
+    for resource in plan["resource_changes"]:
+        change = resource["change"]
+        change.update(actions=["no-op"], before=copy.deepcopy(change["after"]))
+    return plan
+
+
 class PricingMetadataTests(unittest.TestCase):
+    def test_final_no_op_requires_known_unchanged_inventory_and_exact_metadata_additions(self):
+        guard["check_no_changes"](no_op_fixture())
+        cases = [{}, no_op_fixture() | {"resource_changes": []},
+                 no_op_fixture() | {"terraform_version": "1.6.0"},
+                 no_op_fixture() | {"format_version": "other"},
+                 no_op_fixture() | {"errored": True},
+                 no_op_fixture() | {"checks": [{"status": "unknown", "instances": []}]},
+                 no_op_fixture() | {"checks": [{"status": "pass", "instances": [{"status": "fail"}]}]},
+                 no_op_fixture() | {"output_changes": {
+                     "value": {"actions": ["no-op"], "before": False, "after": 0}}}]
+        for fields in ({"actions": ["update"]}, {"actions": ["read"]},
+                       {"before": None}, {"after": {"changed": True}},
+                       {"after_unknown": {"policy": True}}, {"importing": {}}):
+            plan = no_op_fixture()
+            plan["resource_changes"][-1]["change"].update(fields)
+            cases.append(plan)
+        for address in ("missing", "duplicate", "move", "drift", "output"):
+            plan = no_op_fixture()
+            if address == "missing":
+                plan["resource_changes"].pop()
+            elif address == "duplicate":
+                plan["resource_changes"].append(copy.deepcopy(plan["resource_changes"][0]))
+            elif address == "move":
+                plan["resource_changes"][0]["previous_address"] = "old"
+            elif address == "drift":
+                plan["resource_drift"] = [copy.deepcopy(plan["resource_changes"][0])]
+                plan["resource_drift"][0]["change"]["after"] = {"changed": True}
+            else:
+                plan["output_changes"] = {"value": {"actions": ["no-op"], "before": 1, "after": 2}}
+            cases.append(plan)
+        for index in (-2, -1):
+            for mutation in (lambda d: d["Statement"].pop(0),
+                             lambda d: d["Statement"].append(copy.deepcopy(d["Statement"][0])),
+                             lambda d: d["Statement"][0].update(Resource="*")):
+                plan = no_op_fixture()
+                change = plan["resource_changes"][index]["change"]
+                document = json.loads(change["after"]["policy"])
+                mutation(document)
+                change["before"]["policy"] = change["after"]["policy"] = json.dumps(document)
+                cases.append(plan)
+        for plan in cases:
+            with self.subTest(plan=plan), self.assertRaises((ValueError, KeyError, TypeError)):
+                guard["check_no_changes"](plan)
+
     def test_two_update_guard_preserves_existing_documents_regardless_of_statement_order(self):
         plan = fixture()
         guard["check_metadata"](plan)
