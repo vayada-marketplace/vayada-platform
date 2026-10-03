@@ -44,6 +44,17 @@ def main() -> None:
     if len(containers) != 1:
         fail("current task must have one next-api container")
     environment = containers[0].get("environment", [])
+    admission_names = {"HOTEL_SETUP_COMMAND_ADMISSION", "HOTEL_SETUP_CREATION_COMMAND_ADMISSION"}
+    if any(item.get("name") in admission_names for item in containers[0].get("secrets", [])):
+        fail("setup admission cannot be supplied through secrets")
+    admissions = [item for item in environment if item.get("name") in admission_names]
+    if admissions:
+        if len({item["name"] for item in admissions}) != len(admissions) or any(item.get("value") not in {"blocked", "enabled"} for item in admissions):
+            fail("setup admission must be explicit and unambiguous")
+        caller_images = json.loads(Path(__file__).resolve().parents[1].joinpath("deployment/hotel-setup-caller-images.json").read_text())
+        source = caller_images.get(digest, "")
+        if not re.fullmatch(r"[a-f0-9]{40}", source):
+            fail("configured setup caller requires a reviewed admission-compatible image")
     flags = [e.get("value") for e in environment if e.get("name") == "FINANCE_EXPORT_WORKER_ENABLED"]
     reserved = {"FINANCE_EXPORT_WORKER_ENABLED", "FINANCE_EXPORT_WORKER_ACCEPTED_AFTER", "FINANCE_EXPORT_WORKER_PROPERTY_ID", "FINANCE_EXPORT_WORKER_EXPORT_ID"}
     if len(flags) != 1 or flags[0] not in {"true", "false"} or any(s.get("name") in reserved for s in containers[0].get("secrets", [])):
