@@ -399,13 +399,22 @@ window and installer/recovery responsibility are required, not an assumption
 that deployment-role attachments restrict that owner. Non-AWS writers,
 resource policies/SCPs and accepted/chained executions remain review gates.
 
-For hosted verification, propose a separate GitHub environment named
+For hosted verification, Flamur explicitly approved a separate GitHub environment named
 `vay1543-pricing-verification`: only the `main` branch, required reviewer numeric
 ID `120040061`, no administrator bypass, and only the private read-only check.
-This environment/reviewer selection is **proposed**, not human-selected or
-created. The existing `platform-mutations-v2` environment currently admits only
+On 2026-10-03 it was created and read back as environment ID `23367769738`,
+one required User reviewer `FlamurMaliqi` / `120040061`,
+`can_admins_bypass=false` and one branch policy `main` / type `branch`
+(policy ID `61838144`). Self-review prevention is false for this single-human
+setup: the human may request and explicitly approve a check; the agent must
+never approve it using that human's credentials. No wait-timer rule is present.
+Environment protection is not a workflow restriction or AWS read-only grant;
+repository administrators can still edit its configuration. Before any check,
+reverify the exact environment, source/workflow/run and independent AWS admission.
+The existing `platform-mutations-v2` environment currently admits only
 `main` but has no required-reviewer rule; it is not human-approval evidence.
-Human approval must precede any environment or trust installation.
+This approval installs only the new environment settings, not AWS trust,
+permissions, credentials, a workflow, a dispatch or either pricing setup phase.
 
 Reuse the existing Plan role `AROAT5OTWB3XFQWPINYTU`; propose adding only the
 exact OIDC subject
@@ -421,8 +430,8 @@ The reviewed prerequisite must specify policy/attachment ownership and an exact
 saved plan, actual capacity, complete admitted target set, human-selected window,
 private runner/backend/input binding, failure recovery and separate release
 approval. Keep the existing VAY-2029 boundary and cutoff unchanged. None of
-these proposed identities, environment settings or scope choices authorizes
-installation, setup, a hosted dispatch or the hotel test.
+the remaining proposed AWS identities, reader trust or writer-fence scope choices
+authorizes further installation, setup, a hosted dispatch or the hotel test.
 
 ### Pause, verify and resume — proposed order, not an executable lane
 
