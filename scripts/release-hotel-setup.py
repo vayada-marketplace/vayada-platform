@@ -100,11 +100,71 @@ def approved(digest, inventory):
     require(re.fullmatch(r'[a-f0-9]{40}', source) is not None, 'Image lacks reviewed proof')
 
 
+def initial_restore_target(public, expected, digest, hold, captured, candidate):
+    """Restore only the captured pre-cutover task after an initial caller failure."""
+    require(public['taskDefinition'] == expected and public['desiredCount'] == 1,
+            'Failed deployment changed before recovery')
+    require(hold.get('status') == 'active' and hold.get('service') == 'next-target-backend'
+            and hold.get('operationId', '').startswith('setup-')
+            and hold.get('reason') == 'reviewed hotel setup caller release'
+            and hold.get('physicalIdentity') == {'accountId': '269416271598', 'region': REGION,
+                'cluster': CLUSTER, 'ecsService': PUBLIC}, 'Missing initial setup release hold')
+    target = hold.get('capturedTaskDefinitionArn', '')
+    require(TASK.fullmatch(target) and target.split('/')[-1].startswith('vayada-next-api:')
+            and target != expected and captured.get('taskDefinitionArn') == target,
+            'Captured recovery task differs')
+    require(container(candidate, 'vayada-next-api')['image'] == REPOSITORY + '@' + digest,
+            'Failed candidate differs from reviewed caller')
+    old = container(captured, 'vayada-next-api')
+    require(old['image'] == hold.get('capturedImage') and old['image'].startswith(REPOSITORY + '@'),
+            'Captured image differs from hold')
+    # This recovery is deliberately unavailable once any private pair is installed.
+    for definition in (captured, candidate):
+        item = container(definition, 'vayada-next-api')
+        env = environment(item)
+        require(not any(prefix + '_ORIGIN' in env or any(
+            s['name'] == prefix + '_INTERNAL_TOKEN' for s in item.get('secrets', []))
+            for prefix in PREFIX.values()), 'Activated callers cannot use initial recovery')
+    require(any(d['taskDefinition'] == target and d['runningCount'] == 1
+                and d.get('rolloutState') == 'COMPLETED' for d in public['deployments']),
+            'Captured task is no longer the retained running deployment')
+    return target
+
+
+def restore_initial_public(args, public):
+    approved(args.image_digest, 'hotel-setup-caller-images.json')
+    result = aws('ssm', 'get-parameter', '--name',
+                 '/vayada/prod/coordinated-deployments/v1/services/next-target-backend/hold')
+    hold = json.loads(result['Parameter']['Value'])
+    captured = aws('ecs', 'describe-task-definition', '--task-definition', hold['capturedTaskDefinitionArn'])['taskDefinition']
+    candidate = aws('ecs', 'describe-task-definition', '--task-definition', args.expected_public_task)['taskDefinition']
+    target = initial_restore_target(public, args.expected_public_task, args.image_digest, hold, captured, candidate)
+    healthy(public)
+    with tempfile.TemporaryDirectory() as directory:
+        task_file, image_file = Path(directory, 'task.json'), Path(directory, 'image.json')
+        old_digest = container(captured, 'vayada-next-api')['image'].split('@')[1]
+        task_file.write_text(json.dumps(captured))
+        image_file.write_text(json.dumps(aws('ecr', 'describe-images', '--repository-name', 'vayada-next-api', '--image-ids', 'imageDigest=' + old_digest)))
+        subprocess.run(['python3', str(ROOT / 'scripts/assert-next-api-split-compatible-image.py'),
+            'next-target-backend', 'vayada-next-api', old_digest, str(image_file), str(task_file)], check=True)
+    # Recheck hold and current deployment immediately before restoring the captured task.
+    latest = json.loads(aws('ssm', 'get-parameter', '--name',
+        '/vayada/prod/coordinated-deployments/v1/services/next-target-backend/hold')['Parameter']['Value'])
+    require(latest == hold, 'Recovery hold changed')
+    initial_restore_target(service(PUBLIC), args.expected_public_task, args.image_digest, latest, captured, candidate)
+    aws('ecs', 'update-service', '--cluster', CLUSTER, '--service', PUBLIC, '--task-definition', target, '--desired-count', '1')
+    subprocess.run(['aws', 'ecs', 'wait', 'services-stable', '--cluster', CLUSTER, '--services', PUBLIC, '--region', REGION], check=True)
+    final = service(PUBLIC)
+    require(stable(final, target), 'Captured API task failed recovery stability')
+    healthy(final)
+    print(json.dumps({'status': 'PASS', 'service': PUBLIC, 'taskDefinition': target, 'holdRetained': True}))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--service', choices=['public', 'creation', 'property'], required=True)
     parser.add_argument('--purpose', choices=['creation', 'property'], required=True)
-    parser.add_argument('--state', choices=['hold', 'blocked', 'enabled', 'start'], required=True)
+    parser.add_argument('--state', choices=['hold', 'blocked', 'enabled', 'start', 'restore_initial'], required=True)
     parser.add_argument('--image-digest', required=True)
     parser.add_argument('--expected-public-task', required=True)
     parser.add_argument('--private-task', default='')
@@ -112,6 +172,10 @@ def main():
     require(os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('GITHUB_REF') == 'refs/heads/main', 'Reviewed main CI only')
     require(TASK.fullmatch(args.expected_public_task), 'Invalid reviewed public task')
     public = service(PUBLIC)
+    if args.state == 'restore_initial':
+        require(args.service == 'public' and not args.private_task, 'Recovery is public initial-cutover only')
+        restore_initial_public(args, public)
+        return
     require(stable(public, args.expected_public_task), 'Public service is not the reviewed stable task')
     current = aws('ecs', 'describe-task-definition', '--task-definition', args.expected_public_task)['taskDefinition']
     if args.service == 'public':

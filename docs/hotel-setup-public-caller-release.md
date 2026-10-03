@@ -99,6 +99,17 @@ start. Wait for stability and verify the exact selected task/count; failed
 stability blocks release. Neither this entrypoint nor an image publication
 provisions missing credentials or skips their native proofs.
 
+### Failed initial migration recovery
+
+`restore_initial` restores only the pre-cutover API task captured by the protected
+setup release hold. It requires the exact failed candidate, retained running
+captured deployment, immutable split/ongoing-compatible captured image and an
+unchanged active hold. Neither task may contain a private origin/token pair.
+It preserves the hold and restores an existing task definition without registering
+an image or changing credentials. This operation is unavailable after activation;
+use the retained-pair blocked rollback contract then. Inspect the migration ledger
+before attempting the failed release again.
+
 The platform deploy identity may create/describe/tag only the fixed empty
 reader/token containers before staging them; it receives no secret-value read
 or native-prefix access. Container creation depends on that reviewed IAM policy.
