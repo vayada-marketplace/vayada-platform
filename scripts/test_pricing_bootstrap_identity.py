@@ -1,5 +1,6 @@
 """Native Terraform checks on local-only fixtures. Not live IAM authorization proof."""
 import hashlib
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import importlib.util
 import json
 import os
@@ -9,7 +10,9 @@ import runpy
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
+from urllib.parse import parse_qs, quote
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,9 +36,11 @@ class IdentityTests(unittest.TestCase):
         (cls.fixture / "main.tf").write_text(source)
         shutil.copyfile(IDENTITY / "operator.tf", cls.fixture / "operator.tf")
         shutil.copyfile(IDENTITY / "operator_metadata.tf", cls.fixture / "operator_metadata.tf")
+        shutil.copyfile(IDENTITY / "writer_hold.tf", cls.fixture / "writer_hold.tf")
         deployment = Path(cls.directory.name) / "deployment"
         deployment.mkdir()
-        for name in ("pricing-operator-trust-no-mfa.json.tftpl", "pricing-operator-session-fence.json.tftpl"):
+        for name in ("pricing-operator-trust-no-mfa.json.tftpl", "pricing-operator-session-fence.json.tftpl",
+                     "pricing-writer-hold.json"):
             shutil.copyfile(ROOT / "deployment" / name, deployment / name)
         shutil.copyfile(ROOT / "infra/platform_plan_policy.json.tftpl", cls.fixture.parent / "platform_plan_policy.json.tftpl")
         shutil.copyfile(IDENTITY / ".terraform.lock.hcl", cls.fixture / ".terraform.lock.hcl")
@@ -143,6 +148,118 @@ class IdentityTests(unittest.TestCase):
                           if not action.split(":")[1].startswith(("Get", "List", "Describe"))}
         self.assertEqual(allowed_writes, {"s3:PutObject", "dynamodb:PutItem", "dynamodb:DeleteItem",
                                          "secretsmanager:CreateSecret", "secretsmanager:TagResource"})
+
+    def test_writer_hold_native_explicit_targets_and_identity_rejection(self):
+        # Real provider reads against a loopback-only IAM fixture; never AWS/apply.
+        ids = {
+            "vayada-github-actions-platform-deploy": "AROAT5OTWB3XLPYHBY43Y",
+            "vayada-github-actions-coordinated-deploy": "AROAT5OTWB3XD5SXH5GJW",
+            "vayada-github-actions-deploy": "AROAT5OTWB3XPZT47OHGB",
+            "vayada-github-actions-finance-export": "AROAT5OTWB3XMKMLBCNMM",
+        }
+        reads = []
+        account = "269416271598"
+
+        class IAM(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())
+                action, name = body["Action"][0], body.get("RoleName", [""])[0]
+                reads.append((action, name))
+                if action != "GetRole" or name not in ids:
+                    self.send_error(400)
+                    return
+                response = f'''<GetRoleResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+<GetRoleResult><Role><Path>/</Path><RoleName>{name}</RoleName><RoleId>{ids[name]}</RoleId>
+<Arn>arn:aws:iam::{account}:role/{name}</Arn><CreateDate>2030-01-01T00:00:00Z</CreateDate>
+<AssumeRolePolicyDocument>{quote('{"Version":"2012-10-17","Statement":[]}')}</AssumeRolePolicyDocument>
+<MaxSessionDuration>3600</MaxSessionDuration></Role></GetRoleResult>
+<ResponseMetadata><RequestId>offline-fixture</RequestId></ResponseMetadata></GetRoleResponse>'''
+                self.send_response(200)
+                self.send_header("Content-Type", "text/xml")
+                self.end_headers()
+                self.wfile.write(response.encode())
+
+            def log_message(self, *args):
+                pass
+
+        override = self.fixture / "offline_override.tf"
+        original = override.read_text()
+        server = HTTPServer(("127.0.0.1", 0), IAM)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            override.write_text(original.replace("http://127.0.0.1:9", f"http://127.0.0.1:{server.server_port}"))
+            self.assertEqual(self.inspect(), {})
+            self.assertEqual(reads, [])
+            selected = "-var=pricing_writer_hold_targets=" + json.dumps(sorted(ids))
+            self.run_tf("plan", "-out=fixture.tfplan", selected)
+            plan = json.loads(self.run_tf("show", "-json", "fixture.tfplan").stdout)
+            managed = {r["address"]: r for r in plan["resource_changes"] if r["mode"] == "managed"}
+            self.assertEqual(set(managed), {"aws_iam_policy.pricing_writer_hold[0]"} | {
+                f'aws_iam_role_policy_attachment.pricing_writer_hold["{name}"]' for name in ids})
+            self.assertTrue(all(r["change"]["actions"] == ["create"] for r in managed.values()))
+            self.assertEqual(json.loads(managed["aws_iam_policy.pricing_writer_hold[0]"]["change"]["after"]["policy"]),
+                             {"Version": "2012-10-17", "Statement": [{"Effect": "Deny", "Action": "*", "Resource": "*"}]})
+            self.assertEqual(set(reads), {("GetRole", name) for name in ids})
+            ids["vayada-github-actions-deploy"] = "AROAWRONGIDENTITY"
+            result = self.run_tf("plan", selected, ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Actual writer role identity must match", result.stderr)
+            ids["vayada-github-actions-deploy"] = "AROAT5OTWB3XPZT47OHGB"
+            account = "111111111111"
+            result = self.run_tf("plan", selected, ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Actual writer role identity must match", result.stderr)
+            account = "269416271598"
+            result = self.run_tf("plan", '-var=pricing_writer_hold_targets=["vayada-github-actions-platform-plan"]', ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Only explicitly reviewed deployment-role candidates", result.stderr)
+
+            # Synthetic installed hold, not apply. Verify later operator plans can
+            # keep it unchanged and accidental input removal cannot detach it.
+            schemas = json.loads(self.run_tf("providers", "schema", "-json").stdout)[
+                "provider_schemas"]["registry.terraform.io/hashicorp/aws"]["resource_schemas"]
+            policy_arn = "arn:aws:iam::269416271598:policy/vayada-pricing-writer-hold"
+            state = []
+            for resource in managed.values():
+                attributes = resource["change"]["after"].copy()
+                if resource["type"] == "aws_iam_policy":
+                    attributes.update(id=policy_arn, arn=policy_arn, policy_id="ANPAOFFLINEFIXTURE", tags_all={})
+                else:
+                    attributes.update(id="offline-" + attributes["role"], policy_arn=policy_arn)
+                state.append({"mode": "managed", "type": resource["type"], "name": resource["name"],
+                              "provider": 'provider["registry.terraform.io/hashicorp/aws"]', "instances": [{
+                                  "index_key": resource["index"], "schema_version": schemas[resource["type"]]["version"],
+                                  "attributes": attributes}]})
+            state_path = self.fixture / "terraform.tfstate"
+            state_path.write_text(json.dumps({"version": 4, "terraform_version": "1.5.7", "serial": 1,
+                "lineage": "00000000-0000-0000-0000-000000000000", "outputs": {}, "resources": state}))
+            try:
+                arns = {key: f"arn:aws:secretsmanager:eu-west-1:269416271598:secret:pricing-command/prod/{name}-AbCd12"
+                        for key, name in approval.runpy.run_path(str(ROOT / "scripts/assert-pricing-bootstrap-plan.py"))["NAMES"].items()}
+                for variable in ("operator_creation_window", "operator_metadata_window"):
+                    extras = ["-var=" + variable + "=" + json.dumps(WINDOW)]
+                    if variable == "operator_metadata_window":
+                        extras += ["-var=metadata_secret_arns=" + json.dumps(arns)]
+                    self.run_tf("plan", "-refresh=false", "-out=fixture.tfplan", selected, *extras)
+                    later = json.loads(self.run_tf("show", "-json", "fixture.tfplan").stdout)
+                    hold = [r for r in later["resource_changes"] if r["mode"] == "managed" and r["address"] in managed]
+                    self.assertEqual(len(hold), 5)
+                    self.assertTrue(all(r["change"]["actions"] == ["no-op"] for r in hold))
+                    changes = [r for r in later["resource_changes"] if r["mode"] == "managed" and r["change"]["actions"] != ["no-op"]]
+                    self.assertEqual(len(changes), 4)
+                    self.assertTrue(all(r["change"]["actions"] == ["create"] for r in changes))
+                for targets in ([], sorted(ids)[:-1]):
+                    result = self.run_tf("plan", "-refresh=false", "-var=pricing_writer_hold_targets=" + json.dumps(targets), ok=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("prevent_destroy", result.stderr)
+            finally:
+                state_path.unlink()
+        finally:
+            override.write_text(original)
+            server.shutdown()
+            server.server_close()
+            worker.join()
 
     def test_native_two_update_metadata_plan_and_extra_grant_rejection(self):
         # Synthetic local state, real declarations/provider. Never refresh or apply.

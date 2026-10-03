@@ -342,8 +342,10 @@ does not activate the pause and preserves the installed VAY-2029 trust/cutoff un
 ### Whole-writer hold policy candidate — uninstalled, not executor admission
 
 `deployment/pricing-writer-hold.json` is a standalone **deny-only** identity-policy
-document: all actions, all resources, no conditions, exceptions or expiry. No
-Terraform root, workflow or executor loads it. Its offline shape test is not
+document: all actions, all resources, no conditions, exceptions or expiry. The
+separate operator-owned root now loads it only for explicit nonempty
+`pricing_writer_hold_targets`; default empty creates nothing and reads no target
+roles. No workflow or executor installs it. Its offline shape test is not
 AWS enforcement proof. The proposed installation is a separate managed policy
 and reviewed attachments, not another inline policy or an update to the existing
 VAY-2029 boundary. Do not install it under approval for either pricing phase.
@@ -399,26 +401,49 @@ window and installer/recovery responsibility are required, not an assumption
 that deployment-role attachments restrict that owner. Non-AWS writers,
 resource policies/SCPs and accepted/chained executions remain review gates.
 
-#### Installation design for review — no live plan or activation
+#### Installation configuration for review — no live plan or activation
 
 Use the existing separate operator-owned Terraform state at
 `vay1543/bootstrap-identity/terraform.tfstate` for a future managed hold policy
-and its attachments. Do not put them in the ordinary platform root, change the
-VAY-2029 boundary, or add installation permissions to either pricing-phase
-identity. This is a proposed ownership choice, not implemented configuration.
+and its attachments through `writer_hold.tf`. Do not put them in the ordinary
+platform root, change the VAY-2029 boundary, or add installation permissions to
+either pricing-phase identity. The configuration is implemented but disabled by its empty default;
+no production plan, installation or full writer coverage is established.
 
-The smallest implementation should default to an empty explicit target set:
+The implementation defaults to an empty explicit target set:
 no hold resources and no target-role lookups. Activation must name each reviewed
 target, read its actual IAM `RoleId`, and reject a mismatch with the approved
 inventory before creating the policy or attachments. The four candidates above
 are not automatically selected. Additional overlapping writers require review;
 an implementation restricted to those four cannot claim complete coverage.
+The RoleId/ARN precondition uses real provider reads, not caller-supplied proof
+fields. It is a point-in-time check, not an atomic attachment binding: IAM
+attachments identify a role by name. Role deletion/recreation between planning
+and execution must remain excluded by the reviewed non-interference window.
+
+Fresh read-only GetRole checks on 2026-10-03 matched all four listed identities.
+Raw single-page ListRoles returned 54 roles with `IsTruncated=false`; this proves
+that role-name listing was complete, not effective writer coverage. Each target's
+raw attachment listing also reported `IsTruncated=false`: platform deploy has
+11 attachments, the other three have zero. The account quota remains 20.
+Capacity observations do not admit an installation, select targets, prove
+non-AWS/SCP/resource-policy coverage, or replace fresh execution-time checks.
+Separately following raw account-authorization pagination to its explicit end
+required four pages and returned 54 unique roles, three users, one group, and
+27 unique policy ARNs (12 local / 15 AWS-managed). This closes the catalog
+pagination gap only, not the effective-permission or writer-composition review.
 
 For an approved four-target inventory, the expected installation is one new
 managed deny-only policy and four attachments, with no role, trust, existing
 policy or service updates. This is an expected shape, **not a saved plan**.
-Keep both pricing-phase provisioning windows disabled for that installation;
-sharing a state root does not authorize bundling their identity resources.
+If phase identities are not already provisioned, keep their windows disabled
+for the hold installation. Already provisioned identities retain their desired
+configuration unchanged; setting their windows to null would attempt removal.
+The exact installation change inventory must contain only the hold additions,
+never phase provisioning or modification. Terraform's hold configuration does
+not enforce that saved-plan inventory; it is a separate approval/admission gate.
+Later separately reviewed identity plans may retain an unchanged installed hold;
+sharing a state root does not authorize bundling either operation.
 Native provider planning must prove the actual shape against fresh state and
 reviewed source. Recheck attachment capacity and existing attachments first;
 reject imports, replacements, deletes and unrelated changes. Preserve the
