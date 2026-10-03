@@ -5,6 +5,12 @@ locals {
 }
 
 data "aws_iam_policy_document" "hotel_setup_platform_deploy" {
+  # Ordinary Terraform refresh reads only this installed policy's metadata.
+  statement {
+    effect    = "Allow"
+    actions   = ["iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyTags"]
+    resources = ["arn:aws:iam::${var.aws_account_id}:policy/vayada-hotel-setup-platform-deploy"]
+  }
   # IaC may stage only empty fixed reader/token containers; no secret-value read.
   dynamic "statement" {
     for_each = length(local.hotel_setup_secret_names) + length(local.hotel_setup_property_secret_names) > 0 ? [true] : []
