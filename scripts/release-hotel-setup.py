@@ -222,6 +222,7 @@ def main():
         destination = PRIVATE[args.service]
         private = service(destination)
         if args.state == 'stop':
+            prepare_public(current, args.purpose, 'blocked', public_image.split('@')[1])
             require(stable(private), 'Private stop requires one stable task')
             target = private['taskDefinition']
             require(TASK.fullmatch(target), 'Invalid serving private task')
@@ -247,10 +248,50 @@ def main():
     require(stable(service(PUBLIC), args.expected_public_task), 'Public task changed before release')
     if args.state == 'stop':
         require(stable(service(destination), target), 'Private task changed before stop')
+        serving = aws('ecs', 'list-tasks', '--cluster', CLUSTER, '--service-name', destination,
+                      '--desired-status', 'RUNNING')['taskArns']
+        require(len(serving) == 1 and re.fullmatch(r'arn:aws:ecs:eu-west-1:269416271598:task/'
+                + re.escape(CLUSTER) + r'/[a-f0-9]{32}', serving[0]), 'Expected one serving private task ARN')
+        captured = aws('ecs', 'describe-tasks', '--cluster', CLUSTER, '--tasks', *serving)
+        require(not captured.get('failures') and len(captured['tasks']) == 1, 'Serving private task is missing')
+        physical = captured['tasks'][0]
+        require(physical.get('taskArn') == serving[0] and physical.get('taskDefinitionArn') == target
+                and physical.get('clusterArn') == 'arn:aws:ecs:eu-west-1:269416271598:cluster/' + CLUSTER
+                and physical.get('group') == 'service:' + destination
+                and physical.get('desiredStatus') == physical.get('lastStatus') == 'RUNNING',
+                'Serving private task differs from reviewed service')
+        # Desired STOPPED includes tasks still draining, even when service runningCount is zero.
+        history = aws('ecs', 'list-tasks', '--cluster', CLUSTER, '--service-name', destination,
+                      '--desired-status', 'STOPPED')['taskArns']
+        require(len(history) <= 100, 'Too many stopped private tasks to verify')
+        if history:
+            stopped = aws('ecs', 'describe-tasks', '--cluster', CLUSTER, '--tasks', *history)
+            require(not stopped.get('failures') and len(stopped['tasks']) == len(history)
+                    and {task['taskArn'] for task in stopped['tasks']} == set(history)
+                    and all(task.get('lastStatus') == 'STOPPED' for task in stopped['tasks']),
+                    'Private service still has draining tasks')
         aws('ecs', 'update-service', '--cluster', CLUSTER, '--service', destination, '--desired-count', '0')
     else:
         aws('ecs', 'update-service', '--cluster', CLUSTER, '--service', destination, '--task-definition', target, '--desired-count', '1')
     subprocess.run(['aws', 'ecs', 'wait', 'services-stable', '--cluster', CLUSTER, '--services', destination, '--region', REGION], check=True)
+    if args.state == 'stop':
+        subprocess.run(['aws', 'ecs', 'wait', 'tasks-stopped', '--cluster', CLUSTER,
+                        '--tasks', *serving, '--region', REGION], check=True)
+        stopped = aws('ecs', 'describe-tasks', '--cluster', CLUSTER, '--tasks', *serving)
+        require(not stopped.get('failures') and len(stopped['tasks']) == 1
+                and stopped['tasks'][0].get('taskArn') == serving[0]
+                and stopped['tasks'][0].get('lastStatus') == 'STOPPED', 'Serving private task did not stop')
+        require(not aws('ecs', 'list-tasks', '--cluster', CLUSTER, '--service-name', destination,
+                        '--desired-status', 'RUNNING')['taskArns'], 'Private service still has serving tasks')
+        history = aws('ecs', 'list-tasks', '--cluster', CLUSTER, '--service-name', destination,
+                      '--desired-status', 'STOPPED')['taskArns']
+        require(len(history) <= 100, 'Too many stopped private tasks to verify')
+        if history:
+            stopped = aws('ecs', 'describe-tasks', '--cluster', CLUSTER, '--tasks', *history)
+            require(not stopped.get('failures') and len(stopped['tasks']) == len(history)
+                    and {task['taskArn'] for task in stopped['tasks']} == set(history)
+                    and all(task.get('lastStatus') == 'STOPPED' for task in stopped['tasks']),
+                    'Private service still has draining tasks')
     final = service(destination)
     if args.state == 'stop':
         require(final['desiredCount'] == final['runningCount'] == final['pendingCount'] == 0

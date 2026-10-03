@@ -99,17 +99,21 @@ start. Wait for stability and verify the exact selected task/count; failed
 stability blocks release. Neither this entrypoint nor an image publication
 provisions missing credentials or skips their native proofs.
 
-After an Owner's first Save supplies its canonical property UUID, block property
-admission with its retained pair before running private `stop` for the matching
-purpose. Stop requires the exact stable public task and approved serving private
-image, validates the private identities/mode/secrets, and accepts no `private_task`
-input. It changes only that private service's desired count to zero, retaining its
-task definition, and confirms zero desired/running/pending counts. Public stop is
-rejected. Provision and prove the native property credentials through their
-protected bootstrap, then use private `start` with the reviewed retained task and
-re-enable property admission after stability/health checks. This property-only
-pause preserves creation's current admission and service. Stop changes no caller
-configuration, grants, images or Financials.
+For an already-running property service, after an Owner's first Save supplies its
+canonical property UUID, block property admission with its retained pair before
+running private `stop` for the matching purpose. Stop requires the exact stable
+public task and approved serving private image, validates the retained caller
+pair and private identities/mode/secrets, and accepts no `private_task` input. It
+changes only that private service's desired count to zero, retaining its task
+definition, waits for the captured serving task to reach `STOPPED`, and confirms
+zero desired/running/pending counts. Already-draining tasks block stop before
+mutation. Public stop is rejected. Provision and prove the native property
+credentials through their protected bootstrap, then use private `start` with the
+reviewed retained task and re-enable property admission after stability/health
+checks. This property-only pause preserves creation's current admission and
+service. Stop changes no caller configuration, grants, images or Financials.
+Initial activation instead provisions credentials while the private service is
+already at zero, before its first start; it does not use this pause sequence.
 
 ### Failed initial migration recovery
 
