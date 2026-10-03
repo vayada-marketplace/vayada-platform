@@ -80,3 +80,20 @@ until the private service's authenticated preflights pass.
 App contract: `engineering/hotel-setup-command-credential-lifecycle.md` in
 `vayada-marketplace/vayada`; reader/audit drafts #2746 and #2747. No production
 release, provisioning or property activation is authorized by this document.
+
+## Staged private connection
+
+`enable_hotel_setup_private_network=false` creates no network resources. The
+separate opt-in network slice stages an internal ALB with the existing wildcard
+certificate and a VPC-only, host-specific DNS zone. HTTPS enters only from the
+new supplemental `caller` security group; port 8011 enters only from the ALB.
+No shared ECS group or public ALB can reach the task. The caller group remains
+unattached: attaching it to the exact next API service is a later cutover.
+
+The ALB's unauthenticated `/` probe expects 401, proving only that the listener
+started after its database startup guards. It is not authenticated readiness,
+native-credential proof or hotel acceptance. No tokens appear in health checks.
+The public subnet IDs do not make an internal ALB internet-facing. Task HTTPS
+egress remains internet-wide because security groups cannot restrict the WorkOS
+hostname; runtime IAM and TLS still apply. No task or API forwarding is created
+by the network slice.
