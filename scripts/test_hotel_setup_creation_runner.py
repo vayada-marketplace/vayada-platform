@@ -60,7 +60,7 @@ class CreationRunnerTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         for directory in ('scripts', 'deployment', 'bin', 'capture'):
             (self.root / directory).mkdir()
-        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs'):
+        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'audit-hotel-setup-owner.mjs'):
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         (self.root / 'deployment/hotel-setup-command-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
         self.executable('aws', MOCK)
@@ -153,6 +153,28 @@ class CreationRunnerTest(unittest.TestCase):
             self.assertNotIn('register-task-definition', operations)
             self.assertNotIn('run-task', operations)
             self.env = previous
+
+    def test_owner_lookup_receives_no_sdk_role_and_only_owner_secret(self):
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
+                        MOCK_PUBLIC_IMAGE='269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST)
+        for name, content in [('hotel-setup-caller-images.json', {DIGEST: 'b' * 40}),
+                              ('hotel-setup-bootstrap-images.json', {DIGEST: {key: 'b' * 40 for key in ('primarySource', 'rollbackSource', 'publisherSource')}})]:
+            (self.root / 'deployment' / name).write_text(json.dumps(content))
+        self.assertNotEqual(self.run_wrapper('--audit-hotel-setup-owner', 'invalid', DIGEST).returncode, 0)
+        self.assertFalse((self.root / 'capture/calls.jsonl').exists())
+        result = self.run_wrapper('--audit-hotel-setup-owner', 'owner@example.test', DIGEST)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        definition = json.loads((self.root / 'capture/definition.json').read_text())
+        self.assertNotIn('taskRoleArn', definition)
+        self.assertEqual(definition['executionRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution')
+        item, = definition['containerDefinitions']
+        self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
+        raw = (self.root / 'capture/overrides.json').read_text()
+        self.assertLessEqual(len(raw.encode()), 8192)
+        env = {entry['name']: entry['value'] for entry in json.loads(raw)['containerOverrides'][0]['environment']}
+        self.assertEqual(env['HOTEL_SETUP_OWNER_EMAIL'], 'owner@example.test')
+        operations = [json.loads(line)[1] for line in (self.root / 'capture/calls.jsonl').read_text().splitlines()]
+        self.assertNotIn('update-service', operations)
 
     def test_property_reader_requires_admission_hold_before_mutations(self):
         self.env['MOCK_ADMISSION'] = 'enabled'
