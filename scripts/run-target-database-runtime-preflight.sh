@@ -25,6 +25,8 @@ creation_purpose=""
 creation_org=""
 creation_actor=""
 creation_task_role=""
+property_id=""
+property_operation=""
 helper_file=""
 financials_readiness_property=""
 financials_readiness_image_digest=""
@@ -220,6 +222,23 @@ case "${mode}" in
       fi
     fi
     ;;
+  --provision-hotel-setup-property-native)
+    [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main && "$#" -eq 6 ]] || exit 2
+    uuid='^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    [[ "$2" =~ ${uuid} && "$3" =~ ${uuid} && "$4" =~ ${uuid} && "$5" =~ ^(launch_settings|currency|currency_ready|feature_hub)$ && "$6" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 2
+    property_id="$2"; creation_org="$3"; creation_actor="$4"; property_operation="$5"
+    inventory="$(dirname "${BASH_SOURCE[0]}")/../deployment/hotel-setup-bootstrap-images.json"
+    jq -e --arg digest "$6" '.[ $digest ] | type == "object" and
+      (.primarySource | test("^[a-f0-9]{40}$")) and (.rollbackSource | test("^[a-f0-9]{40}$")) and
+      (.publisherSource | test("^[a-f0-9]{40}$"))' "${inventory}" >/dev/null || exit 1
+    ca_required=true
+    family="vayada-next-api-db-runtime-preflight"
+    code_file="run-hotel-setup-property-bootstrap.mjs"
+    secret_name="HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL"
+    secret_parameter="/vayada/prod/db-marketplace-url"
+    task_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$6"
+    creation_task_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap"
+    ;;
   --provision-hotel-setup-creation-org|--provision-hotel-setup-creation-reader|--provision-hotel-setup-property-reader)
     if [[ "${mode}" == "--provision-hotel-setup-creation-org" ]]; then
       [[ "$#" -eq 4 && "$2" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ &&
@@ -295,7 +314,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" ) || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
+  if [[ "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" ) || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -311,7 +330,7 @@ if [[ "${ca_required}" == true ]]; then
     }
   fi
   ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
-  if [[ ( "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" ) ) && "${#ca_payload}" -gt 2100 ]]; then
+  if [[ ( "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" ) ) && "${#ca_payload}" -gt 2100 ]]; then
     echo "Pinned grant CA payload exceeds the reviewed ECS override budget." >&2; exit 1
   fi
 fi
@@ -332,12 +351,13 @@ fi
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
   --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg financials_readiness_property "${financials_readiness_property}" \
   --arg folio_required "${folio_required}" --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
-  --arg creation_purpose "${creation_purpose}" --arg creation_org "${creation_org}" --arg creation_actor "${creation_actor}" \
+  --arg property_id "${property_id}" --arg property_operation "${property_operation}" --arg creation_purpose "${creation_purpose}" --arg creation_org "${creation_org}" --arg creation_actor "${creation_actor}" \
   --arg vay2017_source_import_phase "${vay2017_source_import_phase}" \
   --arg vay2017_signing_key_id "${VAY2017_PREFLIGHT_SIGNING_KEY_ID:-}" --arg vay2017_input "${VAY2017_PREFLIGHT_INPUT_GZIP_BASE64:-}" --arg vay2017_signature "${VAY2017_PREFLIGHT_SIGNATURE:-}" --arg vay2017_public_key "${VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64:-}" --arg vay2017_principal "${CHANNEX_ADOPTION_EXECUTION_PRINCIPAL:-}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
     environment:([{name:"VAYADA_DB_RUNTIME_PREFLIGHT_CODE",value:$code}] +
       (if $helper == "" then [] else [{name:"VAYADA_DB_RUNTIME_PREFLIGHT_HELPER",value:$helper}] end) +
+      (if $property_id == "" then [] else [{name:"HOTEL_SETUP_COMMAND_PROPERTY_ID",value:$property_id},{name:"HOTEL_SETUP_COMMAND_OPERATION",value:$property_operation}] end) +
       (if $creation_purpose == "" then [] else [{name:"HOTEL_SETUP_BOOTSTRAP_PURPOSE",value:$creation_purpose}] end) +
       (if $creation_org == "" then [] else [{name:"HOTEL_SETUP_COMMAND_ORGANIZATION_ID",value:$creation_org}] end) +
       (if $creation_actor == "" then [] else [{name:"HOTEL_SETUP_COMMAND_ACTOR_USER_ID",value:$creation_actor}] end) +
@@ -398,7 +418,7 @@ if [[ "${mode}" == "--audit-financials-readiness" ]]; then
   }
 fi
 # A missing private service or ordinary local writer is not an admission hold.
-if [[ "${mode}" == "--provision-hotel-setup-property-reader" ]]; then
+if [[ "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" ]]; then
   [[ "${EXPECTED_TASK:-}" == "${current_task}" && "${current_task}" == arn:aws:ecs:eu-west-1:269416271598:task-definition/* ]] || {
     echo "Property reader bootstrap requires the reviewed public task definition." >&2; exit 1;
   }
@@ -412,6 +432,18 @@ if [[ "${mode}" == "--provision-hotel-setup-property-reader" ]]; then
     length == 1 and .[0].value == "blocked"' <<<"${source_definition}" >/dev/null || {
     echo "Property reader bootstrap requires explicit blocked caller admission." >&2; exit 1;
   }
+  if [[ "${mode}" == "--provision-hotel-setup-property-native" ]]; then
+    python3 - "${script_dir}/../deployment/hotel-setup-caller-images.json" "${source_definition}" <<'PYCODE'
+import json,re,sys
+images=json.load(open(sys.argv[1]))
+task=json.loads(sys.argv[2])
+item,=[c for c in task['containerDefinitions'] if c['name']=='vayada-next-api']
+prefix='269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@'
+image=item['image']
+assert image.startswith(prefix) and re.fullmatch('[a-f0-9]{40}',images.get(image[len(prefix):],''))
+assert not any(e['name']=='HOTEL_SETUP_COMMAND_ADMISSION' for e in item.get('secrets',[]))
+PYCODE
+  fi
   private_state="$(aws ecs describe-services --cluster "${service_cluster}" --services vayada-hotel-setup-property-service --region "${region}" --query '{services:services,failures:failures}' --output json)"
   jq -e '(.services | length) == 1 and (.failures | length) == 0 and
     .services[0].desiredCount == 0 and .services[0].runningCount == 0 and
