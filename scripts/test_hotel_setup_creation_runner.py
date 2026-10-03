@@ -21,11 +21,11 @@ with (root/'calls.jsonl').open('a') as file: file.write(json.dumps(args)+'\\n')
 def value(flag): return args[args.index(flag)+1]
 operation=args[1]
 if operation=='describe-services' and value('--query')=='services[0]':
- print(json.dumps({'taskDefinition':os.environ['EXPECTED_TASK'],'desiredCount':1,'runningCount':1,'pendingCount':0,'deployments':[{'status':'PRIMARY','rolloutState':'COMPLETED'}]}))
+ print(json.dumps({'taskDefinition':os.environ.get('MOCK_PUBLIC_TASK',os.environ['EXPECTED_TASK']),'desiredCount':1,'runningCount':1,'pendingCount':0,'deployments':[{'status':'PRIMARY','rolloutState':'COMPLETED'}]*int(os.environ.get('MOCK_PUBLIC_DEPLOYMENTS','1'))}))
 elif operation=='describe-services' and value('--services')=='vayada-hotel-setup-property-service':
  print(json.dumps({'services':[{'desiredCount':0,'runningCount':0,'pendingCount':0}], 'failures':[]}))
 elif operation=='describe-services':
- print(json.dumps({'awsvpcConfiguration':{'subnets':['fixture'],'securityGroups':['fixture'],'assignPublicIp':'ENABLED'}}) if 'networkConfiguration' in value('--query') else 'arn:aws:ecs:eu-west-1:269416271598:task-definition/public:1')
+ print(json.dumps({'awsvpcConfiguration':{'subnets':['fixture'],'securityGroups':['fixture'],'assignPublicIp':'ENABLED'}}) if 'networkConfiguration' in value('--query') else os.environ.get('MOCK_CURRENT_TASK','arn:aws:ecs:eu-west-1:269416271598:task-definition/public:1'))
 elif operation=='describe-task-definition':
  print(json.dumps({'family':'public','taskRoleArn':'arn:aws:iam::269416271598:role/broad-serving-role','executionRoleArn':'fixture-execution','containerDefinitions':[{'name':'vayada-next-api','image':os.environ.get('MOCK_PUBLIC_IMAGE','ordinary-serving-image'),'environment':[{'name':'HOTEL_SETUP_COMMAND_ADMISSION','value':os.environ.get('MOCK_ADMISSION','blocked')}],'secrets':[{'name':'UNSAFE','valueFrom':'fixture'}],'portMappings':[{'containerPort':8003}]}]}))
 elif operation=='register-task-definition':
@@ -60,7 +60,7 @@ class CreationRunnerTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         for directory in ('scripts', 'deployment', 'bin', 'capture'):
             (self.root / directory).mkdir()
-        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'audit-hotel-setup-owner.mjs'):
+        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs'):
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         (self.root / 'deployment/hotel-setup-command-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
         self.executable('aws', MOCK)
@@ -152,6 +152,33 @@ class CreationRunnerTest(unittest.TestCase):
             operations = [json.loads(line)[1] for line in calls.read_text().splitlines()]
             self.assertNotIn('register-task-definition', operations)
             self.assertNotIn('run-task', operations)
+            self.env = previous
+
+    def test_migration_audit_uses_fixed_owner_injection_and_rejects_changed_task(self):
+        task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1'
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main', EXPECTED_TASK=task, MOCK_CURRENT_TASK=task)
+        (self.root / 'deployment/hotel-setup-bootstrap-images.json').write_text(json.dumps(
+            {DIGEST: {key: 'b' * 40 for key in ('primarySource', 'rollbackSource', 'publisherSource')}}))
+        result = self.run_wrapper('--audit-hotel-setup-migration', DIGEST)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        definition = json.loads((self.root / 'capture/definition.json').read_text())
+        self.assertNotIn('taskRoleArn', definition)
+        self.assertEqual(definition['executionRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution')
+        item, = definition['containerDefinitions']
+        self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
+        self.assertEqual(item['environment'], [])
+        self.assertEqual(item['portMappings'], [])
+        self.assertLessEqual(len((self.root / 'capture/overrides.json').read_bytes()), 8192)
+        calls = self.root / 'capture/calls.jsonl'
+        for overrides in ({'GITHUB_REF': 'refs/heads/unreviewed'}, {'MOCK_PUBLIC_TASK': task[:-1] + '2'},
+                          {'MOCK_PUBLIC_DEPLOYMENTS': '2'}):
+            calls.unlink(missing_ok=True)
+            previous = self.env.copy(); self.env.update(overrides)
+            self.assertNotEqual(self.run_wrapper('--audit-hotel-setup-migration', DIGEST).returncode, 0)
+            if calls.exists():
+                operations = [json.loads(line)[1] for line in calls.read_text().splitlines()]
+                self.assertNotIn('register-task-definition', operations)
+                self.assertNotIn('run-task', operations)
             self.env = previous
 
     def test_owner_lookup_receives_no_sdk_role_and_only_owner_secret(self):
