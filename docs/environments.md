@@ -881,3 +881,23 @@ X-Vayada-Webhook-Token header. Preserve unrelated subscriptions. Rollback disabl
 these subscriptions and sets the review override to observe_only. Staging canary
 configuration always resets this override to observe_only. App contract and smoke
 requirements: engineering/channex-webhook-cutover-plan.md in the application repo.
+
+### Hotel setup track command runtime repair (VAY-965)
+
+`PUT /api/hotel-setup/tracks` uses the ordinary API runtime connection. Its
+atomic transaction needs column writes as well as reads: `FOR UPDATE` itself
+requires an UPDATE privilege. Run the owner-checked fixed repair with:
+
+```bash
+scripts/run-target-database-runtime-preflight.sh --grant-hotel-setup-tracks
+scripts/run-target-database-runtime-preflight.sh
+```
+
+The helper grants only the column matrix in
+`scripts/grant-target-database-hotel-setup-tracks.mjs`, in one transaction. It
+adds no DELETE, table-wide writes, delegation, role membership or private
+setup scope access. The staged preflight allowlist accepts those columns.
+These are column-scoped privileges, not tenant-scoped privileges; route
+owner authorization remains the tenant boundary. The UPDATE grants on link,
+billing and profile keys permit row locks but are real column write privileges.
+Never replace this runtime connection with migration-owner credentials.
