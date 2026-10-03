@@ -4,6 +4,8 @@ import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import manifest from './fixtures/vay2042-source-reader.json' with { type: 'json' };
 import { provisionSourceReader, reader } from './provision-vay2042-source-reader.mjs';
+import { bindSourceAttestation, proofSha256, evidenceTable } from './vay2042-source-attestation.mjs';
+import { attestor, target } from './provision-vay2042-target.mjs';
 
 const url = new URL(process.env.VAY2042_TEST_DATABASE_URL ?? 'postgresql://postgres:fixture@127.0.0.1:55442/postgres');
 assert.equal(url.hostname, '127.0.0.1');
@@ -142,5 +144,39 @@ test('source bootstrap proves exact grants, denied writes, and safe partial fail
     const other = await open('vayada_target_prod', reader, persisted.password);
     try { await assert.rejects(other.query('SELECT * FROM public.retained_target'), { code: '42501' }); }
     finally { await other.end(); }
+  });
+  await t.test('binds only the four restored source evidence tables and rejects repeat writes', async () => {
+    await root.query(`CREATE ROLE ${ident(attestor)} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+      NOINHERIT NOREPLICATION NOBYPASSRLS`);
+    await root.query(`GRANT ${ident(attestor)} TO fixture_bootstrap WITH INHERIT FALSE, SET TRUE`);
+    await root.query(`CREATE DATABASE ${ident(target)} OWNER fixture_bootstrap`);
+    await root.query(`REVOKE TEMPORARY ON DATABASE ${ident(target)} FROM PUBLIC`);
+    const sourceConnect = async (database, identity) => open(database,
+      identity === 'admin' ? 'fixture_bootstrap' : reader,
+      identity === 'admin' ? 'fixture-admin' : persisted.password);
+    await root.query('CREATE ROLE fixture_other NOLOGIN');
+    await root.query(`GRANT ${ident(attestor)} TO fixture_other WITH INHERIT FALSE, SET TRUE`);
+    await assert.rejects(bindSourceAttestation({ connect: sourceConnect }), /source_attestor_mismatch/);
+    assert.equal((await root.query("SELECT count(*)::int AS n FROM pg_namespace WHERE nspname='vayada_migration_evidence'")).rows[0].n, 0);
+    await root.query(`REVOKE ${ident(attestor)} FROM fixture_other`);
+    await root.query('DROP ROLE fixture_other');
+    assert.deepEqual(await bindSourceAttestation({ connect: sourceConnect }),
+      { status: 'OK', scope: 'isolated-source-attestation', databases: 4,
+        tables: 83, proofSha256 });
+    for (const { database } of manifest.sources) {
+      const source = await sourceConnect(database, 'source');
+      try {
+        const rows = (await source.query(`SELECT attestation_key,attestation_value
+          FROM ${evidenceTable} ORDER BY attestation_key`)).rows;
+        assert.equal(rows.length, 2);
+        assert.equal(rows[0].attestation_value, proofSha256);
+        await source.query('BEGIN READ WRITE');
+        await assert.rejects(source.query(`UPDATE ${evidenceTable}
+          SET attestation_value='forged' WHERE false`), { code: '42501' });
+        await source.query('ROLLBACK');
+      } finally { await source.end(); }
+    }
+    await assert.rejects(bindSourceAttestation({ connect: sourceConnect }),
+      /source_inventory_mismatch/);
   });
 });
