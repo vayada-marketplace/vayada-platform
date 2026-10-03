@@ -117,7 +117,7 @@ class ReleaseTest(unittest.TestCase):
                 release.initial_restore_target(public, new, DIGEST, {**hold, key: value}, captured, candidate)
         for patch in ({'schemaVersion': 2}, {'createdAt': 'invalid'},
                       {'clearedAt': '2026-10-03T18:00:00.000Z'}, {'dependentFrontendsCompatible': 'false'}):
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(release.coordinated.ReleaseError):
                 release.initial_restore_target(public, new, DIGEST, {**hold, **patch}, captured, candidate)
         for state in ({**public, 'taskDefinition': old}, {**public, 'desiredCount': 0},
                       {**public, 'deployments': []}):

@@ -127,7 +127,7 @@ def initial_restore_target(public, expected, digest, hold, captured, candidate):
     for definition in (captured, candidate):
         item = container(definition, 'vayada-next-api')
         env = environment(item)
-        require(not any(prefix + '_ORIGIN' in env or any(
+        require(not any(prefix + '_ORIGIN' in env or prefix + '_INTERNAL_TOKEN' in env or any(
             s['name'] == prefix + '_INTERNAL_TOKEN' for s in item.get('secrets', []))
             for prefix in PREFIX.values()), 'Activated callers cannot use initial recovery')
     require(any(d['taskDefinition'] == target and d['runningCount'] == 1
