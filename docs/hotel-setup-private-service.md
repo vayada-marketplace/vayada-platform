@@ -141,8 +141,12 @@ until the private service's authenticated preflights pass.
 
 ## Credential and release gates
 
-1. Review the exact composed app source and migration manifest (currently through
-   0461), immutable image containing the private executable, and exact
+Post-creation property/purpose credential staging and recoverable Save ordering
+follow [the property bootstrap contract](hotel-setup-property-bootstrap.md). This
+is a design dependency, not a provisioner or permission to run one.
+
+1. Review the exact composed app source and migration manifest (including reviewed
+   launch-settings migration 0462), immutable image containing the private executable, and exact
    reader/native-login/function ownership. Verify actual migration history before
    replacing any superseded source migration; do not rewrite applied history.
    A separate provisioner must satisfy the app's credential-lifecycle contract:
