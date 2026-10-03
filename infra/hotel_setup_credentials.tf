@@ -41,7 +41,7 @@ locals {
 }
 
 resource "aws_secretsmanager_secret" "hotel_setup" {
-  depends_on = [aws_iam_role_policy.github_actions_platform_deploy]
+  depends_on = [aws_iam_role_policy_attachment.hotel_setup_platform_deploy]
   for_each   = local.hotel_setup_secret_names
 
   name        = each.value

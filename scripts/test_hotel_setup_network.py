@@ -27,7 +27,8 @@ def plan(enabled, service=None, property_network=False):
         shutil.copy(ROOT / 'infra/hotel_setup_property_network.tf', path)
         shutil.copy(ROOT / 'infra/.terraform.lock.hcl', path)
         # Reuse init's providers; do not download another copy on small local disks.
-        (path / '.terraform').symlink_to(ROOT / 'infra/.terraform', target_is_directory=True)
+        (path / '.terraform').mkdir()
+        (path / '.terraform/providers').symlink_to(ROOT / 'infra/.terraform/providers', target_is_directory=True)
         (path / 'fixture.tf').write_text('''
 terraform {
   required_providers {
@@ -60,10 +61,10 @@ variable "rds_endpoint" { default = "db.internal" }
 variable "workos_jwks_url" { default = "https://api.workos.com/jwks/client_fixture" }
 variable "workos_issuer" { default = "https://api.workos.com/" }
 variable "workos_audience" { default = "client_fixture" }
-resource "aws_iam_role_policy" "github_actions_platform_deploy" {
+resource "aws_iam_role_policy_attachment" "hotel_setup_platform_deploy" {
   count = 0
   role = "offline-deploy-role"
-  policy = jsonencode({ Version = "2012-10-17", Statement = [] })
+  policy_arn = "arn:aws:iam::269416271598:policy/offline"
 }
 output "setup_environment" { value = local.hotel_setup_environment }
 output "property_environment" { value = local.hotel_setup_property_environment }
