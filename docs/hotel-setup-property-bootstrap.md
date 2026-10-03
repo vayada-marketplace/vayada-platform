@@ -91,3 +91,13 @@ first currency for both reported accounts. Existing Owner-off and billing/global
 restrictions must remain enforced. Live provisioning and release require separate
 explicit authority after these reviewable checks; no automatic provisioner is
 implemented or approved by this design.
+
+## Protected operational entrypoint
+
+The main-only `hotel-setup-property-bootstrap.yml` workflow runs one reviewed operation for one canonical property, owning organization and original Owner actor. Its operational image inventory starts empty. Add an image only after both bundled compiled preflight roots pass the native credential contract and publication cleanup checks.
+
+The wrapper requires the reviewed stable public task, a proved caller image with explicit blocked property admission, and an existing property service at zero desired/running/pending tasks. It clones the serving task only as an operational task, removes serving credentials and ports, uses the dedicated native-bootstrap task role, and injects the owner URL from SSM. Overrides contain only scope identifiers, code and the pinned public CA within the ECS size limit. No generated native password or database URL enters overrides or workflow output.
+
+The launcher accepts the existing production owner `/postgres?sslmode=require` shape, privately changes it to the target database with verified TLS, and starts the fixed compiled CLI with the pinned CA. That CLI checks both `/app` and `/proof/rollback` before publishing its internally generated native credential. It reports only a nonsecret receipt or inspection-required failure. Existing credentials and ambiguous outcomes require inspection; do not blindly retry.
+
+The operational IAM role can create/read/write only native property credential secrets. It cannot access reader/token containers or organization credentials. The workflow never updates a service and always stops its own temporary task and deregisters its temporary task definition. Private service startup and public admission are separate protected releases after all required receipts are verified.
