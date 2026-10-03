@@ -41,7 +41,8 @@ locals {
 }
 
 resource "aws_secretsmanager_secret" "hotel_setup" {
-  for_each = local.hotel_setup_secret_names
+  depends_on = [aws_iam_role_policy.github_actions_platform_deploy]
+  for_each   = local.hotel_setup_secret_names
 
   name        = each.value
   description = "Private ${var.hotel_setup_command_mode} setup ${each.key}; no value managed by Terraform"

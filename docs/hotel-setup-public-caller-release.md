@@ -79,3 +79,27 @@ and only the configured internal-token container reads. No setup native or
 reader references are added. The supplemental caller group attaches only to
 next-target-backend. Terraform stages task definitions; the normal protected
 release must select the reviewed definition/image and validate admission behavior.
+
+
+## Protected release entrypoint
+
+The main-only setup release workflow shares the production mutation queue and
+protected environment. It checks the exact stable serving API task before each
+change. Public release clones that task and preserves all unrelated environment,
+secrets, task role, network and launcher settings, changing only the selected
+setup caller pair/admission, its reviewed immutable image and execution identity.
+The existing split-launcher image guard and coordinated ownership guard still
+apply. `hold` is initial-only and refuses an existing pair; `blocked` retains it.
+Enabled admission requires the corresponding private service stable and healthy.
+
+Private start selects an explicit staged immutable task definition, its fixed
+mode and independently reviewed image inventory, with the relevant public
+admission blocked. The private service must exist at zero tasks for initial
+start. Wait for stability and verify the exact selected task/count; failed
+stability blocks release. Neither this entrypoint nor an image publication
+provisions missing credentials or skips their native proofs.
+
+The platform deploy identity may create/describe/tag only the fixed empty
+reader/token containers before staging them; it receives no secret-value read
+or native-prefix access. Container creation depends on that reviewed IAM policy.
+Caller enable uses only DescribeSecret metadata to obtain an exact token ARN.
