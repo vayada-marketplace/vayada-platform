@@ -85,14 +85,17 @@ class OnlineReadinessTest(unittest.TestCase):
         stopped_arn = arn[:-32] + 'b' * 32
         base = {'taskArn': arn, 'taskDefinitionArn': source['taskDefinitionArn'], 'clusterArn': online.CLUSTER_ARN,
                 'group': 'service:' + online.release.PRIVATE['property'], 'desiredStatus': 'RUNNING', 'lastStatus': 'RUNNING',
+                'overrides': {'inferenceAcceleratorOverrides': [], 'containerOverrides': [{'name': 'hotel-setup'}]},
                 'containers': [{'name': 'hotel-setup', 'image': IMAGE, 'imageDigest': DIGEST}]}
-        variants = [('valid', None), ('wrong-image', lambda task: task['containers'][0].update(imageDigest='sha256:' + 'c' * 64)),
+        variants = [('valid', None), ('valid-absent', lambda task: task['overrides'].pop('inferenceAcceleratorOverrides')), ('wrong-image', lambda task: task['containers'][0].update(imageDigest='sha256:' + 'c' * 64)),
                     ('wrong-service', lambda task: task.update(group='service:other')),
                     ('wrong-definition', lambda task: task.update(taskDefinitionArn='other:1')),
                     ('command-override', lambda task: task.update(overrides={'containerOverrides': [{'name': 'hotel-setup', 'command': ['alternate.js']}]})),
                     ('task-role-override', lambda task: task.update(overrides={'taskRoleArn': online.ACCOUNT + 'admin'})),
                     ('execution-role-override', lambda task: task.update(overrides={'executionRoleArn': online.ACCOUNT + 'admin'})),
                     ('environment-override', lambda task: task.update(overrides={'containerOverrides': [{'name': 'hotel-setup', 'environment': [{'name': 'HOTEL_SETUP_COMMAND_MODE', 'value': 'other'}]}]})),
+                    *[('inference-invalid-' + str(index), lambda task, value=value: task.update(overrides={'inferenceAcceleratorOverrides': value}))
+                      for index, value in enumerate(([{'deviceName': 'other'}], None, {}, ''))],
                     ('draining', None), ('unbounded-history', None), ('missing-physical', None)]
         for case, mutate in variants:
             task = copy.deepcopy(base)
@@ -108,7 +111,7 @@ class OnlineReadinessTest(unittest.TestCase):
                 return {'tasks': [{'taskArn': stopped_arn, 'clusterArn': online.CLUSTER_ARN,
                     'group': base['group'], 'lastStatus': 'RUNNING' if case == 'draining' else 'STOPPED'}]}
             with self.subTest(case=case), patch.object(online.release, 'aws', side_effect=aws):
-                if case == 'valid':
+                if case in ('valid', 'valid-absent'):
                     self.assertEqual(online.physical_tasks(online.release.PRIVATE['property'], source), arn)
                 else:
                     with self.assertRaises(RuntimeError):
@@ -133,6 +136,7 @@ class OnlineReadinessTest(unittest.TestCase):
                 return {'tasks': [{'taskArn': arn, 'taskDefinitionArn': source['taskDefinitionArn'],
                     'clusterArn': online.CLUSTER_ARN, 'group': 'service:' + online.release.PUBLIC,
                     'desiredStatus': 'STOPPED' if case == 'draining' else 'RUNNING', 'lastStatus': 'RUNNING',
+                    'overrides': {'inferenceAcceleratorOverrides': [], 'containerOverrides': [{'name': 'vayada-next-api'}]},
                     'containers': [{'name': 'vayada-next-api', 'image': IMAGE,
                         'imageDigest': 'wrong' if case == 'wrong-image' else DIGEST}]}]}
             with self.subTest(case=case), patch.object(online.release, 'aws', side_effect=aws):
