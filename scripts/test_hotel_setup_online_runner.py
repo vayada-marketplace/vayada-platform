@@ -43,7 +43,7 @@ class OnlineRunnerTest(unittest.TestCase):
 
     def test_checked_in_inventory_selects_one_exact_proved_bundle(self):
         inventory = json.loads((ROOT / 'deployment/hotel-setup-online-images.json').read_text())
-        proof = json.loads((ROOT / 'deployment/hotel-setup-helper-owner-image-proof.json').read_text())
+        proof = json.loads((ROOT / 'deployment/hotel-setup-offline-catalog-image-proof.json').read_text())
         digest = runner.operational_image(inventory)
         self.assertEqual(digest, proof['bundle']['digest'])
         self.assertEqual(inventory['operational'][digest], {
@@ -52,7 +52,7 @@ class OnlineRunnerTest(unittest.TestCase):
             'rollbackSource': proof['rollback']['source'],
         })
         for mode in ('creation', 'property'):
-            for slot in ('primary', 'rollback'):
+            for slot in ('servingPrimary', 'rollback'):
                 self.assertEqual(inventory[mode][proof[slot]['digest']], proof[slot]['source'])
 
     def test_task_identity_secrets_launcher_and_certificate_are_disjoint(self):
