@@ -51,6 +51,7 @@ try {
   await admin.query(`CREATE SCHEMA identity; CREATE SCHEMA platform;
     CREATE ROLE legacy_helper_owner NOLOGIN;
     CREATE ROLE unrelated_reader NOLOGIN;
+    CREATE ROLE reader_creator NOLOGIN CREATEROLE NOINHERIT;
     CREATE TABLE identity.organizations(id integer PRIMARY KEY);
     INSERT INTO identity.organizations VALUES(1),(2);
     ALTER TABLE identity.organizations ENABLE ROW LEVEL SECURITY;
@@ -59,7 +60,8 @@ try {
   for (const fn of functions) await admin.query(`ALTER FUNCTION ${fn} OWNER TO legacy_helper_owner;
     REVOKE ALL ON FUNCTION ${fn} FROM PUBLIC;
     GRANT EXECUTE ON FUNCTION ${fn} TO unrelated_reader;`);
-  for (const role of readers) await admin.query(`CREATE ROLE ${role} LOGIN NOINHERIT PASSWORD 'fixture';
+  for (const role of readers) await admin.query(`SET ROLE reader_creator;
+    CREATE ROLE ${role} LOGIN NOINHERIT PASSWORD 'fixture'; RESET ROLE;
     GRANT USAGE ON SCHEMA identity,platform TO ${role};
     GRANT SELECT(id) ON identity.organizations TO ${role};`);
   await admin.query(`CREATE POLICY worker_scope ON identity.organizations AS RESTRICTIVE
@@ -77,11 +79,16 @@ try {
   const repair = fingerprint => runReaderRlsPermissionCheck(admin, 'apply', fingerprint, 'postgres');
   const initial = await inspect();
   assert.equal(initial.missingEdges, 4);
+  const creatorEdges = async () => (await admin.query(`SELECT roleid,member,grantor,admin_option,inherit_option,set_option
+    FROM pg_auth_members WHERE roleid IN (SELECT oid FROM pg_roles WHERE rolname=ANY($1::text[]))
+    ORDER BY roleid,member,grantor`, [readers])).rows;
+  assert.equal((await creatorEdges()).length, 2);
+  assert.ok((await creatorEdges()).every(edge => edge.admin_option && !edge.inherit_option && !edge.set_option));
   await assert.rejects(repair('0'.repeat(64)));
   assert.equal((await inspect()).missingEdges, 4);
   // Freeze denies role recreation even when the name and flags are unchanged.
   await admin.query(`DROP OWNED BY ${readers[0]}; DROP ROLE ${readers[0]};
-    CREATE ROLE ${readers[0]} LOGIN NOINHERIT PASSWORD 'fixture';
+    SET ROLE reader_creator; CREATE ROLE ${readers[0]} LOGIN NOINHERIT PASSWORD 'fixture'; RESET ROLE;
     GRANT USAGE ON SCHEMA identity,platform TO ${readers[0]};
     GRANT SELECT(id) ON identity.organizations TO ${readers[0]};`);
   await assert.rejects(repair(initial.fingerprint));
@@ -121,11 +128,17 @@ try {
   await admin.query(`REVOKE EXECUTE ON FUNCTION ${source} FROM unrelated_reader`);
   await assert.rejects(repair(frozen.fingerprint));
   await admin.query(`GRANT EXECUTE ON FUNCTION ${source} TO unrelated_reader`);
+  const membershipFrozen = await inspect();
+  await admin.query(`GRANT ${readers[0]} TO unrelated_reader WITH INHERIT FALSE, SET FALSE`);
+  await assert.rejects(repair(membershipFrozen.fingerprint));
+  await admin.query(`REVOKE ${readers[0]} FROM unrelated_reader`);
   const beforeRelations = await relations();
+  const beforeCreatorEdges = await creatorEdges();
   const ready = await inspect();
   await repair(ready.fingerprint);
   assert.equal((await inspect()).missingEdges, 0);
   assert.deepEqual(await relations(), beforeRelations);
+  assert.deepEqual(await creatorEdges(), beforeCreatorEdges);
   for (const role of readers) {
     const client = new pg.Client(`postgresql://${role}:fixture@reader-rls-db:5432/postgres`);
     await client.connect();

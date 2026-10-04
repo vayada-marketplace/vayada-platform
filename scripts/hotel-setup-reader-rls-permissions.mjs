@@ -24,7 +24,8 @@ async function inspect(client, principal) {
   const memberships = (await client.query(`SELECT roleid,member,grantor,admin_option,inherit_option,set_option
     FROM pg_auth_members WHERE roleid=ANY($1::oid[]) OR member=ANY($1::oid[])
     ORDER BY roleid,member,grantor`, [readers.map(row => row.oid)])).rows;
-  require(memberships.length === 0);
+  // CREATEROLE creators can retain incoming ADMIN membership; readers inherit no parent role.
+  require(!memberships.some(row => readers.some(reader => reader.oid === row.member)));
   const functions = (await client.query(`SELECT p.oid,p.oid::regprocedure::text AS signature,
     p.proowner,p.prosecdef,p.provolatile,p.proparallel,p.prokind,p.proleakproof,p.proisstrict,
     p.pronargs,p.pronargdefaults,p.prorettype,p.proargtypes::oid[] AS argument_types,
