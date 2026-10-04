@@ -28,6 +28,10 @@ on:
       - "scripts/release-hotel-setup.py"
       - "scripts/run-hotel-setup-property-bootstrap.mjs"
       - "scripts/audit-hotel-setup-owner.mjs"
+      - "scripts/audit-hotel-setup-readiness-migrations.mjs"
+      - "scripts/test-hotel-setup-readiness-migrations.mjs"
+      - ".github/workflows/hotel-setup-migration-audit.yml"
+      - "docs/hotel-setup-readiness-migration-audit.md"
       - ".github/workflows/hotel-setup-release.yml"
       - "scripts/test_hotel_setup_network.py"
       - "scripts/test_hotel_setup_service.py"
@@ -286,6 +290,7 @@ jobs:
           python3 scripts/test-target-database-identity-secret.py
           python3 scripts/test-target-database-runtime-preflight.py
           python3 scripts/test-target-database-runtime-runner.py
+          node --experimental-vm-modules scripts/test-hotel-setup-readiness-migrations.mjs
           python3 scripts/test_hotel_setup_creation_runner.py
           node --check scripts/provision-hotel-setup-creation-login.mjs
           node --check scripts/test-hotel-setup-creation-bootstrap.mjs
