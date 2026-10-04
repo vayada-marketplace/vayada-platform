@@ -31,7 +31,7 @@ elif operation=='describe-services' and value('--services')=='vayada-hotel-setup
 elif operation=='describe-services':
  print(json.dumps({'awsvpcConfiguration':{'subnets':['fixture'],'securityGroups':['fixture'],'assignPublicIp':'ENABLED'}}) if 'networkConfiguration' in value('--query') else os.environ.get('MOCK_CURRENT_TASK','arn:aws:ecs:eu-west-1:269416271598:task-definition/public:1'))
 elif operation=='describe-task-definition':
- print(json.dumps({'family':'public','taskRoleArn':'arn:aws:iam::269416271598:role/broad-serving-role','executionRoleArn':'fixture-execution','containerDefinitions':[{'name':'vayada-next-api','image':os.environ.get('MOCK_PUBLIC_IMAGE','ordinary-serving-image'),'environment':[{'name':'HOTEL_SETUP_COMMAND_ADMISSION','value':os.environ.get('MOCK_ADMISSION','blocked')}],'secrets':[{'name':'UNSAFE','valueFrom':'fixture'}],'portMappings':[{'containerPort':8003}],**({'entryPoint':['unsafe'],'workingDirectory':'/unsafe','mountPoints':[{'sourceVolume':'code','containerPath':'/app'}],'volumesFrom':[{'sourceContainer':'unsafe'}],'environmentFiles':[{'type':'s3','value':'unsafe'}],'privileged':True} if os.environ.get('MOCK_STARTUP') else {})}]}))
+ print(json.dumps({'family':'public','taskRoleArn':'arn:aws:iam::269416271598:role/broad-serving-role','executionRoleArn':'fixture-execution','containerDefinitions':[{'name':'vayada-next-api','image':os.environ.get('MOCK_PUBLIC_IMAGE','ordinary-serving-image'),'logConfiguration':{'logDriver':'awslogs','options':{'awslogs-group':'/ecs/vayada-next-api','awslogs-region':'eu-west-1','awslogs-stream-prefix':'ecs'}},'environment':[{'name':'HOTEL_SETUP_COMMAND_ADMISSION','value':os.environ.get('MOCK_ADMISSION','blocked')}],'secrets':[{'name':'UNSAFE','valueFrom':'fixture'}],'portMappings':[{'containerPort':8003}],**({'entryPoint':['unsafe'],'workingDirectory':'/unsafe','mountPoints':[{'sourceVolume':'code','containerPath':'/app'}],'volumesFrom':[{'sourceContainer':'unsafe'}],'environmentFiles':[{'type':'s3','value':'unsafe'}],'privileged':True} if os.environ.get('MOCK_STARTUP') else {})}]}))
 elif operation=='register-task-definition':
  (root/'definition.json').write_text(value('--cli-input-json'))
  print('arn:aws:ecs:eu-west-1:269416271598:task-definition/fixture:1')
@@ -120,6 +120,15 @@ class CreationRunnerTest(unittest.TestCase):
             self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_COMMAND_READER_DATABASE_URL',
                               'valueFrom': 'arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-' + suffix}])
             env = {entry['name']: entry['value'] for entry in json.loads((self.root / 'capture/overrides.json').read_text())['containerOverrides'][0]['environment']}
+            expected_group = '/ecs/vayada-hotel-setup' + ('-property' if purpose == 'property' else '')
+            self.assertEqual(item['logConfiguration']['options']['awslogs-group'], expected_group)
+            self.assertEqual(item['logConfiguration']['logDriver'], 'awslogs')
+            self.assertEqual(item['logConfiguration']['options']['awslogs-region'], 'eu-west-1')
+            self.assertEqual(item['logConfiguration']['options']['awslogs-stream-prefix'], 'ecs')
+            calls_for_mode = [json.loads(line) for line in (self.root / 'capture/calls.jsonl').read_text().splitlines()]
+            log_call = next(call for call in reversed(calls_for_mode) if call[1] == 'get-log-events')
+            self.assertEqual(log_call[log_call.index('--log-group-name') + 1], expected_group)
+            self.assertEqual(definition['executionRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup' + ('-property' if purpose == 'property' else '') + '-execution')
             self.assertEqual(env['HOTEL_SETUP_COMMAND_MODE'], mode)
             self.assertNotIn('TARGET_DATABASE_ADMIN_URL', env)
         calls = self.root / 'capture/calls.jsonl'
