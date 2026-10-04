@@ -1,9 +1,12 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
-
-// Operational bootstrap only, in the reviewed application image. Never a service entrypoint.
 const host = "vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com";
 const prefix = "hotel-setup-command/prod/organization/";
+const rlsHelpers = new Map([
+  ["platform.channex_management_worker_source(text,text,uuid)", "8333d3b5cfe357880922d0dc0b46360d419f06194ecd449371bd115bcef73b76"],
+  ["platform.channex_management_worker_scope(text,text,uuid)", "2876336c9cdddbc60acc10f74c7cb9f9a575fb035824f55b961390215281cbb2"],
+]);
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const purpose = process.env.HOTEL_SETUP_BOOTSTRAP_PURPOSE ?? "organization";
 const readerMode = purpose === "property_reader" ? "property_commands" : "property_creation";
@@ -15,6 +18,7 @@ let admin;
 let native;
 let createdRole = false;
 let connectionFailed = false;
+let migrationLocked = false;
 try {
   const organizationId = process.env.HOTEL_SETUP_COMMAND_ORGANIZATION_ID ?? "";
   const actorUserId = process.env.HOTEL_SETUP_COMMAND_ACTOR_USER_ID ?? "";
@@ -32,17 +36,19 @@ try {
       !process.env.VAYADA_DB_RDS_CA_BUNDLE))) throw new Error();
   if (!local) url.pathname = "/vayada_target_prod";
   const appRoot = local ? process.cwd() : "/app";
-  const { HOTEL_SETUP_CREATION_PRIVILEGES } = await import(
-    `${appRoot}/apps/api/dist/hotelSetupCreationPrivileges.js`);
-  const { checkHotelSetupCreationCredential } = await import(
-    `${appRoot}/apps/api/dist/cli/hotelSetupCreationPreflight.js`);
+  const load = name => import(`${appRoot}/apps/api/dist/${name}.js`);
+  const { HOTEL_SETUP_CREATION_PRIVILEGES, HOTEL_SETUP_CREATION_RLS_HELPERS } = await load("hotelSetupCreationPrivileges");
+  const { checkHotelSetupCreationCredential } = await load("cli/hotelSetupCreationPreflight");
   const { createSecretsManagerProviderCredentialVault, createMemoryProviderCredentialVault } =
-    await import(`${appRoot}/apps/api/dist/platform/providerCredentialVault.js`);
+    await load("platform/providerCredentialVault");
   const vault = local ? createMemoryProviderCredentialVault() :
     createSecretsManagerProviderCredentialVault({ region: "eu-west-1" });
-  const { HOTEL_SETUP_CREATION_READER_READ_COLUMNS, HOTEL_SETUP_READER_READ_COLUMNS, HOTEL_SETUP_READER_AUDIT_COLUMNS } =
-    await import(`${appRoot}/apps/api/dist/hotelSetupReaderPrivileges.js`);
-  const { checkHotelSetupReader } = await import(`${appRoot}/apps/api/dist/cli/hotelSetupReaderPreflight.js`);
+  const { HOTEL_SETUP_CREATION_READER_READ_COLUMNS, HOTEL_SETUP_READER_READ_COLUMNS, HOTEL_SETUP_READER_AUDIT_COLUMNS, HOTEL_SETUP_READER_RLS_HELPERS } =
+    await load("hotelSetupReaderPrivileges");
+  const exportedHelpers = isReader ? HOTEL_SETUP_READER_RLS_HELPERS : HOTEL_SETUP_CREATION_RLS_HELPERS;
+  if (exportedHelpers !== undefined && (!Array.isArray(exportedHelpers) ||
+    !same(exportedHelpers, [...rlsHelpers.keys()]))) throw new Error();
+  const { checkHotelSetupReader } = await load("cli/hotelSetupReaderPreflight");
   const inventory = purpose === "organization" ? HOTEL_SETUP_CREATION_PRIVILEGES :
     Object.fromEntries(Object.entries(readerMode === "property_commands" ? HOTEL_SETUP_READER_READ_COLUMNS : HOTEL_SETUP_CREATION_READER_READ_COLUMNS)
       .map(([relation, SELECT]) => [relation, { SELECT }]));
@@ -85,10 +91,25 @@ try {
     options: "-c search_path=pg_catalog",
   });
   admin = connection(decodeURIComponent(url.username), decodeURIComponent(url.password));
-  // Never emit pg diagnostics or credential-bearing connection errors.
   admin.on("error", () => { connectionFailed = true; });
+  admin.on("notice", notice => { if (notice.code === "01007") connectionFailed = true; });
   await admin.connect();
+  migrationLocked = (await admin.query("SELECT pg_try_advisory_lock(8734516) AS locked")).rows[0]?.locked === true;
+  if (!migrationLocked) throw new Error();
   await admin.query("BEGIN");
+  const inspectHelpers = async () => (await admin.query(`SELECT p.oid,p.oid::regprocedure::text AS signature,
+to_jsonb(p)-'proacl' AS catalog,pg_get_functiondef(p.oid) AS definition,
+p.proowner=(SELECT relowner FROM pg_class WHERE oid='platform.hotel_setup_creation_scopes'::regclass) AND
+(pg_has_role(current_user,p.proowner,'USAGE') OR
+has_function_privilege(current_user,p.oid,'EXECUTE WITH GRANT OPTION')) AS trusted,
+COALESCE((SELECT json_agg(a ORDER BY grantor,grantee)
+FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a),'[]'::json) AS acl
+FROM pg_proc p
+WHERE p.oid=ANY($1::regprocedure[]) ORDER BY signature`,
+  [[...rlsHelpers.keys()]])).rows;
+  const helpersBefore = await inspectHelpers();
+  if (helpersBefore.length !== 2 || helpersBefore.some(row => !row.trusted ||
+    rlsHelpers.get(row.signature) !== createHash("sha256").update(row.definition).digest("hex"))) throw new Error();
   if (purpose === "organization") {
     const organization = await admin.query(`SELECT id FROM identity.organizations
       WHERE id=$1 AND kind='hotel_group' AND status='active' FOR UPDATE`, [organizationId]);
@@ -97,10 +118,20 @@ try {
       WHERE organization_id=$1`, [organizationId]);
     if (existing.rowCount) throw new Error();
   }
-  // CREATE fails if this identity exists; never adopt or rotate it.
   await admin.query(`CREATE ROLE ${role} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB
     NOCREATEROLE NOREPLICATION NOBYPASSRLS`);
   createdRole = true;
+  const roleOid = (await admin.query("SELECT oid FROM pg_roles WHERE rolname=$1", [role])).rows[0]?.oid;
+  for (const signature of rlsHelpers.keys())
+    await admin.query(`GRANT EXECUTE ON FUNCTION ${signature} TO ${role}`);
+  const helpersAfter = await inspectHelpers();
+  if (!roleOid || helpersAfter.length !== 2 || helpersBefore.some((before, index) => {
+    const after = helpersAfter[index];
+    const additions = after.acl.filter(edge => !before.acl.some(old => same(old, edge)));
+    return !same({ ...before, acl: [] }, { ...after, acl: [] }) ||
+      !before.acl.every(old => after.acl.some(edge => same(old, edge))) || additions.length !== 1 ||
+      Number(additions[0].grantee) !== roleOid || additions[0].privilege_type !== "EXECUTE" || additions[0].is_grantable;
+  })) throw new Error();
   await admin.query("SELECT pg_catalog.set_config('vay965.bootstrap_password',$1,true)", [password]);
   await admin.query(`DO $$ BEGIN EXECUTE pg_catalog.format('ALTER ROLE ${role} PASSWORD %L',
     pg_catalog.current_setting('vay965.bootstrap_password')); END $$`);
@@ -117,19 +148,21 @@ try {
   if (purpose === "organization") {
     await admin.query(`INSERT INTO platform.hotel_setup_creation_scopes
       (database_login,organization_id) VALUES ($1,$2)`, [role, organizationId]);
+  }
+  if (connectionFailed) throw new Error();
+  await admin.query("COMMIT");
+  await admin.query("SELECT pg_advisory_unlock(8734516)");
+  migrationLocked = false;
+  native = connection(role, password);
+  native.on("error", () => { connectionFailed = true; });
+  await native.connect();
+  if (purpose === "organization") {
+    await checkHotelSetupCreationCredential(native, { organizationId, actorUserId });
     await vault.put(prefix + role, { username: role, password }, AbortSignal.timeout(10_000));
     const stored = await vault.get(prefix + role, AbortSignal.timeout(10_000));
     if (stored?.username !== role || stored?.password !== password || Object.keys(stored).length !== 2)
       throw new Error();
-  }
-  if (connectionFailed) throw new Error();
-  await admin.query("COMMIT");
-  native = connection(role, password);
-  native.on("error", () => { connectionFailed = true; });
-  await native.connect();
-  if (purpose === "organization")
-    await checkHotelSetupCreationCredential(native, { organizationId, actorUserId });
-  else {
+  } else {
     await checkHotelSetupReader(native, readerMode);
     const credentialUrl = new URL(url);
     credentialUrl.username = role;
@@ -147,7 +180,6 @@ try {
   await admin?.query("ROLLBACK").catch(() => undefined);
   let cleanupRequired = false;
   if (createdRole) {
-    // Check after rollback too: a lost COMMIT response may still have committed.
     try {
       const exists = await admin.query("SELECT 1 FROM pg_catalog.pg_roles WHERE rolname=$1", [role]);
       if (exists.rowCount) {
@@ -166,5 +198,6 @@ try {
   process.exitCode = 1;
 } finally {
   await native?.end().catch(() => undefined);
+  if (migrationLocked) await admin?.query("SELECT pg_advisory_unlock(8734516)").catch(() => undefined);
   await admin?.end().catch(() => undefined);
 }

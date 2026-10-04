@@ -18,6 +18,21 @@ const organizations = [randomUUID(), randomUUID()];
 const actor = randomUUID();
 const roles = [];
 const quote = value => '"' + value.replaceAll('"', '""') + '"';
+const helpers = ["platform.channex_management_worker_source(text,text,uuid)",
+  "platform.channex_management_worker_scope(text,text,uuid)"];
+const helperSnapshot = (await admin.query(`SELECT p.oid::regprocedure::text AS signature,
+  pg_get_functiondef(p.oid) AS definition,pg_get_userbyid(p.proowner) AS owner,
+  EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
+    WHERE grantee=0 AND privilege_type='EXECUTE') AS public_execute
+  FROM pg_proc p WHERE p.oid=ANY($1::regprocedure[]) ORDER BY signature`, [helpers])).rows;
+assert.equal(helperSnapshot.length, 2);
+const assertHelperGrants = async role => {
+  const result = await admin.query(`SELECT p.oid::regprocedure::text AS signature,a.privilege_type,a.is_grantable
+    FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) a
+    WHERE p.oid=ANY($1::regprocedure[]) AND a.grantee=(SELECT oid FROM pg_roles WHERE rolname=$2)
+    ORDER BY signature`, [helpers, role]);
+  assert.deepEqual(result.rows, [...helpers].sort().map(signature => ({signature,privilege_type:"EXECUTE",is_grantable:false})));
+};
 const acls = (await admin.query(`SELECT d.datname AS name,
   COALESCE(array_agg(a.privilege_type) FILTER (WHERE a.grantee=0),ARRAY[]::text[]) AS privileges
   FROM pg_catalog.pg_database d LEFT JOIN LATERAL pg_catalog.aclexplode(
@@ -26,6 +41,7 @@ const acls = (await admin.query(`SELECT d.datname AS name,
 try {
   await copyFile(new URL("./provision-hotel-setup-creation-login.mjs", import.meta.url), script);
   for (const acl of acls) await admin.query(`REVOKE ALL ON DATABASE ${quote(acl.name)} FROM PUBLIC`);
+  for (const helper of helpers) await admin.query(`REVOKE ALL ON FUNCTION ${helper} FROM PUBLIC`);
   await admin.query("INSERT INTO identity.users(id,email,name) VALUES($1,$1::uuid::text || '@example.test','Bootstrap test')", [actor]);
   for (const id of organizations) {
     await admin.query("INSERT INTO identity.organizations(id,kind,name,slug) VALUES($1,'hotel_group','Bootstrap test',$1::uuid::text)", [id]);
@@ -37,7 +53,7 @@ try {
     (SELECT count(*)::text FROM platform.product_audit_events) AS audits`)).rows;
   const before = await snapshot();
   url.search = "?sslmode=verify-full";
-  const run = (organizationId, actorUserId = actor, lostCommit = false, purpose = "organization", vaultFault = "") => {
+  const run = (organizationId, actorUserId = actor, lostCommit = false, purpose = "organization", vaultFault = "", helperFault = false) => {
     const preload = `import {createRequire} from "node:module";
       const pg=createRequire(${JSON.stringify(appRoot + "/package.json")})("pg");
       const Client=pg.Client; let lost=false;
@@ -64,6 +80,9 @@ try {
     const args = [];
     if (lostCommit) args.push("--import", "data:text/javascript," + encodeURIComponent(preload));
     if (vaultFault) args.push("--import", "data:text/javascript," + encodeURIComponent(vaultPreload));
+    if (helperFault) args.push("--import", "data:text/javascript," + encodeURIComponent(`
+      const {HOTEL_SETUP_READER_RLS_HELPERS}=await import(${JSON.stringify(pathToFileURL(appRoot + "/apps/api/dist/hotelSetupReaderPrivileges.js").href)});
+      HOTEL_SETUP_READER_RLS_HELPERS.push("pg_catalog.random()");`));
     args.push(script);
     const result = spawnSync(process.execPath, args, {
       cwd: appRoot, encoding: "utf8", timeout: 30_000,
@@ -81,9 +100,10 @@ try {
     return { result, receipt };
   };
   const created = run(organizations[0]);
-  assert.equal(created.result.status, 0);
+  assert.equal(created.result.status, 0, JSON.stringify(created.receipt));
   assert.equal(created.receipt.status, "PASS");
   assert.equal(created.receipt.organizationId, organizations[0]);
+  await assertHelperGrants(created.receipt.role);
   assert.equal((await admin.query("SELECT organization_id FROM platform.hotel_setup_creation_scopes WHERE database_login=$1", [created.receipt.role])).rows[0].organization_id, organizations[0]);
   // Existing assignments are rejected rather than adopted or silently rotated.
   const repeat = run(organizations[0]);
@@ -100,12 +120,48 @@ try {
   assert.equal(uncertain.receipt.code, "hotel_setup_creation_provision_failed");
   assert.equal((await admin.query("SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname=$1", [uncertain.receipt.role])).rows[0].rolcanlogin, false);
   assert.equal((await admin.query("SELECT 1 FROM platform.hotel_setup_creation_scopes WHERE database_login=$1", [uncertain.receipt.role])).rowCount, 0);
+  const abi = await import(pathToFileURL(`${appRoot}/apps/api/dist/hotelSetupReaderPrivileges.js`).href);
+  if (abi.HOTEL_SETUP_READER_RLS_HELPERS !== undefined) {
+    const incompatible = run(organizations[0], actor, false, "creation_reader", "", true);
+    assert.equal(incompatible.result.status, 1);
+    assert.equal(incompatible.receipt.role, undefined);
+  }
+  // A migrator or unexpected helper definition denies bootstrap before any new login exists.
+  await admin.query("SELECT pg_advisory_lock(8734516)");
+  try {
+    const locked = run(organizations[0], actor, false, "creation_reader");
+    assert.equal(locked.result.status, 1);
+    assert.equal(locked.receipt.role, undefined);
+  } finally { await admin.query("SELECT pg_advisory_unlock(8734516)"); }
+  const source = helperSnapshot.find(row => row.signature.includes("_source("));
+  const wrongOwner = "vayada_next_hotel_setup_org_" + randomUUID().replaceAll("-", "");
+  await admin.query(`CREATE ROLE ${quote(wrongOwner)} NOLOGIN`);
+  roles.push(wrongOwner);
+  for (const mutation of [
+    `ALTER FUNCTION ${source.signature} SECURITY DEFINER`,
+    `ALTER FUNCTION ${source.signature} SET search_path=public`,
+    `ALTER FUNCTION ${source.signature} SUPPORT pg_catalog.text_starts_with_support`,
+    `ALTER FUNCTION ${source.signature} OWNER TO ${quote(wrongOwner)}`,
+    source.definition.replace("THEN RETURN true;", "THEN RETURN false;"),
+  ]) {
+    try {
+      await admin.query(mutation);
+      const unsafe = run(organizations[0], actor, false, "creation_reader");
+      assert.equal(unsafe.result.status, 1);
+      assert.equal(unsafe.receipt.role, undefined);
+      assert.equal((await admin.query("SELECT 1 FROM pg_roles WHERE rolname='vayada_next_hotel_setup_creation_reader'")).rowCount, 0);
+    } finally {
+      await admin.query(`ALTER FUNCTION ${source.signature} OWNER TO ${quote(source.owner)}`);
+      await admin.query(source.definition);
+    }
+  }
   for (const [purpose, readerRole] of [["creation_reader", "vayada_next_hotel_setup_creation_reader"],
     ["property_reader", "vayada_next_hotel_setup_reader"]]) {
   const reader = run(organizations[0], actor, false, purpose, "prefix");
   assert.equal(reader.result.status, 0);
   assert.equal(reader.receipt.role, readerRole);
   assert.equal(reader.receipt.purpose, purpose);
+  await assertHelperGrants(reader.receipt.role);
   assert.equal((await admin.query("SELECT count(*)::integer AS count FROM pg_catalog.pg_auth_members WHERE member=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=$1)", [reader.receipt.role])).rows[0].count, 0);
   const existingReader = run(organizations[0], actor, false, purpose);
   assert.equal(existingReader.result.status, 1);
@@ -141,5 +197,9 @@ try {
   await admin.query("DELETE FROM identity.users WHERE id=$1", [actor]);
   for (const acl of acls) if (acl.privileges.length)
     await admin.query(`GRANT ${acl.privileges.join(",")} ON DATABASE ${quote(acl.name)} TO PUBLIC`);
+  for (const helper of helperSnapshot) {
+    await admin.query(helper.definition);
+    if (helper.public_execute) await admin.query(`GRANT EXECUTE ON FUNCTION ${helper.signature} TO PUBLIC`);
+  }
   await admin.end();
 }
