@@ -58,6 +58,36 @@ class CreationRunnerTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('Unexpected production owner URL shape', result.stderr)
 
+    def test_manual_child_preserves_owner_secret_and_uses_fixed_ca(self):
+        script = r"""
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+const env={VAYADA_DB_RDS_CA_BUNDLE:'synthetic-ca',
+  HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL:'postgresql://vayada_admin:synthetic@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require',
+  HOTEL_SETUP_HELPER_OWNER_DATABASE_URL:'postgresql://vayada_target_prod_user:synthetic@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/vayada_target_prod?sslmode=require'};
+let writes=0,spawns=0,exit;
+const context=vm.createContext({URL,process:{env,execPath:'node',exit:value=>{exit=value;}}});
+const fs=new vm.SyntheticModule(['writeFileSync'],function(){this.setExport('writeFileSync',(path,ca,options)=>{
+  assert.equal(path,'/tmp/hotel-setup-rds.pem');assert.equal(ca,'synthetic-ca');assert.equal(options.mode,0o600);writes++;
+});},{context});
+const child=new vm.SyntheticModule(['spawnSync'],function(){this.setExport('spawnSync',(exe,args,options)=>{
+  assert.equal(exe,'node');assert.equal(args[0],'/app/apps/api/dist/cli/hotelSetupPropertyBootstrap.js');
+  assert.equal(options.env.NODE_EXTRA_CA_CERTS,'/tmp/hotel-setup-rds.pem');
+  assert.equal(new URL(options.env.HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL).search,'?sslmode=verify-full');
+  assert.equal(new URL(options.env.HOTEL_SETUP_HELPER_OWNER_DATABASE_URL).pathname,'/vayada_target_prod');
+  assert.equal(new URL(options.env.HOTEL_SETUP_HELPER_OWNER_DATABASE_URL).search,'?sslmode=require');
+  spawns++;return {status:0};
+});},{context});
+const source=new vm.SourceTextModule(readFileSync(process.argv[1],'utf8'),{context,
+  importModuleDynamically:async name=>{assert.equal(name,'node:child_process');await child.link(()=>{});await child.evaluate();return child;}});
+await source.link(name=>{assert.equal(name,'node:fs');return fs;});await source.evaluate();
+assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
+"""
+        result=subprocess.run(['node','--experimental-vm-modules','--input-type=module','-e',script,
+            str(ROOT/'scripts/run-hotel-setup-property-bootstrap.mjs')],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -391,13 +421,15 @@ class CreationRunnerTest(unittest.TestCase):
         self.assertEqual(definition['taskRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap')
         self.assertEqual(definition['executionRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution')
         item, = definition['containerDefinitions']
-        self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
+        self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'},
+            {'name': 'HOTEL_SETUP_HELPER_OWNER_DATABASE_URL', 'valueFrom': '/vayada/prod/target-database-url'}])
         raw = (self.root / 'capture/overrides.json').read_text()
         self.assertLessEqual(len(raw.encode()), 8192)
         env = {entry['name']: entry['value'] for entry in json.loads(raw)['containerOverrides'][0]['environment']}
         self.assertEqual(env['HOTEL_SETUP_COMMAND_PROPERTY_ID'], ORG)
         self.assertEqual(env['HOTEL_SETUP_COMMAND_OPERATION'], 'launch_settings')
         self.assertNotIn('HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL', env)
+        self.assertNotIn('HOTEL_SETUP_HELPER_OWNER_DATABASE_URL', env)
         operations = [json.loads(line)[1] for line in (self.root / 'capture/calls.jsonl').read_text().splitlines()]
         self.assertNotIn('update-service', operations)
         self.assertEqual(operations[-2:], ['stop-task', 'deregister-task-definition'])
