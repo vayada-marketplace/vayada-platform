@@ -245,6 +245,11 @@ case "${mode}" in
     secret_parameter="/vayada/prod/db-marketplace-url"
     task_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@sha256:c2fbba1a4d3f8f7bc4c46d0816f125d3598cd1c1a4880dd3b103feb0d3aa67d2"
     creation_execution_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution"
+    if [[ "$mode" == --inspect-hotel-setup-reader-rls || "$mode" == --repair-hotel-setup-reader-rls ]]; then
+      secret_name="TARGET_DATABASE_MIGRATION_URL"
+      secret_parameter="/vayada/prod/target-database-url"
+      creation_execution_role="arn:aws:iam::269416271598:role/vayada-next-api-setup-caller-execution"
+    fi
     if [[ "$mode" == --inspect-hotel-setup-legacy-helpers || "$mode" == --verify-hotel-setup-legacy-helpers ]]; then
       [[ "${EXPECTED_TASK:-}" == arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186 ]] || exit 2
       reader_rls_mode=""; legacy_helper_mode=inspect

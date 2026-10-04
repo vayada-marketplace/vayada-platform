@@ -150,17 +150,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const diagnostic = process.env.HOTEL_SETUP_READER_RLS_MODE === 'inspect' ? readerInspectionDiagnostic() : undefined;
   try {
     let url;
-    try { url = new URL(process.env.TARGET_DATABASE_ADMIN_URL ?? ''); } catch {}
+    try { url = new URL(process.env.TARGET_DATABASE_MIGRATION_URL ?? ''); } catch {}
     check({ urlParsed: !!url, githubActions: process.env.GITHUB_ACTIONS === 'true',
       main: process.env.GITHUB_REF === 'refs/heads/main', protocol: url?.protocol === 'postgresql:',
       host: url?.hostname === 'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com',
-      port: url?.port === '5432', username: url?.username === 'vayada_admin', database: url?.pathname === '/postgres',
+      port: url?.port === '5432', username: url?.username === 'vayada_target_prod_user', database: url?.pathname === '/vayada_target_prod',
       passwordPresent: !!url?.password, noFragment: !!url && !url.hash,
       sslQuery: url?.search === '?sslmode=require', caPresent: !!process.env.VAYADA_DB_RDS_CA_BUNDLE }, diagnostic);
     step(diagnostic, 'connect');
     const { default: pg } = await import('pg');
     client = new pg.Client({ host: url.hostname, port: 5432, database: 'vayada_target_prod',
-      user: 'vayada_admin', password: decodeURIComponent(url.password),
+      user: 'vayada_target_prod_user', password: decodeURIComponent(url.password),
       ssl: { ca: process.env.VAYADA_DB_RDS_CA_BUNDLE, rejectUnauthorized: true, servername: url.hostname },
       connectionTimeoutMillis: 10000, query_timeout: 15000, statement_timeout: 15000,
       options: '-c search_path=pg_catalog' });
@@ -168,7 +168,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     client.on('notice', notice => { if (notice.code === '01007') invalid = true; });
     await client.connect();
     const receipt = await runReaderRlsPermissionCheck(client,
-      process.env.HOTEL_SETUP_READER_RLS_MODE, process.env.HOTEL_SETUP_READER_RLS_FROZEN, 'vayada_admin', diagnostic);
+      process.env.HOTEL_SETUP_READER_RLS_MODE, process.env.HOTEL_SETUP_READER_RLS_FROZEN, 'vayada_target_prod_user', diagnostic);
     step(diagnostic, 'completion');
     check({ connectionValid: !invalid }, diagnostic);
     console.log(JSON.stringify(receipt));
