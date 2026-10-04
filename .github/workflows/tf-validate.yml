@@ -15,6 +15,8 @@ on:
       - "scripts/test_hotel_setup_release.py"
       - "scripts/test_hotel_setup_online_readiness.py"
       - "scripts/assert-hotel-setup-online-readiness.py"
+      - "scripts/run-hotel-setup-online.py"
+      - "scripts/test_hotel_setup_online_runner.py"
       - "deployment/hotel-setup-online-images.json"
       - "scripts/release-hotel-setup.py"
       - "scripts/run-hotel-setup-property-bootstrap.mjs"
@@ -320,7 +322,7 @@ jobs:
         working-directory: infra
 
       - name: Verify hotel setup credential isolation (offline)
-        run: python3 -m unittest scripts/test_hotel_setup_credentials.py scripts/test_hotel_setup_public_caller.py scripts/test_hotel_setup_release.py scripts/test_hotel_setup_online_readiness.py scripts/test_hotel_setup_caller_retained.py -v
+        run: python3 -m unittest scripts/test_hotel_setup_credentials.py scripts/test_hotel_setup_public_caller.py scripts/test_hotel_setup_release.py scripts/test_hotel_setup_online_readiness.py scripts/test_hotel_setup_online_runner.py scripts/test_hotel_setup_caller_retained.py -v
 
       - name: Prove pricing infrastructure opt-in with native offline plans
         run: python3 -m unittest scripts/test_pricing_infrastructure_opt_in.py -v
