@@ -12,7 +12,7 @@ const source = 'platform.channex_management_worker_source(text,text,uuid)';
 const functions = [scope, source];
 // Exercise the exact production eval transport, relocating only its owned module path.
 const bootstrap = readFileSync('/source/run-target-database-runtime-preflight.sh', 'utf8')
-  .match(/^  bootstrap="(const fs=.*)"$/m)[1]
+  .match(/^  bootstrap="(const fs=.*HOTEL_SETUP_READER_RLS_MODE.*)"$/m)[1]
   .replace("p='/app/.vayada-db-runtime-preflight.mjs'", "p='/work/injected-preflight.mjs'");
 const code = gzipSync(readFileSync('/source/hotel-setup-reader-rls-permissions.mjs')).toString('base64');
 // Only the fixture socket/TLS changes; the CLI validates its real production URL and principal.
