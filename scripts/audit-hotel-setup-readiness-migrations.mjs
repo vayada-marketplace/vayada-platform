@@ -77,15 +77,16 @@ try {
     if (witness.name !== expected.name) failLedger('name_mismatch',witness);
     if (witness.checksum_sha256 !== expected.checksum) failLedger('checksum_mismatch',witness);
     // The canonical runner records checksum rejection before executing any DDL.
+    // Rejected files may have a historical name; the applied witness stays canonical.
     // Every attempt after the applied witness must be that exact rejection;
     // a newer rejection cannot conceal an intervening unresolved DDL failure.
     for (const attempt of history.slice(0,witnessIndex)) {
-      const filename = `${migrationVersion}_${expected.name}.sql`;
+      const filename = `${migrationVersion}_${attempt.name}.sql`;
       const failure = `Checksum mismatch for ${filename}: ledger has ${expected.checksum}, file is ${attempt.checksum_sha256}`;
       const diagnostic = {
         failedStatus: attempt.status === 'failed',
         productionEnvironment: attempt.environment === 'production',
-        canonicalName: attempt.name === expected.name,
+        validAttemptName: typeof attempt.name === 'string' && /^[a-z][a-z0-9_]{0,199}$/.test(attempt.name),
         validAttemptChecksum: /^[a-f0-9]{64}$/.test(attempt.checksum_sha256 ?? ''),
         differsFromApplied: attempt.checksum_sha256 !== expected.checksum,
         exactChecksumRejection: attempt.failure_reason === failure,

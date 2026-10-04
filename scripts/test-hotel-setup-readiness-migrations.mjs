@@ -124,6 +124,19 @@ assert.deepEqual(origin.output[0].historyOrigin,{gitSha:'a'.repeat(40),runnerVer
 const badOrigin=await audit(f=>rejected(f,a=>{a.duration_ms=12;a.git_sha='synthetic secret';a.runner_version='synthetic secret';}));
 assert.deepEqual(badOrigin.output[0].historyOrigin,{gitSha:null,runnerVersion:null});
 assert(!JSON.stringify(badOrigin.output).includes('synthetic secret'));
+function historicalName(attempt,witness,name='prepared_hotel_imports') {
+  attempt.name=name;
+  attempt.failure_reason=`Checksum mismatch for ${witness.version}_${attempt.name}.sql: ledger has ${witness.checksum_sha256}, file is ${attempt.checksum_sha256}`;
+}
+const renamed=await audit(f=>rejected(f,historicalName));
+assert.equal(renamed.exitCode,0);assert.equal(renamed.output[0].rejectedChecksums,1);
+for(const name of ['../secret','bad.sql','0174_other','UPPER','with space','a'.repeat(201),null]) {
+  const bad=await audit(f=>rejected(f,(a,w)=>historicalName(a,w,name)));
+  assert.equal(bad.exitCode,1);assert.equal(bad.output[0].historyDiagnostic.validAttemptName,false);
+  assert(!JSON.stringify(bad.output).includes('../secret'));
+}
+const renamedWrongWitness=await audit(f=>rejected(f,(a,w)=>{historicalName(a,w);w.name='different_applied_name';}));
+assert.equal(renamedWrongWitness.exitCode,1);assert.equal(renamedWrongWitness.output[0].reason,'name_mismatch');
 const rejection = await audit(f=>rejected(f));
 assert.equal(rejection.exitCode,0);
 assert.equal(rejection.output[0].rejectedChecksums,1);
@@ -136,7 +149,7 @@ for (const change of [
 ]) assert.equal((await audit(f=>rejected(f,change))).exitCode,1);
 for (const status of ['failed','rolled_forward']) {
   const result=await audit(f=>{
-    rejected(f);
+    rejected(f,historicalName);
     const witness=f.rows[1]; witness.history_order=3;
     f.rows.splice(1,0,{...f.rows[0],history_order:2,status,failure_reason:'unresolved execution failure'});
   });
