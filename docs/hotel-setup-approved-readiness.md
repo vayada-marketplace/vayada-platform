@@ -28,7 +28,7 @@ hotel facts are accepted.
 
 Both tasks use the existing isolated database-preflight cluster/family, the
 organization-bootstrap task role and property-bootstrap execution identity. Only
-ECS injects the owner SSM URL. The fixed launcher writes the pinned CA into an empty
+ECS injects the administrator SSM URL `/vayada/prod/db-marketplace-url`. The fixed launcher writes the pinned CA into an empty
 runtime volume, unsets its source variable and executes the fixed `/app` CLI on a
 read-only root. Native rollback proof uses the reviewed `/proof/rollback` artifact
 inside the approved image.
@@ -37,3 +37,11 @@ Each pass has a three-minute deadline plus bounded log/cleanup reads. Lost RunTa
 replies never retry; cleanup stops only the exact attempt/definition/tag task.
 Failure logs retain sanitized task identifiers for inspection before another run.
 Definitions remain retained without account-wide deregistration permissions.
+
+`diagnose` runs only the same immutable inspection, using the same stopped-service
+and blocked-caller gates. Its protected launcher records a query ordinal, bounded
+row count and SQLSTATE; it never prints queries, errors, credentials or results.
+ROLLBACK cleanup cannot replace the failed check. `status: PASS` means the
+diagnostic completed: consult `inspectionStatus` for the actual inspection result.
+A diagnostic receipt cannot freeze identities or authorize an apply. No database
+permissions or IAM permissions are added by this mode.

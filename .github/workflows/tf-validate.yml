@@ -26,6 +26,8 @@ on:
       - "scripts/run-hotel-setup-online.py"
       - "scripts/run-hotel-setup-approved-readiness.py"
       - "scripts/test_hotel_setup_approved_readiness.py"
+      - "scripts/diagnose-hotel-setup-approved-readiness.mjs"
+      - "scripts/test-hotel-setup-approved-readiness-diagnostic.mjs"
       - ".github/workflows/hotel-setup-approved-readiness.yml"
       - "docs/hotel-setup-approved-readiness.md"
       - "scripts/test_hotel_setup_online_runner.py"
@@ -361,6 +363,9 @@ jobs:
 
       - name: Prove pricing infrastructure opt-in with native offline plans
         run: python3 -m unittest scripts/test_pricing_infrastructure_opt_in.py -v
+
+      - name: Verify approved readiness diagnostic redaction
+        run: node scripts/test-hotel-setup-approved-readiness-diagnostic.mjs
 
       - name: Verify private hotel setup network (offline)
         run: python3 -m unittest scripts/test_hotel_setup_network.py -v
