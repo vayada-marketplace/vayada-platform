@@ -101,7 +101,7 @@ for(const change of [
   assert.equal(receipt.status,'FAIL');
   assert.equal(receipt.code,'hotel_setup_readiness_migration_audit_unavailable');
   assert(['manifest','connection','lock','identity','ledger','objects','rollback'].includes(receipt.stage));
-  assert(Object.keys(receipt).every(key=>['status','code','stage','reason','version','sqlState','historyDiagnostic'].includes(key)));
+  assert(Object.keys(receipt).every(key=>['status','code','stage','reason','version','sqlState','historyDiagnostic','historyOrigin'].includes(key)));
   if(receipt.version) assert.match(receipt.version,/^\d{4}$/);
   assert(!JSON.stringify(receipt).includes('synthetic secret'));
   assert.equal(result.ends,result.connects);
@@ -119,6 +119,11 @@ assert.equal(diagnosed.output[0].historyDiagnostic.exactChecksumRejection,false)
 assert.equal(diagnosed.output[0].historyDiagnostic.zeroDuration,false);
 assert(Object.values(diagnosed.output[0].historyDiagnostic).every(value=>typeof value==='boolean'));
 assert(!JSON.stringify(diagnosed.output).includes('synthetic secret'));
+const origin=await audit(f=>rejected(f,a=>{a.duration_ms=12;a.git_sha='a'.repeat(40);a.runner_version='0.1.0';}));
+assert.deepEqual(origin.output[0].historyOrigin,{gitSha:'a'.repeat(40),runnerVersion:'0.1.0'});
+const badOrigin=await audit(f=>rejected(f,a=>{a.duration_ms=12;a.git_sha='synthetic secret';a.runner_version='synthetic secret';}));
+assert.deepEqual(badOrigin.output[0].historyOrigin,{gitSha:null,runnerVersion:null});
+assert(!JSON.stringify(badOrigin.output).includes('synthetic secret'));
 const rejection = await audit(f=>rejected(f));
 assert.equal(rejection.exitCode,0);
 assert.equal(rejection.output[0].rejectedChecksums,1);

@@ -9,7 +9,7 @@ const pending = new Map([
   ['0464_hotel_setup_reconciliation_cursor.sql', 'a29545e48f2ba83d934e39db9c27ac5d9a0f2ee79422b19d36c60b1fea9d3fcb'],
 ]);
 let client;
-let stage='configuration',reason,version,historyDiagnostic;
+let stage='configuration',reason,version,historyDiagnostic,historyOrigin;
 const failLedger = (value,row) => { reason=value; if (/^\d{4}$/.test(row?.version ?? '')) version=row.version; throw new Error(); };
 try {
   const url = new URL(process.env.HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL);
@@ -52,7 +52,7 @@ try {
       identity[0].read_only !== 'on') throw new Error();
   stage='ledger';
   const rows = (await client.query(`SELECT version, name, status, environment, checksum_sha256,
-      failure_reason, duration_ms, statement_count, requires_rebuild,
+      failure_reason, duration_ms, statement_count, requires_rebuild, git_sha, runner_version,
       row_number() OVER (PARTITION BY version ORDER BY applied_at DESC, id DESC) AS history_order
     FROM platform.schema_migrations ORDER BY version, applied_at DESC, id DESC LIMIT 10001`)).rows;
   if (rows.length > 10000) failLedger('history_limit');
@@ -94,7 +94,12 @@ try {
         noRebuildRequired: attempt.requires_rebuild === false,
       };
       if (Object.values(diagnostic).some(value => value !== true)) {
-        historyDiagnostic = diagnostic; failLedger('unresolved_history',attempt);
+        historyDiagnostic = diagnostic;
+        historyOrigin = {
+          gitSha: /^[a-f0-9]{40}$/.test(attempt.git_sha ?? '') ? attempt.git_sha : null,
+          runnerVersion: /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$/.test(attempt.runner_version ?? '') ? attempt.runner_version : null,
+        };
+        failLedger('unresolved_history',attempt);
       }
       rejectedChecksums++;
     }
@@ -121,7 +126,7 @@ try {
     appliedCount: applied.size, rejectedChecksums, manifestSha256, pending: ['0463', '0464'] }));
 } catch (error) {
   console.error(JSON.stringify({ status: 'FAIL', code: 'hotel_setup_readiness_migration_audit_unavailable',stage,
-    ...(reason ? {reason} : {}),...(historyDiagnostic ? {historyDiagnostic} : {}),...(version ? {version} : {}),
+    ...(reason ? {reason} : {}),...(historyDiagnostic ? {historyDiagnostic,historyOrigin} : {}),...(version ? {version} : {}),
     ...(/^[0-9A-Z]{5}$/.test(error?.code ?? '') ? {sqlState:error.code} : {}) }));
   process.exitCode = 1;
 } finally {
