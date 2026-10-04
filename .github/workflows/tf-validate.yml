@@ -73,6 +73,8 @@ on:
       - "scripts/hotel-setup-reader-rls-native-preflight.mjs"
       - ".github/workflows/hotel-setup-reader-rls-repair.yml"
       - "scripts/*hotel-setup-legacy-helper-inspection*"
+      - "scripts/hotel-setup-approved-legacy-helper-repair.mjs"
+      - ".github/workflows/hotel-setup-approved-legacy-helper-repair.yml"
       - ".github/workflows/hotel-setup-legacy-helper-inspection.yml"
       - "scripts/vay2017-source-snapshot-import.mjs"
       - "scripts/vay2017-source-snapshot-extract.mjs"
@@ -286,6 +288,7 @@ jobs:
           python3 scripts/test-target-database-credential-split.py
           python3 scripts/test-target-database-split-deployment-ready.py
           bash -n scripts/run-target-database-runtime-preflight.sh
+          node --check scripts/hotel-setup-approved-legacy-helper-repair.mjs
           node --check scripts/vay2017-source-snapshot-import.mjs
           node --check scripts/vay2017-source-snapshot-extract.mjs
           node --check scripts/target-database-runtime-preflight.mjs
