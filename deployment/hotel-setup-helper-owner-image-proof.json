@@ -35,6 +35,9 @@
     "customerData": false,
     "cloudWrites": false,
     "productionCutover": "NOT_PERFORMED",
-    "ownerSaveReload": "PENDING"
+    "ownerSaveReload": "PENDING",
+    "publicCallerSourceUnchangedFrom": "c2acd36190563e6c589c7d9202059a4b3f2c55be",
+    "primarySourceChanges": "bootstrap_helper_owner_and_activation_only",
+    "actualImagePublicCallerServerStartupAndMigrationFiles": "BYTE_IDENTICAL_TO_PREVIOUS_PRIMARY"
   }
 }
