@@ -34,6 +34,7 @@ reader_rls_mode=""
 reader_rls_frozen=""
 legacy_helper_mode=""
 legacy_helper_frozen=""
+legacy_helper_scope="hotel_setup_legacy_helper_inspection"
 financials_readiness_property=""
 financials_readiness_image_digest=""
 folio_required="false"
@@ -230,11 +231,11 @@ case "${mode}" in
       fi
     fi
     ;;
-  --inspect-hotel-setup-reader-rls|--repair-hotel-setup-reader-rls|--verify-hotel-setup-creation-reader-rls|--verify-hotel-setup-property-reader-rls|--inspect-hotel-setup-legacy-helpers|--verify-hotel-setup-legacy-helpers)
+  --inspect-hotel-setup-reader-rls|--repair-hotel-setup-reader-rls|--verify-hotel-setup-creation-reader-rls|--verify-hotel-setup-property-reader-rls|--inspect-hotel-setup-legacy-helpers|--verify-hotel-setup-legacy-helpers|--inspect-approved-hotel-setup-legacy-helpers|--repair-approved-hotel-setup-legacy-helpers)
     [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main &&
        "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_REPOSITORY:-}" == vayada-marketplace/vayada-platform ]] || exit 2
     reader_rls_mode=inspect
-    if [[ "$mode" == --repair-hotel-setup-reader-rls ]]; then
+    if [[ "$mode" == --repair-hotel-setup-reader-rls || "$mode" == --repair-approved-hotel-setup-legacy-helpers ]]; then
       [[ "$#" -eq 2 && "$2" =~ ^[a-f0-9]{64}$ ]] || exit 2
       reader_rls_mode=apply; reader_rls_frozen="$2"
     else [[ "$#" -eq 1 || "$mode" == --verify-hotel-setup-legacy-helpers ]] || exit 2; fi
@@ -259,6 +260,15 @@ case "${mode}" in
       fi
       code_file="hotel-setup-legacy-helper-inspection.mjs"
       creation_task_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-creation-bootstrap"
+    fi
+    if [[ "$mode" == --inspect-approved-hotel-setup-legacy-helpers || "$mode" == --repair-approved-hotel-setup-legacy-helpers ]]; then
+      [[ "${EXPECTED_TASK:-}" == arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186 ]] || exit 2
+      legacy_helper_mode="$reader_rls_mode"; legacy_helper_frozen="$reader_rls_frozen"; reader_rls_mode=""; reader_rls_frozen=""
+      legacy_helper_scope="hotel_setup_approved_legacy_helper_repair"
+      code_file="hotel-setup-approved-legacy-helper-repair.mjs"
+      secret_name="TARGET_DATABASE_MIGRATION_URL"; secret_parameter="/vayada/prod/target-database-url"
+      creation_task_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-creation-bootstrap"
+      creation_execution_role="arn:aws:iam::269416271598:role/vayada-next-api-setup-caller-execution"
     fi
     if [[ "$mode" == --verify-hotel-setup-creation-reader-rls || "$mode" == --verify-hotel-setup-property-reader-rls ]]; then
       code_file="hotel-setup-reader-rls-native-preflight.mjs"
@@ -481,6 +491,13 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $vay2017_signature == "" then [] else [{name:"VAY2017_PREFLIGHT_SIGNATURE",value:$vay2017_signature}] end) +
       (if $vay2017_public_key == "" then [] else [{name:"VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64",value:$vay2017_public_key}] end) +
       (if $vay2017_principal == "" then [] else [{name:"CHANNEX_ADOPTION_EXECUTION_PRINCIPAL",value:$vay2017_principal}] end))}]}')"
+definition_environment='[]'
+if [[ "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair ]]; then
+  # Nonsecret reviewed code and public CA live only in the disposable definition.
+  # Keep runtime arguments under ECS's override limit; credentials stay secret-injected.
+  definition_environment="$(jq -c '[.containerOverrides[0].environment[] | select(.name=="VAYADA_DB_RUNTIME_PREFLIGHT_CODE" or .name=="VAYADA_DB_RDS_CA_BUNDLE_GZIP")]' <<<"$overrides")"
+  overrides="$(jq -c '.containerOverrides[0].environment |= map(select(.name!="VAYADA_DB_RUNTIME_PREFLIGHT_CODE" and .name!="VAYADA_DB_RDS_CA_BUNDLE_GZIP"))' <<<"$overrides")"
+fi
 [[ "${#overrides}" -le 8192 ]] || { echo "ECS command override exceeds the 8192-byte limit." >&2; exit 1; }
 
 if [[ "${mode}" == "--audit-financials-readiness" ]]; then
@@ -574,7 +591,7 @@ PYCODE
     echo "Property reader bootstrap requires the staged property service at zero tasks." >&2; exit 1;
   }
 fi
-temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" \
+temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" --argjson definition_environment "$definition_environment" \
   --arg secret_name "${secret_name}" --arg secret_parameter "${secret_parameter}" \
   --arg extra_secret_name "${extra_secret_name}" --arg extra_secret_parameter "${extra_secret_parameter}" --arg channex_image "${channex_image}" --arg task_image "${task_image}" --arg creation_task_role "${creation_task_role}" --arg creation_execution_role "${creation_execution_role}" '
   del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
@@ -586,7 +603,7 @@ temporary_definition="$(jq -c --arg family "${family}" --arg container "${contai
       | .secrets=[{name:$secret_name,valueFrom:$secret_parameter}]
       | if $extra_secret_name == "" then . else .secrets += [{name:$extra_secret_name,valueFrom:$extra_secret_parameter}] end
       | if $task_image != "" then .image=$task_image elif $channex_image != "" then .image=$channex_image else . end
-      | .environment=[]
+      | .environment=$definition_environment
       | .portMappings=[]]
 ' <<<"${source_definition}")"
 if [[ -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-hotel-setup-readiness-migrations" ]]; then
@@ -653,11 +670,12 @@ for _ in {1..10}; do
   jq -e --arg expected "${vay2017_expected_status}" --arg reader "$reader_rls_mode" --arg exit "$(jq -r '.exitCode' <<<"${task}")" \
     'if type != "array" then false elif $reader == "inspect" and $exit == "1" then length > 0
       else any(.[]; fromjson? | select(type == "object") | .status == "PASS" or .status == "BLOCKED" or
+        (.scope=="hotel_setup_approved_legacy_helper_repair" and (.status=="UNCERTAIN" or .status=="COMMITTED_UNVERIFIED")) or
         ($expected != "" and .status == $expected)) end' <<<"${messages}" >/dev/null 2>&1 && break
   sleep 2
 done
 
-if [[ -n "$legacy_helper_mode" && "$(jq -r '.exitCode' <<<"${task}")" == "2" ]]; then
+if [[ "$legacy_helper_scope" == hotel_setup_legacy_helper_inspection && -n "$legacy_helper_mode" && "$(jq -r '.exitCode' <<<"${task}")" == "2" ]]; then
   blocked="$(jq -c --arg mode "$legacy_helper_mode" '.[] | fromjson? | select(.status == "BLOCKED" and .scope == "hotel_setup_legacy_helper_inspection" and .mode == $mode)' <<<"${messages}")"
   [[ -n "$blocked" ]] || exit 1
   printf '%s\n' "$blocked"
@@ -668,6 +686,15 @@ if [[ "${mode}" == "--audit-financials-readiness" && "$(jq -r '.exitCode' <<<"${
   [[ -n "${blocked}" ]] || { echo "Financials readiness task exited without a blocked report." >&2; exit 1; }
   jq -c --arg task_definition "${current_task}" --arg image_digest "${financials_readiness_image_digest}" \
     '. + {sourceTaskDefinition:$task_definition,sourceImageDigest:$image_digest}' <<<"${blocked}"
+  exit 2
+fi
+if [[ "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair && "$(jq -r '.exitCode' <<<"${task}")" != "0" ]]; then
+  # Project only fixed outcome fields; never relay secrets or arbitrary task errors.
+  outcome="$(jq -c '.[] | fromjson? | select(.scope=="hotel_setup_approved_legacy_helper_repair" and
+    (.status=="UNCERTAIN" or .status=="COMMITTED_UNVERIFIED")) | .catalog as $catalog |
+    {status,scope,catalog:(if (["unavailable","unexpected","unchanged","exact_granted","changed","unchanged_since_commit"]|index($catalog)) then .catalog else "unavailable" end),
+     nativeProof:"unverified"} | if .status=="COMMITTED_UNVERIFIED" then .+{committed:true} else . end' <<<"${messages}")"
+  [[ -z "$outcome" ]] || printf '%s\n' "$outcome" >&2
   exit 2
 fi
 [[ "$(jq -r '.exitCode' <<<"${task}")" == "0" ]] || {
@@ -711,7 +738,7 @@ fi
   exit 1
 }
 if [[ -n "$legacy_helper_mode" ]]; then
-  result="$(jq -c --arg mode "$legacy_helper_mode" '.[] | fromjson? | select(.status == "PASS" and .scope == "hotel_setup_legacy_helper_inspection" and .mode == $mode)' <<<"${messages}")"
+  result="$(jq -c --arg mode "$legacy_helper_mode" --arg scope "$legacy_helper_scope" '.[] | fromjson? | select(.status == "PASS" and .scope == $scope and .mode == $mode)' <<<"${messages}")"
 elif [[ -n "${vay2017_expected_status}" ]]; then
   result="$(jq -c --arg expected "${vay2017_expected_status}" '.[] | fromjson? | select(.status == $expected)' <<<"${messages}")"
 else

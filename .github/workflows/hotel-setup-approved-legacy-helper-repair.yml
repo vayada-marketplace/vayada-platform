@@ -1,0 +1,74 @@
+name: Repair two approved setup account helper permissions
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Fixed read-only inspection or inspected permission repair
+        type: choice
+        options: [inspect, apply]
+        default: inspect
+        required: true
+      expected_task_definition:
+        description: Reviewed stable public API task definition ARN
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+jobs:
+  repair:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Inspect, freeze, and repair only the fixed helper execution edges
+        env:
+          EXPECTED_TASK: ${{ inputs.expected_task_definition }}
+          REPAIR_MODE: ${{ inputs.mode }}
+          AWS_MAX_ATTEMPTS: "1"
+          AWS_RETRY_MODE: standard
+        run: |
+          set -euo pipefail
+          [[ "$REPAIR_MODE" == inspect || "$REPAIR_MODE" == apply ]] || exit 2
+          verify() {
+            aws ecs describe-services --cluster vayada-backend-cluster --region eu-west-1 \
+              --services vayada-next-api-service vayada-hotel-setup-service vayada-hotel-setup-property-service \
+              --output json > service-state.json
+            jq -e --arg public "$EXPECTED_TASK" '
+              (.failures|length)==0 and (.services|length)==3 and
+              all(.services[]; .desiredCount==1 and .runningCount==1 and .pendingCount==0 and
+                (.deployments|length)==1 and .deployments[0].status=="PRIMARY" and
+                .deployments[0].rolloutState=="COMPLETED") and
+              ([.services[]|select(.serviceName=="vayada-next-api-service")|.taskDefinition]==[$public]) and
+              ([.services[]|select(.serviceName=="vayada-hotel-setup-service")|.taskDefinition]==
+                ["arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-hotel-setup-primary:2"]) and
+              ([.services[]|select(.serviceName=="vayada-hotel-setup-property-service")|.taskDefinition]==
+                ["arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-hotel-setup-property-primary:1"])
+            ' service-state.json >/dev/null
+          }
+          verify
+          bash scripts/run-target-database-runtime-preflight.sh --inspect-approved-hotel-setup-legacy-helpers > inspection.json
+          frozen=$(jq -er 'select(.status=="PASS" and .scope=="hotel_setup_approved_legacy_helper_repair" and
+            .mode=="inspect")|.fingerprint|select(test("^[a-f0-9]{64}$"))' inspection.json)
+          cat inspection.json
+          if [[ "$REPAIR_MODE" == apply ]]; then
+            verify
+            bash scripts/run-target-database-runtime-preflight.sh --repair-approved-hotel-setup-legacy-helpers "$frozen"
+            verify
+            bash scripts/run-target-database-runtime-preflight.sh --inspect-approved-hotel-setup-legacy-helpers > readback.json
+            jq -e '.status=="PASS" and .missingEdges==0' readback.json >/dev/null
+            cat readback.json
+            verify
+          fi

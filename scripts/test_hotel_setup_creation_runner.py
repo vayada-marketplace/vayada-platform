@@ -64,7 +64,7 @@ class CreationRunnerTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         for directory in ('scripts', 'deployment', 'bin', 'capture'):
             (self.root / directory).mkdir()
-        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'stage-hotel-setup-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'coordinated_release.py'):
+        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'stage-hotel-setup-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'hotel-setup-approved-legacy-helper-repair.mjs', 'coordinated_release.py'):
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copy(ROOT / 'deployment/coordinated-release-v1.json', self.root / 'deployment/coordinated-release-v1.json')
         (self.root / 'deployment/hotel-setup-command-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
@@ -130,6 +130,43 @@ class CreationRunnerTest(unittest.TestCase):
             self.assertEqual(self.run_wrapper('--inspect-hotel-setup-reader-rls').returncode, 2)
             self.assertFalse(calls.exists())
             self.env = previous
+
+    def test_approved_legacy_repair_is_fixed_owner_injected_and_frozen(self):
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
+                        GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REPOSITORY='vayada-marketplace/vayada-platform',
+                        EXPECTED_TASK='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186',
+                        MOCK_CURRENT_TASK='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186')
+        for mode, args in [('inspect', []), ('apply', ['b' * 64])]:
+            self.env['MOCK_RECEIPT'] = json.dumps({'status':'PASS','scope':'hotel_setup_approved_legacy_helper_repair','mode':mode})
+            result = self.run_wrapper('--inspect-approved-hotel-setup-legacy-helpers' if mode == 'inspect' else '--repair-approved-hotel-setup-legacy-helpers', *args)
+            self.assertEqual(result.returncode,0,result.stderr)
+            definition = json.loads((self.root / 'capture/definition.json').read_text())
+            self.assertEqual(definition['executionRoleArn'],'arn:aws:iam::269416271598:role/vayada-next-api-setup-caller-execution')
+            self.assertEqual(definition['taskRoleArn'],'arn:aws:iam::269416271598:role/vayada-hotel-setup-creation-bootstrap')
+            item, = definition['containerDefinitions']
+            self.assertEqual(item['secrets'],[{'name':'TARGET_DATABASE_MIGRATION_URL','valueFrom':'/vayada/prod/target-database-url'}])
+            raw = (self.root / 'capture/overrides.json').read_text()
+            self.assertLessEqual(len(raw.encode()),8192)
+            env = {e['name']:e['value'] for e in json.loads(raw)['containerOverrides'][0]['environment']}
+            self.assertEqual(env['HOTEL_SETUP_LEGACY_HELPER_MODE'],mode)
+            self.assertEqual(env.get('HOTEL_SETUP_LEGACY_HELPER_FROZEN'),None if mode == 'inspect' else 'b' * 64)
+            self.assertNotIn('HOTEL_SETUP_READER_RLS_MODE',env)
+            env.update({e['name']:e['value'] for e in item['environment']})
+            self.assertEqual({e['name'] for e in item['environment']},{'VAYADA_DB_RUNTIME_PREFLIGHT_CODE','VAYADA_DB_RDS_CA_BUNDLE_GZIP'})
+            decoded = subprocess.run(['node','-e',"process.stdout.write(require('node:zlib').brotliDecompressSync(require('node:fs').readFileSync(0)))"],input=base64.b64decode(env['VAYADA_DB_RUNTIME_PREFLIGHT_CODE']),capture_output=True,check=True).stdout
+            self.assertEqual(decoded,(ROOT / 'scripts/hotel-setup-approved-legacy-helper-repair.mjs').read_bytes())
+        for status in ['UNCERTAIN','COMMITTED_UNVERIFIED']:
+            self.env.update(MOCK_EXIT_CODE='2',MOCK_RECEIPT=json.dumps({'status':status,'scope':'hotel_setup_approved_legacy_helper_repair','catalog':'exact_granted','secret':'DO_NOT_RELAY'}))
+            result = self.run_wrapper('--repair-approved-hotel-setup-legacy-helpers','b' * 64)
+            self.assertEqual(result.returncode,2)
+            self.assertEqual(json.loads(result.stderr)['status'],status)
+            if status == 'UNCERTAIN': self.assertNotIn('committed',json.loads(result.stderr))
+            else: self.assertIs(json.loads(result.stderr)['committed'],True)
+            self.assertNotIn('DO_NOT_RELAY',result.stderr)
+        self.assertEqual(self.run_wrapper('--repair-approved-hotel-setup-legacy-helpers').returncode,2)
+        self.assertEqual(self.run_wrapper('--repair-approved-hotel-setup-legacy-helpers','bad').returncode,2)
+        self.env['GITHUB_REF']='refs/heads/unreviewed'
+        self.assertEqual(self.run_wrapper('--inspect-approved-hotel-setup-legacy-helpers').returncode,2)
 
     def test_generated_eval_executes_reader_repair_entrypoint(self):
         self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
