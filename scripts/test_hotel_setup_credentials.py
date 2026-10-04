@@ -50,7 +50,7 @@ class HotelSetupCredentialsTests(unittest.TestCase):
         for forbidden in ['aws_secretsmanager_secret_version', 'aws_ecs_', 'resource "aws_iam_role_policy_attachment"', 'ssm:', 'kms:', 'PassRole']:
             self.assertNotIn(forbidden, source)
         for path in (ROOT / "infra").glob("*.tf"):
-            if path != SOURCE and path.name not in ["hotel_setup_service.tf", "hotel_setup_property_service.tf", "hotel_setup_creation_bootstrap.tf", "hotel_setup_property_bootstrap.tf", "hotel_setup_property_bootstrap_execution.tf", "hotel_setup_property_credentials.tf", "hotel_setup_public_caller.tf", "ecs.tf"]:
+            if path != SOURCE and path.name not in ["hotel_setup_service.tf", "hotel_setup_property_service.tf", "hotel_setup_creation_bootstrap.tf", "hotel_setup_property_bootstrap.tf", "hotel_setup_property_bootstrap_execution.tf", "hotel_setup_property_credentials.tf", "hotel_setup_public_caller.tf", "hotel_setup_online.tf", "ecs.tf"]:
                 self.assertNotIn('aws_iam_role.hotel_setup_', path.read_text(), str(path))
 
     def test_actual_plan_metadata_is_default_off_and_exact_container_reads(self):
@@ -130,7 +130,7 @@ locals {
         rendered = render(True, "property_creation")
         self.assertTrue(rendered["bootstrap_enabled"])
         bootstrap, = rendered["bootstrap_policy"]["Statement"]
-        self.assertEqual(bootstrap["Action"], ["secretsmanager:CreateSecret", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"])
+        self.assertEqual(bootstrap["Action"], ["secretsmanager:CreateSecret", "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"])
         self.assertEqual(rendered["names"], {
             "reader_database_url": "hotel-setup-creation/prod/reader-database-url",
             "internal_token": "hotel-setup-creation/prod/internal-token"})

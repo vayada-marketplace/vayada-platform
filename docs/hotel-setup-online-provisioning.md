@@ -37,3 +37,15 @@ default-off dedicated orchestration role, and populate all reviewed readiness an
 operational image inventories after actual dual native proof. Retained older
 organization credentials still require the protected offline backfill procedure.
 There is no production activation in this slice.
+
+The orchestration role can tag only during creation of its two online task
+families; stopping requires the fixed operational marker on a task in the exact
+cluster. It cannot tag an existing serving task, update a service or read
+administrative parameter/secret values. Native organization publication adds only
+`DescribeSecret` on its existing organization-native prefix.
+
+Completed passes retain the registered operational task definition and report
+`retainedTaskDefinitionArn`. AWS does not support resource-level IAM for
+`DeregisterTaskDefinition`; this controller receives no account-wide deregistration
+grant. Retained definitions are metadata and grant no ability to restart a pass
+without the same reviewed workflow, images and current serving gate.

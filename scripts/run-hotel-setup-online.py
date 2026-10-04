@@ -19,6 +19,7 @@ EXECUTION = gate.ACCOUNT + 'vayada-hotel-setup-property-bootstrap-execution'
 ROLES = {'organization': gate.ACCOUNT + 'vayada-hotel-setup-creation-bootstrap',
          'property': gate.ACCOUNT + 'vayada-hotel-setup-property-bootstrap'}
 FAMILIES = {mode: 'vayada-hotel-setup-online-' + mode for mode in ROLES}
+TAGS = [{'key': 'vayada:hotel-setup-online', 'value': 'true'}]
 CA = ROOT / 'rehearsal/rds-ca-rsa2048-g1.pem'
 CA_HASH = 'f5c5f92ae025987c76dc49bdb1ace8556fdf332b4788d719a923bc274779d869'
 COMMAND = ["umask 077; printf '%s' \"$HOTEL_SETUP_RDS_CA\" > /runtime/rds-ca.pem; unset HOTEL_SETUP_RDS_CA; exec node apps/api/dist/cli/hotelSetupAutomaticProvisioning.js"]
@@ -64,7 +65,7 @@ def quiet():
 def definition(mode, digest):
     ca = CA.read_bytes()
     release.require(hashlib.sha256(ca).hexdigest() == CA_HASH, 'Pinned operational CA differs')
-    return {'family': FAMILIES[mode], 'taskRoleArn': ROLES[mode], 'executionRoleArn': EXECUTION,
+    return {'family': FAMILIES[mode], 'tags': TAGS, 'taskRoleArn': ROLES[mode], 'executionRoleArn': EXECUTION,
         'networkMode': 'awsvpc', 'requiresCompatibilities': ['FARGATE'], 'cpu': '256', 'memory': '512',
         'runtimePlatform': {'cpuArchitecture': 'X86_64', 'operatingSystemFamily': 'LINUX'},
         'volumes': [{'name': 'runtime'}], 'containerDefinitions': [{
@@ -85,13 +86,14 @@ def definition(mode, digest):
 
 def task_state(arn, registered, attempt, mode):
     release.require(gate.TASK_ARN.fullmatch(arn), 'Operational task identity is invalid')
-    result = aws('ecs', 'describe-tasks', '--cluster', release.CLUSTER, '--tasks', arn)
+    result = aws('ecs', 'describe-tasks', '--cluster', release.CLUSTER, '--tasks', arn, '--include', 'TAGS')
     tasks = result.get('tasks', [])
     release.require(not result.get('failures') and len(tasks) == 1, 'Operational task is missing')
     task = tasks[0]
     release.require(task.get('taskArn') == arn and task.get('taskDefinitionArn') == registered
                     and task.get('clusterArn') == gate.CLUSTER_ARN and task.get('startedBy') == attempt
-                    and task.get('group') == 'family:' + FAMILIES[mode], 'Operational task scope differs')
+                    and task.get('group') == 'family:' + FAMILIES[mode]
+                    and task.get('tags') == TAGS, 'Operational task scope differs')
     return task
 
 
@@ -124,7 +126,7 @@ def run(mode, inventory, attempt):
         run_attempted = True
         result = aws('ecs', 'run-task', '--cluster', release.CLUSTER, '--task-definition', registered,
             '--launch-type', 'FARGATE', '--count', '1', '--network-configuration', json.dumps(network),
-            '--client-token', attempt, '--started-by', attempt)
+            '--client-token', attempt, '--started-by', attempt, '--tags', json.dumps(TAGS))
         tasks = result.get('tasks', [])
         if len(tasks) == 1:
             task = tasks[0].get('taskArn')
@@ -137,7 +139,8 @@ def run(mode, inventory, attempt):
                 release.require(len(containers) == 1 and containers[0].get('name') == 'hotel-setup-online'
                                 and containers[0].get('exitCode') == 0, 'Operational pass did not complete')
                 release.require(gate.snapshot(inventory) == captured, 'Serving tasks changed during operational writes')
-                return {'status': 'PASS', 'mode': mode, 'taskArn': task, 'imageDigest': digest}
+                return {'status': 'PASS', 'mode': mode, 'taskArn': task, 'imageDigest': digest,
+                        'retainedTaskDefinitionArn': registered}
             release.require(gate.snapshot(inventory) == captured, 'Serving tasks changed during operational writes')
             time.sleep(3)
         raise RuntimeError('Operational pass deadline expired')
@@ -150,8 +153,8 @@ def run(mode, inventory, attempt):
                 task = arns[0]
         if task:
             stop_exact(task, registered, attempt, mode)
-        if registered and not inspection:
-            aws('ecs', 'deregister-task-definition', '--task-definition', registered)
+        # Deregistration has no resource-level IAM support. Retain our reviewed
+        # definition rather than granting this identity account-wide mutation.
         if inspection:
             raise RuntimeError('Lost operational response requires inspection; no retry')
 

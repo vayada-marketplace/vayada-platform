@@ -40,6 +40,7 @@ class OnlineRunnerTest(unittest.TestCase):
     def test_task_identity_secrets_launcher_and_certificate_are_disjoint(self):
         for mode in ('organization', 'property'):
             source = runner.definition(mode, DIGEST)
+            self.assertEqual(source['tags'], runner.TAGS)
             self.assertEqual(source['taskRoleArn'], runner.ROLES[mode])
             self.assertEqual(source['executionRoleArn'], runner.EXECUTION)
             item = source['containerDefinitions'][0]
@@ -102,7 +103,8 @@ class OnlineRunnerTest(unittest.TestCase):
             if args[1] == 'describe-tasks':
                 return {'tasks': [{'taskArn': ARN, 'taskDefinitionArn': registered,
                     'clusterArn': runner.gate.CLUSTER_ARN, 'startedBy': ATTEMPT,
-                    'group': 'family:' + runner.FAMILIES['property'], 'lastStatus': 'STOPPED' if stopped else 'RUNNING'}]}
+                    'group': 'family:' + runner.FAMILIES['property'], 'tags': runner.TAGS,
+                    'lastStatus': 'STOPPED' if stopped else 'RUNNING'}]}
             if args[1] == 'stop-task':
                 self.assertIn(ARN, args)
                 stopped = True
@@ -114,6 +116,17 @@ class OnlineRunnerTest(unittest.TestCase):
                 runner.run('property', INVENTORY, ATTEMPT)
         self.assertTrue(stopped)
         self.assertEqual([call[1] for call in calls].count('stop-task'), 1)
+
+    def test_missing_changed_or_duplicated_marker_cannot_stop_a_task(self):
+        for tags in ([], [{'key': 'vayada:hotel-setup-online', 'value': 'false'}], runner.TAGS * 2):
+            with self.subTest(tags=tags), patch.object(runner, 'aws', return_value={'tasks': [{
+                'taskArn': ARN, 'taskDefinitionArn': 'expected', 'startedBy': ATTEMPT,
+                'clusterArn': runner.gate.CLUSTER_ARN, 'group': 'family:' + runner.FAMILIES['property'],
+                'lastStatus': 'RUNNING', 'tags': tags}]}) as calls:
+                with self.assertRaises(RuntimeError):
+                    runner.stop_exact(ARN, 'expected', ATTEMPT, 'property')
+                self.assertNotIn('stop-task', [call.args[1] for call in calls.call_args_list])
+                self.assertEqual(calls.call_args.args[-2:], ('--include', 'TAGS'))
 
     def test_pass_drift_failure_and_lost_run_ack_cleanup_only_exact_task(self):
         mode = 'property'
@@ -130,26 +143,27 @@ class OnlineRunnerTest(unittest.TestCase):
                 if args[1] == 'register-task-definition':
                     return {'taskDefinition': {'taskDefinitionArn': registered}}
                 if args[1] == 'run-task':
+                    self.assertEqual(args[-2], '--tags')
+                    self.assertEqual(runner.json.loads(args[-1]), runner.TAGS)
                     if case == 'lost-run-ack':
                         raise RuntimeError('response lost')
                     return {'tasks': [{'taskArn': ARN}]}
                 if args[1] == 'describe-tasks':
                     return {'tasks': [{'taskArn': ARN, 'taskDefinitionArn': registered,
                         'clusterArn': runner.gate.CLUSTER_ARN, 'startedBy': ATTEMPT,
-                        'group': 'family:' + runner.FAMILIES[mode], 'lastStatus': 'STOPPED',
+                        'group': 'family:' + runner.FAMILIES[mode], 'lastStatus': 'STOPPED', 'tags': runner.TAGS,
                         'containers': [{'name': 'hotel-setup-online', 'exitCode': 1 if case == 'exit-failure' else 0}]}]}
                 if args[1] == 'list-tasks':
                     self.assertIn(ATTEMPT, args)
                     return {'taskArns': [ARN]}
-                if args[1] == 'deregister-task-definition':
-                    self.assertEqual(args[-1], registered)
-                    return {}
                 raise AssertionError(args[1])
             with self.subTest(case=case), patch.object(runner.gate, 'snapshot', side_effect=snapshot), \
                  patch.object(runner, 'quiet'), patch.object(runner.release, 'service', return_value={'networkConfiguration': {'awsvpcConfiguration': {'subnets': ['fixture']}}}), \
                  patch.object(runner, 'aws', side_effect=aws):
                 if case == 'success':
-                    self.assertEqual(runner.run(mode, INVENTORY, ATTEMPT)['status'], 'PASS')
+                    receipt = runner.run(mode, INVENTORY, ATTEMPT)
+                    self.assertEqual(receipt['status'], 'PASS')
+                    self.assertEqual(receipt['retainedTaskDefinitionArn'], registered)
                 else:
                     with self.assertRaises(RuntimeError):
                         runner.run(mode, INVENTORY, ATTEMPT)
@@ -157,7 +171,7 @@ class OnlineRunnerTest(unittest.TestCase):
                 self.assertNotIn('update-service', operations)
                 self.assertNotIn('get-secret-value', operations)
                 self.assertEqual(operations.count('run-task'), 0 if case == 'before-run-drift' else 1)
-                self.assertEqual(operations.count('deregister-task-definition'), 0 if case == 'lost-run-ack' else 1)
+                self.assertNotIn('deregister-task-definition', operations)
 
 
 if __name__ == '__main__':
