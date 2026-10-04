@@ -106,6 +106,16 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(len(objects["Resource"]), 2)
         self.assertTrue(all("*" not in arn for arn in objects["Resource"]))
 
+    def test_hosted_refresh_uses_existing_plan_identity_not_apply(self):
+        workflow = (ROOT / ".github/workflows/tf-plan.yml").read_text()
+        self.assertEqual(workflow.count("role-to-assume:"), 1)
+        self.assertIn("role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-plan", workflow)
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", workflow)
+        self.assertIn("terraform plan -no-color -out=tfplan", workflow)
+        for command in ("terraform apply", "terraform refresh", "terraform destroy",
+                        "run-target-database-runtime-preflight", "aws ecs", "aws ses"):
+            self.assertNotIn(command, workflow)
+
     def test_migration_patch_applies_and_covers_all_callers(self):
         patch = ROOT / "deployment/platform-writer-boundary-workflows.patch"
         with tempfile.TemporaryDirectory() as directory:

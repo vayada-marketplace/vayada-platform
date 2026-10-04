@@ -4,6 +4,61 @@
 change therefore adds no permissions to either platform role. It supplies the
 second operator phase described in [platform contract PR #251](https://github.com/vayada-marketplace/vayada-platform/pull/251).
 
+Flamur accepted reliance on the reviewed plan and trusted operator for these two
+policy contents, after disclosure of unintended-grant risk. This is preparation
+only, not activation or approval of a session, execution window or saved plan.
+The offline `scripts/assert-pricing-bootstrap-plan.py --metadata <private-plan-json>`
+check rejects anything except the two intended document updates, preserves the
+reviewed cutoff and existing statements, and requires unchanged known final
+secret identities. It neither applies nor authenticates its input. No workflow
+or creation receipt admits this later phase; trusted sealed-plan decoding, full
+root/protected guards and distinct metadata approval remain required.
+
+The separately selected metadata receipt approver is GitHub User `FlamurMaliqi`,
+stable numeric ID `120040061`. This is a human selection only, not approval of a
+receipt, plan, AWS role/session, execution window or policy write. The metadata
+actual role/session remains unselected and there is no executor. The shared
+approval component now supports an explicit reviewed `phase="metadata"`, with
+its own selected-human ID set, proposed role-name binding, two-update receipt
+and distinct `approve-vay1543-metadata` command. Creation remains the default
+and cannot authorize this phase. Neither phase may be chosen from dispatch
+inputs/comments/environment or switched at consumption. The metadata saved-plan
+path reuses sealed-FD custody/native decoding and the writer/Finance guards,
+running the exact two-update check before fresh approval consumption. Actual
+source/runtime/backend/state/session/authorization/whole-writer-hold admission
+and live boundary version-count preflight integration are still required; this is not a
+configured or authorized execution lane.
+
+The existing IAM-only root now contains an inactive
+[`operator_metadata.tf` proposal](../infra/pricing-bootstrap-identity/operator_metadata.tf)
+for a distinct selected-owner role, not an admitted session. Null window and
+false SSM option create nothing. A non-overlapping reviewed window and five
+exact final secret ARNs are required before its four IAM resources (eight with
+the independent fixed-36 SSM option) can be proposed. It grants only the two
+target policy writes and state/lock bookkeeping, denies creation/self-editing,
+policy-version deletion and old-version default switching, and retains the
+existing session fences. Before admission, verify fewer than five boundary
+versions under the writer hold: the pinned provider otherwise attempts pruning.
+No role or metadata gate is activated by this proposal.
+
+The shared `observe_metadata_policy_capacity` component prepares a fixed-target
+read-only check, but no executor invokes it and no live AWS observation was
+performed. It requires explicit temporary credentials and a separately reviewed
+stable metadata RoleId, verifies the exact STS account/ARN/RoleId/session, and
+rejects an incomplete or ambiguous version list or five existing versions.
+It grants nothing and cannot retire old versions. The admitted private runner
+must rerun it under the durable whole-writer hold before constructing and
+consuming each receipt; passing it does not prove session/window authorization,
+IAM composition, policy contents, hold or immutable runtime/source/state.
+
+The native offline regression test copies these declarations and both real
+policy assemblies into a backend-free fixture with synthetic local state and
+AWS provider 5.100.0. It checks default-off no-op, the guarded two-update plan,
+and rejection of an added secret-value grant. Conditional selection happens
+before JSON decoding: the two heterogeneous statement objects cannot unify
+with an empty Terraform tuple once the final ARNs are known. No refresh, apply,
+production state or credentials are used; this is not live authorization proof.
+
 After the seven empty pricing resources have been created through their
 reviewed saved operator plan, keep competing platform writers paused. A separate
 reviewed activation must set `enable_pricing_command_metadata_refresh=true` in
