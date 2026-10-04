@@ -232,7 +232,7 @@ class ApprovedReadinessTest(unittest.TestCase):
                     self.assertNotEqual(calls.call_args_list[0].args[4], calls.call_args_list[1].args[4])
 
     def test_pass_cleanup_only_exact_task_including_lost_ack_after_desired_stop(self):
-        for case in ('success', 'drift', 'bad-exit', 'lost-ack', 'timeout', 'wrong-tag', 'override', 'cleanup-read-failure'):
+        for case in ('success', 'drift', 'bad-exit', 'lost-ack', 'lost-ack-running', 'timeout', 'wrong-tag', 'override', 'cleanup-read-failure'):
             stopped = False
             calls = []
             def aws(*args):
@@ -242,11 +242,12 @@ class ApprovedReadinessTest(unittest.TestCase):
                     return {'taskDefinition': {'taskDefinitionArn': REGISTERED}}
                 if args[1] == 'run-task':
                     self.assertNotIn('--overrides', args)
-                    if case == 'lost-ack':
+                    if case in ('lost-ack', 'lost-ack-running'):
                         raise RuntimeError('unknown')
                     return {'tasks': [{'taskArn': ARN}]}
                 if args[1] == 'list-tasks':
-                    return {'taskArns': [ARN] if args[-1] == 'STOPPED' else []}
+                    candidate_status = 'RUNNING' if case == 'lost-ack-running' else 'STOPPED'
+                    return {'taskArns': [ARN] if args[-1] == candidate_status else []}
                 if args[1] == 'stop-task':
                     self.assertIn(ARN, args)
                     stopped = True
@@ -292,9 +293,13 @@ class ApprovedReadinessTest(unittest.TestCase):
                 self.assertNotIn('deregister-task-definition', operations)
                 if case in ('wrong-tag', 'override', 'cleanup-read-failure'):
                     self.assertNotIn('stop-task', operations)
-                if case == 'lost-ack':
+                if case in ('lost-ack', 'lost-ack-running'):
                     self.assertTrue(stopped)
-                    self.assertIn(('ecs', 'list-tasks', '--cluster', runner.CLUSTER, '--family', runner.FAMILY, '--desired-status', 'STOPPED'), calls)
+                    candidate_status = 'RUNNING' if case == 'lost-ack-running' else 'STOPPED'
+                    self.assertIn(('ecs', 'list-tasks', '--cluster', runner.CLUSTER, '--family', runner.FAMILY, '--desired-status', candidate_status), calls)
+                    self.assertEqual([call for call in calls if call[1] == 'stop-task'], [
+                        ('ecs', 'stop-task', '--cluster', runner.CLUSTER, '--task', ARN,
+                         '--reason', 'Approved readiness bounded task cleanup')])
 
     def test_workflow_keeps_manual_main_protection_shared_queue_and_no_owner_inputs(self):
         workflow = (ROOT / '.github/workflows/hotel-setup-approved-readiness.yml').read_text()
