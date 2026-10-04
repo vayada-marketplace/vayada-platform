@@ -40,7 +40,7 @@ Definitions remain retained without account-wide deregistration permissions.
 
 `diagnose` runs only the same immutable inspection, using the same stopped-service
 and blocked-caller gates. Its protected launcher records a query ordinal, bounded
-row count and SQLSTATE; it never prints queries, errors, credentials or results.
+row count, SQLSTATE and a SHA-256 fingerprint of the fixed SQL statement; it never prints queries, errors, credentials or results.
 ROLLBACK cleanup cannot replace the failed check. `status: PASS` means the
 diagnostic completed: consult `inspectionStatus` for the actual inspection result.
 A diagnostic receipt cannot freeze identities or authorize an apply. No database

@@ -47,10 +47,10 @@ class ApprovedReadinessTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             runner.definition('diagnose', DIGEST, FROZEN)
         value = {'status': 'PASS', 'mode': 'diagnose', 'inspectionStatus': 'FAIL',
-            'phase': 'query_04', 'rowCount': None, 'sqlState': '42501'}
+            'phase': 'query_04', 'rowCount': None, 'sqlState': '42501', 'statementSha256': 'a' * 64}
         runner.diagnostic_receipt(value)
         for key, bad in [('phase', 'secret'), ('sqlState', 'password'), ('rowCount', True),
-                ('inspectionStatus', 'ready')]:
+                ('inspectionStatus', 'ready'), ('statementSha256', 'SQL-with-data')]:
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 runner.diagnostic_receipt({**value, key: bad})
         with patch.object(runner, 'approved_image', return_value=PROOF), \
