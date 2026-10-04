@@ -34,8 +34,11 @@ async function authority(client, binding, primitives, locked) {
 
 async function capture(client, principal, primitives, expected, locked = false) {
   const identity = (await client.query(`SELECT current_user AS principal,session_user AS session,
-    pg_is_in_recovery() AS replica,(SELECT oid FROM pg_roles WHERE rolname=current_user) AS oid`)).rows[0];
-  require(identity?.principal === principal && identity.session === principal && identity.replica === false);
+    pg_is_in_recovery() AS replica,(SELECT oid FROM pg_roles WHERE rolname=current_user) AS oid,
+    (SELECT rolcreaterole FROM pg_roles WHERE rolname=current_user) AS can_create_roles,
+    EXISTS(SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid
+      WHERE m.member=current_user::regrole::oid AND r.rolname='vayada_next_hotel_setup_scope' AND m.admin_option) AS scope_role_admin`)).rows[0];
+  require(identity?.principal === principal && identity.session === principal && identity.replica === false && identity.oid === expected.owner);
   const roles = (await client.query(`SELECT oid,rolname,rolcanlogin,rolinherit,rolsuper,rolcreaterole,rolcreatedb,
     rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil::text,rolconfig FROM pg_roles WHERE oid=ANY($1::oid[]) ORDER BY oid`,[expected.roles])).rows;
   require(roles.length === 2);
@@ -217,7 +220,8 @@ export async function repairLegacyHelpers({connectAdmin,principal='vayada_target
           fingerprint,committed:true,addedEdges,catalog,nativeProof:'unverified',proofStage,nativeCheck,sqlState:/^[A-Z0-9]{5}$/.test(error?.code ?? '') ? error.code : null};
       }
     }
-    return {status:'PASS',scope:'hotel_setup_approved_legacy_helper_repair',mode,fingerprint,addedEdges,committed:mode === 'apply',
+    return {status:'PASS',scope:'hotel_setup_approved_legacy_helper_repair',
+      owner:{oid:before.identity.oid,canCreateRoles:before.identity.can_create_roles,scopeRoleAdmin:before.identity.scope_role_admin},mode,fingerprint,addedEdges,committed:mode === 'apply',
       missingEdges:mode === 'apply' ? 0 : before.functions.reduce((count,fn) => count + expected.roles.filter(oid => !fn.acl.some(e => e.grantee === oid && e.privilege_type === 'EXECUTE')).length,0),
       organizations:BINDINGS.map((b,index) => ({...b,roleOid:expected.roles[index],secretVersion:versions[index]})),
       nativeProof:mode === 'apply' ? 'helpers_and_own_org' : 'identity_only'};
