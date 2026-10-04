@@ -575,6 +575,19 @@ authorizes further installation, setup, a hosted dispatch or the hotel test.
 
 ### Pause, verify and resume — proposed order, not an executable lane
 
+The manual `pricing-verification-reader.yml` workflow prepares only a protected
+reader **identity check**, not this sequence's full private-plan lane. It requires
+the exact current main SHA and the existing human-reviewed
+`vay1543-pricing-verification` environment, then assumes only the existing Plan
+role for 900 seconds. STS account, assumed-role ARN, stable RoleId and matching
+session names must agree. It loads no application secrets, runs no Terraform,
+publishes no state/plan/artifact, and never changes or releases a hold. It will
+fail authentication until the separately reviewed reader trust is installed.
+Successful identity checking is not composed-permission, immutable-runner,
+writer-drain or production source/backend/input admission. The full private
+no-op planning and inspection stage is still absent; do not substitute this
+workflow's green result for it or dispatch it as installation approval.
+
 The required ordinary hosted no-op is a **plan refresh**, not Terraform Apply.
 The existing `.github/workflows/tf-plan.yml` uses
 `arn:aws:iam::269416271598:role/vayada-github-actions-platform-plan`, not the
