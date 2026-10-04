@@ -122,6 +122,26 @@ class OnlineReadinessTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 online.approved(IMAGE, purpose, inventory)
 
+    def test_public_physical_container_image_and_draining_are_checked(self):
+        source = definition('creation')
+        source['containerDefinitions'][0]['name'] = 'vayada-next-api'
+        arn = online.CLUSTER_ARN.replace(':cluster/', ':task/') + '/' + 'd' * 32
+        for case in ('valid', 'wrong-image', 'draining'):
+            def aws(*args):
+                if args[1] == 'list-tasks':
+                    return {'taskArns': [arn] if args[-1] == 'RUNNING' else []}
+                return {'tasks': [{'taskArn': arn, 'taskDefinitionArn': source['taskDefinitionArn'],
+                    'clusterArn': online.CLUSTER_ARN, 'group': 'service:' + online.release.PUBLIC,
+                    'desiredStatus': 'STOPPED' if case == 'draining' else 'RUNNING', 'lastStatus': 'RUNNING',
+                    'containers': [{'name': 'vayada-next-api', 'image': IMAGE,
+                        'imageDigest': 'wrong' if case == 'wrong-image' else DIGEST}]}]}
+            with self.subTest(case=case), patch.object(online.release, 'aws', side_effect=aws):
+                if case == 'valid':
+                    self.assertEqual(online.physical_tasks(online.release.PUBLIC, source, 'vayada-next-api'), arn)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        online.physical_tasks(online.release.PUBLIC, source, 'vayada-next-api')
+
     def test_snapshot_reads_both_serving_purposes_and_rejects_public_replacement(self):
         public_arn = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1'
         public = {'taskDefinitionArn': public_arn, 'containerDefinitions': [{'name': 'vayada-next-api',

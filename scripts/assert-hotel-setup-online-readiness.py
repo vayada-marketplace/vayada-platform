@@ -26,7 +26,7 @@ def approved(image, purpose, inventory):
     return digest
 
 
-def physical_tasks(name, definition):
+def physical_tasks(name, definition, container_name='hotel-setup'):
     running = release.aws('ecs', 'list-tasks', '--cluster', release.CLUSTER,
                           '--service-name', name, '--desired-status', 'RUNNING')
     arns = running.get('taskArns', [])
@@ -43,11 +43,11 @@ def physical_tasks(name, definition):
     task_overrides = task.get('overrides', {})
     release.require(set(task_overrides) <= {'containerOverrides'}, 'Private task has identity or runtime overrides')
     overrides = task_overrides.get('containerOverrides', [])
-    release.require(all(set(item) <= {'name'} and item.get('name') == 'hotel-setup' for item in overrides),
+    release.require(all(set(item) <= {'name'} and item.get('name') == container_name for item in overrides),
                     'Private startup has effective command or environment overrides')
     containers = task.get('containers', [])
-    release.require(len(containers) == 1 and containers[0].get('name') == 'hotel-setup'
-                    and containers[0].get('image') == release.container(definition, 'hotel-setup')['image']
+    release.require(len(containers) == 1 and containers[0].get('name') == container_name
+                    and containers[0].get('image') == release.container(definition, container_name)['image']
                     and containers[0].get('imageDigest') == containers[0]['image'].split('@')[1],
                     'Observed private image differs')
     # A desired-STOPPED task may still be physically RUNNING during draining.
@@ -125,7 +125,9 @@ def snapshot(inventory):
     image = release.container(definition, 'vayada-next-api')['image']
     release.require(image.startswith(release.REPOSITORY + '@'), 'Public caller must be immutable')
     release.approved(image.split('@')[1], 'hotel-setup-caller-images.json')
-    result = {'publicTask': public['taskDefinition'], 'private': {}}
+    public_arn = physical_tasks(release.PUBLIC, definition, 'vayada-next-api')
+    release.healthy(public)
+    result = {'publicTask': public['taskDefinition'], 'publicTaskArn': public_arn, 'private': {}}
     for purpose, name in release.PRIVATE.items():
         admission = release.environment(release.container(definition, 'vayada-next-api')).get(release.PREFIX[purpose] + '_ADMISSION')
         release.require(admission in ('enabled', 'blocked'), 'Public caller admission is not explicit')
