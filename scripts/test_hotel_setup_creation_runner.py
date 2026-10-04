@@ -232,6 +232,9 @@ class CreationRunnerTest(unittest.TestCase):
         for status, code in [('PASS', '0'), ('BLOCKED', '2')]:
             self.env.update(MOCK_EXIT_CODE=code, MOCK_RECEIPT=json.dumps({**receipt, 'status': status, 'scope': 'wrong_scope'}))
             self.assertEqual(self.run_wrapper('--inspect-hotel-setup-legacy-helpers').returncode, 1)
+        for status, code in [('PASS', '0'), ('BLOCKED', '2')]:
+            self.env.update(MOCK_EXIT_CODE=code, MOCK_RECEIPT=json.dumps({**receipt, 'status': status, 'mode': 'verify'}))
+            self.assertEqual(self.run_wrapper('--inspect-hotel-setup-legacy-helpers').returncode, 1)
 
     def test_exact_task_credentials_and_bounded_overrides(self):
         for purpose, args, suffix in (
