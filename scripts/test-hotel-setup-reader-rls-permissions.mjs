@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import pg from 'pg';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { gzipSync } from 'node:zlib';
 import { runReaderRlsPermissionCheck } from './hotel-setup-reader-rls-permissions.mjs';
 
 const admin = new pg.Client('postgresql://postgres:postgres@reader-rls-db:5432/postgres');
@@ -7,6 +10,30 @@ const readers = ['vayada_next_hotel_setup_creation_reader', 'vayada_next_hotel_s
 const scope = 'platform.channex_management_worker_scope(text,text,uuid)';
 const source = 'platform.channex_management_worker_source(text,text,uuid)';
 const functions = [scope, source];
+// Exercise the exact production eval transport, relocating only its owned module path.
+const bootstrap = readFileSync('/source/run-target-database-runtime-preflight.sh', 'utf8')
+  .match(/^  bootstrap="(const fs=.*)"$/m)[1]
+  .replace("p='/app/.vayada-db-runtime-preflight.mjs'", "p='/work/injected-preflight.mjs'");
+const code = gzipSync(readFileSync('/source/hotel-setup-reader-rls-permissions.mjs')).toString('base64');
+// Only the fixture socket/TLS changes; the CLI validates its real production URL and principal.
+const redirect = `import {createRequire} from 'node:module';
+  const pg=createRequire('/work/package.json')('pg'),Client=pg.Client;
+  pg.Client=class extends Client {constructor(options){super({...options,host:'reader-rls-db',
+    port:5432,database:'postgres',password:'fixture',ssl:false})}};`;
+const launched = (mode, fingerprint) => {
+  const result = spawnSync(process.execPath, ['--import', 'data:text/javascript,' + encodeURIComponent(redirect), '--eval', bootstrap], {
+    encoding: 'utf8', timeout: 30000, env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main',
+      VAYADA_DB_RUNTIME_PREFLIGHT_CODE: code, VAYADA_DB_RDS_CA_BUNDLE: 'owned-fixture-ca',
+      TARGET_DATABASE_ADMIN_URL: 'postgresql://vayada_admin:fixture@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require',
+      HOTEL_SETUP_READER_RLS_MODE: mode, ...(fingerprint ? {HOTEL_SETUP_READER_RLS_FROZEN: fingerprint} : {}) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const receipt = JSON.parse(result.stdout);
+  assert.equal(receipt.status, 'PASS');
+  assert.equal(receipt.scope, 'hotel_setup_reader_rls_permissions');
+  assert.equal(receipt.mode, mode);
+  return receipt;
+};
 // Exact deployed 0407/0408 invoker bodies; their hashes are enforced by the repair.
 const definition = `CREATE FUNCTION platform.channex_management_worker_scope(kind text, resource text, parent uuid DEFAULT NULL)
 RETURNS boolean LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog AS $$
@@ -52,6 +79,7 @@ try {
     CREATE ROLE legacy_helper_owner NOLOGIN;
     CREATE ROLE unrelated_reader NOLOGIN;
     CREATE ROLE reader_creator NOLOGIN CREATEROLE NOINHERIT;
+    CREATE ROLE vayada_admin LOGIN SUPERUSER PASSWORD 'fixture';
     CREATE TABLE identity.organizations(id integer PRIMARY KEY);
     INSERT INTO identity.organizations VALUES(1),(2);
     ALTER TABLE identity.organizations ENABLE ROW LEVEL SECURITY;
@@ -134,8 +162,9 @@ try {
   await admin.query(`REVOKE ${readers[0]} FROM unrelated_reader`);
   const beforeRelations = await relations();
   const beforeCreatorEdges = await creatorEdges();
-  const ready = await inspect();
-  await repair(ready.fingerprint);
+  const cliReady = launched('inspect');
+  assert.equal(cliReady.missingEdges, 4);
+  launched('apply', cliReady.fingerprint);
   assert.equal((await inspect()).missingEdges, 0);
   assert.deepEqual(await relations(), beforeRelations);
   assert.deepEqual(await creatorEdges(), beforeCreatorEdges);

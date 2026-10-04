@@ -125,6 +125,30 @@ class CreationRunnerTest(unittest.TestCase):
             self.assertFalse(calls.exists())
             self.env = previous
 
+    def test_generated_eval_executes_reader_repair_entrypoint(self):
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
+                        GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REPOSITORY='vayada-marketplace/vayada-platform',
+                        EXPECTED_TASK='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186',
+                        MOCK_CURRENT_TASK='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186')
+        result = self.run_wrapper('--inspect-hotel-setup-reader-rls')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        override, = json.loads((self.root / 'capture/overrides.json').read_text())['containerOverrides']
+        command = override['command']
+        self.assertEqual(command[:2], ['node', '--eval'])
+        # Use the actual generated eval and compressed real module; only relocate its owned file.
+        command[2] = command[2].replace("p='/app/.vayada-db-runtime-preflight.mjs'",
+                                        'p=' + json.dumps(str((self.root / 'injected-preflight.mjs').resolve())))
+        env = {'PATH': os.environ['PATH'], **{entry['name']: entry['value'] for entry in override['environment']}}
+        env['TARGET_DATABASE_ADMIN_URL'] = 'invalid-destination'
+        actual = subprocess.run(command, env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
+        self.assertEqual(actual.returncode, 1, actual.stdout + actual.stderr)
+        self.assertEqual(actual.stdout, '')
+        self.assertEqual(json.loads(actual.stderr), {'status': 'FAIL', 'code': 'hotel_setup_reader_rls_permission_unavailable'})
+        # Other operational modes retain eval's original argv; their entrypoint ABI is unchanged.
+        env.pop('HOTEL_SETUP_READER_RLS_MODE')
+        unrelated = subprocess.run(command, env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
+        self.assertEqual((unrelated.returncode, unrelated.stdout, unrelated.stderr), (0, '', ''))
+
     def test_exact_task_credentials_and_bounded_overrides(self):
         for purpose, args, suffix in (
             ('organization', ['--provision-hotel-setup-creation-org', ORG, ACTOR, DIGEST], 'bootstrap'),
