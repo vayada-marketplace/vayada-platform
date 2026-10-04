@@ -248,11 +248,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const [{STSClient,GetCallerIdentityCommand},{SecretsManagerClient,DescribeSecretCommand,GetSecretValueCommand},membership]=await Promise.all([
       import('@aws-sdk/client-sts'),import('@aws-sdk/client-secrets-manager'),
       import('/app/apps/api/dist/hotelSetupMembership.js')]);
-    const credentials=(await import('@aws-sdk/credential-providers')).fromNodeProviderChain();
-    sts=new STSClient({region:'eu-west-1',endpoint:'https://sts.eu-west-1.amazonaws.com',maxAttempts:1,credentials});
+    sts=new STSClient({region:'eu-west-1',endpoint:'https://sts.eu-west-1.amazonaws.com',maxAttempts:1});
     const caller=await sts.send(new GetCallerIdentityCommand({}));
     require(caller.Account === '269416271598' && /^arn:aws:sts::269416271598:assumed-role\/vayada-hotel-setup-creation-bootstrap\/[-A-Za-z0-9_]+$/.test(caller.Arn ?? ''));
-    secrets=new SecretsManagerClient({region:'eu-west-1',endpoint:'https://secretsmanager.eu-west-1.amazonaws.com',maxAttempts:1,credentials});
+    secrets=new SecretsManagerClient({region:'eu-west-1',endpoint:'https://secretsmanager.eu-west-1.amazonaws.com',maxAttempts:1,credentials:await sts.config.credentials()});
     const connection=async (user,password) => {
       const client=new pg.Client({host:url.hostname,port:5432,database:'vayada_target_prod',user,password,
         ssl:{ca:process.env.VAYADA_DB_RDS_CA_BUNDLE,rejectUnauthorized:true,servername:url.hostname},
