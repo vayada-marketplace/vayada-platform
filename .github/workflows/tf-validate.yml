@@ -66,6 +66,8 @@ on:
       - "scripts/*hotel-setup-reader-rls-permissions*"
       - "scripts/hotel-setup-reader-rls-native-preflight.mjs"
       - ".github/workflows/hotel-setup-reader-rls-repair.yml"
+      - "scripts/*hotel-setup-legacy-helper-inspection*"
+      - ".github/workflows/hotel-setup-legacy-helper-inspection.yml"
       - "scripts/vay2017-source-snapshot-import.mjs"
       - "scripts/vay2017-source-snapshot-extract.mjs"
       - "scripts/target-database-runtime-preflight.mjs"
@@ -189,6 +191,8 @@ jobs:
           persist-credentials: false
       - name: Verify hardened setup reader helper repair
         run: bash scripts/test-hotel-setup-reader-rls-permissions.sh "${{ matrix.postgres }}"
+      - name: Verify fixed read-only legacy organization helper proof
+        run: bash scripts/test-hotel-setup-legacy-helper-inspection.sh "${{ matrix.postgres }}"
       - name: Verify scoped identity grants and denials
         run: bash scripts/test-target-database-identity-runtime-grant.sh "${{ matrix.postgres }}"
 

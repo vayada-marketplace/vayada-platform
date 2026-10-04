@@ -38,8 +38,8 @@ elif operation=='register-task-definition':
 elif operation=='run-task':
  (root/'overrides.json').write_text(value('--overrides'))
  print('arn:aws:ecs:eu-west-1:269416271598:task/fixture/123')
-elif operation=='describe-tasks': print('STOPPED' if value('--query')=='tasks[0].lastStatus' else json.dumps({'exitCode':0,'reason':'fixture'}))
-elif operation=='get-log-events': print(json.dumps(['{"status":"PASS"}']))
+elif operation=='describe-tasks': print('STOPPED' if value('--query')=='tasks[0].lastStatus' else json.dumps({'exitCode':int(os.environ.get('MOCK_EXIT_CODE','0')),'reason':'fixture'}))
+elif operation=='get-log-events': print(json.dumps([os.environ.get('MOCK_RECEIPT','{"status":"PASS"}')]))
 elif operation in ('stop-task','deregister-task-definition'): print('{}')
 else: sys.exit('Unexpected AWS operation: '+operation)
 '''
@@ -64,7 +64,7 @@ class CreationRunnerTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         for directory in ('scripts', 'deployment', 'bin', 'capture'):
             (self.root / directory).mkdir()
-        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'stage-hotel-setup-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'coordinated_release.py'):
+        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'stage-hotel-setup-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'coordinated_release.py'):
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copy(ROOT / 'deployment/coordinated-release-v1.json', self.root / 'deployment/coordinated-release-v1.json')
         (self.root / 'deployment/hotel-setup-command-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
@@ -154,6 +154,93 @@ class CreationRunnerTest(unittest.TestCase):
         env.pop('HOTEL_SETUP_READER_RLS_MODE')
         unrelated = subprocess.run(command, env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
         self.assertEqual((unrelated.returncode, unrelated.stdout, unrelated.stderr), (0, '', ''))
+
+    def legacy_environment(self):
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
+                        GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REPOSITORY='vayada-marketplace/vayada-platform',
+                        EXPECTED_TASK='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186',
+                        MOCK_CURRENT_TASK='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186')
+
+    def test_legacy_inspection_is_fixed_and_cannot_supply_other_scope(self):
+        self.legacy_environment()
+        self.env['MOCK_STARTUP'] = 'true'
+        for mode, args in [('inspect', []), ('verify', ['b' * 64])]:
+            receipt = {'status': 'PASS', 'scope': 'hotel_setup_legacy_helper_inspection', 'mode': mode}
+            self.env['MOCK_RECEIPT'] = json.dumps(receipt)
+            result = self.run_wrapper('--' + mode + '-hotel-setup-legacy-helpers', *args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), receipt)
+            definition = json.loads((self.root / 'capture/definition.json').read_text())
+            self.assertEqual(definition['family'], 'vayada-next-api-db-runtime-preflight')
+            self.assertEqual(definition['taskRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-creation-bootstrap')
+            self.assertEqual(definition['executionRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution')
+            item, = definition['containerDefinitions']
+            self.assertEqual(item['image'], '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@sha256:c2fbba1a4d3f8f7bc4c46d0816f125d3598cd1c1a4880dd3b103feb0d3aa67d2')
+            self.assertEqual(item['secrets'], [{'name': 'TARGET_DATABASE_ADMIN_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
+            self.assertEqual(item['environment'], [])
+            self.assertEqual(item['portMappings'], [])
+            self.assertEqual(item['workingDirectory'], '/app')
+            self.assertFalse(item['privileged'])
+            for key in ('entryPoint', 'mountPoints', 'volumesFrom', 'environmentFiles'):
+                self.assertNotIn(key, item)
+            self.assertNotIn('volumes', definition)
+            raw = (self.root / 'capture/overrides.json').read_text()
+            self.assertLessEqual(len(raw.encode()), 8192)
+            override, = json.loads(raw)['containerOverrides']
+            env = {entry['name']: entry['value'] for entry in override['environment']}
+            self.assertEqual(env['HOTEL_SETUP_LEGACY_HELPER_MODE'], mode)
+            self.assertEqual(env.get('HOTEL_SETUP_LEGACY_HELPER_FROZEN'), None if mode == 'inspect' else 'b' * 64)
+            self.assertNotIn('HOTEL_SETUP_READER_RLS_MODE', env)
+            self.assertNotIn('TARGET_DATABASE_ADMIN_URL', env)
+        calls = self.root / 'capture/calls.jsonl'
+        for overrides, args in [({'GITHUB_REF': 'refs/heads/other'}, ['--inspect-hotel-setup-legacy-helpers']),
+                                ({'GITHUB_EVENT_NAME': 'push'}, ['--inspect-hotel-setup-legacy-helpers']),
+                                ({'GITHUB_REPOSITORY': 'other/repo'}, ['--inspect-hotel-setup-legacy-helpers']),
+                                ({'EXPECTED_TASK': 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1187'}, ['--inspect-hotel-setup-legacy-helpers']),
+                                ({}, ['--inspect-hotel-setup-legacy-helpers', ORG]),
+                                ({}, ['--verify-hotel-setup-legacy-helpers', 'not-a-fingerprint'])]:
+            calls.unlink(missing_ok=True)
+            previous = self.env.copy()
+            self.env.update(overrides)
+            self.assertEqual(self.run_wrapper(*args).returncode, 2)
+            self.assertFalse(calls.exists())
+            self.env = previous
+
+    def test_generated_eval_executes_actual_legacy_cli_before_dependency_load(self):
+        self.legacy_environment()
+        for mode, args in [('inspect', []), ('verify', ['b' * 64])]:
+            self.env['MOCK_RECEIPT'] = json.dumps({'status': 'PASS', 'scope': 'hotel_setup_legacy_helper_inspection', 'mode': mode})
+            result = self.run_wrapper('--' + mode + '-hotel-setup-legacy-helpers', *args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            override, = json.loads((self.root / 'capture/overrides.json').read_text())['containerOverrides']
+            command = override['command']
+            self.assertEqual(command[:2], ['node', '--eval'])
+            path = (self.root / 'injected-legacy.mjs').resolve()
+            command[2] = command[2].replace("p='/app/.vayada-db-runtime-preflight.mjs'", 'p=' + json.dumps(str(path)))
+            env = {'PATH': os.environ['PATH'], **{entry['name']: entry['value'] for entry in override['environment']}}
+            env['TARGET_DATABASE_ADMIN_URL'] = 'invalid-destination'
+            actual = subprocess.run(command, env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
+            self.assertEqual(actual.returncode, 1, actual.stdout + actual.stderr)
+            self.assertEqual(actual.stdout, '')
+            self.assertEqual(json.loads(actual.stderr), {'status': 'FAIL', 'code': 'hotel_setup_legacy_helper_inspection_unavailable'})
+            # The exported fixture import remains inert even with invalid production inputs.
+            imported = subprocess.run(['node', '--input-type=module', '--eval', 'await import(' + json.dumps(path.as_uri()) + ')'],
+                                      env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
+            self.assertEqual((imported.returncode, imported.stdout, imported.stderr), (0, '', ''))
+
+    def test_legacy_blocked_receipt_is_sanitized_and_wrong_scope_cannot_pass(self):
+        self.legacy_environment()
+        receipt = {'status': 'BLOCKED', 'scope': 'hotel_setup_legacy_helper_inspection', 'mode': 'inspect'}
+        self.env.update(MOCK_EXIT_CODE='2', MOCK_RECEIPT=json.dumps(receipt))
+        blocked = self.run_wrapper('--inspect-hotel-setup-legacy-helpers')
+        self.assertEqual(blocked.returncode, 2, blocked.stderr)
+        self.assertEqual(json.loads(blocked.stdout), receipt)
+        for status, code in [('PASS', '0'), ('BLOCKED', '2')]:
+            self.env.update(MOCK_EXIT_CODE=code, MOCK_RECEIPT=json.dumps({**receipt, 'status': status, 'scope': 'wrong_scope'}))
+            self.assertEqual(self.run_wrapper('--inspect-hotel-setup-legacy-helpers').returncode, 1)
+        for status, code in [('PASS', '0'), ('BLOCKED', '2')]:
+            self.env.update(MOCK_EXIT_CODE=code, MOCK_RECEIPT=json.dumps({**receipt, 'status': status, 'mode': 'verify'}))
+            self.assertEqual(self.run_wrapper('--inspect-hotel-setup-legacy-helpers').returncode, 1)
 
     def test_exact_task_credentials_and_bounded_overrides(self):
         for purpose, args, suffix in (
