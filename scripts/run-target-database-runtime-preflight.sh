@@ -30,6 +30,8 @@ property_id=""
 property_operation=""
 owner_email=""
 helper_file=""
+reader_rls_mode=""
+reader_rls_frozen=""
 financials_readiness_property=""
 financials_readiness_image_digest=""
 folio_required="false"
@@ -226,6 +228,35 @@ case "${mode}" in
       fi
     fi
     ;;
+  --inspect-hotel-setup-reader-rls|--repair-hotel-setup-reader-rls|--verify-hotel-setup-creation-reader-rls|--verify-hotel-setup-property-reader-rls)
+    [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main &&
+       "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_REPOSITORY:-}" == vayada-marketplace/vayada-platform ]] || exit 2
+    reader_rls_mode=inspect
+    if [[ "$mode" == --repair-hotel-setup-reader-rls ]]; then
+      [[ "$#" -eq 2 && "$2" =~ ^[a-f0-9]{64}$ ]] || exit 2
+      reader_rls_mode=apply; reader_rls_frozen="$2"
+    else [[ "$#" -eq 1 ]] || exit 2; fi
+    ca_required=true
+    family="vayada-next-api-db-runtime-preflight"
+    code_file="hotel-setup-reader-rls-permissions.mjs"
+    secret_name="TARGET_DATABASE_ADMIN_URL"
+    secret_parameter="/vayada/prod/db-marketplace-url"
+    task_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@sha256:c2fbba1a4d3f8f7bc4c46d0816f125d3598cd1c1a4880dd3b103feb0d3aa67d2"
+    creation_execution_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution"
+    if [[ "$mode" == --verify-hotel-setup-creation-reader-rls || "$mode" == --verify-hotel-setup-property-reader-rls ]]; then
+      code_file="hotel-setup-reader-rls-native-preflight.mjs"
+      secret_name="HOTEL_SETUP_COMMAND_READER_DATABASE_URL"
+      if [[ "$mode" == --verify-hotel-setup-creation-reader-rls ]]; then
+        reader_rls_mode=property_creation
+        secret_parameter="arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-creation/prod/reader-database-url-EDME10"
+        creation_execution_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-execution"
+      else
+        reader_rls_mode=property_commands
+        secret_parameter="arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-command/prod/reader-database-url-WqoWDT"
+        creation_execution_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-execution"
+      fi
+    fi
+    ;;
   --audit-hotel-setup-migration|--audit-hotel-setup-readiness-migrations|--stage-hotel-setup-migration-scope)
     [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main && "$#" -eq 2 && "$2" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 2
     inventory="$(dirname "${BASH_SOURCE[0]}")/../deployment/hotel-setup-bootstrap-images.json"
@@ -351,7 +382,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--stage-hotel-setup-migration-scope" ) || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
+  if [[ -n "$reader_rls_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--stage-hotel-setup-migration-scope" ) || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -367,7 +398,7 @@ if [[ "${ca_required}" == true ]]; then
     }
   fi
   ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
-  if [[ ( "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--stage-hotel-setup-migration-scope" ) ) && "${#ca_payload}" -gt 2100 ]]; then
+  if [[ ( -n "$reader_rls_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--stage-hotel-setup-migration-scope" ) ) && "${#ca_payload}" -gt 2100 ]]; then
     echo "Pinned grant CA payload exceeds the reviewed ECS override budget." >&2; exit 1
   fi
 fi
@@ -386,7 +417,7 @@ else
   bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';if(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP)process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();if(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_HELPER)fs.writeFileSync('/app/channex-policy-consumer-roles.mjs',z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_HELPER,'base64')));fs.writeFileSync(p,z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));import(p).catch(()=>{console.error(JSON.stringify({status:'FAIL',code:'runtime_preflight_bootstrap_failed'}));process.exit(1)})"
 fi
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
-  --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg financials_readiness_property "${financials_readiness_property}" \
+  --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg reader_rls_mode "${reader_rls_mode}" --arg reader_rls_frozen "${reader_rls_frozen}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg financials_readiness_property "${financials_readiness_property}" \
   --arg folio_required "${folio_required}" --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
   --arg owner_email "${owner_email}" --arg property_id "${property_id}" --arg property_operation "${property_operation}" --arg creation_purpose "${creation_purpose}" --arg creation_org "${creation_org}" --arg creation_actor "${creation_actor}" \
   --arg vay2017_source_import_phase "${vay2017_source_import_phase}" \
@@ -394,6 +425,11 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
     environment:([{name:"VAYADA_DB_RUNTIME_PREFLIGHT_CODE",value:$code}] +
       (if $helper == "" then [] else [{name:"VAYADA_DB_RUNTIME_PREFLIGHT_HELPER",value:$helper}] end) +
+      (if $reader_rls_mode == "" then [] else [{name:"HOTEL_SETUP_READER_RLS_MODE",value:$reader_rls_mode},
+        {name:"GITHUB_ACTIONS",value:"true"},{name:"GITHUB_REF",value:"refs/heads/main"}] end) +
+      (if $reader_rls_mode == "property_creation" or $reader_rls_mode == "property_commands" then
+        [{name:"HOTEL_SETUP_COMMAND_MODE",value:$reader_rls_mode}] else [] end) +
+      (if $reader_rls_frozen == "" then [] else [{name:"HOTEL_SETUP_READER_RLS_FROZEN",value:$reader_rls_frozen}] end) +
       (if $owner_email == "" then [] else [{name:"HOTEL_SETUP_OWNER_EMAIL",value:$owner_email}] end) +
       (if $property_id == "" then [] else [{name:"HOTEL_SETUP_COMMAND_PROPERTY_ID",value:$property_id},{name:"HOTEL_SETUP_COMMAND_OPERATION",value:$property_operation}] end) +
       (if $creation_purpose == "" then [] else [{name:"HOTEL_SETUP_BOOTSTRAP_PURPOSE",value:$creation_purpose}] end) +
@@ -449,7 +485,7 @@ else
 fi
 source_definition="$(aws ecs describe-task-definition --task-definition "${current_task}" --region "${region}" \
   --query taskDefinition --output json)"
-if [[ "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--stage-hotel-setup-migration-scope" ]]; then
+if [[ -n "$reader_rls_mode" || "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--stage-hotel-setup-migration-scope" ]]; then
   [[ "${EXPECTED_TASK:-}" == "${current_task}" && "${current_task}" == arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:* ]] || exit 1
   public_state="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" --query 'services[0]' --output json)"
   jq -e --arg expected "${current_task}" '.taskDefinition == $expected and
@@ -527,7 +563,7 @@ temporary_definition="$(jq -c --arg family "${family}" --arg container "${contai
       | .environment=[]
       | .portMappings=[]]
 ' <<<"${source_definition}")"
-if [[ "${mode}" == "--audit-hotel-setup-readiness-migrations" ]]; then
+if [[ -n "$reader_rls_mode" || "${mode}" == "--audit-hotel-setup-readiness-migrations" ]]; then
   temporary_definition="$(jq -c 'del(.volumes) | .containerDefinitions |= map(
     del(.entryPoint,.mountPoints,.volumesFrom,.environmentFiles) | .workingDirectory="/app" | .privileged=false)' <<<"${temporary_definition}")"
 fi

@@ -62,7 +62,7 @@ class CreationRunnerTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         for directory in ('scripts', 'deployment', 'bin', 'capture'):
             (self.root / directory).mkdir()
-        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'stage-hotel-setup-migration-scope.mjs', 'coordinated_release.py'):
+        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'stage-hotel-setup-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'coordinated_release.py'):
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copy(ROOT / 'deployment/coordinated-release-v1.json', self.root / 'deployment/coordinated-release-v1.json')
         (self.root / 'deployment/hotel-setup-command-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
@@ -83,6 +83,47 @@ class CreationRunnerTest(unittest.TestCase):
     def run_wrapper(self, *args):
         return subprocess.run(['bash', str(self.root / 'scripts/run-target-database-runtime-preflight.sh'), *args],
                               env=self.env, capture_output=True, text=True, timeout=20)
+
+    def test_existing_reader_repair_is_fixed_main_only_and_execution_injected(self):
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
+                        GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REPOSITORY='vayada-marketplace/vayada-platform',
+                        EXPECTED_TASK='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186',
+                        MOCK_CURRENT_TASK='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186')
+        for mode, args in [('inspect', []), ('apply', ['b' * 64])]:
+            result = self.run_wrapper('--inspect-hotel-setup-reader-rls' if mode == 'inspect' else
+                                      '--repair-hotel-setup-reader-rls', *args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            definition = json.loads((self.root / 'capture/definition.json').read_text())
+            self.assertNotIn('taskRoleArn', definition)
+            self.assertEqual(definition['executionRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution')
+            item, = definition['containerDefinitions']
+            self.assertEqual(item['image'], '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@sha256:c2fbba1a4d3f8f7bc4c46d0816f125d3598cd1c1a4880dd3b103feb0d3aa67d2')
+            self.assertEqual(item['secrets'], [{'name': 'TARGET_DATABASE_ADMIN_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
+            raw = (self.root / 'capture/overrides.json').read_text()
+            self.assertLessEqual(len(raw.encode()), 8192)
+            env = {entry['name']: entry['value'] for entry in json.loads(raw)['containerOverrides'][0]['environment']}
+            self.assertEqual(env['HOTEL_SETUP_READER_RLS_MODE'], mode)
+            self.assertEqual(env.get('HOTEL_SETUP_READER_RLS_FROZEN'), None if mode == 'inspect' else 'b' * 64)
+        for purpose, mode, suffix in [('creation', 'property_creation', 'creation/prod/reader-database-url-EDME10'),
+                                      ('property', 'property_commands', 'command/prod/reader-database-url-WqoWDT')]:
+            result = self.run_wrapper(f'--verify-hotel-setup-{purpose}-reader-rls')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            definition = json.loads((self.root / 'capture/definition.json').read_text())
+            self.assertNotIn('taskRoleArn', definition)
+            item, = definition['containerDefinitions']
+            self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_COMMAND_READER_DATABASE_URL',
+                              'valueFrom': 'arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-' + suffix}])
+            env = {entry['name']: entry['value'] for entry in json.loads((self.root / 'capture/overrides.json').read_text())['containerOverrides'][0]['environment']}
+            self.assertEqual(env['HOTEL_SETUP_COMMAND_MODE'], mode)
+            self.assertNotIn('TARGET_DATABASE_ADMIN_URL', env)
+        calls = self.root / 'capture/calls.jsonl'
+        for overrides in [{'GITHUB_REF': 'refs/heads/other'}, {'GITHUB_EVENT_NAME': 'push'}, {'GITHUB_REPOSITORY': 'other/repo'}]:
+            calls.unlink(missing_ok=True)
+            previous = self.env.copy()
+            self.env.update(overrides)
+            self.assertEqual(self.run_wrapper('--inspect-hotel-setup-reader-rls').returncode, 2)
+            self.assertFalse(calls.exists())
+            self.env = previous
 
     def test_exact_task_credentials_and_bounded_overrides(self):
         for purpose, args, suffix in (
