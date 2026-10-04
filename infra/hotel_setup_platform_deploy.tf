@@ -72,6 +72,7 @@ data "aws_iam_policy_document" "hotel_setup_platform_deploy" {
         "vayada-hotel-setup-property-execution",
         "vayada-hotel-setup-property-task",
         "vayada-next-api-setup-caller-execution",
+        "vayada-github-actions-hotel-setup-online",
       ] : "arn:aws:iam::${var.aws_account_id}:role/${name}"]
     }
   }
