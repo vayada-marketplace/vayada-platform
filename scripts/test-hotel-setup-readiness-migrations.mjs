@@ -30,7 +30,7 @@ async function audit(change = () => {}) {
     async query(sql) {
       fixture.queries.push(sql);
       assert.match(sql, /^(BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY|SET LOCAL statement_timeout=|SELECT\s|ROLLBACK)/);
-      if (fixture.databaseFailure) throw Error('synthetic secret must never leave task');
+      if (fixture.databaseFailure) { const error=Error('synthetic secret must never leave task');error.code=fixture.databaseFailureCode;throw error; }
       if (sql.includes('pg_try_advisory_lock(8734516)')) return {rows:[{locked:fixture.identity.locked}]};
       if (sql.includes('current_database()')) return {rows:[fixture.identity]};
       if (sql.includes('DISTINCT ON (version)')) return {rows:fixture.rows};
@@ -95,8 +95,21 @@ for(const change of [
 ]) {
   const result=await audit(change);
   assert.equal(result.exitCode,1);
-  assert.deepEqual(result.output,[{status:'FAIL',code:'hotel_setup_readiness_migration_audit_unavailable'}]);
+  assert.equal(result.output.length,1);
+  const receipt=result.output[0];
+  assert.equal(receipt.status,'FAIL');
+  assert.equal(receipt.code,'hotel_setup_readiness_migration_audit_unavailable');
+  assert(['manifest','connection','lock','identity','ledger','objects','rollback'].includes(receipt.stage));
+  assert(Object.keys(receipt).every(key=>['status','code','stage','reason','version','sqlState'].includes(key)));
+  if(receipt.version) assert.match(receipt.version,/^\d{4}$/);
+  assert(!JSON.stringify(receipt).includes('synthetic secret'));
   assert.equal(result.ends,result.connects);
+}
+for(const code of ['42501','synthetic secret must never leave task']) {
+  const result=await audit(f=>{f.databaseFailure=true;f.databaseFailureCode=code;});
+  assert.equal(result.output[0].stage,'lock');
+  assert.equal(result.output[0].sqlState,code==='42501' ? code : undefined);
+  assert(!JSON.stringify(result.output).includes('synthetic secret'));
 }
 for(const url of [ownerUrl.replace('rds.amazonaws.com','unsafe.invalid'),ownerUrl.replace('5432','5433'),
   ownerUrl.replace('vayada_admin:','other:'),ownerUrl.replace('/postgres?','/other?'),ownerUrl+'&options=unsafe',ownerUrl+'#fragment']) {
