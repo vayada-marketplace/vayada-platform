@@ -1,6 +1,7 @@
 """Operational isolation, release drift and unknown-response cleanup, without AWS."""
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -33,9 +34,26 @@ class OnlineRunnerTest(unittest.TestCase):
         bad = copy.deepcopy(INVENTORY)
         bad['operational'][DIGEST]['rollbackSource'] = 'not-a-source'
         invalid.append(bad)
+        ambiguous = copy.deepcopy(INVENTORY)
+        ambiguous['operational']['sha256:' + 'f' * 64] = copy.deepcopy(ambiguous['operational'][DIGEST])
+        invalid.append(ambiguous)
         for inventory in invalid:
             with self.subTest(inventory=inventory), self.assertRaises((RuntimeError, TypeError)):
                 runner.operational_image(inventory)
+
+    def test_checked_in_inventory_selects_one_exact_proved_bundle(self):
+        inventory = json.loads((ROOT / 'deployment/hotel-setup-online-images.json').read_text())
+        proof = json.loads((ROOT / 'deployment/hotel-setup-helper-owner-image-proof.json').read_text())
+        digest = runner.operational_image(inventory)
+        self.assertEqual(digest, proof['bundle']['digest'])
+        self.assertEqual(inventory['operational'][digest], {
+            'source': proof['bundle']['publisherSource'],
+            'primarySource': proof['primary']['source'],
+            'rollbackSource': proof['rollback']['source'],
+        })
+        for mode in ('creation', 'property'):
+            for slot in ('primary', 'rollback'):
+                self.assertEqual(inventory[mode][proof[slot]['digest']], proof[slot]['source'])
 
     def test_task_identity_secrets_launcher_and_certificate_are_disjoint(self):
         for mode in ('organization', 'property'):

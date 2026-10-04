@@ -238,6 +238,15 @@ class ReleaseTest(unittest.TestCase):
                 'secrets':[{'name':'HOTEL_SETUP_COMMAND_ADMISSION','valueFrom':'fixture'}]}
         with self.assertRaises(RuntimeError): release.environment(item)
 
+    def test_checked_in_primary_is_admitted_for_public_and_both_private_releases(self):
+        proof = json.loads((ROOT / 'deployment/hotel-setup-helper-owner-image-proof.json').read_text())
+        primary = proof['primary']
+        for name in ('hotel-setup-caller-images.json', 'hotel-setup-command-images.json',
+                     'hotel-setup-property-images.json'):
+            inventory = json.loads((ROOT / 'deployment' / name).read_text())
+            self.assertEqual(inventory[primary['digest']], primary['source'])
+            release.approved(primary['digest'], name)
+
     def test_empty_caller_inventory_blocks_unproved_images(self):
         with self.assertRaises(RuntimeError): release.approved(DIGEST, 'hotel-setup-caller-images.json')
 
