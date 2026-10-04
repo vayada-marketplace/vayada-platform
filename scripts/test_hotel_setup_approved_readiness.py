@@ -113,14 +113,15 @@ class ApprovedReadinessTest(unittest.TestCase):
     def test_zero_counts_do_not_hide_pending_or_draining_physical_tasks(self):
         arn = runner.gate.CLUSTER_ARN.replace(':cluster/', ':task/') + '/' + 'a' * 32
         for desired, last, override in [('RUNNING', 'RUNNING', {}), ('STOPPED', 'STOPPING', {}),
-                ('STOPPED', 'STOPPED', {'taskRoleArn': 'other'}), ('STOPPED', 'STOPPED', {})]:
+                ('STOPPED', 'STOPPED', {'taskRoleArn': 'other'}), ('STOPPED', 'STOPPED', {}), ('STOPPED', 'STOPPED', {'inferenceAcceleratorOverrides': []}),
+                *[('STOPPED', 'STOPPED', {'inferenceAcceleratorOverrides': value}) for value in ([{'deviceName': 'other'}], None, {}, '')]]:
             def aws(*args):
                 if args[1] == 'list-tasks':
                     return {'taskArns': [arn] if args[-1] == desired else []}
                 return {'tasks': [{'taskArn': arn, 'clusterArn': runner.gate.CLUSTER_ARN,
                     'group': 'service:private-fixture', 'lastStatus': last, 'overrides': override}]}
             with self.subTest(desired=desired, last=last, override=override), patch.object(runner, 'aws', side_effect=aws):
-                if last == 'STOPPED' and not override:
+                if last == 'STOPPED' and override in ({}, {'inferenceAcceleratorOverrides': []}):
                     runner.physically_stopped(runner.release.CLUSTER, '--service-name', 'private-fixture', 'hotel-setup')
                 else:
                     with self.assertRaises(RuntimeError):
@@ -258,7 +259,7 @@ class ApprovedReadinessTest(unittest.TestCase):
                     return {'tasks': [{'taskArn': ARN, 'taskDefinitionArn': REGISTERED, 'clusterArn': runner.CLUSTER_ARN,
                         'group': 'family:' + runner.FAMILY, 'startedBy': ATTEMPT,
                         'tags': [] if case == 'wrong-tag' else runner.TAGS,
-                        'overrides': {'taskRoleArn': 'other'} if case == 'override' else {},
+                        'overrides': {'taskRoleArn': 'other'} if case == 'override' else {'inferenceAcceleratorOverrides': [], 'containerOverrides': [{'name': runner.CONTAINER}]},
                         'lastStatus': 'STOPPED' if stopped or case in ('success', 'bad-exit', 'wrong-tag', 'override', 'cleanup-read-failure') else 'RUNNING',
                         'containers': [{'name': runner.CONTAINER, 'image': IMAGE, 'imageDigest': DIGEST,
                             'exitCode': 1 if case == 'bad-exit' else 0}]}]}
@@ -313,6 +314,18 @@ class ApprovedReadinessTest(unittest.TestCase):
             self.assertNotIn(forbidden, workflow)
         ci = (ROOT / '.github/workflows/tf-validate.yml').read_text()
         self.assertIn('scripts/test_hotel_setup_approved_readiness.py scripts/test_hotel_setup_credentials.py', ci)
+
+    def test_operational_task_accepts_only_absent_or_empty_inference_overrides(self):
+        for overrides in ({}, {'inferenceAcceleratorOverrides': []}, *[{'inferenceAcceleratorOverrides': value}
+                for value in ([{'deviceName': 'other'}], None, {}, '')]):
+            task = {'taskArn': ARN, 'taskDefinitionArn': REGISTERED, 'clusterArn': runner.CLUSTER_ARN,
+                'group': 'family:' + runner.FAMILY, 'startedBy': ATTEMPT, 'tags': runner.TAGS, 'overrides': overrides}
+            with self.subTest(overrides=overrides), patch.object(runner, 'aws', return_value={'tasks': [task]}):
+                if overrides in ({}, {'inferenceAcceleratorOverrides': []}):
+                    self.assertEqual(runner.task_state(ARN, REGISTERED, ATTEMPT), task)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        runner.task_state(ARN, REGISTERED, ATTEMPT)
 
     def test_receipt_extra_fields_duplicate_events_or_unknown_status_never_pass(self):
         for value in [apply_value(), {'status': 'PASS', 'mode': 'inspect', 'inspection': {**FROZEN, 'password': 'x'}},

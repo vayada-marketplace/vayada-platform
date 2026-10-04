@@ -41,7 +41,8 @@ def physical_tasks(name, definition, container_name='hotel-setup'):
                     and task.get('desiredStatus') == task.get('lastStatus') == 'RUNNING',
                     'Physical private task differs from the serving definition')
     task_overrides = task.get('overrides', {})
-    release.require(set(task_overrides) <= {'containerOverrides'}, 'Private task has identity or runtime overrides')
+    release.require(set(task_overrides) <= {'containerOverrides', 'inferenceAcceleratorOverrides'}
+                    and task_overrides.get('inferenceAcceleratorOverrides', []) == [], 'Private task has identity or runtime overrides')
     overrides = task_overrides.get('containerOverrides', [])
     release.require(all(set(item) <= {'name'} and item.get('name') == container_name for item in overrides),
                     'Private startup has effective command or environment overrides')

@@ -77,7 +77,8 @@ def physically_stopped(cluster, selector, name, container_name=None):
         if container_name:
             for task in tasks:
                 overrides = task.get('overrides', {})
-                release.require(set(overrides) <= {'containerOverrides'} and all(set(item) <= {'name'}
+                release.require(set(overrides) <= {'containerOverrides', 'inferenceAcceleratorOverrides'}
+                    and overrides.get('inferenceAcceleratorOverrides', []) == [] and all(set(item) <= {'name'}
                     and item.get('name') == container_name for item in overrides.get('containerOverrides', [])),
                     'Stopped private history has runtime or identity overrides')
 
@@ -197,7 +198,8 @@ def task_state(arn, registered, attempt):
         and task.get('clusterArn') == CLUSTER_ARN and task.get('group') == 'family:' + FAMILY
         and task.get('startedBy') == attempt and task.get('tags') == TAGS, 'Offline task scope differs')
     overrides = task.get('overrides', {})
-    release.require(set(overrides) <= {'containerOverrides'} and all(set(item) <= {'name'}
+    release.require(set(overrides) <= {'containerOverrides', 'inferenceAcceleratorOverrides'}
+        and overrides.get('inferenceAcceleratorOverrides', []) == [] and all(set(item) <= {'name'}
         and item.get('name') == CONTAINER for item in overrides.get('containerOverrides', [])), 'Offline task has effective overrides')
     return task
 
