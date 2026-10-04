@@ -426,6 +426,9 @@ if [[ -n "${helper_file}" ]]; then helper_payload="$(gzip -9 -c "${script_dir}/$
 if [[ -n "$legacy_helper_mode" ]]; then
   payload="$(node -e "const fs=require('node:fs'),z=require('node:zlib');process.stdout.write(z.brotliCompressSync(fs.readFileSync(process.argv[1]),{params:{[z.constants.BROTLI_PARAM_QUALITY]:11}}).toString('base64'))" "${script_dir}/${code_file}")"
   bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();fs.writeFileSync(p,z.brotliDecompressSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));process.argv[1]=p;import(p).catch(()=>process.exit(1))"
+elif [[ "$reader_rls_mode" == inspect || "$reader_rls_mode" == apply ]]; then
+  payload="$(node -e "const fs=require('node:fs'),z=require('node:zlib');process.stdout.write(z.brotliCompressSync(fs.readFileSync(process.argv[1]),{params:{[z.constants.BROTLI_PARAM_QUALITY]:11}}).toString('base64'))" "${script_dir}/${code_file}")"
+  bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();fs.writeFileSync(p,z.brotliDecompressSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));if(process.env.HOTEL_SETUP_READER_RLS_MODE)process.argv[1]=p;import(p).catch(()=>process.exit(1))"
 elif [[ -n "${vay2017_phase}" ]]; then
   bootstrap="const{spawnSync}=require('node:child_process'),z=require('node:zlib');process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();const r=spawnSync(process.execPath,['/app/packages/backend-migration/dist/cli/legacyHistoricalBindingProductionPreflight.js',process.env.VAY2017_PREFLIGHT_PHASE],{stdio:'inherit',env:process.env});process.exit(r.status??1)"
 else
@@ -637,17 +640,18 @@ elif [[ "${vay2017_source_import_phase}" == "prepare" ]]; then vay2017_expected_
 elif [[ "${vay2017_source_import_phase}" == "extract" ]]; then vay2017_expected_status="complete";
 elif [[ "${vay2017_source_import_phase}" == "cleanup" ]]; then vay2017_expected_status="clean";
 fi
+task="$(aws ecs describe-tasks --cluster "${cluster}" --tasks "${task_arn}" --region "${region}" \
+  --query 'tasks[0].{exitCode:containers[0].exitCode,reason:stoppedReason}' --output json)"
 for _ in {1..10}; do
   messages="$(aws logs get-log-events --log-group-name /ecs/vayada-next-api --log-stream-name "${log_stream}" \
     --start-from-head --region "${region}" --query 'events[].message' --output json 2>/dev/null || echo '[]')"
-  jq -e --arg expected "${vay2017_expected_status}" \
-    'any(.[]; fromjson? | .status == "PASS" or .status == "BLOCKED" or ($expected != "" and .status == $expected))' \
-    <<<"${messages}" >/dev/null && break
+  jq -e --arg expected "${vay2017_expected_status}" --arg reader "$reader_rls_mode" --arg exit "$(jq -r '.exitCode' <<<"${task}")" \
+    'if type != "array" then false elif $reader == "inspect" and $exit == "1" then length > 0
+      else any(.[]; fromjson? | select(type == "object") | .status == "PASS" or .status == "BLOCKED" or
+        ($expected != "" and .status == $expected)) end' <<<"${messages}" >/dev/null 2>&1 && break
   sleep 2
 done
 
-task="$(aws ecs describe-tasks --cluster "${cluster}" --tasks "${task_arn}" --region "${region}" \
-  --query 'tasks[0].{exitCode:containers[0].exitCode,reason:stoppedReason}' --output json)"
 if [[ -n "$legacy_helper_mode" && "$(jq -r '.exitCode' <<<"${task}")" == "2" ]]; then
   blocked="$(jq -c --arg mode "$legacy_helper_mode" '.[] | fromjson? | select(.status == "BLOCKED" and .scope == "hotel_setup_legacy_helper_inspection" and .mode == $mode)' <<<"${messages}")"
   [[ -n "$blocked" ]] || exit 1
@@ -662,8 +666,43 @@ if [[ "${mode}" == "--audit-financials-readiness" && "$(jq -r '.exitCode' <<<"${
   exit 2
 fi
 [[ "$(jq -r '.exitCode' <<<"${task}")" == "0" ]] || {
-  echo "Runtime preflight task failed: $(jq -r '.reason' <<<"${task}")" >&2
-  jq -r '.[] | fromjson? | select(.status == "FAIL" or .status == "failed") | .code' <<<"${messages}" >&2
+  if [[ "$reader_rls_mode" == inspect ]]; then
+    # Admit only the fixed inspect diagnostic schema; never relay arbitrary error text.
+    diagnostic="$(jq -c '
+      def hash: if . == null then true elif type == "string" then test("^[a-f0-9]{64}$") else false end;
+      def checks: ["identityCount","principalMatches","sessionMatches","primary","readerCount",
+        "login","noInherit","noSuperuser","noCreateRole","noCreateDatabase","noReplication","noBypassRls",
+        "noReaderParentMembership","helperCount","signatureMatches","bodyMatches","invoker","stable",
+        "ownerNotReader","parallelUnsafe","functionKind","notLeakproof","notStrict","argumentCount",
+        "defaultCount","booleanResult","notSetReturning","notVariadic","noAllArgTypes","noArgModes",
+        "noSupportFunction","argumentTypes","argumentNames","searchPath","defaultExpression","language",
+        "grantAuthority","noPublicExecute","noReaderGrantOption","lockAcquired","urlParsed","githubActions",
+        "main","protocol","host","port","username","database","passwordPresent","noFragment","sslQuery",
+        "caPresent","connectionValid"];
+      .[] | fromjson? | select(type == "object") | select(keys == ["code","diagnostic","mode","scope","status"] and
+        .status == "FAIL" and .scope == "hotel_setup_reader_rls_permissions" and .mode == "inspect" and
+        .code == "hotel_setup_reader_rls_permission_unavailable") |
+      select(.diagnostic | type == "object") |
+      select(.diagnostic.checks | type == "object") |
+      select(.diagnostic | keys == ["bodyHash","checks","definitionHash","lockAcquired","oid","predicate","sqlState","stage","subject"]) |
+      select(.diagnostic | .stage as $stage | ["environment","connect","mode","lock","transaction","identity",
+        "readers","memberships","functions","helper","acl","rollback","completion"] | index($stage)) |
+      select(.diagnostic | .predicate as $predicate | checks + ["sql_error","unexpected"] | index($predicate)) |
+      select(.diagnostic | (.lockAcquired == null or (.lockAcquired | type == "boolean")) and
+        (.oid | if . == null then true elif type == "number" then floor == . and . > 0 and . <= 4294967295 else false end) and
+        (.sqlState | if . == null then true elif type == "string" then test("^[A-Z0-9]{5}$") else false end) and
+        (.bodyHash | hash) and (.definitionHash | hash) and
+        (.subject == null or (.subject as $subject | ["vayada_next_hotel_setup_creation_reader","vayada_next_hotel_setup_reader",
+          "platform.channex_management_worker_scope(text,text,uuid)","platform.channex_management_worker_source(text,text,uuid)"] | index($subject))) and
+        (.checks | type == "object" and ([keys[]] - checks | length == 0) and all(.[]; type == "boolean")))
+      ' <<<"${messages}" 2>/dev/null)" || diagnostic=""
+    if [[ -n "$diagnostic" && "$(wc -l <<<"$diagnostic" | tr -d ' ')" == 1 ]]; then
+      printf '%s\n' "$diagnostic" >&2
+    else echo hotel_setup_reader_rls_permission_unavailable >&2; fi
+  else
+    echo "Runtime preflight task failed: $(jq -r '.reason' <<<"${task}")" >&2
+    jq -r '.[] | fromjson? | select(.status == "FAIL" or .status == "failed") | .code' <<<"${messages}" >&2
+  fi
   exit 1
 }
 if [[ -n "$legacy_helper_mode" ]]; then

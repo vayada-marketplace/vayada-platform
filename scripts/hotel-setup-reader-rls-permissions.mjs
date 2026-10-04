@@ -10,22 +10,50 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const require = value => { if (!value) throw new Error('hotel_setup_reader_rls_permission_unavailable'); };
 
-async function inspect(client, principal) {
+const step = (diagnostic, stage) => {
+  if (diagnostic) Object.assign(diagnostic, { stage, predicate: null, checks: {}, subject: null,
+    oid: null, bodyHash: null, definitionHash: null });
+};
+const check = (checks, diagnostic) => {
+  if (diagnostic) Object.assign(diagnostic, { checks,
+    predicate: Object.keys(checks).find(key => checks[key] !== true) ?? null });
+  require(Object.values(checks).every(value => value === true));
+};
+export const readerInspectionDiagnostic = () => ({ stage: 'environment', predicate: null,
+  checks: {}, subject: null, oid: null, bodyHash: null, definitionHash: null,
+  lockAcquired: null, sqlState: null });
+export function readerInspectionFailure(error, diagnostic) {
+  return { status: 'FAIL', scope: 'hotel_setup_reader_rls_permissions', mode: 'inspect',
+    code: 'hotel_setup_reader_rls_permission_unavailable', diagnostic: { ...diagnostic,
+      predicate: diagnostic.predicate ?? (/^[A-Z0-9]{5}$/.test(error?.code ?? '') ? 'sql_error' : 'unexpected'),
+      sqlState: /^[A-Z0-9]{5}$/.test(error?.code ?? '') ? error.code : null } };
+}
+
+async function inspect(client, principal, diagnostic) {
+  step(diagnostic, 'identity');
   const identity = (await client.query(`SELECT current_database() AS database, current_user AS principal,
     session_user AS session, pg_is_in_recovery() AS replica,
     (SELECT oid FROM pg_roles WHERE rolname=current_user) AS oid`)).rows;
-  require(identity.length === 1 && identity[0].principal === principal &&
-    identity[0].session === principal && identity[0].replica === false);
+  check({ identityCount: identity.length === 1, principalMatches: identity[0]?.principal === principal,
+    sessionMatches: identity[0]?.session === principal, primary: identity[0]?.replica === false }, diagnostic);
+  step(diagnostic, 'readers');
   const readers = (await client.query(`SELECT oid,rolname,rolcanlogin,rolinherit,rolsuper,
     rolcreaterole,rolcreatedb,rolreplication,rolbypassrls,rolconnlimit,
     rolvaliduntil::text,rolconfig FROM pg_roles WHERE rolname=ANY($1::text[]) ORDER BY rolname`, [roles])).rows;
-  require(readers.length === 2 && readers.every(row => row.rolcanlogin && !row.rolinherit &&
-    !row.rolsuper && !row.rolcreaterole && !row.rolcreatedb && !row.rolreplication && !row.rolbypassrls));
+  check({ readerCount: readers.length === 2 }, diagnostic);
+  for (const row of readers) {
+    if (diagnostic) Object.assign(diagnostic, { subject: row.rolname, oid: row.oid });
+    check({ login: row.rolcanlogin, noInherit: !row.rolinherit, noSuperuser: !row.rolsuper,
+      noCreateRole: !row.rolcreaterole, noCreateDatabase: !row.rolcreatedb,
+      noReplication: !row.rolreplication, noBypassRls: !row.rolbypassrls }, diagnostic);
+  }
+  step(diagnostic, 'memberships');
   const memberships = (await client.query(`SELECT roleid,member,grantor,admin_option,inherit_option,set_option
     FROM pg_auth_members WHERE roleid=ANY($1::oid[]) OR member=ANY($1::oid[])
     ORDER BY roleid,member,grantor`, [readers.map(row => row.oid)])).rows;
   // CREATEROLE creators can retain incoming ADMIN membership; readers inherit no parent role.
-  require(!memberships.some(row => readers.some(reader => reader.oid === row.member)));
+  check({ noReaderParentMembership: !memberships.some(row => readers.some(reader => reader.oid === row.member)) }, diagnostic);
+  step(diagnostic, 'functions');
   const functions = (await client.query(`SELECT p.oid,p.oid::regprocedure::text AS signature,
     p.proowner,p.prosecdef,p.provolatile,p.proparallel,p.prokind,p.proleakproof,p.proisstrict,
     p.pronargs,p.pronargdefaults,p.prorettype,p.proargtypes::oid[] AS argument_types,
@@ -37,37 +65,49 @@ async function inspect(client, principal) {
     FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang
     WHERE p.oid=ANY(ARRAY(SELECT to_regprocedure(unnest($1::text[])))) ORDER BY signature`,
   [[...helpers.keys()]])).rows;
-  require(functions.length === 2);
+  check({ helperCount: functions.length === 2 }, diagnostic);
   for (const row of functions) {
-    require(helpers.get(row.signature) === hash(row.prosrc) && !row.prosecdef && row.provolatile === 's' &&
-      !readers.some(reader => reader.oid === row.proowner) &&
-      row.proparallel === 'u' && row.prokind === 'f' && !row.proleakproof && !row.proisstrict &&
-      row.pronargs === 3 && row.pronargdefaults === 1 && row.prorettype === 16 &&
-      !row.proretset && row.provariadic === 0 && row.proallargtypes === null && row.proargmodes === null && row.prosupport === '-' &&
-      same(row.argument_types, [25, 25, 2950]) && same(row.proargnames, ['kind', 'resource', 'parent']) &&
-      same(row.proconfig, ['search_path=pg_catalog']) && row.defaults === 'NULL::uuid' &&
-      row.lanname === 'plpgsql' && row.can_grant === true);
+    step(diagnostic, 'helper');
+    if (diagnostic) Object.assign(diagnostic, { subject: helpers.has(row.signature) ? row.signature : null,
+      oid: row.oid, bodyHash: hash(row.prosrc), definitionHash: hash(row.definition) });
+    check({ signatureMatches: helpers.has(row.signature), bodyMatches: helpers.get(row.signature) === hash(row.prosrc),
+      invoker: !row.prosecdef, stable: row.provolatile === 's',
+      ownerNotReader: !readers.some(reader => reader.oid === row.proowner), parallelUnsafe: row.proparallel === 'u',
+      functionKind: row.prokind === 'f', notLeakproof: !row.proleakproof, notStrict: !row.proisstrict,
+      argumentCount: row.pronargs === 3, defaultCount: row.pronargdefaults === 1, booleanResult: row.prorettype === 16,
+      notSetReturning: !row.proretset, notVariadic: row.provariadic === 0, noAllArgTypes: row.proallargtypes === null,
+      noArgModes: row.proargmodes === null, noSupportFunction: row.prosupport === '-',
+      argumentTypes: same(row.argument_types, [25, 25, 2950]), argumentNames: same(row.proargnames, ['kind', 'resource', 'parent']),
+      searchPath: same(row.proconfig, ['search_path=pg_catalog']), defaultExpression: row.defaults === 'NULL::uuid',
+      language: row.lanname === 'plpgsql', grantAuthority: row.can_grant === true }, diagnostic);
     row.bodyHash = hash(row.prosrc);
     row.definitionHash = hash(row.definition);
     delete row.prosrc;
     delete row.definition;
+    if (diagnostic) diagnostic.stage = 'acl';
     row.acl = (await client.query(`SELECT grantor,grantee,privilege_type,is_grantable FROM pg_proc p
       CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
       WHERE p.oid=$1 ORDER BY grantor,grantee,privilege_type,is_grantable`, [row.oid])).rows;
-    require(!row.acl.some(edge => edge.grantee === 0 && edge.privilege_type === 'EXECUTE'));
-    require(!row.acl.some(edge => readers.some(reader => reader.oid === edge.grantee) && edge.is_grantable));
+    check({ noPublicExecute: !row.acl.some(edge => edge.grantee === 0 && edge.privilege_type === 'EXECUTE'),
+      noReaderGrantOption: !row.acl.some(edge => readers.some(reader => reader.oid === edge.grantee) && edge.is_grantable) }, diagnostic);
   }
   return { identity: identity[0], readers, memberships, functions };
 }
 
 // The shared migration lock is acquired before any snapshot and held through readback/COMMIT.
-export async function runReaderRlsPermissionCheck(client, mode, frozen, principal = 'vayada_admin') {
+export async function runReaderRlsPermissionCheck(client, mode, frozen, principal = 'vayada_admin', diagnostic) {
+  if (mode !== 'inspect') diagnostic = undefined;
+  step(diagnostic, 'mode');
   require(['inspect', 'apply'].includes(mode) && (mode === 'inspect' ? frozen === undefined : /^[a-f0-9]{64}$/.test(frozen ?? '')));
-  require((await client.query('SELECT pg_try_advisory_lock(8734516) AS locked')).rows[0]?.locked === true);
+  step(diagnostic, 'lock');
+  const locked = (await client.query('SELECT pg_try_advisory_lock(8734516) AS locked')).rows[0]?.locked === true;
+  if (diagnostic) diagnostic.lockAcquired = locked;
+  check({ lockAcquired: locked }, diagnostic);
   try {
+    step(diagnostic, 'transaction');
     await client.query(mode === 'inspect' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' : 'BEGIN');
     await client.query("SET LOCAL search_path=pg_catalog; SET LOCAL statement_timeout='15s'; SET LOCAL lock_timeout='5s'");
-    const before = await inspect(client, principal);
+    const before = await inspect(client, principal, diagnostic);
     const fingerprint = hash(JSON.stringify(before));
     const missing = before.functions.flatMap(fn => before.readers.filter(reader =>
       !fn.acl.some(edge => edge.grantee === reader.oid && edge.privilege_type === 'EXECUTE'))
@@ -92,7 +132,7 @@ export async function runReaderRlsPermissionCheck(client, mode, frozen, principa
           edge.privilege_type === 'EXECUTE' && !edge.is_grantable)));
       }
       await client.query('COMMIT');
-    } else await client.query('ROLLBACK');
+    } else { step(diagnostic, 'rollback'); await client.query('ROLLBACK'); }
     return { status: 'PASS', scope: 'hotel_setup_reader_rls_permissions', mode, fingerprint,
       readers: before.readers.map(row => ({ role: row.rolname, oid: row.oid })),
       functions: before.functions.map(row => ({ signature: row.signature, oid: row.oid,
@@ -107,12 +147,17 @@ export async function runReaderRlsPermissionCheck(client, mode, frozen, principa
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   let client;
   let invalid = false;
+  const diagnostic = process.env.HOTEL_SETUP_READER_RLS_MODE === 'inspect' ? readerInspectionDiagnostic() : undefined;
   try {
-    const url = new URL(process.env.TARGET_DATABASE_ADMIN_URL ?? '');
-    require(process.env.GITHUB_ACTIONS === 'true' && process.env.GITHUB_REF === 'refs/heads/main' &&
-      url.protocol === 'postgresql:' && url.hostname === 'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com' &&
-      url.port === '5432' && url.username === 'vayada_admin' && url.pathname === '/postgres' &&
-      url.password && !url.hash && url.search === '?sslmode=require' && process.env.VAYADA_DB_RDS_CA_BUNDLE);
+    let url;
+    try { url = new URL(process.env.TARGET_DATABASE_ADMIN_URL ?? ''); } catch {}
+    check({ urlParsed: !!url, githubActions: process.env.GITHUB_ACTIONS === 'true',
+      main: process.env.GITHUB_REF === 'refs/heads/main', protocol: url?.protocol === 'postgresql:',
+      host: url?.hostname === 'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com',
+      port: url?.port === '5432', username: url?.username === 'vayada_admin', database: url?.pathname === '/postgres',
+      passwordPresent: !!url?.password, noFragment: !!url && !url.hash,
+      sslQuery: url?.search === '?sslmode=require', caPresent: !!process.env.VAYADA_DB_RDS_CA_BUNDLE }, diagnostic);
+    step(diagnostic, 'connect');
     const { default: pg } = await import('pg');
     client = new pg.Client({ host: url.hostname, port: 5432, database: 'vayada_target_prod',
       user: 'vayada_admin', password: decodeURIComponent(url.password),
@@ -123,11 +168,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     client.on('notice', notice => { if (notice.code === '01007') invalid = true; });
     await client.connect();
     const receipt = await runReaderRlsPermissionCheck(client,
-      process.env.HOTEL_SETUP_READER_RLS_MODE, process.env.HOTEL_SETUP_READER_RLS_FROZEN);
-    require(!invalid);
+      process.env.HOTEL_SETUP_READER_RLS_MODE, process.env.HOTEL_SETUP_READER_RLS_FROZEN, 'vayada_admin', diagnostic);
+    step(diagnostic, 'completion');
+    check({ connectionValid: !invalid }, diagnostic);
     console.log(JSON.stringify(receipt));
-  } catch {
-    console.error(JSON.stringify({ status: 'FAIL', code: 'hotel_setup_reader_rls_permission_unavailable' }));
+  } catch (error) {
+    console.error(JSON.stringify(diagnostic ? readerInspectionFailure(error, diagnostic) :
+      { status: 'FAIL', code: 'hotel_setup_reader_rls_permission_unavailable' }));
     process.exitCode = 1;
   } finally { await client?.end().catch(() => {}); }
 }
