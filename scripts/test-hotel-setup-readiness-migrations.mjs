@@ -19,7 +19,7 @@ async function audit(change = () => {}) {
     identity: {database:'vayada_target_prod',principal:'vayada_admin',replica:false,read_only:'on',locked:true},
     objects: {scopes_present:true,cursor_absent:true,columns_absent:true,checks_absent:true},
     rows: [...contents].filter(([name]) => name.slice(0,4) < '0463').map(([filename,content]) => ({
-      version:filename.slice(0,4),name:filename.slice(5,-4),status:'applied',environment:'production',checksum_sha256:checksum(content)
+      version:filename.slice(0,4),name:filename.slice(5,-4),status:'applied',environment:'production',checksum_sha256:checksum(content),history_order:1
     })),
   };
   change(fixture);
@@ -33,7 +33,7 @@ async function audit(change = () => {}) {
       if (fixture.databaseFailure) { const error=Error('synthetic secret must never leave task');error.code=fixture.databaseFailureCode;throw error; }
       if (sql.includes('pg_try_advisory_lock(8734516)')) return {rows:[{locked:fixture.identity.locked}]};
       if (sql.includes('current_database()')) return {rows:[fixture.identity]};
-      if (sql.includes('DISTINCT ON (version)')) return {rows:fixture.rows};
+      if (sql.includes('row_number() OVER')) return {rows:fixture.rows};
       if (sql.includes('scopes_present')) return {rows:[fixture.objects]};
       return {rows:[]};
     }
@@ -59,7 +59,7 @@ async function audit(change = () => {}) {
 }
 const valid = await audit();
 assert.equal(valid.exitCode,0);
-assert.deepEqual(valid.output,[{status:'PASS',audit:'hotel_setup_readiness_migrations',appliedCount:2,
+assert.deepEqual(valid.output,[{status:'PASS',audit:'hotel_setup_readiness_migrations',appliedCount:2,rejectedChecksums:0,
   manifestSha256:checksum(JSON.stringify([...contents].map(([filename,content])=>[filename.slice(0,4),{name:filename.slice(5,-4),checksum:checksum(content)}]))),pending:['0463','0464']}]);
 assert.equal(valid.connects,1); assert.equal(valid.ends,1);
 assert.equal(valid.options.ssl.rejectUnauthorized,true);
@@ -105,6 +105,38 @@ for(const change of [
   assert(!JSON.stringify(receipt).includes('synthetic secret'));
   assert.equal(result.ends,result.connects);
 }
+function rejected(fixture, change = () => {}) {
+  const witness = fixture.rows[0];
+  const attempt = {...witness,status:'failed',checksum_sha256:'a'.repeat(64),duration_ms:0,statement_count:null,requires_rebuild:false};
+  attempt.failure_reason = `Checksum mismatch for ${witness.version}_${witness.name}.sql: ledger has ${witness.checksum_sha256}, file is ${attempt.checksum_sha256}`;
+  change(attempt,witness);
+  witness.history_order=2;
+  fixture.rows.unshift(attempt);
+}
+const rejection = await audit(f=>rejected(f));
+assert.equal(rejection.exitCode,0);
+assert.equal(rejection.output[0].rejectedChecksums,1);
+for (const change of [
+  a=>a.failure_reason+=' unexpected', a=>a.duration_ms=1, a=>a.statement_count=0,
+  a=>a.requires_rebuild=true, a=>a.status='rolled_forward', a=>a.environment='staging',
+  a=>a.name='wrong', a=>a.checksum_sha256='bad', (a,w)=>a.checksum_sha256=w.checksum_sha256,
+  (a,w)=>w.checksum_sha256='b'.repeat(64), (a,w)=>w.status='failed',
+  a=>a.history_order=2,
+]) assert.equal((await audit(f=>rejected(f,change))).exitCode,1);
+for (const status of ['failed','rolled_forward']) {
+  const result=await audit(f=>{
+    rejected(f);
+    const witness=f.rows[1]; witness.history_order=3;
+    f.rows.splice(1,0,{...f.rows[0],history_order:2,status,failure_reason:'unresolved execution failure'});
+  });
+  assert.equal(result.exitCode,1);
+  assert.equal(result.output[0].reason,'unresolved_history');
+}
+const twice = await audit(f=>{
+  rejected(f);f.rows[1].history_order=3;
+  f.rows.splice(1,0,{...f.rows[0],history_order:2});
+});
+assert.equal(twice.exitCode,0);assert.equal(twice.output[0].rejectedChecksums,2);
 for(const code of ['42501','synthetic secret must never leave task']) {
   const result=await audit(f=>{f.databaseFailure=true;f.databaseFailureCode=code;});
   assert.equal(result.output[0].stage,'lock');

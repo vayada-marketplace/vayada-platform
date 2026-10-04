@@ -51,20 +51,44 @@ try {
       identity[0].principal !== 'vayada_admin' || identity[0].replica !== false ||
       identity[0].read_only !== 'on') throw new Error();
   stage='ledger';
-  const rows = (await client.query(`SELECT DISTINCT ON (version)
-      version, name, status, environment, checksum_sha256
-    FROM platform.schema_migrations ORDER BY version, applied_at DESC, id DESC LIMIT 1001`)).rows;
-  const applied = new Set();
+  const rows = (await client.query(`SELECT version, name, status, environment, checksum_sha256,
+      failure_reason, duration_ms, statement_count, requires_rebuild,
+      row_number() OVER (PARTITION BY version ORDER BY applied_at DESC, id DESC) AS history_order
+    FROM platform.schema_migrations ORDER BY version, applied_at DESC, id DESC LIMIT 10001`)).rows;
+  if (rows.length > 10000) failLedger('history_limit');
+  const histories = new Map();
   for (const row of rows) {
-    const expected = manifest.get(row.version);
+    const history = histories.get(row.version) ?? [];
+    history.push(row);
+    histories.set(row.version, history);
+  }
+  const applied = new Set();
+  let rejectedChecksums = 0;
+  for (const [migrationVersion, history] of histories) {
+    const row = history[0];
+    const expected = manifest.get(migrationVersion);
     if (!expected) failLedger('unknown_version',row);
-    if (applied.has(row.version)) failLedger('duplicate_version',row);
     if (row.version >= '0463') failLedger('transition_already_present',row);
-    if (row.status !== 'applied') failLedger('not_applied',row);
-    if (row.environment !== 'production') failLedger('wrong_environment',row);
-    if (row.name !== expected.name) failLedger('name_mismatch',row);
-    if (row.checksum_sha256 !== expected.checksum) failLedger('checksum_mismatch',row);
-    applied.add(row.version);
+    if (history.some((entry,index) => Number(entry.history_order) !== index + 1)) failLedger('history_order',row);
+    const witnessIndex = history.findIndex(entry => entry.status === 'applied');
+    if (witnessIndex < 0) failLedger('not_applied',row);
+    const witness = history[witnessIndex];
+    if (witness.environment !== 'production') failLedger('wrong_environment',witness);
+    if (witness.name !== expected.name) failLedger('name_mismatch',witness);
+    if (witness.checksum_sha256 !== expected.checksum) failLedger('checksum_mismatch',witness);
+    // The canonical runner records checksum rejection before executing any DDL.
+    // Every attempt after the applied witness must be that exact rejection;
+    // a newer rejection cannot conceal an intervening unresolved DDL failure.
+    for (const attempt of history.slice(0,witnessIndex)) {
+      const filename = `${migrationVersion}_${expected.name}.sql`;
+      const failure = `Checksum mismatch for ${filename}: ledger has ${expected.checksum}, file is ${attempt.checksum_sha256}`;
+      if (attempt.status !== 'failed' || attempt.environment !== 'production' || attempt.name !== expected.name ||
+          !/^[a-f0-9]{64}$/.test(attempt.checksum_sha256 ?? '') || attempt.checksum_sha256 === expected.checksum ||
+          attempt.failure_reason !== failure || attempt.duration_ms !== 0 || attempt.statement_count !== null ||
+          attempt.requires_rebuild !== false) failLedger('unresolved_history',attempt);
+      rejectedChecksums++;
+    }
+    applied.add(migrationVersion);
   }
   if ([...manifest.keys()].filter(version => !applied.has(version)).join(',') !== '0463,0464') failLedger('pending_set_mismatch');
   stage='objects';
@@ -84,7 +108,7 @@ try {
   await client.query('ROLLBACK');
   const manifestSha256 = createHash('sha256').update(JSON.stringify([...manifest])).digest('hex');
   console.log(JSON.stringify({ status: 'PASS', audit: 'hotel_setup_readiness_migrations',
-    appliedCount: applied.size, manifestSha256, pending: ['0463', '0464'] }));
+    appliedCount: applied.size, rejectedChecksums, manifestSha256, pending: ['0463', '0464'] }));
 } catch (error) {
   console.error(JSON.stringify({ status: 'FAIL', code: 'hotel_setup_readiness_migration_audit_unavailable',stage,
     ...(reason ? {reason} : {}),...(version ? {version} : {}),
