@@ -244,14 +244,15 @@ def apply_receipt(value, frozen):
 
 
 def diagnostic_receipt(value):
-    release.require(set(value) == {'status', 'mode', 'inspectionStatus', 'phase', 'rowCount', 'sqlState'}
+    release.require(set(value) == {'status', 'mode', 'inspectionStatus', 'phase', 'rowCount', 'sqlState', 'statementSha256'}
         and value['status'] == 'PASS' and value['mode'] == 'diagnose'
         and value['inspectionStatus'] in ('PASS', 'FAIL')
         and isinstance(value['phase'], str)
         and re.fullmatch(r'configuration|connection|complete|query_[0-9]{2}', value['phase'])
         and (value['rowCount'] is None or type(value['rowCount']) is int and 0 <= value['rowCount'] <= 100)
         and (value['sqlState'] is None or isinstance(value['sqlState'], str)
-            and re.fullmatch(r'[0-9A-Z]{5}', value['sqlState'])), 'Invalid diagnostic receipt')
+            and re.fullmatch(r'[0-9A-Z]{5}', value['sqlState'])) and (value['statementSha256'] is None or isinstance(value['statementSha256'], str)
+            and re.fullmatch(r'[a-f0-9]{64}', value['statementSha256'])), 'Invalid diagnostic receipt')
 
 
 def receipt(task, mode, frozen):

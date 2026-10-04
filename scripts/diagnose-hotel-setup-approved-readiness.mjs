@@ -1,10 +1,12 @@
 // Run only the immutable bundle's read-only inspection; never print errors or data.
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 const pg = createRequire('/app/apps/api/dist/cli/hotelSetupApprovedReadinessBackfill.js')('pg');
 import { inspectApprovedReadiness, parseApprovedReadinessConfiguration } from '/app/apps/api/dist/cli/hotelSetupApprovedReadinessBackfill.js';
 let phase = 'configuration';
 let query = 0;
 let rowCount = null;
+let statementSha256 = null;
 let sqlState = null;
 const original = pg.Client.prototype.query;
 pg.Client.prototype.query = async function (...args) {
@@ -12,6 +14,7 @@ pg.Client.prototype.query = async function (...args) {
   if (args[0] === 'ROLLBACK') return original.apply(this, args);
   phase = `query_${String(++query).padStart(2, '0')}`;
   rowCount = null;
+  statementSha256 = typeof args[0] === 'string' ? createHash('sha256').update(args[0]).digest('hex') : null;
   try {
     const result = await original.apply(this, args);
     rowCount = Number.isInteger(result.rowCount) && result.rowCount >= 0 ? result.rowCount : null;
@@ -32,4 +35,4 @@ try {
 } catch {
   // SQLSTATE and an ordinal identify a check without exposing its values.
 }
-console.log(JSON.stringify({ status: 'PASS', mode: 'diagnose', inspectionStatus, phase, rowCount, sqlState }));
+console.log(JSON.stringify({ status: 'PASS', mode: 'diagnose', inspectionStatus, phase, rowCount, sqlState, statementSha256 }));
