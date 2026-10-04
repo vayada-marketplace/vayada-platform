@@ -43,10 +43,10 @@ docker volume create "$modules" >/dev/null
 docker run --detach --rm --name "$database" --network "$network" \
   --network-alias reader-rls-db --env POSTGRES_PASSWORD=postgres "postgres:${version}" >/dev/null
 for _ in {1..30}; do
-  docker exec "$database" pg_isready -U postgres >/dev/null 2>&1 && break
+  docker exec "$database" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
   sleep 1
 done
-docker exec "$database" pg_isready -U postgres >/dev/null
+docker exec "$database" pg_isready -h 127.0.0.1 -U postgres >/dev/null
 docker run --rm --volume "$modules:/work" --workdir /work node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 docker run --rm --network "$network" --volume "$modules:/work" \
