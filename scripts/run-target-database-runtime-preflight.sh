@@ -333,6 +333,8 @@ case "${mode}" in
     code_file="run-hotel-setup-property-bootstrap.mjs"
     secret_name="HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL"
     secret_parameter="/vayada/prod/db-marketplace-url"
+    extra_secret_name="HOTEL_SETUP_HELPER_OWNER_DATABASE_URL"
+    extra_secret_parameter="/vayada/prod/target-database-url"
     task_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$6"
     creation_task_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap"
     creation_execution_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution"

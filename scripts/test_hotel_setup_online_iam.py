@@ -100,6 +100,23 @@ class OnlineIamTests(unittest.TestCase):
             self.assertTrue(self.allowed('ecs:DescribeServices', service + name, {}))
         self.assertFalse(self.allowed('ecs:DescribeServices', service + 'another-service', {}))
 
+    def test_helper_owner_parameter_is_execution_injection_only(self):
+        source=(ROOT/'infra/hotel_setup_property_bootstrap_execution.tf').read_text()
+        expression=source.split('policy = jsonencode(',1)[1].rsplit(')',1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory,'main.tf').write_text('locals { actual = '+expression+' }\nvariable "aws_region" { default = "eu-west-1" }\nvariable "aws_account_id" { default = "269416271598" }\n')
+            result=subprocess.run(['terraform','console','-no-color'],cwd=directory,
+                input='jsonencode(local.actual)\n',capture_output=True,text=True,check=True,timeout=30)
+            policy=json.loads(json.loads(result.stdout.strip()))
+        statement,=policy['Statement']
+        self.assertEqual(statement['Effect'],'Allow')
+        self.assertEqual(statement['Action'],['ssm:GetParameters'])
+        self.assertEqual(set(statement['Resource']),{
+            'arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/db-marketplace-url',
+            'arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/target-database-url'})
+        self.assertIn('role  = aws_iam_role.hotel_setup_property_bootstrap_execution[0].id',source)
+        self.assertFalse(any('ssm:' in action for stmt in self.actual['policy']['Statement'] for action in stmt['Action']))
+
 
 if __name__ == '__main__':
     unittest.main()

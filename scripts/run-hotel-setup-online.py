@@ -73,7 +73,8 @@ def definition(mode, digest):
             'workingDirectory': '/app', 'entryPoint': ['/bin/sh', '-ec'], 'command': COMMAND,
             'readonlyRootFilesystem': True, 'privileged': False, 'stopTimeout': 30,
             'mountPoints': [{'sourceVolume': 'runtime', 'containerPath': '/runtime', 'readOnly': False}],
-            'secrets': [{'name': 'HOTEL_SETUP_AUTOMATIC_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}],
+            'secrets': [{'name': 'HOTEL_SETUP_AUTOMATIC_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'},
+                {'name': 'HOTEL_SETUP_HELPER_OWNER_DATABASE_URL', 'valueFrom': '/vayada/prod/target-database-url'}],
             'environment': [{'name': key, 'value': value} for key, value in {
                 'NODE_ENV': 'production', 'AWS_REGION': release.REGION, 'HOTEL_SETUP_AUTOMATIC_MODE': mode,
                 'HOTEL_SETUP_RDS_CA': ca.decode('ascii'), 'NODE_EXTRA_CA_CERTS': '/runtime/rds-ca.pem',

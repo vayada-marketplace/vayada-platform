@@ -18,9 +18,12 @@ resource "aws_iam_role_policy" "hotel_setup_property_bootstrap_owner_parameter" 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["ssm:GetParameters"]
-      Resource = ["arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/prod/db-marketplace-url"]
+      Effect = "Allow"
+      Action = ["ssm:GetParameters"]
+      Resource = [
+        "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/prod/db-marketplace-url",
+        "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/prod/target-database-url",
+      ]
     }]
   })
 }

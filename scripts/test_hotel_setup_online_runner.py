@@ -48,7 +48,9 @@ class OnlineRunnerTest(unittest.TestCase):
             self.assertEqual(item['command'], runner.COMMAND)
             self.assertTrue(item['readonlyRootFilesystem'])
             self.assertFalse(item['privileged'])
-            self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_AUTOMATIC_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
+            self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_AUTOMATIC_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'},
+                {'name': 'HOTEL_SETUP_HELPER_OWNER_DATABASE_URL', 'valueFrom': '/vayada/prod/target-database-url'}])
+            self.assertNotIn('HOTEL_SETUP_HELPER_OWNER_DATABASE_URL', {entry['name'] for entry in item['environment']})
             env = {entry['name']: entry['value'] for entry in item['environment']}
             self.assertEqual(env['HOTEL_SETUP_AUTOMATIC_MODE'], mode)
             self.assertEqual(env['NODE_EXTRA_CA_CERTS'], '/runtime/rds-ca.pem')
