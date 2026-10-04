@@ -23,4 +23,17 @@ bounded ephemeral pass and must retain the same reviewed serving definitions
 through publication. Organization/property operational task roles and native
 secret prefixes stay disjoint; only the dedicated execution identity injects the
 admin URL. No per-hotel service pause or API secret-write privilege is introduced.
-There is no scheduled runner or production activation in this prerequisite slice.
+The five-minute `hotel-setup-online.yml` schedule and manual dispatch are disabled
+unless repository variable `HOTEL_SETUP_AUTOMATIC_PROVISIONING_ENABLED` is exactly
+`true`. Both passes run sequentially in the same production mutation queue. A
+read-only GitHub API job first requires an already configured
+`hotel-setup-automatic-provisioning` environment with exactly one `main` branch
+policy, no tag policy, required reviewer, waiting period or custom approval app.
+The protected job repeats this check before AWS authentication. This source does
+not create or change the environment or enable the repository variable.
+
+Before enabling, separately configure that machine environment, install the
+default-off dedicated orchestration role, and populate all reviewed readiness and
+operational image inventories after actual dual native proof. Retained older
+organization credentials still require the protected offline backfill procedure.
+There is no production activation in this slice.
