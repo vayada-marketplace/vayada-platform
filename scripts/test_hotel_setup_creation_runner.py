@@ -97,10 +97,10 @@ class CreationRunnerTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             definition = json.loads((self.root / 'capture/definition.json').read_text())
             self.assertNotIn('taskRoleArn', definition)
-            self.assertEqual(definition['executionRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution')
+            self.assertEqual(definition['executionRoleArn'], 'arn:aws:iam::269416271598:role/vayada-next-api-setup-caller-execution')
             item, = definition['containerDefinitions']
             self.assertEqual(item['image'], '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@sha256:c2fbba1a4d3f8f7bc4c46d0816f125d3598cd1c1a4880dd3b103feb0d3aa67d2')
-            self.assertEqual(item['secrets'], [{'name': 'TARGET_DATABASE_ADMIN_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
+            self.assertEqual(item['secrets'], [{'name': 'TARGET_DATABASE_MIGRATION_URL', 'valueFrom': '/vayada/prod/target-database-url'}])
             raw = (self.root / 'capture/overrides.json').read_text()
             self.assertLessEqual(len(raw.encode()), 8192)
             env = {entry['name']: entry['value'] for entry in json.loads(raw)['containerOverrides'][0]['environment']}
@@ -145,7 +145,7 @@ class CreationRunnerTest(unittest.TestCase):
         command[2] = command[2].replace("p='/app/.vayada-db-runtime-preflight.mjs'",
                                         'p=' + json.dumps(str((self.root / 'injected-preflight.mjs').resolve())))
         env = {'PATH': os.environ['PATH'], **{entry['name']: entry['value'] for entry in override['environment']}}
-        env['TARGET_DATABASE_ADMIN_URL'] = 'invalid-destination'
+        env['TARGET_DATABASE_MIGRATION_URL'] = 'invalid-destination'
         actual = subprocess.run(command, env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
         self.assertEqual(actual.returncode, 1, actual.stdout + actual.stderr)
         self.assertEqual(actual.stdout, '')

@@ -22,7 +22,7 @@ const redirect = `import {createRequire} from 'node:module';
 const launched = (mode, fingerprint, failure = false) => {
   const result = spawnSync(process.execPath, ['--import', 'data:text/javascript,' + encodeURIComponent(redirect), '--eval', bootstrap], {
     encoding: 'utf8', timeout: 30000, env: { ...process.env, ...environment,
-      TARGET_DATABASE_ADMIN_URL: 'postgresql://vayada_admin:fixture@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require',
+      TARGET_DATABASE_MIGRATION_URL: 'postgresql://vayada_target_prod_user:fixture@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/vayada_target_prod?sslmode=require',
       HOTEL_SETUP_READER_RLS_MODE: mode, ...(fingerprint ? {HOTEL_SETUP_READER_RLS_FROZEN: fingerprint} : {}) },
   });
   assert.equal(result.status, failure ? 1 : 0, result.stderr);
@@ -91,7 +91,7 @@ try {
     CREATE ROLE legacy_helper_owner NOLOGIN;
     CREATE ROLE unrelated_reader NOLOGIN;
     CREATE ROLE reader_creator NOLOGIN CREATEROLE NOINHERIT;
-    CREATE ROLE vayada_admin LOGIN SUPERUSER PASSWORD 'fixture';
+    CREATE ROLE vayada_target_prod_user LOGIN SUPERUSER PASSWORD 'fixture';
     CREATE TABLE identity.organizations(id integer PRIMARY KEY);
     INSERT INTO identity.organizations VALUES(1),(2);
     ALTER TABLE identity.organizations ENABLE ROW LEVEL SECURITY;
@@ -129,7 +129,7 @@ try {
     assert.equal(failed.diagnostic.lockAcquired, false);
     launched('apply', initial.fingerprint, true); // Apply keeps its generic failure contract.
   } finally { await locker.end(); }
-  await admin.query('GRANT USAGE ON SCHEMA platform TO vayada_admin; ALTER ROLE vayada_admin NOSUPERUSER');
+  await admin.query('GRANT USAGE ON SCHEMA platform TO vayada_target_prod_user; ALTER ROLE vayada_target_prod_user NOSUPERUSER');
   try {
     const failed = launched('inspect', undefined, true);
     assert.equal(failed.diagnostic.predicate, 'grantAuthority', JSON.stringify(failed.diagnostic));
@@ -141,7 +141,7 @@ try {
       assert.equal(sqlFailure.diagnostic.sqlState, '42501');
       assert.equal(sqlFailure.diagnostic.predicate, 'sql_error');
     } finally { await admin.query('GRANT SELECT ON pg_catalog.pg_auth_members TO PUBLIC'); }
-  } finally { await admin.query('ALTER ROLE vayada_admin SUPERUSER'); }
+  } finally { await admin.query('ALTER ROLE vayada_target_prod_user SUPERUSER'); }
   assert.equal((await inspect()).missingEdges, 4);
   const creatorEdges = async () => (await admin.query(`SELECT roleid,member,grantor,admin_option,inherit_option,set_option
     FROM pg_auth_members WHERE roleid IN (SELECT oid FROM pg_roles WHERE rolname=ANY($1::text[]))
@@ -206,6 +206,8 @@ try {
   await admin.query(`REVOKE ${readers[0]} FROM unrelated_reader`);
   const beforeRelations = await relations();
   const beforeCreatorEdges = await creatorEdges();
+  for (const fn of functions) await admin.query(`ALTER FUNCTION ${fn} OWNER TO vayada_target_prod_user`);
+  await admin.query('ALTER ROLE vayada_target_prod_user NOSUPERUSER NOCREATEROLE NOCREATEDB');
   const cliReady = launched('inspect');
   assert.equal(cliReady.missingEdges, 4);
   launched('apply', cliReady.fingerprint);
