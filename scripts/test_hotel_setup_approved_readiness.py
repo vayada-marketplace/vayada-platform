@@ -36,6 +36,32 @@ def apply_value():
 
 
 class ApprovedReadinessTest(unittest.TestCase):
+    def test_diagnosis_cannot_apply_or_supply_frozen_inspection(self):
+        task = runner.definition('diagnose', DIGEST)
+        item = task['containerDefinitions'][0]
+        env = {entry['name']: entry['value'] for entry in item['environment']}
+        self.assertEqual(env['HOTEL_SETUP_APPROVED_READINESS_MODE'], 'inspect')
+        self.assertNotIn('HOTEL_SETUP_APPROVED_READINESS_INSPECTION', env)
+        self.assertIn('inspectApprovedReadiness(config)', item['command'][0])
+        self.assertNotIn('applyApprovedReadiness(', item['command'][0])
+        with self.assertRaises(RuntimeError):
+            runner.definition('diagnose', DIGEST, FROZEN)
+        value = {'status': 'PASS', 'mode': 'diagnose', 'inspectionStatus': 'FAIL',
+            'phase': 'query_04', 'rowCount': None, 'sqlState': '42501'}
+        runner.diagnostic_receipt(value)
+        for key, bad in [('phase', 'secret'), ('sqlState', 'password'), ('rowCount', True),
+                ('inspectionStatus', 'ready')]:
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                runner.diagnostic_receipt({**value, key: bad})
+        with patch.object(runner, 'approved_image', return_value=PROOF), \
+             patch.object(runner, 'snapshot', return_value=CAPTURED), \
+             patch.object(runner, 'run_pass', return_value=(value, {'taskArn': ARN})) as run:
+            result = runner.run('diagnose', DIGEST, PUBLIC, '1:1')
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], 'diagnose')
+        self.assertNotIn('inspectionSha256', result)
+        self.assertNotIn('inspection', result)
+
     def test_empty_inventory_denies_before_aws_and_only_exact_dual_proof_is_admitted(self):
         with patch.object(runner.Path, 'read_text', return_value='{}'), patch.object(runner, 'aws') as aws, self.assertRaises(RuntimeError):
             runner.run('apply', DIGEST, PUBLIC, '1:1')

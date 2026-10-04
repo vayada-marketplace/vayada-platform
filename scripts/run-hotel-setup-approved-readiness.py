@@ -166,19 +166,24 @@ def inspection(value):
 
 
 def definition(mode, digest, frozen=None):
+    release.require(mode in ('inspect', 'apply', 'diagnose') and (mode == 'apply' or frozen is None), 'Invalid offline operation')
     ca = CA.read_bytes()
     release.require(hashlib.sha256(ca).hexdigest() == CA_HASH, 'Pinned offline CA differs')
     environment = {'NODE_ENV': 'production', 'AWS_REGION': release.REGION,
-        'HOTEL_SETUP_APPROVED_READINESS_MODE': mode, 'HOTEL_SETUP_RDS_CA': ca.decode('ascii'),
+        'HOTEL_SETUP_APPROVED_READINESS_MODE': 'inspect' if mode == 'diagnose' else mode, 'HOTEL_SETUP_RDS_CA': ca.decode('ascii'),
         'NODE_EXTRA_CA_CERTS': '/runtime/rds-ca.pem'}
     if mode == 'apply':
         environment['HOTEL_SETUP_APPROVED_READINESS_INSPECTION'] = json.dumps(inspection(frozen), separators=(',', ':'))
+    command = COMMAND
+    if mode == 'diagnose':
+        program = (ROOT / 'scripts/diagnose-hotel-setup-approved-readiness.mjs').read_text()
+        command = [COMMAND[0].split('exec node')[0] + "exec node --input-type=module - <<'DIAGNOSTIC'\n" + program + '\nDIAGNOSTIC']
     return {'family': FAMILY, 'tags': TAGS, 'taskRoleArn': ROLE, 'executionRoleArn': EXECUTION,
         'networkMode': 'awsvpc', 'requiresCompatibilities': ['FARGATE'], 'cpu': '256', 'memory': '512',
         'runtimePlatform': {'cpuArchitecture': 'X86_64', 'operatingSystemFamily': 'LINUX'},
         'volumes': [{'name': 'runtime'}], 'containerDefinitions': [{
             'name': CONTAINER, 'essential': True, 'image': release.REPOSITORY + '@' + digest,
-            'workingDirectory': '/app', 'entryPoint': ['/bin/sh', '-ec'], 'command': COMMAND,
+            'workingDirectory': '/app', 'entryPoint': ['/bin/sh', '-ec'], 'command': command,
             'readonlyRootFilesystem': True, 'privileged': False, 'stopTimeout': 30,
             'mountPoints': [{'sourceVolume': 'runtime', 'containerPath': '/runtime', 'readOnly': False}],
             'secrets': [{'name': 'HOTEL_SETUP_AUTOMATIC_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}],
@@ -238,6 +243,17 @@ def apply_receipt(value, frozen):
             'Apply reader receipt differs from frozen inspection')
 
 
+def diagnostic_receipt(value):
+    release.require(set(value) == {'status', 'mode', 'inspectionStatus', 'phase', 'rowCount', 'sqlState'}
+        and value['status'] == 'PASS' and value['mode'] == 'diagnose'
+        and value['inspectionStatus'] in ('PASS', 'FAIL')
+        and isinstance(value['phase'], str)
+        and re.fullmatch(r'configuration|connection|complete|query_[0-9]{2}', value['phase'])
+        and (value['rowCount'] is None or type(value['rowCount']) is int and 0 <= value['rowCount'] <= 100)
+        and (value['sqlState'] is None or isinstance(value['sqlState'], str)
+            and re.fullmatch(r'[0-9A-Z]{5}', value['sqlState'])), 'Invalid diagnostic receipt')
+
+
 def receipt(task, mode, frozen):
     stream = 'hotel-setup-approved-readiness-' + mode + '/' + CONTAINER + '/' + task.rsplit('/', 1)[1]
     for _ in range(10):
@@ -252,6 +268,8 @@ def receipt(task, mode, frozen):
             if mode == 'inspect':
                 release.require(set(value) == {'status', 'mode', 'inspection'}, 'Unexpected inspection receipt fields')
                 inspection(value['inspection'])
+            elif mode == 'diagnose':
+                diagnostic_receipt(value)
             else:
                 apply_receipt(value, frozen)
             return value
@@ -324,6 +342,11 @@ def run_pass(mode, digest, expected, captured, attempt, frozen=None):
 def run(mode, digest, expected, identity):
     proof = approved_image(digest)
     captured = snapshot(expected)
+    if mode == 'diagnose':
+        attempt = hashlib.sha256((identity + ':diagnose').encode()).hexdigest()[:32]
+        value, observed = run_pass('diagnose', digest, expected, captured, attempt)
+        release.require(snapshot(expected) == captured, 'Offline gates changed after diagnosis')
+        return {**value, 'imageDigest': digest, 'proof': proof, 'capturedGates': captured, 'tasks': {'diagnose': observed}}
     attempt = hashlib.sha256((identity + ':inspect').encode()).hexdigest()[:32]
     value, observed = run_pass('inspect', digest, expected, captured, attempt)
     frozen = json.loads(json.dumps(inspection(value['inspection'])))
@@ -340,7 +363,7 @@ def run(mode, digest, expected, identity):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mode', choices=['inspect', 'apply'], required=True)
+    parser.add_argument('--mode', choices=['inspect', 'apply', 'diagnose'], required=True)
     parser.add_argument('--image-digest', required=True)
     parser.add_argument('--expected-public-task', required=True)
     args = parser.parse_args()

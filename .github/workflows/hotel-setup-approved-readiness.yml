@@ -6,7 +6,7 @@ on:
       mode:
         description: Apply always inspects and freezes exact identities first in this job
         type: choice
-        options: [inspect, apply]
+        options: [inspect, apply, diagnose]
         default: inspect
         required: true
       image_digest:
