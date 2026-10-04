@@ -120,10 +120,17 @@ class OnlineReadinessTest(unittest.TestCase):
     def test_checked_in_inventory_cannot_admit_the_old_serving_images(self):
         import json
         inventory = json.loads((ROOT / 'deployment/hotel-setup-online-images.json').read_text())
-        self.assertEqual(inventory, {'creation': {}, 'property': {}, 'operational': {}})
+        self.assertEqual(set(inventory), {'creation', 'property', 'operational'})
         for purpose in inventory:
             with self.assertRaises(RuntimeError):
                 online.approved(IMAGE, purpose, inventory)
+        for purpose, digest in (
+            ('creation','sha256:c2fbba1a4d3f8f7bc4c46d0816f125d3598cd1c1a4880dd3b103feb0d3aa67d2'),
+            ('property','sha256:b673453b253fac2e94822c24158f6d599696d0fb71a2bc68c7f4a3be0f98f38a'),
+        ):
+            with self.subTest(purpose=purpose), self.assertRaises(RuntimeError):
+                online.approved(online.release.REPOSITORY+'@'+digest,purpose,inventory)
+
 
     def test_public_physical_container_image_and_draining_are_checked(self):
         source = definition('creation')

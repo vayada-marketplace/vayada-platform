@@ -26,6 +26,7 @@ creation_org=""
 creation_actor=""
 creation_task_role=""
 creation_execution_role=""
+log_group="/ecs/vayada-next-api"
 property_id=""
 property_operation=""
 owner_email=""
@@ -275,10 +276,12 @@ case "${mode}" in
       secret_name="HOTEL_SETUP_COMMAND_READER_DATABASE_URL"
       if [[ "$mode" == --verify-hotel-setup-creation-reader-rls ]]; then
         reader_rls_mode=property_creation
+        log_group="/ecs/vayada-hotel-setup"
         secret_parameter="arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-creation/prod/reader-database-url-EDME10"
         creation_execution_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-execution"
       else
         reader_rls_mode=property_commands
+        log_group="/ecs/vayada-hotel-setup-property"
         secret_parameter="arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-command/prod/reader-database-url-WqoWDT"
         creation_execution_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-execution"
       fi
@@ -592,7 +595,7 @@ PYCODE
   }
 fi
 temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" --argjson definition_environment "$definition_environment" \
-  --arg secret_name "${secret_name}" --arg secret_parameter "${secret_parameter}" \
+  --arg secret_name "${secret_name}" --arg secret_parameter "${secret_parameter}" --arg log_group "${log_group}" \
   --arg extra_secret_name "${extra_secret_name}" --arg extra_secret_parameter "${extra_secret_parameter}" --arg channex_image "${channex_image}" --arg task_image "${task_image}" --arg creation_task_role "${creation_task_role}" --arg creation_execution_role "${creation_execution_role}" '
   del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
   | del(.taskRoleArn)
@@ -600,6 +603,7 @@ temporary_definition="$(jq -c --arg family "${family}" --arg container "${contai
   | if $creation_execution_role == "" then . else .executionRoleArn=$creation_execution_role end
   | .family=$family
   | .containerDefinitions=[.containerDefinitions[]|select(.name==$container)
+      | .logConfiguration.options["awslogs-group"]=$log_group
       | .secrets=[{name:$secret_name,valueFrom:$secret_parameter}]
       | if $extra_secret_name == "" then . else .secrets += [{name:$extra_secret_name,valueFrom:$extra_secret_parameter}] end
       | if $task_image != "" then .image=$task_image elif $channex_image != "" then .image=$channex_image else . end
@@ -665,7 +669,7 @@ fi
 task="$(aws ecs describe-tasks --cluster "${cluster}" --tasks "${task_arn}" --region "${region}" \
   --query 'tasks[0].{exitCode:containers[0].exitCode,reason:stoppedReason}' --output json)"
 for _ in {1..10}; do
-  messages="$(aws logs get-log-events --log-group-name /ecs/vayada-next-api --log-stream-name "${log_stream}" \
+  messages="$(aws logs get-log-events --log-group-name "${log_group}" --log-stream-name "${log_stream}" \
     --start-from-head --region "${region}" --query 'events[].message' --output json 2>/dev/null || echo '[]')"
   jq -e --arg expected "${vay2017_expected_status}" --arg reader "$reader_rls_mode" --arg exit "$(jq -r '.exitCode' <<<"${task}")" \
     'if type != "array" then false elif $reader == "inspect" and $exit == "1" then length > 0
