@@ -76,6 +76,7 @@ for(const change of [
   f=>f.files.set('unversioned.sql','unexpected migration file'),
   f=>f.files.delete('0001_identity.sql'),
   f=>f.rows.pop(),
+  f=>f.rows=Array.from({length:10001},()=>({...f.rows[0]})),
   f=>f.rows[0].checksum_sha256='f'.repeat(64),
   f=>f.rows[0].environment='staging',
   f=>f.rows[0].status='failed',
