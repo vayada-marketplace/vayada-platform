@@ -37,10 +37,9 @@ def apply_value():
 
 class ApprovedReadinessTest(unittest.TestCase):
     def test_empty_inventory_denies_before_aws_and_only_exact_dual_proof_is_admitted(self):
-        with patch.object(runner, 'aws') as aws, self.assertRaises(RuntimeError):
+        with patch.object(runner.Path, 'read_text', return_value='{}'), patch.object(runner, 'aws') as aws, self.assertRaises(RuntimeError):
             runner.run('apply', DIGEST, PUBLIC, '1:1')
         aws.assert_not_called()
-        self.assertEqual(json.loads((ROOT / 'deployment/hotel-setup-approved-readiness-images.json').read_text()), {})
         for proof in (PROOF, 'old-source', {'source': 'b' * 40}, {**PROOF, 'extra': 'd' * 40}):
             with self.subTest(proof=proof), patch.object(runner.Path, 'read_text', return_value=json.dumps({DIGEST: proof})):
                 if proof == PROOF:

@@ -3,5 +3,10 @@
     "primarySource": "d51cb02975995ffd8388958e295e23ae63474fd7",
     "rollbackSource": "b83da0787e098d59490b48b392967cb6d67b97b7",
     "publisherSource": "ec30c1c968eb879338339a8cbe4c3bd754928aad"
+  },
+  "sha256:92889da3445b9aee6cbd9d7c0d84ff6fae1971d9d0e4c0d0842bf046a6d87fdd": {
+    "publisherSource": "e8589716be188f981398f34911fd202679e4b4a6",
+    "primarySource": "c2acd36190563e6c589c7d9202059a4b3f2c55be",
+    "rollbackSource": "187eeea3a5d6864283b854815334fe34c7ec752b"
   }
 }
