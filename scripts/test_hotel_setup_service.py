@@ -8,6 +8,10 @@ from scripts.test_hotel_setup_network import ROOT, plan
 
 DIGEST = 'sha256:' + 'a' * 64
 ROLLBACK = 'sha256:' + 'b' * 64
+HARDENED_REVIEWED_PAIR = {
+    'sha256:3316fce31bb4382def31ef37a7e6ff9d83d69ee6ea582ac1dcea8722551f827d': 'c2acd36190563e6c589c7d9202059a4b3f2c55be',
+    'sha256:259f22ca5f9d90cfa87239adfff6a396bd3877598372c20a377dc055dfd3df6b': '187eeea3a5d6864283b854815334fe34c7ec752b',
+}
 
 
 class HotelSetupServiceTests(unittest.TestCase):
@@ -120,7 +124,7 @@ class HotelSetupServiceTests(unittest.TestCase):
             self.assertEqual(resources[f'aws_ecs_task_definition.hotel_setup_property["{slot}"]']['family'], 'vayada-hotel-setup-property-' + slot)
         inventory = json.loads((ROOT / 'deployment/hotel-setup-property-images.json').read_text())
         proof = json.loads((ROOT / 'deployment/hotel-setup-property-image-proof.json').read_text())
-        self.assertEqual(inventory, {proof[slot]['digest']: proof[slot]['source'] for slot in ('primary', 'rollback')})
+        self.assertEqual(inventory, {proof[slot]['digest']: proof[slot]['source'] for slot in ('primary', 'rollback')} | HARDENED_REVIEWED_PAIR)
         self.assertNotEqual(proof['primary']['digest'], proof['rollback']['digest'])
         self.assertEqual(proof['verification']['postgresVersions'], [16, 17])
         source = (ROOT / 'infra/hotel_setup_property_service.tf').read_text()
@@ -188,7 +192,7 @@ class HotelSetupServiceTests(unittest.TestCase):
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
         inventory = json.loads((ROOT / 'deployment/hotel-setup-command-images.json').read_text())
         proof = json.loads((ROOT / 'deployment/hotel-setup-creation-image-proof.json').read_text())
-        self.assertEqual(inventory, {proof[key]['digest']: proof[key]['source'] for key in ('primary', 'rollback')})
+        self.assertEqual(inventory, {proof[key]['digest']: proof[key]['source'] for key in ('primary', 'rollback')} | HARDENED_REVIEWED_PAIR)
         for digest, source in inventory.items():
             self.assertRegex(digest, r'^sha256:[a-f0-9]{64}$')
             self.assertRegex(source, r'^[a-f0-9]{40}$')
