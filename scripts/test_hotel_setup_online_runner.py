@@ -43,8 +43,10 @@ class OnlineRunnerTest(unittest.TestCase):
 
     def test_checked_in_inventory_selects_one_exact_proved_bundle(self):
         inventory = json.loads((ROOT / 'deployment/hotel-setup-online-images.json').read_text())
-        proof = json.loads((ROOT / 'deployment/hotel-setup-offline-catalog-image-proof.json').read_text())
+        proof = json.loads((ROOT / 'deployment/hotel-setup-native-catalog-image-proof.json').read_text())
         digest = runner.operational_image(inventory)
+        self.assertEqual(proof['verification']['approvedOperatorFixture'], 'non-superuser_no_password_catalog_SELECT_or_UPDATE')
+        self.assertTrue(proof['verification']['roleRecreationDenial'])
         self.assertEqual(digest, proof['bundle']['digest'])
         self.assertEqual(inventory['operational'][digest], {
             'source': proof['bundle']['publisherSource'],
