@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the real operational wrapper without contacting AWS."""
+import base64
+import gzip
 import json
 import os
 from pathlib import Path
@@ -102,6 +104,10 @@ class CreationRunnerTest(unittest.TestCase):
             raw = (self.root / 'capture/overrides.json').read_text()
             self.assertLessEqual(len(raw.encode()), 8192)
             env = {entry['name']: entry['value'] for entry in json.loads(raw)['containerOverrides'][0]['environment']}
+            code = base64.b64decode(env['VAYADA_DB_RUNTIME_PREFLIGHT_CODE'])
+            self.assertEqual(gzip.decompress(code), (ROOT / 'scripts/hotel-setup-reader-rls-permissions.mjs').read_bytes())
+            self.assertEqual(code[3] & 8, 0)
+            self.assertEqual(code[4:8], b'\0' * 4)
             self.assertEqual(env['HOTEL_SETUP_READER_RLS_MODE'], mode)
             self.assertEqual(env.get('HOTEL_SETUP_READER_RLS_FROZEN'), None if mode == 'inspect' else 'b' * 64)
         for purpose, mode, suffix in [('creation', 'property_creation', 'creation/prod/reader-database-url-EDME10'),
@@ -170,6 +176,8 @@ class CreationRunnerTest(unittest.TestCase):
                 self.assertLessEqual(len(raw.encode()), 8192)
                 override, = json.loads(raw)['containerOverrides']
                 env = {entry['name']: entry['value'] for entry in override['environment']}
+                code = base64.b64decode(env['VAYADA_DB_RUNTIME_PREFLIGHT_CODE'])
+                self.assertEqual(gzip.decompress(code), (ROOT / 'scripts/provision-hotel-setup-creation-login.mjs').read_bytes())
                 self.assertEqual(env['HOTEL_SETUP_BOOTSTRAP_PURPOSE'], purpose)
                 if purpose == 'organization':
                     self.assertEqual(env['HOTEL_SETUP_COMMAND_ORGANIZATION_ID'], ORG)

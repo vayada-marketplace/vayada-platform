@@ -420,7 +420,7 @@ service="vayada-next-api-service"
 container="vayada-next-api"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 payload=""
-if [[ -n "${code_file}" ]]; then payload="$(gzip -9 -c "${script_dir}/${code_file}" | base64 | tr -d '\n')"; fi
+if [[ -n "${code_file}" ]]; then payload="$(gzip -n -9 -c "${script_dir}/${code_file}" | base64 | tr -d '\n')"; fi
 helper_payload=""
 if [[ -n "${helper_file}" ]]; then helper_payload="$(gzip -9 -c "${script_dir}/${helper_file}" | base64 | tr -d '\n')"; fi
 if [[ -n "$legacy_helper_mode" ]]; then
