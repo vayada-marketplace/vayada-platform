@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import pg from 'pg';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { gzipSync } from 'node:zlib';
 import { runReaderRlsPermissionCheck } from './hotel-setup-reader-rls-permissions.mjs';
 
 const admin = new pg.Client('postgresql://postgres:postgres@reader-rls-db:5432/postgres');
@@ -10,24 +9,37 @@ const readers = ['vayada_next_hotel_setup_creation_reader', 'vayada_next_hotel_s
 const scope = 'platform.channex_management_worker_scope(text,text,uuid)';
 const source = 'platform.channex_management_worker_source(text,text,uuid)';
 const functions = [scope, source];
-// Exercise the exact production eval transport, relocating only its owned module path.
-const bootstrap = readFileSync('/source/run-target-database-runtime-preflight.sh', 'utf8')
-  .match(/^  bootstrap="(const fs=.*HOTEL_SETUP_READER_RLS_MODE.*)"$/m)[1]
-  .replace("p='/app/.vayada-db-runtime-preflight.mjs'", "p='/work/injected-preflight.mjs'");
-const code = gzipSync(readFileSync('/source/hotel-setup-reader-rls-permissions.mjs')).toString('base64');
+// Execute the actual captured ECS source+CA override, relocating only its owned module path.
+const [captured] = JSON.parse(readFileSync('/fixture/overrides.json', 'utf8')).containerOverrides;
+assert.deepEqual(captured.command.slice(0, 2), ['node', '--eval']);
+const bootstrap = captured.command[2].replace("p='/app/.vayada-db-runtime-preflight.mjs'", "p='/work/injected-preflight.mjs'");
+const environment = Object.fromEntries(captured.environment.map(({name, value}) => [name, value]));
 // Only the fixture socket/TLS changes; the CLI validates its real production URL and principal.
 const redirect = `import {createRequire} from 'node:module';
   const pg=createRequire('/work/package.json')('pg'),Client=pg.Client;
   pg.Client=class extends Client {constructor(options){super({...options,host:'reader-rls-db',
     port:5432,database:'postgres',password:'fixture',ssl:false})}};`;
-const launched = (mode, fingerprint) => {
+const launched = (mode, fingerprint, failure = false) => {
   const result = spawnSync(process.execPath, ['--import', 'data:text/javascript,' + encodeURIComponent(redirect), '--eval', bootstrap], {
-    encoding: 'utf8', timeout: 30000, env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main',
-      VAYADA_DB_RUNTIME_PREFLIGHT_CODE: code, VAYADA_DB_RDS_CA_BUNDLE: 'owned-fixture-ca',
+    encoding: 'utf8', timeout: 30000, env: { ...process.env, ...environment,
       TARGET_DATABASE_ADMIN_URL: 'postgresql://vayada_admin:fixture@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require',
       HOTEL_SETUP_READER_RLS_MODE: mode, ...(fingerprint ? {HOTEL_SETUP_READER_RLS_FROZEN: fingerprint} : {}) },
   });
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, failure ? 1 : 0, result.stderr);
+  assert.deepEqual(readFileSync('/work/injected-preflight.mjs'), readFileSync('/source/hotel-setup-reader-rls-permissions.mjs'));
+  if (failure) {
+    assert.equal(result.stdout, '');
+    const receipt = JSON.parse(result.stderr);
+    assert.equal(receipt.code, 'hotel_setup_reader_rls_permission_unavailable');
+    assert.equal(JSON.stringify(receipt).includes('postgresql:'), false);
+    if (mode === 'apply') assert.deepEqual(receipt, { status: 'FAIL', code: receipt.code });
+    else {
+      assert.equal(receipt.scope, 'hotel_setup_reader_rls_permissions');
+      assert.equal(receipt.mode, 'inspect');
+      assert.ok(Buffer.byteLength(result.stderr) < 8192);
+    }
+    return receipt;
+  }
   const receipt = JSON.parse(result.stdout);
   assert.equal(receipt.status, 'PASS');
   assert.equal(receipt.scope, 'hotel_setup_reader_rls_permissions');
@@ -107,6 +119,30 @@ try {
   const repair = fingerprint => runReaderRlsPermissionCheck(admin, 'apply', fingerprint, 'postgres');
   const initial = await inspect();
   assert.equal(initial.missingEdges, 4);
+  const locker = new pg.Client('postgresql://postgres:postgres@reader-rls-db:5432/postgres');
+  await locker.connect();
+  try {
+    await locker.query('SELECT pg_advisory_lock(8734516)');
+    const failed = launched('inspect', undefined, true);
+    assert.equal(failed.diagnostic.stage, 'lock');
+    assert.equal(failed.diagnostic.predicate, 'lockAcquired');
+    assert.equal(failed.diagnostic.lockAcquired, false);
+    launched('apply', initial.fingerprint, true); // Apply keeps its generic failure contract.
+  } finally { await locker.end(); }
+  await admin.query('GRANT USAGE ON SCHEMA platform TO vayada_admin; ALTER ROLE vayada_admin NOSUPERUSER');
+  try {
+    const failed = launched('inspect', undefined, true);
+    assert.equal(failed.diagnostic.predicate, 'grantAuthority', JSON.stringify(failed.diagnostic));
+    assert.equal(failed.diagnostic.checks.grantAuthority, false);
+    await admin.query('REVOKE SELECT ON pg_catalog.pg_auth_members FROM PUBLIC');
+    try {
+      const sqlFailure = launched('inspect', undefined, true);
+      assert.equal(sqlFailure.diagnostic.stage, 'memberships');
+      assert.equal(sqlFailure.diagnostic.sqlState, '42501');
+      assert.equal(sqlFailure.diagnostic.predicate, 'sql_error');
+    } finally { await admin.query('GRANT SELECT ON pg_catalog.pg_auth_members TO PUBLIC'); }
+  } finally { await admin.query('ALTER ROLE vayada_admin SUPERUSER'); }
+  assert.equal((await inspect()).missingEdges, 4);
   const creatorEdges = async () => (await admin.query(`SELECT roleid,member,grantor,admin_option,inherit_option,set_option
     FROM pg_auth_members WHERE roleid IN (SELECT oid FROM pg_roles WHERE rolname=ANY($1::text[]))
     ORDER BY roleid,member,grantor`, [readers])).rows;
@@ -131,6 +167,7 @@ try {
   await assert.rejects(repair(oldFunction.fingerprint));
   await admin.query(`GRANT unrelated_reader TO ${readers[0]}`);
   await assert.rejects(inspect());
+  assert.equal(launched('inspect', undefined, true).diagnostic.predicate, 'noReaderParentMembership');
   await admin.query(`REVOKE unrelated_reader FROM ${readers[0]}`);
   await admin.query('SET SESSION AUTHORIZATION unrelated_reader');
   await assert.rejects(runReaderRlsPermissionCheck(admin, 'inspect', undefined, 'unrelated_reader'));
@@ -149,6 +186,13 @@ try {
     await admin.query(mutation);
     await admin.query('COMMIT');
     await assert.rejects(inspect());
+    const failure = launched('inspect', undefined, true).diagnostic;
+    assert.equal(failure.stage, 'helper');
+    assert.equal(failure.subject, source);
+    assert.ok(['invoker', 'searchPath', 'bodyMatches'].includes(failure.predicate));
+    assert.match(failure.bodyHash, /^[a-f0-9]{64}$/);
+    assert.match(failure.definitionHash, /^[a-f0-9]{64}$/);
+    assert.equal(failure.checks[failure.predicate], false);
     await admin.query(definition.replaceAll('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION'));
   }
   // A concurrent ACL edit also invalidates the frozen receipt; nothing else is repaired.

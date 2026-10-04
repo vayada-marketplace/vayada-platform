@@ -105,9 +105,9 @@ class CreationRunnerTest(unittest.TestCase):
             self.assertLessEqual(len(raw.encode()), 8192)
             env = {entry['name']: entry['value'] for entry in json.loads(raw)['containerOverrides'][0]['environment']}
             code = base64.b64decode(env['VAYADA_DB_RUNTIME_PREFLIGHT_CODE'])
-            self.assertEqual(gzip.decompress(code), (ROOT / 'scripts/hotel-setup-reader-rls-permissions.mjs').read_bytes())
-            self.assertEqual(code[3] & 8, 0)
-            self.assertEqual(code[4:8], b'\0' * 4)
+            decoded = subprocess.run(['node', '-e', "process.stdout.write(require('node:zlib').brotliDecompressSync(require('node:fs').readFileSync(0)))"],
+                                     input=code, capture_output=True, check=True).stdout
+            self.assertEqual(decoded, (ROOT / 'scripts/hotel-setup-reader-rls-permissions.mjs').read_bytes())
             self.assertEqual(env['HOTEL_SETUP_READER_RLS_MODE'], mode)
             self.assertEqual(env.get('HOTEL_SETUP_READER_RLS_FROZEN'), None if mode == 'inspect' else 'b' * 64)
         for purpose, mode, suffix in [('creation', 'property_creation', 'creation/prod/reader-database-url-EDME10'),
@@ -149,7 +149,18 @@ class CreationRunnerTest(unittest.TestCase):
         actual = subprocess.run(command, env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
         self.assertEqual(actual.returncode, 1, actual.stdout + actual.stderr)
         self.assertEqual(actual.stdout, '')
-        self.assertEqual(json.loads(actual.stderr), {'status': 'FAIL', 'code': 'hotel_setup_reader_rls_permission_unavailable'})
+        report = json.loads(actual.stderr)
+        self.assertEqual(report['code'], 'hotel_setup_reader_rls_permission_unavailable')
+        self.assertEqual(report['scope'], 'hotel_setup_reader_rls_permissions')
+        self.assertEqual(report['mode'], 'inspect')
+        self.assertEqual(report['diagnostic']['predicate'], 'urlParsed')
+        self.assertFalse(report['diagnostic']['checks']['urlParsed'])
+        self.assertFalse(report['diagnostic']['checks']['passwordPresent'])
+        self.assertNotIn('invalid-destination', actual.stderr)
+        env['HOTEL_SETUP_READER_RLS_MODE'] = 'apply'
+        apply = subprocess.run(command, env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
+        self.assertEqual(apply.returncode, 1)
+        self.assertEqual(json.loads(apply.stderr), {'status': 'FAIL', 'code': report['code']})
         # Other operational modes retain eval's original argv; their entrypoint ABI is unchanged.
         env.pop('HOTEL_SETUP_READER_RLS_MODE')
         unrelated = subprocess.run(command, env=env, cwd=self.root, capture_output=True, text=True, timeout=20)
@@ -241,6 +252,44 @@ class CreationRunnerTest(unittest.TestCase):
         for status, code in [('PASS', '0'), ('BLOCKED', '2')]:
             self.env.update(MOCK_EXIT_CODE=code, MOCK_RECEIPT=json.dumps({**receipt, 'status': status, 'mode': 'verify'}))
             self.assertEqual(self.run_wrapper('--inspect-hotel-setup-legacy-helpers').returncode, 1)
+
+    def test_inspect_failure_diagnostic_has_exact_safe_schema(self):
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
+                        GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REPOSITORY='vayada-marketplace/vayada-platform',
+                        EXPECTED_TASK='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186',
+                        MOCK_CURRENT_TASK='arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186',
+                        MOCK_EXIT_CODE='1')
+        diagnostic = {'stage': 'helper', 'predicate': 'grantAuthority', 'checks': {'grantAuthority': False},
+                      'subject': 'platform.channex_management_worker_source(text,text,uuid)', 'oid': 123,
+                      'bodyHash': 'a' * 64, 'definitionHash': 'b' * 64, 'lockAcquired': True, 'sqlState': None}
+        report = {'status': 'FAIL', 'code': 'hotel_setup_reader_rls_permission_unavailable',
+                  'scope': 'hotel_setup_reader_rls_permissions', 'mode': 'inspect', 'diagnostic': diagnostic}
+        self.env['MOCK_RECEIPT'] = json.dumps(report)
+        result = self.run_wrapper('--inspect-hotel-setup-reader-rls')
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stderr), report)
+        for mutation in ({'extra': 'fixture-sensitive'}, {'mode': 'apply'}, {'scope': 'wrong'},
+                         {'code': 'fixture-sensitive'},
+                         {'diagnostic': {**diagnostic, 'subject': 'fixture-sensitive'}},
+                         {'diagnostic': {**diagnostic, 'sqlState': 'fixture-sensitive'}},
+                         {'diagnostic': {**diagnostic, 'checks': {'fixture-sensitive': False}}},
+                         {'diagnostic': {**diagnostic, 'bodyHash': 'fixture-sensitive'}},
+                         {'diagnostic': {**diagnostic, 'extra': 'fixture-sensitive'}},
+                         {'diagnostic': 'fixture-sensitive'},
+                         {'diagnostic': {**diagnostic, 'checks': 'fixture-sensitive'}},
+                         {'diagnostic': {**diagnostic, 'oid': 'fixture-sensitive'}},
+                         {'diagnostic': {**diagnostic, 'bodyHash': {'fixture-sensitive': True}}}):
+            self.env['MOCK_RECEIPT'] = json.dumps({**report, **mutation})
+            denied = self.run_wrapper('--inspect-hotel-setup-reader-rls')
+            self.assertEqual(denied.returncode, 1)
+            self.assertEqual(denied.stderr.strip(), report['code'])
+            self.assertEqual(denied.stdout, '')
+        for scalar in ('fixture-sensitive', 123, None, ['fixture-sensitive']):
+            self.env['MOCK_RECEIPT'] = json.dumps(scalar)
+            denied = self.run_wrapper('--inspect-hotel-setup-reader-rls')
+            self.assertEqual(denied.returncode, 1)
+            self.assertEqual(denied.stderr.strip(), report['code'])
+            self.assertEqual(denied.stdout, '')
 
     def test_exact_task_credentials_and_bounded_overrides(self):
         for purpose, args, suffix in (
