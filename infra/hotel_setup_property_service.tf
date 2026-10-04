@@ -55,6 +55,7 @@ resource "aws_ecs_task_definition" "hotel_setup_property" {
   network_mode             = "awsvpc"
   cpu                      = "256"
   memory                   = "512"
+  skip_destroy             = true
   execution_role_arn       = try(aws_iam_role.hotel_setup_property_execution[0].arn, null)
   task_role_arn            = try(aws_iam_role.hotel_setup_property_task[0].arn, null)
   container_definitions = templatefile("${path.module}/hotel_setup_container.json.tftpl", {
