@@ -129,7 +129,8 @@ def snapshot(inventory):
     public_arn = physical_tasks(release.PUBLIC, definition, 'vayada-next-api')
     release.healthy(public)
     result = {'publicTask': public['taskDefinition'], 'publicTaskArn': public_arn, 'private': {}}
-    for purpose, name in release.PRIVATE.items():
+    for purpose in ('creation', 'property'):
+        name = release.PRIVATE[purpose]
         admission = release.environment(release.container(definition, 'vayada-next-api')).get(release.PREFIX[purpose] + '_ADMISSION')
         release.require(admission in ('enabled', 'blocked'), 'Public caller admission is not explicit')
         # Validate the retained fixed origin/token/execution identity; no mutation.

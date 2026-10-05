@@ -52,6 +52,24 @@ class HotelSetupServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'Hotel setup staging requires'):
             plan(True, service=selected)
 
+    def test_logo_admission_requires_scoped_storage_and_both_full_proof_images(self):
+        selected = {'property_credentials': True, 'mode': 'property_creation',
+                    'property_enabled': True, 'property_digests': {'primary': DIGEST, 'rollback': ROLLBACK},
+                    'property_inventory': {DIGEST: 'c' * 40, ROLLBACK: 'd' * 40},
+                    'logo_admission': 'enabled'}
+        with self.assertRaisesRegex(AssertionError, 'full lifecycle proof'):
+            plan(True, service=selected, property_network=True)
+        selected.update(logo_storage=True, logo_inventory={DIGEST: 'c' * 40})
+        with self.assertRaisesRegex(AssertionError, 'full lifecycle proof'):
+            plan(True, service=selected, property_network=True)
+        selected['logo_inventory'][ROLLBACK] = 'd' * 40
+        result = plan(True, service=selected, property_network=True)
+        env = {entry['name']: entry['value'] for entry in result['planned_values']['outputs']['property_environment']['value']}
+        self.assertEqual(env['HOTEL_SETUP_LOGO_COMMAND_ADMISSION'], 'enabled')
+        resources = {r['address']: r['values'] for r in result['planned_values']['root_module']['resources']}
+        self.assertEqual(resources['aws_ecs_service.hotel_setup_property[0]']['desired_count'], 0)
+        self.assertIn('aws_iam_role_policy.hotel_setup_logo_media[0]', resources)
+
     def test_creation_mode_isolated_and_still_not_started(self):
         selected = {'enabled': True, 'credentials': True, 'mode': 'property_creation',
                     'digests': {'primary': DIGEST, 'rollback': ROLLBACK},
@@ -115,6 +133,7 @@ class HotelSetupServiceTests(unittest.TestCase):
         self.assertNotIn('aws_ecs_service.hotel_setup[0]', resources)
         environment = {e['name']: e['value'] for e in result['planned_values']['outputs']['property_environment']['value']}
         self.assertEqual(environment['HOTEL_SETUP_COMMAND_MODE'], 'property_commands')
+        self.assertEqual(environment['HOTEL_SETUP_LOGO_COMMAND_ADMISSION'], 'blocked')
         self.assertEqual(environment['HOTEL_SETUP_COMMAND_SECRET_PREFIX'], 'hotel-setup-command/prod/property/')
         configuration = {r['address']: r for r in result['configuration']['root_module']['resources']}
         self.assertIn('aws_lb_listener_rule.hotel_setup_property', configuration['aws_ecs_service.hotel_setup_property']['depends_on'])

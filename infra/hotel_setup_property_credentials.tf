@@ -57,6 +57,6 @@ resource "aws_iam_role_policy" "hotel_setup_property_native_secrets" {
   name = "hotel-setup-property-native-secret-read"
   role = aws_iam_role.hotel_setup_property_task[0].id
   policy = templatefile("${path.module}/hotel_setup_secret_read_policy.json.tftpl", {
-    secret_arns = jsonencode([local.hotel_setup_property_secret_arn])
+    secret_arns = jsonencode(concat([local.hotel_setup_property_secret_arn], var.enable_hotel_setup_logo_storage ? [local.hotel_setup_logo_secret_arn] : []))
   })
 }

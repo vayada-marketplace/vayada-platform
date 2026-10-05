@@ -16,10 +16,14 @@ def plan(enabled, service=None, property_network=False):
         path = Path(directory) / "infra"
         path.mkdir()
         if service is not None:
-            for name in ["hotel_setup_creation_bootstrap.tf", "hotel_setup_credentials.tf", "hotel_setup_property_credentials.tf", "hotel_setup_secret_read_policy.json.tftpl", "hotel_setup_service.tf", "hotel_setup_property_service.tf", "hotel_setup_container.json.tftpl"]:
+            for name in ["hotel_setup_creation_bootstrap.tf", "hotel_setup_credentials.tf", "hotel_setup_property_credentials.tf", "hotel_setup_logo.tf", "hotel_setup_secret_read_policy.json.tftpl", "hotel_setup_service.tf", "hotel_setup_property_service.tf", "hotel_setup_container.json.tftpl"]:
                 shutil.copy(ROOT / "infra" / name, path)
+            for name in ("hotel_setup_property_service.tf", "hotel_setup_logo.tf"):
+                copied = path / name
+                copied.write_text(copied.read_text().replace("aws_s3_bucket.private_profile_media", "local.fixture_media_bucket"))
             (path.parent / "deployment").mkdir()
             (path.parent / "deployment/hotel-setup-command-images.json").write_text(json.dumps(service.get("inventory", {})))
+            (path.parent / "deployment/hotel-setup-logo-images.json").write_text(json.dumps(service.get("logo_inventory", {})))
             (path.parent / "deployment/hotel-setup-property-images.json").write_text(json.dumps(service.get("property_inventory", {})))
             (path.parent / "rehearsal").mkdir()
             shutil.copy(ROOT / "rehearsal/rds-ca-rsa2048-g1.pem", path.parent / "rehearsal")
@@ -66,6 +70,10 @@ resource "aws_iam_role_policy_attachment" "hotel_setup_platform_deploy" {
   role = "offline-deploy-role"
   policy_arn = "arn:aws:iam::269416271598:policy/offline"
 }
+locals {
+  private_profile_media_cdn_base_url = "https://images.vayada.com"
+  fixture_media_bucket = { id = "vayada-media-production", arn = "arn:aws:s3:::vayada-media-production", bucket_regional_domain_name = "vayada-media-production.s3.eu-west-1.amazonaws.com" }
+}
 output "setup_environment" { value = local.hotel_setup_environment }
 output "property_environment" { value = local.hotel_setup_property_environment }
 ''')
@@ -74,6 +82,8 @@ output "property_environment" { value = local.hotel_setup_property_environment }
                 'enable_hotel_setup_credential_infrastructure': service.get('credentials', False),
                 'hotel_setup_command_mode': service.get('mode', 'property_commands'),
                 'enable_hotel_setup_property_credentials': service.get('property_credentials', False),
+                'enable_hotel_setup_logo_storage': service.get('logo_storage', False),
+                'hotel_setup_logo_private_admission': service.get('logo_admission', 'blocked'),
                 'enable_hotel_setup_property_service_staging': service.get('property_enabled', False),
                 'hotel_setup_property_image_digests': service.get('property_digests', {'primary': '', 'rollback': ''}),
                 'hotel_setup_image_digests': service.get('digests', {'primary': '', 'rollback': ''})}))

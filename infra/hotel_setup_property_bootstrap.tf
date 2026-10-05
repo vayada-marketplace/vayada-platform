@@ -14,7 +14,7 @@ resource "aws_iam_role_policy" "hotel_setup_property_bootstrap" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:CreateSecret", "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
-      Resource = [local.hotel_setup_property_secret_arn]
+      Resource = concat([local.hotel_setup_property_secret_arn], var.enable_hotel_setup_logo_storage ? [local.hotel_setup_logo_secret_arn] : [])
     }]
   })
 }
