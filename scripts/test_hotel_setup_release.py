@@ -60,6 +60,20 @@ class ReleaseTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             release.approved(DIGEST, 'hotel-setup-logo-images.json')
 
+    def test_initial_logo_hold_retains_the_installed_image_and_absent_pair(self):
+        task = copy.deepcopy(self.task)
+        task['containerDefinitions'][0]['image'] = release.REPOSITORY + '@' + DIGEST
+        held = release.prepare_public(task, 'logo', 'hold', DIGEST)
+        self.assertEqual(held['containerDefinitions'][0]['image'], task['containerDefinitions'][0]['image'])
+        self.assertEqual(held['containerDefinitions'][0]['secrets'], task['containerDefinitions'][0]['secrets'])
+        self.assertEqual(release.environment(held['containerDefinitions'][0])['HOTEL_SETUP_LOGO_COMMAND_ADMISSION'], 'blocked')
+        with self.assertRaises(RuntimeError):
+            release.prepare_public(task, 'logo', 'hold', 'sha256:' + 'b'*64)
+        paired = release.prepare_public(task, 'property', 'enabled', DIGEST, TOKEN)
+        paired = release.prepare_public(paired, 'logo', 'enabled', DIGEST, TOKEN)
+        with self.assertRaises(RuntimeError):
+            release.prepare_public(paired, 'logo', 'hold', DIGEST)
+
     def test_logo_admission_requires_the_live_exact_media_policy(self):
         task = {'taskRoleArn': 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-task'}
         policy = {'Version': '2012-10-17', 'Statement': [{'Effect': 'Allow',

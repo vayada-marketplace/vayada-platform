@@ -16,6 +16,11 @@ production 0464 ledger history is required. 0465 may be absent or exactly applie
 unknown, applied or mismatching transition histories fail closed. Existing
 parents fail closed for inspection rather than adoption.
 
+Before installing the logo artifact, the initial public logo hold retains the exact
+installed caller-approved immutable image and requires an absent logo origin/token
+pair. It only adds blocked admission; artifact changes and later blocked/enabled
+logo releases still require the complete logo protocol inventory.
+
 All three public callers must be explicitly blocked and both physical private
 services stopped. The driver requires an active incompatible-frontend coordinated
 hold capturing the exact stable public task. It rechecks the unchanged hold,

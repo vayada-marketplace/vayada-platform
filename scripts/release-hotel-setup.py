@@ -95,6 +95,8 @@ def prepare_public(task, purpose, state, digest, token=None):
     pairs = [entry for entry in secrets if entry['name'] == prefix + '_INTERNAL_TOKEN']
     require(len(pairs) <= 1, 'Ambiguous token')
     if state == 'hold':
+        if purpose == 'logo':
+            require(item['image'] == REPOSITORY + '@' + digest, 'Initial logo hold must retain the installed immutable image')
         require(prefix + '_ORIGIN' not in env and not pairs, 'Initial hold cannot remove an existing pair')
     elif state == 'blocked':
         require(result.get('executionRoleArn') == EXECUTION, 'Blocked pair requires isolated public execution identity')
@@ -218,7 +220,8 @@ def main():
         token = None
         if args.purpose == 'logo':
             require(args.state in ('hold', 'blocked', 'enabled'), 'Logo release only changes public admission')
-            approved(args.image_digest, 'hotel-setup-logo-images.json')
+            if args.state != 'hold':
+                approved(args.image_digest, 'hotel-setup-logo-images.json')
         if args.state == 'enabled':
             private = service(PRIVATE[args.purpose])
             require(stable(private), 'Private service must be healthy before admission')
