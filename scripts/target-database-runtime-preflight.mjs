@@ -55,6 +55,7 @@ const protectedRelations = [
   "platform.hotel_setup_property_scopes",
   "platform.hotel_setup_creation_scopes",
   "platform.hotel_setup_linked_properties",
+  "platform.hotel_setup_reconciliation_cursors",
   "hotel_catalog.hotel_setup_effective_creation_scopes",
   "platform.identity_migration_provenance",
   "platform.channex_adoption_approval_records",
@@ -227,6 +228,7 @@ try {
         to_regclass('platform.hotel_setup_property_scopes'),
         to_regclass('platform.hotel_setup_creation_scopes'),
         to_regclass('platform.hotel_setup_linked_properties'),
+        to_regclass('platform.hotel_setup_reconciliation_cursors'),
         to_regclass('hotel_catalog.hotel_setup_effective_creation_scopes')
       ) AND has_any_column_privilege(current_user, oid, 'SELECT')`,
     [],
@@ -559,6 +561,7 @@ try {
           'platform.hotel_setup_property_scopes',
           'platform.hotel_setup_creation_scopes',
           'platform.hotel_setup_linked_properties',
+          'platform.hotel_setup_reconciliation_cursors',
           'hotel_catalog.hotel_setup_effective_creation_scopes',
           'platform.pricing_runtime_property_scopes'
         )

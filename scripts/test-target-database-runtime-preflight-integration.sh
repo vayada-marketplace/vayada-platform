@@ -133,6 +133,7 @@ CREATE TABLE platform.pricing_runtime_property_scopes (database_login name PRIMA
 CREATE TABLE platform.hotel_setup_property_scopes (database_login name PRIMARY KEY, property_id uuid, organization_id uuid);
 CREATE TABLE platform.hotel_setup_creation_scopes (database_login name PRIMARY KEY, organization_id uuid);
 CREATE TABLE platform.hotel_setup_linked_properties (property_id uuid PRIMARY KEY);
+CREATE TABLE platform.hotel_setup_reconciliation_cursors (mode text PRIMARY KEY, scope_id uuid);
 CREATE VIEW hotel_catalog.hotel_setup_effective_creation_scopes WITH (security_barrier = true) AS
   SELECT organization_id FROM platform.hotel_setup_creation_scopes WHERE database_login = session_user;
 CREATE TABLE pms.inventory_coverage_validation_queue (id uuid PRIMARY KEY);
@@ -926,6 +927,7 @@ for entry in \
   platform.hotel_setup_property_scopes:database_login \
   platform.hotel_setup_creation_scopes:database_login \
   platform.hotel_setup_linked_properties:property_id \
+  platform.hotel_setup_reconciliation_cursors:scope_id \
   hotel_catalog.hotel_setup_effective_creation_scopes:organization_id; do
   table="${entry%:*}"
   column="${entry#*:}"
