@@ -18,10 +18,10 @@ REGION = 'eu-west-1'
 CLUSTER = 'vayada-backend-cluster'
 REPOSITORY = '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api'
 PUBLIC = 'vayada-next-api-service'
-PRIVATE = {'creation': 'vayada-hotel-setup-service', 'property': 'vayada-hotel-setup-property-service'}
-PREFIX = {'creation': 'HOTEL_SETUP_CREATION_COMMAND', 'property': 'HOTEL_SETUP_COMMAND'}
-ORIGIN = {'creation': 'https://hotel-setup-command.vayada.com', 'property': 'https://hotel-setup-property-command.vayada.com'}
-SECRET = {'creation': 'hotel-setup-creation/prod/internal-token', 'property': 'hotel-setup-command/prod/internal-token'}
+PRIVATE = {'creation': 'vayada-hotel-setup-service', 'property': 'vayada-hotel-setup-property-service', 'logo': 'vayada-hotel-setup-property-service'}
+PREFIX = {'creation': 'HOTEL_SETUP_CREATION_COMMAND', 'property': 'HOTEL_SETUP_COMMAND', 'logo': 'HOTEL_SETUP_LOGO_COMMAND'}
+ORIGIN = {'creation': 'https://hotel-setup-command.vayada.com', 'property': 'https://hotel-setup-property-command.vayada.com', 'logo': 'https://hotel-setup-property-command.vayada.com'}
+SECRET = {'creation': 'hotel-setup-creation/prod/internal-token', 'property': 'hotel-setup-command/prod/internal-token', 'logo': 'hotel-setup-command/prod/internal-token'}
 EXECUTION = 'arn:aws:iam::269416271598:role/vayada-next-api-setup-caller-execution'
 TASK = re.compile(r'^arn:aws:ecs:eu-west-1:269416271598:task-definition/[a-zA-Z0-9_-]+:[1-9][0-9]*$')
 
@@ -40,6 +40,23 @@ def service(name):
     result = aws('ecs', 'describe-services', '--cluster', CLUSTER, '--services', name)
     require(not result.get('failures') and len(result['services']) == 1, 'Required service is missing')
     return result['services'][0]
+
+
+def require_logo_media_policy(task):
+    role = 'vayada-hotel-setup-property-task'
+    require(task.get('taskRoleArn') == 'arn:aws:iam::269416271598:role/' + role,
+            'Logo forwarding requires the isolated private task role')
+    policy = aws('iam', 'get-role-policy', '--role-name', role,
+                 '--policy-name', 'hotel-setup-logo-exact-media-object-access')['PolicyDocument']
+    statement = policy.get('Statement', [])
+    require(policy.get('Version') == '2012-10-17' and len(statement) == 1 and
+            set(statement[0]) == {'Effect', 'Action', 'Resource'} and
+            statement[0]['Effect'] == 'Allow' and
+            sorted(statement[0]['Action']) == ['s3:DeleteObject', 's3:GetObject', 's3:PutObject'] and
+            sorted(statement[0]['Resource']) == sorted(
+                'arn:aws:s3:::vayada-media-production/' + prefix
+                for prefix in ('staging/*', 'private/media/*', 'public/media/*')),
+            'Live logo media permissions differ from the reviewed policy')
 
 
 def stable(state, task=None):
@@ -78,12 +95,18 @@ def prepare_public(task, purpose, state, digest, token=None):
     pairs = [entry for entry in secrets if entry['name'] == prefix + '_INTERNAL_TOKEN']
     require(len(pairs) <= 1, 'Ambiguous token')
     if state == 'hold':
+        if purpose == 'logo':
+            require(item['image'] == REPOSITORY + '@' + digest, 'Initial logo hold must retain the installed immutable image')
         require(prefix + '_ORIGIN' not in env and not pairs, 'Initial hold cannot remove an existing pair')
     elif state == 'blocked':
         require(result.get('executionRoleArn') == EXECUTION, 'Blocked pair requires isolated public execution identity')
         require(env.get(prefix + '_ORIGIN') == ORIGIN[purpose] and len(pairs) == 1, 'Blocked rollback must retain its pair')
     else:
         require(state == 'enabled' and token, 'Invalid caller release')
+        if purpose == 'logo':
+            require(env.get(PREFIX['property'] + '_ORIGIN') == ORIGIN['property'] and
+                    any(entry['name'] == PREFIX['property'] + '_INTERNAL_TOKEN' and entry['valueFrom'] == token for entry in secrets),
+                    'Logo forwarding requires the existing isolated property caller pair')
         env[prefix + '_ORIGIN'] = ORIGIN[purpose]
         item['secrets'] = [entry for entry in secrets if entry['name'] != prefix + '_INTERNAL_TOKEN'] + [{'name': prefix + '_INTERNAL_TOKEN', 'valueFrom': token}]
         result['executionRoleArn'] = EXECUTION
@@ -169,7 +192,7 @@ def restore_initial_public(args, public):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--service', choices=['public', 'creation', 'property'], required=True)
-    parser.add_argument('--purpose', choices=['creation', 'property'], required=True)
+    parser.add_argument('--purpose', choices=['creation', 'property', 'logo'], required=True)
     parser.add_argument('--state', choices=['hold', 'blocked', 'enabled', 'start', 'stop', 'restore_initial'], required=True)
     parser.add_argument('--image-digest', required=True)
     parser.add_argument('--expected-public-task', required=True)
@@ -179,7 +202,7 @@ def main():
     require(TASK.fullmatch(args.expected_public_task), 'Invalid reviewed public task')
     public = service(PUBLIC)
     if args.state == 'restore_initial':
-        require(args.service == 'public' and not args.private_task, 'Recovery is public initial-cutover only')
+        require(args.service == 'public' and args.purpose in ('creation', 'property') and not args.private_task, 'Recovery is public initial-cutover only')
         restore_initial_public(args, public)
         return
     require(stable(public, args.expected_public_task), 'Public service is not the reviewed stable task')
@@ -195,6 +218,10 @@ def main():
             subprocess.run(['python3', str(ROOT / 'scripts/assert-next-api-split-compatible-image.py'), 'next-target-backend', 'vayada-next-api', args.image_digest, str(image_file), str(task_file)], check=True)
         subprocess.run(['python3', str(ROOT / 'scripts/coordinated_release.py'), 'guard-legacy', '--service', 'next-target-backend', '--event-name', 'workflow_dispatch', '--operation-id', 'setup-' + os.environ['GITHUB_RUN_ID'], '--reason', 'reviewed hotel setup caller release'], check=True)
         token = None
+        if args.purpose == 'logo':
+            require(args.state in ('hold', 'blocked', 'enabled'), 'Logo release only changes public admission')
+            if args.state != 'hold':
+                approved(args.image_digest, 'hotel-setup-logo-images.json')
         if args.state == 'enabled':
             private = service(PRIVATE[args.purpose])
             require(stable(private), 'Private service must be healthy before admission')
@@ -203,6 +230,10 @@ def main():
             private_image = container(private_task, 'hotel-setup')['image']
             require(private_image.startswith(REPOSITORY + '@'), 'Private image must be immutable')
             approved(private_image.split('@')[1], 'hotel-setup-command-images.json' if args.purpose == 'creation' else 'hotel-setup-property-images.json')
+            if args.purpose == 'logo':
+                approved(private_image.split('@')[1], 'hotel-setup-logo-images.json')
+                require(environment(container(private_task, 'hotel-setup')).get('HOTEL_SETUP_LOGO_COMMAND_ADMISSION') == 'enabled', 'Private logo admission must be enabled before forwarding')
+                require_logo_media_policy(private_task)
             token = aws('secretsmanager', 'describe-secret', '--secret-id', SECRET[args.purpose])['ARN']
         definition = prepare_public(current, args.purpose, args.state, args.image_digest, token)
         with tempfile.TemporaryDirectory() as directory:
@@ -219,6 +250,8 @@ def main():
         require(public_image.startswith(REPOSITORY + '@'), 'Public image must be immutable')
         approved(public_image.split('@')[1], 'hotel-setup-caller-images.json')
         require(environment(container(current, 'vayada-next-api')).get(PREFIX[args.purpose] + '_ADMISSION') == 'blocked', 'Caller admission must be blocked')
+        if args.service == 'property':
+            require(environment(container(current, 'vayada-next-api')).get(PREFIX['logo'] + '_ADMISSION', 'blocked') == 'blocked', 'Logo admission must be blocked before property service mutation')
         destination = PRIVATE[args.service]
         private = service(destination)
         if args.state == 'stop':

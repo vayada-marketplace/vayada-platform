@@ -46,6 +46,56 @@ class ReleaseTest(unittest.TestCase):
         creation_hold = release.prepare_public(blocked, 'creation', 'hold', DIGEST)
         self.assertEqual(creation_hold['containerDefinitions'][0]['secrets'], blocked['containerDefinitions'][0]['secrets'])
 
+    def test_logo_admission_preserves_other_callers_and_reuses_exact_private_token(self):
+        property_enabled = release.prepare_public(self.task, 'property', 'enabled', DIGEST, TOKEN)
+        logo_enabled = release.prepare_public(property_enabled, 'logo', 'enabled', DIGEST, TOKEN)
+        blocked = release.prepare_public(logo_enabled, 'logo', 'blocked', DIGEST)
+        env = release.environment(blocked['containerDefinitions'][0])
+        self.assertEqual(env['HOTEL_SETUP_LOGO_COMMAND_ADMISSION'], 'blocked')
+        self.assertEqual(env['HOTEL_SETUP_COMMAND_ADMISSION'], 'enabled')
+        self.assertEqual(env['HOTEL_SETUP_LOGO_COMMAND_ORIGIN'], release.ORIGIN['property'])
+        self.assertEqual(blocked['containerDefinitions'][0]['secrets'], logo_enabled['containerDefinitions'][0]['secrets'])
+        with self.assertRaises(RuntimeError):
+            release.prepare_public(self.task, 'logo', 'enabled', DIGEST, TOKEN.replace('internal-token', 'native-login'))
+        with self.assertRaises(RuntimeError):
+            release.approved(DIGEST, 'hotel-setup-logo-images.json')
+
+    def test_initial_logo_hold_retains_the_installed_image_and_absent_pair(self):
+        task = copy.deepcopy(self.task)
+        task['containerDefinitions'][0]['image'] = release.REPOSITORY + '@' + DIGEST
+        held = release.prepare_public(task, 'logo', 'hold', DIGEST)
+        self.assertEqual(held['containerDefinitions'][0]['image'], task['containerDefinitions'][0]['image'])
+        self.assertEqual(held['containerDefinitions'][0]['secrets'], task['containerDefinitions'][0]['secrets'])
+        self.assertEqual(release.environment(held['containerDefinitions'][0])['HOTEL_SETUP_LOGO_COMMAND_ADMISSION'], 'blocked')
+        with self.assertRaises(RuntimeError):
+            release.prepare_public(task, 'logo', 'hold', 'sha256:' + 'b'*64)
+        paired = release.prepare_public(task, 'property', 'enabled', DIGEST, TOKEN)
+        paired = release.prepare_public(paired, 'logo', 'enabled', DIGEST, TOKEN)
+        with self.assertRaises(RuntimeError):
+            release.prepare_public(paired, 'logo', 'hold', DIGEST)
+
+    def test_logo_admission_requires_the_live_exact_media_policy(self):
+        task = {'taskRoleArn': 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-task'}
+        policy = {'Version': '2012-10-17', 'Statement': [{'Effect': 'Allow',
+            'Action': ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+            'Resource': ['arn:aws:s3:::vayada-media-production/' + prefix
+                         for prefix in ('staging/*', 'private/media/*', 'public/media/*')]}]}
+        with patch.object(release, 'aws', return_value={'PolicyDocument': policy}) as call:
+            release.require_logo_media_policy(task)
+            call.assert_called_once_with('iam', 'get-role-policy', '--role-name',
+                'vayada-hotel-setup-property-task', '--policy-name',
+                'hotel-setup-logo-exact-media-object-access')
+        for changed in ('missing', 'broad', 'read_only'):
+            invalid = copy.deepcopy(policy)
+            if changed == 'missing': invalid['Statement'] = []
+            elif changed == 'broad': invalid['Statement'][0]['Resource'] = ['arn:aws:s3:::vayada-media-production/*']
+            else: invalid['Statement'][0]['Action'] = ['s3:GetObject']
+            with patch.object(release, 'aws', return_value={'PolicyDocument': invalid}):
+                with self.assertRaises(RuntimeError): release.require_logo_media_policy(task)
+        with patch.object(release, 'aws') as call:
+            with self.assertRaises(RuntimeError): release.require_logo_media_policy({'taskRoleArn': 'broad-role'})
+            call.assert_not_called()
+
     def test_private_start_uses_only_pinned_safe_definition_and_refuses_wrong_role(self):
         public_task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/public:1'
         private_task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-hotel-setup-property-primary:1'
@@ -95,7 +145,7 @@ class ReleaseTest(unittest.TestCase):
         public = copy.deepcopy(self.task)
         public['containerDefinitions'][0]['image'] = release.REPOSITORY + '@' + DIGEST
         public['containerDefinitions'][0]['environment'] += [
-            {'name': prefix + '_ADMISSION', 'value': 'blocked' if key == purpose else 'enabled'}
+            {'name': prefix + '_ADMISSION', 'value': 'blocked' if key in (purpose, 'logo') else 'enabled'}
             for key, prefix in release.PREFIX.items()]
         prefix = 'hotel-setup-command/prod/' if purpose == 'property' else 'hotel-setup-creation/prod/'
         public = release.prepare_public(public, purpose, 'enabled', DIGEST,

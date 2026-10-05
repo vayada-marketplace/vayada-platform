@@ -16,13 +16,20 @@ locals {
   hotel_setup_property_images = var.enable_hotel_setup_property_service_staging ? var.hotel_setup_property_image_digests : {}
   # Only independently verified immutable images may be staged.
   hotel_setup_property_image_inventory = jsondecode(file("${path.module}/../deployment/hotel-setup-property-images.json"))
-  hotel_setup_property_environment = [for entry in local.hotel_setup_environment : {
+  hotel_setup_property_environment = concat([for entry in local.hotel_setup_environment : {
     name = entry.name
     value = lookup({
       HOTEL_SETUP_COMMAND_MODE          = "property_commands"
       HOTEL_SETUP_COMMAND_SECRET_PREFIX = local.hotel_setup_property_secret_prefix
     }, entry.name, entry.value)
-  }]
+    }], [
+    { name = "HOTEL_SETUP_LOGO_COMMAND_ADMISSION", value = var.hotel_setup_logo_private_admission },
+    { name = "PLATFORM_MEDIA_BUCKET", value = aws_s3_bucket.private_profile_media.id },
+    { name = "PLATFORM_MEDIA_CDN_BASE_URL", value = local.private_profile_media_cdn_base_url },
+    { name = "PLATFORM_MEDIA_CDN_ORIGIN_HOST", value = aws_s3_bucket.private_profile_media.bucket_regional_domain_name },
+    { name = "PLATFORM_MEDIA_PUBLIC_PATH_PREFIX", value = "media" },
+    { name = "PLATFORM_MEDIA_PUBLIC_CACHE_CONTROL", value = "public, max-age=31536000, immutable" },
+  ])
 }
 
 resource "aws_cloudwatch_log_group" "hotel_setup_property" {
@@ -69,6 +76,11 @@ resource "aws_ecs_task_definition" "hotel_setup_property" {
   volume { name = "runtime" }
   lifecycle {
     precondition {
+      condition = (var.hotel_setup_logo_private_admission == "blocked" ||
+      (var.enable_hotel_setup_logo_storage && can(regex("^[a-f0-9]{40}$", lookup(local.hotel_setup_logo_image_inventory, each.value, "")))))
+      error_message = "Enabled logo tasks require scoped storage and full lifecycle proof for both immutable primary and rollback images."
+    }
+    precondition {
       condition = (var.enable_hotel_setup_property_credentials && var.enable_hotel_setup_property_network &&
         can(regex("^[a-f0-9]{40}$", lookup(local.hotel_setup_property_image_inventory, each.value, ""))) &&
       var.workos_audience != "" && var.workos_issuer != "" && var.workos_jwks_url != "")
@@ -108,5 +120,5 @@ resource "aws_ecs_service" "hotel_setup_property" {
     ignore_changes = [desired_count, task_definition]
   }
 
-  depends_on = [aws_lb_listener_rule.hotel_setup_property, aws_iam_role_policy.hotel_setup_property_execution_runtime, aws_iam_role_policy.hotel_setup_property_execution_secrets, aws_iam_role_policy.hotel_setup_property_native_secrets]
+  depends_on = [aws_lb_listener_rule.hotel_setup_property, aws_iam_role_policy.hotel_setup_property_execution_runtime, aws_iam_role_policy.hotel_setup_property_execution_secrets, aws_iam_role_policy.hotel_setup_property_native_secrets, aws_iam_role_policy.hotel_setup_logo_media]
 }

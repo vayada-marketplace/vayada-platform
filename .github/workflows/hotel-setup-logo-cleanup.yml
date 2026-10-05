@@ -1,38 +1,41 @@
-name: Bootstrap exact hotel property command credential
-
+name: Inspect or clean exact hotel logo attempt
 on:
   workflow_dispatch:
     inputs:
       image_digest:
-        description: Reviewed dual-proof operational image digest
+        description: Reviewed immutable image with complete cleanup and native proofs
         required: true
       expected_task_definition:
-        description: Reviewed stable public task with blocked property admission
+        description: Reviewed stable public task with blocked property and logo admission
         required: true
       property_id:
-        description: Canonical existing property UUID
         required: true
       organization_id:
-        description: Canonical owning organization UUID
         required: true
       actor_user_id:
-        description: Original Owner actor UUID
+        description: Original actor bound to the attempt, including after revocation
         required: true
-      operation:
+      kind:
         type: choice
-        options: [launch_settings, currency, currency_ready, feature_hub, property_logo]
+        options: [upload_session, publication_job]
         required: true
-
+      target_id:
+        description: Exact upload session or publication job UUID
+        required: true
+      phase:
+        type: choice
+        options: [plan, apply]
+        required: true
+      expected_manifest_sha256:
+        description: Empty for plan; exact PLAN receipt hash required for apply
 permissions:
   contents: read
   id-token: write
-
 concurrency:
   group: production-ecs-mutations
   queue: max
-
 jobs:
-  bootstrap:
+  cleanup:
     if: github.ref == 'refs/heads/main'
     environment: platform-mutations-v2
     runs-on: ubuntu-latest
@@ -45,14 +48,17 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
           aws-region: eu-west-1
-      - name: Require blocked caller and zero-task property service
+      - name: Require reviewed image, stopped executor and exact attempt manifest
         env:
           EXPECTED_TASK: ${{ inputs.expected_task_definition }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
           PROPERTY_ID: ${{ inputs.property_id }}
           ORGANIZATION_ID: ${{ inputs.organization_id }}
           ACTOR_USER_ID: ${{ inputs.actor_user_id }}
-          OPERATION: ${{ inputs.operation }}
+          KIND: ${{ inputs.kind }}
+          TARGET_ID: ${{ inputs.target_id }}
+          PHASE: ${{ inputs.phase }}
+          MANIFEST_SHA256: ${{ inputs.expected_manifest_sha256 }}
         run: |
           set -euo pipefail
-          bash scripts/run-target-database-runtime-preflight.sh --provision-hotel-setup-property-native "$PROPERTY_ID" "$ORGANIZATION_ID" "$ACTOR_USER_ID" "$OPERATION" "$IMAGE_DIGEST"
+          bash scripts/run-target-database-runtime-preflight.sh --cleanup-hotel-setup-logo "$PROPERTY_ID" "$ORGANIZATION_ID" "$ACTOR_USER_ID" "$KIND" "$TARGET_ID" "$PHASE" "$MANIFEST_SHA256" "$IMAGE_DIGEST"

@@ -3,8 +3,13 @@ name: Stage fixed NOLOGIN hotel setup migration group
 on:
   workflow_dispatch:
     inputs:
+      scope:
+        description: Fixed migration parent to stage
+        type: choice
+        options: [property_0441, logo_0466]
+        default: property_0441
       image_digest:
-        description: Reviewed operational image containing exact migration 0441
+        description: Reviewed operational image containing the selected exact migration
         required: true
       expected_task_definition:
         description: Exact stable held public API task
@@ -31,6 +36,13 @@ jobs:
           aws-region: eu-west-1
       - name: Stage only the fixed NOLOGIN group after native failure proof
         env:
+          SCOPE: ${{ inputs.scope }}
           EXPECTED_TASK: ${{ inputs.expected_task_definition }}
           IMAGE_DIGEST: ${{ inputs.image_digest }}
-        run: bash scripts/run-target-database-runtime-preflight.sh --stage-hotel-setup-migration-scope "$IMAGE_DIGEST"
+        run: |
+          case "$SCOPE" in
+            property_0441) mode=--stage-hotel-setup-migration-scope ;;
+            logo_0466) mode=--stage-hotel-setup-logo-migration-scope ;;
+            *) exit 2 ;;
+          esac
+          bash scripts/run-target-database-runtime-preflight.sh "$mode" "$IMAGE_DIGEST"
