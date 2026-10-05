@@ -232,11 +232,11 @@ case "${mode}" in
       fi
     fi
     ;;
-  --inspect-hotel-setup-reader-rls|--repair-hotel-setup-reader-rls|--verify-hotel-setup-creation-reader-rls|--verify-hotel-setup-property-reader-rls|--inspect-hotel-setup-legacy-helpers|--verify-hotel-setup-legacy-helpers|--inspect-approved-hotel-setup-legacy-helpers|--repair-approved-hotel-setup-legacy-helpers)
+  --inspect-hotel-setup-reader-rls|--repair-hotel-setup-reader-rls|--verify-hotel-setup-creation-reader-rls|--verify-hotel-setup-property-reader-rls|--inspect-hotel-setup-legacy-helpers|--verify-hotel-setup-legacy-helpers|--inspect-approved-hotel-setup-legacy-helpers|--repair-approved-hotel-setup-legacy-helpers|--inspect-hotel-setup-tenant-helpers|--repair-hotel-setup-tenant-helpers)
     [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main &&
        "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_REPOSITORY:-}" == vayada-marketplace/vayada-platform ]] || exit 2
     reader_rls_mode=inspect
-    if [[ "$mode" == --repair-hotel-setup-reader-rls || "$mode" == --repair-approved-hotel-setup-legacy-helpers ]]; then
+    if [[ "$mode" == --repair-hotel-setup-reader-rls || "$mode" == --repair-approved-hotel-setup-legacy-helpers || "$mode" == --repair-hotel-setup-tenant-helpers ]]; then
       [[ "$#" -eq 2 && "$2" =~ ^[a-f0-9]{64}$ ]] || exit 2
       reader_rls_mode=apply; reader_rls_frozen="$2"
     else [[ "$#" -eq 1 || "$mode" == --verify-hotel-setup-legacy-helpers ]] || exit 2; fi
@@ -269,6 +269,15 @@ case "${mode}" in
       code_file="hotel-setup-approved-legacy-helper-repair.mjs"
       secret_name="TARGET_DATABASE_MIGRATION_URL"; secret_parameter="/vayada/prod/target-database-url"
       creation_task_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-creation-bootstrap"
+      creation_execution_role="arn:aws:iam::269416271598:role/vayada-next-api-setup-caller-execution"
+    fi
+    if [[ "$mode" == --inspect-hotel-setup-tenant-helpers || "$mode" == --repair-hotel-setup-tenant-helpers ]]; then
+      [[ "${EXPECTED_TASK:-}" == arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1192 ]] || exit 2
+      legacy_helper_mode="$reader_rls_mode"; legacy_helper_frozen="$reader_rls_frozen"; reader_rls_mode=""; reader_rls_frozen=""
+      legacy_helper_scope="hotel_setup_tenant_helpers"
+      creation_task_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-creation-bootstrap"
+      code_file="hotel-setup-tenant-helper-repair.mjs"
+      secret_name="TARGET_DATABASE_MIGRATION_URL"; secret_parameter="/vayada/prod/target-database-url"
       creation_execution_role="arn:aws:iam::269416271598:role/vayada-next-api-setup-caller-execution"
     fi
     if [[ "$mode" == --verify-hotel-setup-creation-reader-rls || "$mode" == --verify-hotel-setup-property-reader-rls ]]; then
@@ -497,7 +506,7 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $vay2017_public_key == "" then [] else [{name:"VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64",value:$vay2017_public_key}] end) +
       (if $vay2017_principal == "" then [] else [{name:"CHANNEX_ADOPTION_EXECUTION_PRINCIPAL",value:$vay2017_principal}] end))}]}')"
 definition_environment='[]'
-if [[ "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair ]]; then
+if [[ "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair || "$legacy_helper_scope" == hotel_setup_tenant_helpers ]]; then
   # Nonsecret reviewed code and public CA live only in the disposable definition.
   # Keep runtime arguments under ECS's override limit; credentials stay secret-injected.
   definition_environment="$(jq -c '[.containerOverrides[0].environment[] | select(.name=="VAYADA_DB_RUNTIME_PREFLIGHT_CODE" or .name=="VAYADA_DB_RDS_CA_BUNDLE_GZIP")]' <<<"$overrides")"
@@ -676,7 +685,7 @@ for _ in {1..10}; do
   jq -e --arg expected "${vay2017_expected_status}" --arg reader "$reader_rls_mode" --arg exit "$(jq -r '.exitCode' <<<"${task}")" \
     'if type != "array" then false elif $reader == "inspect" and $exit == "1" then length > 0
       else any(.[]; fromjson? | select(type == "object") | .status == "PASS" or .status == "BLOCKED" or
-        (.scope=="hotel_setup_approved_legacy_helper_repair" and (.status=="UNCERTAIN" or .status=="COMMITTED_UNVERIFIED")) or
+        ((.scope=="hotel_setup_approved_legacy_helper_repair" or .scope=="hotel_setup_tenant_helpers") and (.status=="UNCERTAIN" or .status=="COMMITTED_UNVERIFIED")) or
         ($expected != "" and .status == $expected)) end' <<<"${messages}" >/dev/null 2>&1 && break
   sleep 2
 done
@@ -694,9 +703,9 @@ if [[ "${mode}" == "--audit-financials-readiness" && "$(jq -r '.exitCode' <<<"${
     '. + {sourceTaskDefinition:$task_definition,sourceImageDigest:$image_digest}' <<<"${blocked}"
   exit 2
 fi
-if [[ "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair && "$(jq -r '.exitCode' <<<"${task}")" != "0" ]]; then
+if [[ ( "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair || "$legacy_helper_scope" == hotel_setup_tenant_helpers ) && "$(jq -r '.exitCode' <<<"${task}")" != "0" ]]; then
   # Project only fixed outcome fields; never relay secrets or arbitrary task errors.
-  outcome="$(jq -c '.[] | fromjson? | select(.scope=="hotel_setup_approved_legacy_helper_repair" and
+  outcome="$(jq -c --arg scope "$legacy_helper_scope" '.[] | fromjson? | select(.scope==$scope and
     (.status=="UNCERTAIN" or .status=="COMMITTED_UNVERIFIED")) | .catalog as $catalog |
     {status,scope,catalog:(if (["unavailable","unexpected","unchanged","exact_granted","changed","unchanged_since_commit"]|index($catalog)) then .catalog else "unavailable" end),
      nativeProof:"unverified"} | if .status=="COMMITTED_UNVERIFIED" then .+{committed:true} else . end' <<<"${messages}")"
