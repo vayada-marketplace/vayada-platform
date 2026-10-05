@@ -57,7 +57,8 @@ try {
   const rowHash = async () => (await setup.query(`SELECT md5(json_build_object(
     'ledger',(SELECT json_agg(row ORDER BY id) FROM platform.schema_migrations row),
     'schemas',(SELECT json_agg(row ORDER BY oid) FROM pg_catalog.pg_namespace row),
-    'relations',(SELECT json_agg(row ORDER BY oid) FROM pg_catalog.pg_class row))::text) AS hash`)).rows[0].hash;
+    'relations',(SELECT json_agg(row ORDER BY oid) FROM pg_catalog.pg_class row),
+    'functions',(SELECT json_agg(row ORDER BY oid) FROM pg_catalog.pg_proc row))::text) AS hash`)).rows[0].hash;
   await setup.query(`INSERT INTO platform.schema_migrations(version,name,status,environment,checksum_sha256)
     SELECT '0464','hotel_setup_reconciliation_cursor','applied','production',$1 FROM generate_series(1,4)`,
     [hash('0464_hotel_setup_reconciliation_cursor.sql')]);
@@ -71,8 +72,10 @@ try {
         super({connectionString: connection.href, ssl: options.ssl});
       }
       async query(text, ...args) {
+        const unquoted = text.replace(/'(?:[^']|'')*'/g, "''");
         const read = (text.startsWith('SELECT ') || text.startsWith('WITH history AS (')) && !text.includes(';') &&
-          !/\b(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|COMMIT)\b/i.test(text.replace(/'(?:[^']|'')*'/g, "''"));
+          !/\b(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|COMMIT)\b/i.test(unquoted) &&
+          !/\bpg_advisory_[a-z_]*\s*\(/i.test(unquoted);
         assert.ok(text === 'BEGIN READ ONLY' || text === "SET LOCAL statement_timeout='15s'" || text === 'ROLLBACK' || read);
         queries++;
         try {return await super.query(text, ...args);} catch (error) {
@@ -102,6 +105,23 @@ try {
     return receipt.inspection;
   }
   let inspection = await run();
+  assert.ok([16,17].includes(Math.floor(inspection.server.serverVersionNum / 10000)));
+  assert.equal(inspection.server.createroleSelfGrant, '');
+  assert.equal(inspection.server.createroleSelfGrantReset, '');
+  assert.equal(inspection.server.createroleSelfGrantSource, 'default');
+  assert.equal(inspection.server.advisoryLockExecute, true); assert.equal(inspection.server.lockHashExecute, true);
+  for (const value of ['inherit','set','set, inherit']) {
+    await setup.query(`ALTER ROLE vayada_admin SET createrole_self_grant TO '${value}'`);
+    const configured = (await run()).server;
+    const expected = value === 'set, inherit' ? 'inherit,set' : value;
+    assert.equal(configured.createroleSelfGrant, expected); assert.equal(configured.createroleSelfGrantReset, expected);
+    assert.equal(configured.createroleSelfGrantSource, 'user');
+  }
+  await setup.query('ALTER ROLE vayada_admin RESET createrole_self_grant');
+  await setup.query('REVOKE EXECUTE ON FUNCTION pg_catalog.pg_advisory_xact_lock(bigint), pg_catalog.hashtextextended(text,bigint) FROM PUBLIC');
+  const restricted = (await run()).server;
+  assert.equal(restricted.advisoryLockExecute, false); assert.equal(restricted.lockHashExecute, false);
+  await setup.query('GRANT EXECUTE ON FUNCTION pg_catalog.pg_advisory_xact_lock(bigint), pg_catalog.hashtextextended(text,bigint) TO PUBLIC');
   assert.equal(inspection.ledger[0].total, 4); assert.equal(inspection.ledger[0].latest.length, 3);
   assert.equal(inspection.ledger[0].allAppliedBasenamePinned, true);
   assert.equal(inspection.ledger[0].allAppliedPinned, false);
@@ -138,4 +158,4 @@ try {
   assert.equal(await globalHash(), before, 'Exact global roles/settings/memberships/database ACL cleanup differs');
   await admin.end();
 }
-console.log('PASS: native TLS NOSUPERUSER audit, canonical basename/history diagnostics, absent parent, read-only queries, sanitized output and exact catalog/global cleanup');
+console.log('PASS: native TLS NOSUPERUSER audit, bounded server/self-grant settings and function privileges, canonical basename/history diagnostics, absent parent, read-only queries, sanitized output and exact catalog/global cleanup');
