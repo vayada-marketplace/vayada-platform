@@ -1,12 +1,12 @@
-name: Read protected hotel setup migration ledger
+name: Read protected hotel setup ledger and automatic authority
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Fixed ledger diagnostic or pre-readiness migration transition
+        description: Fixed ledger diagnostic, readiness transition or automatic grant authority
         type: choice
-        options: [failed_0441, readiness_0463_0464]
+        options: [failed_0441, readiness_0463_0464, automatic_authority]
         default: failed_0441
         required: true
       image_digest:
@@ -36,7 +36,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
           aws-region: eu-west-1
-      - name: Read only the selected fixed migration audit
+      - name: Read only the selected fixed audit
         env:
           AUDIT_MODE: ${{ inputs.mode }}
           EXPECTED_TASK: ${{ inputs.expected_task_definition }}
@@ -46,6 +46,7 @@ jobs:
           case "$AUDIT_MODE" in
             failed_0441) mode=--audit-hotel-setup-migration ;;
             readiness_0463_0464) mode=--audit-hotel-setup-readiness-migrations ;;
+            automatic_authority) mode=--audit-hotel-setup-automatic-authority ;;
             *) exit 2 ;;
           esac
           bash scripts/run-target-database-runtime-preflight.sh "$mode" "$IMAGE_DIGEST"
