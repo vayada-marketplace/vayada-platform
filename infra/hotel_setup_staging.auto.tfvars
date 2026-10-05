@@ -8,13 +8,17 @@ hotel_setup_command_mode                     = "property_creation"
 enable_hotel_setup_service_staging           = true
 enable_hotel_setup_property_service_staging  = true
 hotel_setup_image_digests = {
-  primary  = "sha256:bafc5880043ff7019d9921d195a5d5998d8b99f57b95bf3f251e85b0e1e8c698"
-  rollback = "sha256:259f22ca5f9d90cfa87239adfff6a396bd3877598372c20a377dc055dfd3df6b"
+  primary  = "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965"
+  rollback = "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965"
 }
 hotel_setup_property_image_digests = {
-  primary  = "sha256:bafc5880043ff7019d9921d195a5d5998d8b99f57b95bf3f251e85b0e1e8c698"
-  rollback = "sha256:259f22ca5f9d90cfa87239adfff6a396bd3877598372c20a377dc055dfd3df6b"
+  primary  = "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965"
+  rollback = "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965"
 }
 # Retain both admitted callers after the protected activation and native proofs.
 # Later applies reject removal of installed origin/token pairs or enabled admission.
-hotel_setup_public_caller = { creation = "enabled", property = "enabled" }
+hotel_setup_public_caller = { creation = "enabled", property = "enabled", logo = "hold" }
+
+# Reviewed scoped logo protocol; automatic provisioning remains disabled.
+enable_hotel_setup_logo_storage    = true
+hotel_setup_logo_private_admission = "enabled"

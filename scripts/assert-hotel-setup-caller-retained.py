@@ -3,7 +3,7 @@
 import json
 import sys
 
-PREFIXES = ("HOTEL_SETUP_CREATION_COMMAND", "HOTEL_SETUP_COMMAND")
+PREFIXES = ("HOTEL_SETUP_CREATION_COMMAND", "HOTEL_SETUP_COMMAND", "HOTEL_SETUP_LOGO_COMMAND")
 
 def check(current, plan):
     containers = current["taskDefinition"]["containerDefinitions"]
@@ -32,8 +32,8 @@ def check(current, plan):
             raise ValueError("Secret admission marker forbidden")
         if admission in old_env and admission not in new_env:
             raise ValueError("Installed setup admission cannot be removed")
-        if old_env.get(admission) == "enabled" and new_env.get(admission) != "enabled":
-            raise ValueError("Ordinary apply cannot disable activated setup; use protected release")
+        if old_env.get(admission) in ("enabled", "blocked") and new_env.get(admission) != old_env[admission]:
+            raise ValueError("Ordinary apply must retain setup admission; use protected release")
         if origin in old_env or token in old_secrets:
             if (new_env.get(origin) != old_env.get(origin) or new_secrets.get(token) != old_secrets.get(token)):
                 raise ValueError("Installed setup origin/token pair must be retained")
