@@ -15,6 +15,13 @@ const knownRoles = new Set([...roles, 'rdsadmin', 'rds_superuser', 'postgres']);
 const digest = value => createHash('sha256').update(value).digest('hex');
 const roleName = name => knownRoles.has(name) ? {name} : {name: 'other', nameSha256: digest(name)};
 const validHash = value => /^[a-f0-9]{64}$/.test(value ?? '') ? value : null;
+const selfGrant = value => {
+  if (value === null || value === '') return value;
+  if (typeof value !== 'string' || !/^(?:inherit|set)(?:\s*,\s*(?:inherit|set))*$/.test(value.trim())) return 'other';
+  return [...new Set(value.split(',').map(option => option.trim()))].sort().join(',');
+};
+const settingSources = new Set(['default', 'dynamic default', 'environment variable', 'configuration file',
+  'command line', 'global', 'database', 'user', 'database user', 'client', 'override', 'interactive', 'test', 'session']);
 let client;
 let stage = 'configuration';
 const inspection = {};
@@ -42,6 +49,17 @@ try {
   inspection.identity = identity[0] ?? null;
   if (identity.length !== 1 || !identity[0].database_matches || !identity[0].principal_matches ||
       identity[0].replica !== false || identity[0].read_only !== true || identity[0].rolsuper !== false) throw new Error();
+  stage = 'server_settings';
+  const server = (await client.query(`SELECT current_setting('server_version_num')::int AS server_version_num,
+    current_setting('createrole_self_grant',true) AS self_grant,
+    (SELECT source FROM pg_catalog.pg_settings WHERE name='createrole_self_grant') AS source,
+    (SELECT reset_val FROM pg_catalog.pg_settings WHERE name='createrole_self_grant') AS reset_val,
+    pg_catalog.has_function_privilege(current_user,'pg_catalog.pg_advisory_xact_lock(bigint)','EXECUTE') AS advisory_lock_execute,
+    pg_catalog.has_function_privilege(current_user,'pg_catalog.hashtextextended(text,bigint)','EXECUTE') AS lock_hash_execute`)).rows[0];
+  inspection.server = {serverVersionNum: server.server_version_num, createroleSelfGrant: selfGrant(server.self_grant),
+    createroleSelfGrantSource: server.source === null ? null : settingSources.has(server.source) ? server.source : 'other',
+    createroleSelfGrantReset: selfGrant(server.reset_val),
+    advisoryLockExecute: server.advisory_lock_execute, lockHashExecute: server.lock_hash_execute};
   stage = 'roles';
   inspection.roles = (await client.query(`SELECT rolname AS name, rolsuper, rolcreaterole, rolcreatedb,
     rolcanlogin, rolinherit, rolreplication, rolbypassrls, rolconfig IS NOT NULL AS has_role_settings,

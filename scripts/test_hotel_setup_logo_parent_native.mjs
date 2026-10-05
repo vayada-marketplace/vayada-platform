@@ -47,13 +47,14 @@ const catalogSnapshot=async()=>(await setup.query(`SELECT md5(json_build_object(
  'schemas',(SELECT json_agg(r ORDER BY oid) FROM pg_namespace r),
  'relations',(SELECT json_agg(r ORDER BY oid) FROM pg_class r),
  'functions',(SELECT json_agg(r ORDER BY oid) FROM pg_proc r))::text) AS hash`)).rows[0].hash;
-let uncertain=false;
+let uncertain=false,selfGrant=false,denyLock=false;
 async function run(){
  const catalogBefore=await catalogSnapshot(),globalBefore=await globalSnapshot();
  let receipt,exit;
  class Client extends pg.Client {
   constructor(options){assert.equal(options.ssl.rejectUnauthorized,true);assert.equal(options.ssl.ca,ca??'test-ca');const connection=new URL(url);connection.username='vayada_admin';connection.password='local-stage-test';super({connectionString:connection.href,ssl});}
-  async query(...args){const value=await super.query(...args);if(uncertain&&args[0]==='COMMIT')throw Error('acknowledgement lost');return value;}
+  async connect(){await super.connect();if(selfGrant)await super.query("SET createrole_self_grant='inherit,set'");}
+  async query(...args){if(denyLock&&args[0].includes('pg_advisory_xact_lock'))return super.query("SELECT 'SECRET_SENTINEL_DO_NOT_LOG'::integer");const value=await super.query(...args);if(uncertain&&args[0]==='COMMIT')throw Error('acknowledgement lost');return value;}
  }
  const context=vm.createContext({URL,process:{env:{HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL:'postgresql://vayada_admin:synthetic@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require',VAYADA_DB_RDS_CA_BUNDLE:ca??'test-ca'},set exitCode(v){exit=v;}},console:{log:v=>receipt=JSON.parse(v),error:v=>receipt=JSON.parse(v)}});
  const modules={pg:{default:{Client}},'node:crypto':{createHash},'node:fs':{readFileSync:path=>readFileSync(`${migrationDir}/${path.split('/').at(-1)}`)}};
@@ -69,6 +70,14 @@ await setup.query("UPDATE platform.schema_migrations SET checksum_sha256='wrong'
 await setup.query("UPDATE platform.schema_migrations SET name='0464_hotel_setup_reconciliation_cursor.sql'");assert.equal((await run()).exit,1);await absent();await setup.query("UPDATE platform.schema_migrations SET name='hotel_setup_reconciliation_cursor'");
 await setup.query("INSERT INTO platform.schema_migrations(version,name,status,environment,checksum_sha256,failure_reason)VALUES('0466','0466_hotel_setup_logo_scope.sql','failed','production',$1,'permission denied to create role')",[hash('0466_hotel_setup_logo_scope.sql')]);assert.equal((await run()).exit,1);await absent();await setup.query("DELETE FROM platform.schema_migrations WHERE version='0466'");
 await setup.query("INSERT INTO platform.schema_migrations(version,name,status,environment,checksum_sha256)VALUES('0467','unexpected','applied','production','wrong')");assert.equal((await run()).exit,1);await absent();await setup.query("DELETE FROM platform.schema_migrations WHERE version='0467'");
+denyLock=true;const denied=await run();denyLock=false;
+assert.equal(denied.exit,1);assert.equal(denied.receipt.stage,'lock');assert.equal(denied.receipt.sqlstate,'22P02');assert.equal(denied.receipt.parentPosture,null);
+assert.ok(!JSON.stringify(denied.receipt).includes('SECRET_SENTINEL'));await absent();
+selfGrant=true;const inherited=await run();selfGrant=false;
+assert.equal(inherited.exit,1);assert.equal(inherited.receipt.stage,'parent_verify');assert.equal(inherited.receipt.sqlstate,null);
+assert.equal(inherited.receipt.parentPosture.incoming_memberships,2);
+assert.ok(inherited.receipt.parentPosture.creator_edges.some(edge=>edge.creator_matches&&edge.admin_option&&!edge.inherit_option&&!edge.set_option&&edge.grantor_superuser));
+assert.ok(inherited.receipt.parentPosture.creator_edges.some(edge=>edge.creator_matches&&!edge.admin_option&&edge.inherit_option&&edge.set_option&&!edge.grantor_superuser));await absent();
 const result=await run();assert.equal(result.receipt.status,'PASS');assert.equal(result.receipt.migrationOwnerCanCreateRole,false);
 const posture=(await setup.query("SELECT rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolinherit,rolreplication,rolbypassrls FROM pg_catalog.pg_roles WHERE rolname='vayada_next_hotel_setup_logo_scope'")).rows[0];assert.ok(Object.values(posture).every(value=>value===false));
 const edges=(await setup.query("SELECT member::regrole::text AS member,admin_option,inherit_option,set_option FROM pg_catalog.pg_auth_members WHERE roleid='vayada_next_hotel_setup_logo_scope'::regrole OR member='vayada_next_hotel_setup_logo_scope'::regrole")).rows;assert.deepEqual(edges,[{member:'vayada_admin',admin_option:true,inherit_option:false,set_option:false}]);assert.equal(result.receipt.creatorAdminOnlyMembership,true);
@@ -86,4 +95,4 @@ assert.equal((await setup.query('SELECT count(*)::int AS count FROM platform.sch
  assert.equal(await globalSnapshot(),before,'Exact global roles/settings/membership/database ACL cleanup differs');
  await admin.end();
 }
-console.log('PASS: native fixed parent staging, canonical basename/full-filename denial, owner/ledger denials, exact protected-admin-only membership, ledger/catalog preservation, unknown COMMIT and exact global cleanup');
+console.log('PASS: native fixed parent staging, canonical ledger denials, strict self-grant rejection with rolled-back posture, bounded SQLSTATE without error text, exact protected-admin-only membership, ledger/catalog preservation, unknown COMMIT and exact global cleanup');
