@@ -438,6 +438,24 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
                 self.assertNotIn('update-service', operations)
                 self.assertEqual(operations[-2:], ['stop-task', 'deregister-task-definition'])
 
+    def test_logo_property_runner_retains_proof_and_blocked_service_guards(self):
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
+                        MOCK_PUBLIC_IMAGE='269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST)
+        (self.root / 'deployment/hotel-setup-caller-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
+        inventory = self.root / 'deployment/hotel-setup-bootstrap-images.json'
+        args = ['--provision-hotel-setup-property-native', ORG, ORG, ACTOR, 'property_logo', DIGEST]
+        inventory.write_text('{}')
+        self.assertNotEqual(self.run_wrapper(*args).returncode, 0)
+        self.assertFalse((self.root / 'capture/calls.jsonl').exists())
+        inventory.write_text(json.dumps({DIGEST: {key: 'b' * 40 for key in ('primarySource', 'rollbackSource', 'publisherSource')}}))
+        result = self.run_wrapper(*args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        overrides = json.loads((self.root / 'capture/overrides.json').read_text())
+        env = {entry['name']: entry['value'] for entry in overrides['containerOverrides'][0]['environment']}
+        self.assertEqual(env['HOTEL_SETUP_COMMAND_OPERATION'], 'property_logo')
+        operations = [json.loads(line)[1] for line in (self.root / 'capture/calls.jsonl').read_text().splitlines()]
+        self.assertNotIn('update-service', operations)
+
     def test_native_property_runner_is_main_only_and_proved_before_mutations(self):
         self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
                         MOCK_PUBLIC_IMAGE='269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST)

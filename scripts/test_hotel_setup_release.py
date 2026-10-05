@@ -46,6 +46,20 @@ class ReleaseTest(unittest.TestCase):
         creation_hold = release.prepare_public(blocked, 'creation', 'hold', DIGEST)
         self.assertEqual(creation_hold['containerDefinitions'][0]['secrets'], blocked['containerDefinitions'][0]['secrets'])
 
+    def test_logo_admission_preserves_other_callers_and_reuses_exact_private_token(self):
+        property_enabled = release.prepare_public(self.task, 'property', 'enabled', DIGEST, TOKEN)
+        logo_enabled = release.prepare_public(property_enabled, 'logo', 'enabled', DIGEST, TOKEN)
+        blocked = release.prepare_public(logo_enabled, 'logo', 'blocked', DIGEST)
+        env = release.environment(blocked['containerDefinitions'][0])
+        self.assertEqual(env['HOTEL_SETUP_LOGO_COMMAND_ADMISSION'], 'blocked')
+        self.assertEqual(env['HOTEL_SETUP_COMMAND_ADMISSION'], 'enabled')
+        self.assertEqual(env['HOTEL_SETUP_LOGO_COMMAND_ORIGIN'], release.ORIGIN['property'])
+        self.assertEqual(blocked['containerDefinitions'][0]['secrets'], logo_enabled['containerDefinitions'][0]['secrets'])
+        with self.assertRaises(RuntimeError):
+            release.prepare_public(self.task, 'logo', 'enabled', DIGEST, TOKEN.replace('internal-token', 'native-login'))
+        with self.assertRaises(RuntimeError):
+            release.approved(DIGEST, 'hotel-setup-logo-images.json')
+
     def test_private_start_uses_only_pinned_safe_definition_and_refuses_wrong_role(self):
         public_task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/public:1'
         private_task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-hotel-setup-property-primary:1'
@@ -95,7 +109,7 @@ class ReleaseTest(unittest.TestCase):
         public = copy.deepcopy(self.task)
         public['containerDefinitions'][0]['image'] = release.REPOSITORY + '@' + DIGEST
         public['containerDefinitions'][0]['environment'] += [
-            {'name': prefix + '_ADMISSION', 'value': 'blocked' if key == purpose else 'enabled'}
+            {'name': prefix + '_ADMISSION', 'value': 'blocked' if key in (purpose, 'logo') else 'enabled'}
             for key, prefix in release.PREFIX.items()]
         prefix = 'hotel-setup-command/prod/' if purpose == 'property' else 'hotel-setup-creation/prod/'
         public = release.prepare_public(public, purpose, 'enabled', DIGEST,

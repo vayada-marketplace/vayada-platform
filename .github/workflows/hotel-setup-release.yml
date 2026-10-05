@@ -9,7 +9,7 @@ on:
         required: true
       purpose:
         type: choice
-        options: [creation, property]
+        options: [creation, property, logo]
         required: true
       state:
         type: choice

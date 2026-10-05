@@ -331,7 +331,7 @@ case "${mode}" in
   --provision-hotel-setup-property-native)
     [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main && "$#" -eq 6 ]] || exit 2
     uuid='^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-    [[ "$2" =~ ${uuid} && "$3" =~ ${uuid} && "$4" =~ ${uuid} && "$5" =~ ^(launch_settings|currency|currency_ready|feature_hub)$ && "$6" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 2
+    [[ "$2" =~ ${uuid} && "$3" =~ ${uuid} && "$4" =~ ${uuid} && "$5" =~ ^(launch_settings|currency|currency_ready|feature_hub|property_logo)$ && "$6" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 2
     property_id="$2"; creation_org="$3"; creation_actor="$4"; property_operation="$5"
     inventory="$(dirname "${BASH_SOURCE[0]}")/../deployment/hotel-setup-bootstrap-images.json"
     jq -e --arg digest "$6" '.[ $digest ] | type == "object" and

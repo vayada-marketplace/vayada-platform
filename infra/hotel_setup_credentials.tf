@@ -22,6 +22,7 @@ locals {
   } : {}
   hotel_setup_property_secret_prefix = "hotel-setup-command/prod/property/"
   hotel_setup_property_secret_arn    = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${local.hotel_setup_property_secret_prefix}vayada_next_hotel_setup_property_*"
+  hotel_setup_logo_secret_arn        = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${local.hotel_setup_property_secret_prefix}vayada_next_hotel_setup_logo_*"
   hotel_setup_creation_secret_prefix = "hotel-setup-command/prod/organization/"
   hotel_setup_creation_secret_arn    = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${local.hotel_setup_creation_secret_prefix}vayada_next_hotel_setup_org_*"
   hotel_setup_native_secret_prefix   = var.hotel_setup_command_mode == "property_creation" ? local.hotel_setup_creation_secret_prefix : local.hotel_setup_property_secret_prefix
