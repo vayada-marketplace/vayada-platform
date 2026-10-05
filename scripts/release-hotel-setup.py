@@ -42,6 +42,23 @@ def service(name):
     return result['services'][0]
 
 
+def require_logo_media_policy(task):
+    role = 'vayada-hotel-setup-property-task'
+    require(task.get('taskRoleArn') == 'arn:aws:iam::269416271598:role/' + role,
+            'Logo forwarding requires the isolated private task role')
+    policy = aws('iam', 'get-role-policy', '--role-name', role,
+                 '--policy-name', 'hotel-setup-logo-exact-media-object-access')['PolicyDocument']
+    statement = policy.get('Statement', [])
+    require(policy.get('Version') == '2012-10-17' and len(statement) == 1 and
+            set(statement[0]) == {'Effect', 'Action', 'Resource'} and
+            statement[0]['Effect'] == 'Allow' and
+            sorted(statement[0]['Action']) == ['s3:DeleteObject', 's3:GetObject', 's3:PutObject'] and
+            sorted(statement[0]['Resource']) == sorted(
+                'arn:aws:s3:::vayada-media-production/' + prefix
+                for prefix in ('staging/*', 'private/media/*', 'public/media/*')),
+            'Live logo media permissions differ from the reviewed policy')
+
+
 def stable(state, task=None):
     return (state['desiredCount'] == state['runningCount'] == 1 and state['pendingCount'] == 0
             and len(state['deployments']) == 1 and state['deployments'][0]['rolloutState'] == 'COMPLETED' and state['deployments'][0].get('status') == 'PRIMARY'
@@ -213,6 +230,7 @@ def main():
             if args.purpose == 'logo':
                 approved(private_image.split('@')[1], 'hotel-setup-logo-images.json')
                 require(environment(container(private_task, 'hotel-setup')).get('HOTEL_SETUP_LOGO_COMMAND_ADMISSION') == 'enabled', 'Private logo admission must be enabled before forwarding')
+                require_logo_media_policy(private_task)
             token = aws('secretsmanager', 'describe-secret', '--secret-id', SECRET[args.purpose])['ARN']
         definition = prepare_public(current, args.purpose, args.state, args.image_digest, token)
         with tempfile.TemporaryDirectory() as directory:

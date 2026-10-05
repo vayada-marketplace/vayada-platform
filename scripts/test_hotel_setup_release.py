@@ -60,6 +60,28 @@ class ReleaseTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             release.approved(DIGEST, 'hotel-setup-logo-images.json')
 
+    def test_logo_admission_requires_the_live_exact_media_policy(self):
+        task = {'taskRoleArn': 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-task'}
+        policy = {'Version': '2012-10-17', 'Statement': [{'Effect': 'Allow',
+            'Action': ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+            'Resource': ['arn:aws:s3:::vayada-media-production/' + prefix
+                         for prefix in ('staging/*', 'private/media/*', 'public/media/*')]}]}
+        with patch.object(release, 'aws', return_value={'PolicyDocument': policy}) as call:
+            release.require_logo_media_policy(task)
+            call.assert_called_once_with('iam', 'get-role-policy', '--role-name',
+                'vayada-hotel-setup-property-task', '--policy-name',
+                'hotel-setup-logo-exact-media-object-access')
+        for changed in ('missing', 'broad', 'read_only'):
+            invalid = copy.deepcopy(policy)
+            if changed == 'missing': invalid['Statement'] = []
+            elif changed == 'broad': invalid['Statement'][0]['Resource'] = ['arn:aws:s3:::vayada-media-production/*']
+            else: invalid['Statement'][0]['Action'] = ['s3:GetObject']
+            with patch.object(release, 'aws', return_value={'PolicyDocument': invalid}):
+                with self.assertRaises(RuntimeError): release.require_logo_media_policy(task)
+        with patch.object(release, 'aws') as call:
+            with self.assertRaises(RuntimeError): release.require_logo_media_policy({'taskRoleArn': 'broad-role'})
+            call.assert_not_called()
+
     def test_private_start_uses_only_pinned_safe_definition_and_refuses_wrong_role(self):
         public_task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/public:1'
         private_task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-hotel-setup-property-primary:1'
