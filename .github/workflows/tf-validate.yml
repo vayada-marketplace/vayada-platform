@@ -39,6 +39,8 @@ on:
       - "scripts/run-hotel-setup-property-bootstrap.mjs"
       - "scripts/audit-hotel-setup-owner.mjs"
       - "scripts/audit-hotel-setup-readiness-migrations.mjs"
+      - "scripts/inspect-hotel-setup-logo-migration.mjs"
+      - "scripts/test_hotel_setup_logo_inspection_native.mjs"
       - "scripts/test-hotel-setup-readiness-migrations.mjs"
       - ".github/workflows/hotel-setup-migration-audit.yml"
       - "docs/hotel-setup-readiness-migration-audit.md"
@@ -316,6 +318,8 @@ jobs:
           python3 scripts/test-target-database-runtime-preflight.py
           python3 scripts/test-target-database-runtime-runner.py
           node --experimental-vm-modules scripts/test-hotel-setup-readiness-migrations.mjs
+          node --check scripts/inspect-hotel-setup-logo-migration.mjs
+          node --check scripts/test_hotel_setup_logo_inspection_native.mjs
           python3 scripts/test_hotel_setup_creation_runner.py
           node --check scripts/provision-hotel-setup-creation-login.mjs
           node --check scripts/test-hotel-setup-creation-bootstrap.mjs
