@@ -24,6 +24,13 @@ class CallerRetainedTests(unittest.TestCase):
         for old, new in (("hold", "off"), ("blocked", "hold"), ("enabled", "hold"), ("enabled", "blocked"), ("enabled", "off")):
             with self.assertRaises(ValueError):
                 guard.check(*self.documents(old, new))
+    def test_logo_pair_retained_and_paused_callers_never_reopened(self):
+        for prefix in guard.PREFIXES:
+            guard.check(*self.documents("enabled", "enabled", prefix))
+            guard.check(*self.documents("blocked", "blocked", prefix))
+            for old, new in (("enabled","off"),("blocked","hold"),("blocked","enabled"),("hold","enabled")):
+                with self.assertRaises(ValueError):
+                    guard.check(*self.documents(old, new, prefix))
     def test_repointed_token_denied(self):
         current, plan = self.documents("enabled", "enabled")
         task = plan["planned_values"]["root_module"]["resources"][0]["values"]

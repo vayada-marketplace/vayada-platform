@@ -1,0 +1,46 @@
+{
+  "purpose": "property_logo",
+  "bundle": {
+    "digest": "sha256:df7d509d0b5167ea57b00f846602385b67ee052c0dd7387f466f528487151960",
+    "publisherSource": "84b4fd6976d5bbc5a4d2c8753901dfb85d24b179",
+    "publisherRun": 37357113935
+  },
+  "primary": {
+    "digest": "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965",
+    "source": "3efb2195a823f40b7cd5a716db5bf08ac3fe90ad",
+    "buildRun": 37352120155
+  },
+  "rollback": {
+    "digest": "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965",
+    "source": "3efb2195a823f40b7cd5a716db5bf08ac3fe90ad",
+    "buildRun": 37352120155
+  },
+  "verification": {
+    "status": "PASS",
+    "postgresVersions": [
+      16,
+      17
+    ],
+    "actualImmutableApiImage": true,
+    "apiNativeCasesPerVersion": 12,
+    "actualImmutablePublishedBundle": true,
+    "bothFixedNativeRoots": "PASS",
+    "exactGlobalCleanup": "PASS",
+    "creator": "vayada_admin LOGIN NOSUPERUSER CREATEROLE CREATEDB; incoming ADMIN=true INHERIT=false SET=false with superuser grantor",
+    "checks": [
+      "pending native proof before actor-bound immutable secret publication",
+      "ready proof and resolver",
+      "revocation and scope denial",
+      "media publication/replay and cleanup/recovery",
+      "creation, launch-settings, Financials and Channex native regressions"
+    ],
+    "secretApiTransport": "local_mock",
+    "customerData": false,
+    "cloudWrites": false,
+    "automaticProvisioning": "OFF; manual proof only",
+    "productionCreatorAuthority": "NOT_ASSERTED",
+    "productionCutover": "PENDING",
+    "ownerSaveReload": "PENDING"
+  },
+  "rollbackPolicy": "same complete scoped logo protocol"
+}
