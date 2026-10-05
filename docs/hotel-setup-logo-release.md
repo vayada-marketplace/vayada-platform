@@ -25,3 +25,14 @@ private/media/* and public/media/* of the existing media bucket. Keys have no
 property or purpose discriminator; native evidence and runtime key constructors
 must bind each operation. There is no ListBucket, ACL, legacy-bucket or bucket
 policy change, and ordinary API/native database permissions remain unchanged.
+
+For cleanup after revocation, use the protected `hotel-setup-logo-cleanup`
+workflow against one bound `upload_session` or `publication_job` UUID. Keep both
+property and logo admission blocked and confirm all physical private executor
+tasks stopped. The driver checks that gate before launch, during execution and
+after completion. `plan` returns only a manifest hash and key count; `apply`
+requires that exact hash and rejects drift. Its separate task role grants only
+DeleteObject on the three reviewed key prefixes, with the existing helper-owner
+URL injected by the execution role. It cannot read/write S3, publish credentials,
+list the bucket or run a HTTP Owner bypass. Failed or uncertain cleanup requires
+inspection; the runner never retries a mutating invocation.

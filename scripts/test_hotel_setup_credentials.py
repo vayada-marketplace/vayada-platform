@@ -131,6 +131,16 @@ locals {
         self.assertEqual(policy["Statement"], [{"Effect": "Allow",
             "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
             "Resource": ["arn:aws:s3:::vayada-media-production/" + path for path in ["staging/*", "private/media/*", "public/media/*"]]}])
+        cleanup = source.split('resource "aws_iam_role_policy" "hotel_setup_logo_cleanup"', 1)[1]
+        expression = cleanup.split("policy = ", 1)[1].rsplit("\n}", 1)[0].strip()
+        expression = expression.replace("aws_s3_bucket.private_profile_media.arn", "local.bucket_arn")
+        expression = expression.replace('"\n', '",\n').replace(']\n', '],\n')
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "main.tf").write_text('locals { bucket_arn = "arn:aws:s3:::vayada-media-production" }')
+            result = subprocess.run(["terraform", "console", "-no-color"], input=expression.replace("\n", " ") + "\n",
+                capture_output=True, text=True, cwd=directory, check=True, timeout=30)
+            cleanup_policy = json.loads(json.loads(result.stdout.strip()))
+        self.assertEqual(cleanup_policy["Statement"], [{**policy["Statement"][0], "Action": ["s3:DeleteObject"]}])
         task = (ROOT / "infra/hotel_setup_property_service.tf").read_text()
         self.assertIn('name = "HOTEL_SETUP_LOGO_COMMAND_ADMISSION", value = var.hotel_setup_logo_private_admission', task)
         self.assertIn('default = "blocked"', source)

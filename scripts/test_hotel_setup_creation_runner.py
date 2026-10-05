@@ -27,17 +27,19 @@ if operation=='get-parameter':
 elif operation=='describe-services' and value('--query')=='services[0]':
  print(json.dumps({'taskDefinition':os.environ.get('MOCK_PUBLIC_TASK',os.environ['EXPECTED_TASK']),'desiredCount':1,'runningCount':1,'pendingCount':0,'deployments':[{'status':'PRIMARY','rolloutState':'COMPLETED'}]*int(os.environ.get('MOCK_PUBLIC_DEPLOYMENTS','1'))}))
 elif operation=='describe-services' and value('--services')=='vayada-hotel-setup-property-service':
- print(json.dumps({'services':[{'desiredCount':0,'runningCount':int(os.environ.get('MOCK_PROPERTY_RUNNING','0')),'pendingCount':0}], 'failures':[]}))
+ print(json.dumps({'services':[{'desiredCount':0,'runningCount':1 if os.environ.get('MOCK_GATE_DRIFT') and (root/'overrides.json').exists() else int(os.environ.get('MOCK_PROPERTY_RUNNING','0')),'pendingCount':0}], 'failures':[]}))
 elif operation=='describe-services':
  print(json.dumps({'awsvpcConfiguration':{'subnets':['fixture'],'securityGroups':['fixture'],'assignPublicIp':'ENABLED'}}) if 'networkConfiguration' in value('--query') else os.environ.get('MOCK_CURRENT_TASK','arn:aws:ecs:eu-west-1:269416271598:task-definition/public:1'))
 elif operation=='describe-task-definition':
- print(json.dumps({'family':'public','taskRoleArn':'arn:aws:iam::269416271598:role/broad-serving-role','executionRoleArn':'fixture-execution','containerDefinitions':[{'name':'vayada-next-api','image':os.environ.get('MOCK_PUBLIC_IMAGE','ordinary-serving-image'),'logConfiguration':{'logDriver':'awslogs','options':{'awslogs-group':'/ecs/vayada-next-api','awslogs-region':'eu-west-1','awslogs-stream-prefix':'ecs'}},'environment':[{'name':'HOTEL_SETUP_COMMAND_ADMISSION','value':os.environ.get('MOCK_ADMISSION','blocked')}],'secrets':[{'name':'UNSAFE','valueFrom':'fixture'}],'portMappings':[{'containerPort':8003}],**({'entryPoint':['unsafe'],'workingDirectory':'/unsafe','mountPoints':[{'sourceVolume':'code','containerPath':'/app'}],'volumesFrom':[{'sourceContainer':'unsafe'}],'environmentFiles':[{'type':'s3','value':'unsafe'}],'privileged':True} if os.environ.get('MOCK_STARTUP') else {})}]}))
+ print(json.dumps({'family':'public','taskRoleArn':'arn:aws:iam::269416271598:role/broad-serving-role','executionRoleArn':'fixture-execution','containerDefinitions':[{'name':'vayada-next-api','image':os.environ.get('MOCK_PUBLIC_IMAGE','ordinary-serving-image'),'logConfiguration':{'logDriver':'awslogs','options':{'awslogs-group':'/ecs/vayada-next-api','awslogs-region':'eu-west-1','awslogs-stream-prefix':'ecs'}},'environment':[{'name':'HOTEL_SETUP_COMMAND_ADMISSION','value':os.environ.get('MOCK_ADMISSION','blocked')},{'name':'HOTEL_SETUP_LOGO_COMMAND_ADMISSION','value':os.environ.get('MOCK_LOGO_ADMISSION','blocked')}],'secrets':[{'name':'UNSAFE','valueFrom':'fixture'}],'portMappings':[{'containerPort':8003}],**({'entryPoint':['unsafe'],'workingDirectory':'/unsafe','mountPoints':[{'sourceVolume':'code','containerPath':'/app'}],'volumesFrom':[{'sourceContainer':'unsafe'}],'environmentFiles':[{'type':'s3','value':'unsafe'}],'privileged':True} if os.environ.get('MOCK_STARTUP') else {})}]}))
 elif operation=='register-task-definition':
  (root/'definition.json').write_text(value('--cli-input-json'))
  print('arn:aws:ecs:eu-west-1:269416271598:task-definition/fixture:1')
 elif operation=='run-task':
  (root/'overrides.json').write_text(value('--overrides'))
  print('arn:aws:ecs:eu-west-1:269416271598:task/fixture/123')
+elif operation=='list-tasks': print(json.dumps(['arn:aws:ecs:eu-west-1:269416271598:task/vayada-backend-cluster/'+'a'*32] if os.environ.get('MOCK_DRAINING') and value('--desired-status')=='STOPPED' else []))
+elif operation=='describe-tasks' and '--query' not in args: print(json.dumps({'failures':[],'tasks':[{'group':'service:vayada-hotel-setup-property-service','desiredStatus':'STOPPED','lastStatus':'RUNNING'}]}))
 elif operation=='describe-tasks': print('STOPPED' if value('--query')=='tasks[0].lastStatus' else json.dumps({'exitCode':int(os.environ.get('MOCK_EXIT_CODE','0')),'reason':'fixture'}))
 elif operation=='get-log-events': print(json.dumps([os.environ.get('MOCK_RECEIPT','{"status":"PASS"}')]))
 elif operation in ('stop-task','deregister-task-definition'): print('{}')
@@ -94,7 +96,7 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
         self.root = Path(self.temp.name)
         for directory in ('scripts', 'deployment', 'bin', 'capture'):
             (self.root / directory).mkdir()
-        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'stage-hotel-setup-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'hotel-setup-approved-legacy-helper-repair.mjs', 'hotel-setup-tenant-helper-repair.mjs', 'coordinated_release.py'):
+        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'run-hotel-setup-logo-cleanup.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'stage-hotel-setup-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'hotel-setup-approved-legacy-helper-repair.mjs', 'hotel-setup-tenant-helper-repair.mjs', 'coordinated_release.py'):
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copy(ROOT / 'deployment/coordinated-release-v1.json', self.root / 'deployment/coordinated-release-v1.json')
         (self.root / 'deployment/hotel-setup-command-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
@@ -437,6 +439,49 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
                 operations = [json.loads(line)[1] for line in (self.root / 'capture/calls.jsonl').read_text().splitlines()]
                 self.assertNotIn('update-service', operations)
                 self.assertEqual(operations[-2:], ['stop-task', 'deregister-task-definition'])
+
+    def test_logo_cleanup_exact_manifest_separate_identity_and_physical_gate(self):
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
+                        GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REPOSITORY='vayada-marketplace/vayada-platform',
+                        MOCK_PUBLIC_IMAGE='269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST)
+        (self.root / 'deployment/hotel-setup-caller-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
+        inventory = self.root / 'deployment/hotel-setup-logo-images.json'
+        inventory.write_text('{}')
+        args = ['--cleanup-hotel-setup-logo', ORG, ORG, ACTOR, 'upload_session', ACTOR, 'plan', '', DIGEST]
+        self.assertNotEqual(self.run_wrapper(*args).returncode, 0)
+        self.assertFalse((self.root / 'capture/calls.jsonl').exists())
+        inventory.write_text(json.dumps({DIGEST: 'b' * 40}))
+        for phase in ('plan', 'apply'):
+            args[6:8] = [phase, '' if phase == 'plan' else 'a' * 64]
+            receipt = {'status': 'PLAN' if phase == 'plan' else 'PASS', 'kind': 'upload_session',
+                       'targetId': ACTOR, 'manifestSha256': 'a' * 64, 'keyCount': 4}
+            self.env['MOCK_RECEIPT'] = json.dumps(receipt)
+            result = self.run_wrapper(*args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), receipt)
+            definition = json.loads((self.root / 'capture/definition.json').read_text())
+            self.assertEqual(definition['taskRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-logo-cleanup')
+            item, = definition['containerDefinitions']
+            self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_HELPER_OWNER_DATABASE_URL', 'valueFrom': '/vayada/prod/target-database-url'}])
+            overrides = json.loads((self.root / 'capture/overrides.json').read_text())
+            env = {entry['name']: entry['value'] for entry in overrides['containerOverrides'][0]['environment']}
+            self.assertEqual(env['HOTEL_SETUP_LOGO_CLEANUP_APPLY'], 'enabled' if phase == 'apply' else 'blocked')
+            self.assertEqual(env['HOTEL_SETUP_LOGO_CLEANUP_TARGET_ID'], ACTOR)
+            self.assertLessEqual(len(json.dumps(overrides).encode()), 8192)
+        for changes in ({'MOCK_LOGO_ADMISSION': 'enabled'}, {'MOCK_PROPERTY_RUNNING': '1'},
+                        {'MOCK_DRAINING': '1'}, {'MOCK_GATE_DRIFT': '1'}):
+            previous = self.env.copy()
+            (self.root / 'capture/calls.jsonl').unlink()
+            (self.root / 'capture/overrides.json').unlink(missing_ok=True)
+            self.env.update(changes)
+            self.assertNotEqual(self.run_wrapper(*args).returncode, 0)
+            operations = [json.loads(line)[1] for line in (self.root / 'capture/calls.jsonl').read_text().splitlines()]
+            if 'MOCK_GATE_DRIFT' in changes:
+                self.assertIn('stop-task', operations)
+            else:
+                self.assertNotIn('register-task-definition', operations)
+            self.env = previous
+        self.assertNotIn('update-service', operations)
 
     def test_logo_property_runner_retains_proof_and_blocked_service_guards(self):
         self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
