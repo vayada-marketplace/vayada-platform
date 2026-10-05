@@ -121,6 +121,16 @@ class CompatibleImageTest(unittest.TestCase):
     def test_skips_unrelated_service(self) -> None:
         self.assertEqual(run("pms-backend", "other", "tag", []).returncode, 0)
 
+    def test_logo_image_has_split_and_ongoing_export_attestations(self):
+        source = "3efb2195a823f40b7cd5a716db5bf08ac3fe90ad"
+        digest = "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965"
+        for name in ("next-api-split-compatible-images.txt", "next-api-ongoing-export-compatible-images.txt"):
+            approved = dict(line.split() for line in (ROOT / "scripts" / name).read_text().splitlines()
+                            if line.strip() and not line.startswith("#"))
+            self.assertEqual(approved.get(source), digest)
+        result = run("next-target-backend", "vayada-next-api", digest, [], ongoing=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
