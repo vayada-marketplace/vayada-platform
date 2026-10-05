@@ -300,7 +300,7 @@ case "${mode}" in
       fi
     fi
     ;;
-  --audit-hotel-setup-migration|--audit-hotel-setup-readiness-migrations|--stage-hotel-setup-migration-scope)
+  --audit-hotel-setup-migration|--audit-hotel-setup-readiness-migrations|--stage-hotel-setup-migration-scope|--stage-hotel-setup-logo-migration-scope)
     [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main && "$#" -eq 2 && "$2" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 2
     inventory="$(dirname "${BASH_SOURCE[0]}")/../deployment/hotel-setup-bootstrap-images.json"
     jq -e --arg digest "$2" '.[ $digest ] | type == "object" and
@@ -311,6 +311,7 @@ case "${mode}" in
     code_file="audit-hotel-setup-migration.mjs"
     [[ "${mode}" != "--audit-hotel-setup-readiness-migrations" ]] || code_file="audit-hotel-setup-readiness-migrations.mjs"
     [[ "${mode}" != "--stage-hotel-setup-migration-scope" ]] || code_file="stage-hotel-setup-migration-scope.mjs"
+    [[ "${mode}" != "--stage-hotel-setup-logo-migration-scope" ]] || code_file="stage-hotel-setup-logo-migration-scope.mjs"
     secret_name="HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL"
     secret_parameter="/vayada/prod/db-marketplace-url"
     task_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$2"
@@ -447,7 +448,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--stage-hotel-setup-migration-scope" ) || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
+  if [[ -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || ( "${mode}" == "--stage-hotel-setup-migration-scope" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ) || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -463,7 +464,7 @@ if [[ "${ca_required}" == true ]]; then
     }
   fi
   ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
-  if [[ ( -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--stage-hotel-setup-migration-scope" ) ) && "${#ca_payload}" -gt 2100 ]]; then
+  if [[ ( -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || ( "${mode}" == "--stage-hotel-setup-migration-scope" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ) ) && "${#ca_payload}" -gt 2100 ]]; then
     echo "Pinned grant CA payload exceeds the reviewed ECS override budget." >&2; exit 1
   fi
 fi
@@ -572,14 +573,14 @@ else
 fi
 source_definition="$(aws ecs describe-task-definition --task-definition "${current_task}" --region "${region}" \
   --query taskDefinition --output json)"
-if [[ -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--stage-hotel-setup-migration-scope" ]]; then
+if [[ -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-hotel-setup-migration" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || ( "${mode}" == "--stage-hotel-setup-migration-scope" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ]]; then
   [[ "${EXPECTED_TASK:-}" == "${current_task}" && "${current_task}" == arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:* ]] || exit 1
   public_state="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" --query 'services[0]' --output json)"
   jq -e --arg expected "${current_task}" '.taskDefinition == $expected and
     .desiredCount == 1 and .runningCount == 1 and .pendingCount == 0 and
     (.deployments | length) == 1 and .deployments[0].status == "PRIMARY" and
     .deployments[0].rolloutState == "COMPLETED"' <<<"${public_state}" >/dev/null || exit 1
-  if [[ "${mode}" == "--stage-hotel-setup-migration-scope" ]]; then
+  if [[ ( "${mode}" == "--stage-hotel-setup-migration-scope" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ]]; then
     hold="$(aws ssm get-parameter --name /vayada/prod/coordinated-deployments/v1/services/next-target-backend/hold --region "${region}" --query 'Parameter.Value' --output text)"
     python3 - "${script_dir}" "${hold}" "${current_task}" <<'PYCODE'
 import json,sys
@@ -636,7 +637,7 @@ PYCODE
   }
 fi
 logo_cleanup_release_gate() {
-  [[ "${mode}" == "--cleanup-hotel-setup-logo" ]] || return 0
+  [[ "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ]] || return 0
   local public_now private_now running stopped physical
   public_now="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" --query 'services[0]' --output json)"
   jq -e --arg expected "${EXPECTED_TASK}" '.taskDefinition==$expected and .desiredCount==1 and .runningCount==1 and .pendingCount==0 and
@@ -644,6 +645,27 @@ logo_cleanup_release_gate() {
   jq -e '[.containerDefinitions[] | select(.name=="vayada-next-api") | .environment[] | select(.name=="HOTEL_SETUP_LOGO_COMMAND_ADMISSION")] |
     length==1 and .[0].value=="blocked"' <<<"$source_definition" >/dev/null || return 1
   jq -e 'all(.containerDefinitions[] | select(.name=="vayada-next-api") | .secrets[]; .name!="HOTEL_SETUP_LOGO_COMMAND_ADMISSION")' <<<"$source_definition" >/dev/null || return 1
+  if [[ "${mode}" == "--stage-hotel-setup-logo-migration-scope" ]]; then
+    jq -e '[.containerDefinitions[] | select(.name=="vayada-next-api") | .environment[] |
+      select(.name=="HOTEL_SETUP_CREATION_COMMAND_ADMISSION" or .name=="HOTEL_SETUP_COMMAND_ADMISSION")] |
+      length==2 and ([.[]|select(.name=="HOTEL_SETUP_CREATION_COMMAND_ADMISSION")]|length)==1 and ([.[]|select(.name=="HOTEL_SETUP_COMMAND_ADMISSION")]|length)==1 and all(.[];.value=="blocked")' <<<"$source_definition" >/dev/null || return 1
+    jq -e 'all(.containerDefinitions[] | select(.name=="vayada-next-api") | .secrets[];
+      .name!="HOTEL_SETUP_CREATION_COMMAND_ADMISSION" and .name!="HOTEL_SETUP_COMMAND_ADMISSION")' <<<"$source_definition" >/dev/null || return 1
+    local current_hold
+    current_hold="$(aws ssm get-parameter --name /vayada/prod/coordinated-deployments/v1/services/next-target-backend/hold --region "${region}" --query 'Parameter.Value' --output text)"
+    [[ "$current_hold" == "$hold" ]] || return 1
+    local creation_now creation_running creation_stopped creation_physical
+    creation_now="$(aws ecs describe-services --cluster "${service_cluster}" --services vayada-hotel-setup-service --region "${region}" --query '{services:services,failures:failures}' --output json)"
+    jq -e '(.services|length)==1 and (.failures|length)==0 and .services[0].desiredCount==0 and .services[0].runningCount==0 and .services[0].pendingCount==0' <<<"$creation_now" >/dev/null || return 1
+    creation_running="$(aws ecs list-tasks --cluster "${service_cluster}" --service-name vayada-hotel-setup-service --desired-status RUNNING --region "${region}" --query taskArns --output json)"
+    jq -e 'length==0' <<<"$creation_running" >/dev/null || return 1
+    creation_stopped="$(aws ecs list-tasks --cluster "${service_cluster}" --service-name vayada-hotel-setup-service --desired-status STOPPED --region "${region}" --query taskArns --output json)"
+    jq -e 'length<=100' <<<"$creation_stopped" >/dev/null || return 1
+    if [[ "$(jq length <<<"$creation_stopped")" != 0 ]]; then
+      creation_physical="$(aws ecs describe-tasks --cluster "${service_cluster}" --tasks $(jq -r '.[]' <<<"$creation_stopped") --region "${region}" --output json)"
+      jq -e --argjson count "$(jq length <<<"$creation_stopped")" '(.failures|length)==0 and (.tasks|length)==$count and all(.tasks[];.group=="service:vayada-hotel-setup-service" and .desiredStatus=="STOPPED" and .lastStatus=="STOPPED")' <<<"$creation_physical" >/dev/null || return 1
+    fi
+  fi
   private_now="$(aws ecs describe-services --cluster "${service_cluster}" --services vayada-hotel-setup-property-service --region "${region}" --query '{services:services,failures:failures}' --output json)"
   jq -e '(.services|length)==1 and (.failures|length)==0 and .services[0].desiredCount==0 and .services[0].runningCount==0 and .services[0].pendingCount==0' <<<"$private_now" >/dev/null || return 1
   running="$(aws ecs list-tasks --cluster "${service_cluster}" --service-name vayada-hotel-setup-property-service --desired-status RUNNING --region "${region}" --query taskArns --output json)"
@@ -673,7 +695,7 @@ temporary_definition="$(jq -c --arg family "${family}" --arg container "${contai
       | .environment=$definition_environment
       | .portMappings=[]]
 ' <<<"${source_definition}")"
-if [[ -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--cleanup-hotel-setup-logo" ]]; then
+if [[ -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-hotel-setup-readiness-migrations" || ( "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ]]; then
   temporary_definition="$(jq -c 'del(.volumes) | .containerDefinitions |= map(
     del(.entryPoint,.mountPoints,.volumesFrom,.environmentFiles) | .workingDirectory="/app" | .privileged=false)' <<<"${temporary_definition}")"
 fi
@@ -695,6 +717,7 @@ registered_task="$(aws ecs register-task-definition --cli-input-json "${temporar
 
 network="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" \
   --query 'services[0].networkConfiguration' --output json)"
+logo_cleanup_release_gate || { echo "Protected logo release gate changed before task launch; inspection required." >&2; exit 1; }
 task_arn="$(aws ecs run-task --cluster "${cluster}" --task-definition "${registered_task}" --launch-type FARGATE \
   --network-configuration "${network}" --overrides "${overrides}" \
   --tags key=VayadaPurpose,value=target-db-runtime-preflight --region "${region}" \
@@ -747,6 +770,15 @@ for _ in {1..10}; do
   sleep 2
 done
 
+if [[ "${mode}" == "--stage-hotel-setup-logo-migration-scope" ]]; then
+  [[ "$(jq -r '.exitCode' <<<"$task")" == 0 ]] || { echo "Logo parent staging requires inspection." >&2; exit 1; }
+  jq -ce '[.[] | fromjson? | select(.=={status:"PASS",migration:"0466",scopeRole:"vayada_next_hotel_setup_logo_scope",
+    login:false,businessGrantsAdded:false,migrationOwner:"vayada_target_prod_user",
+    migrationOwnerCanCreateRole:false,creatorAdminOnlyMembership:true})] | select(length==1) | .[0]' <<<"$messages" || {
+    echo "Logo parent staging returned invalid evidence; inspection required." >&2; exit 1;
+  }
+  exit 0
+fi
 if [[ -n "$logo_cleanup_phase" ]]; then
   [[ "$(jq -r '.exitCode' <<<"$task")" == 0 ]] || { echo "Logo cleanup requires recovery inspection." >&2; exit 1; }
   jq -ce --arg expected "$vay2017_expected_status" --arg kind "$logo_cleanup_kind" --arg target "$logo_cleanup_target" --arg hash "$logo_cleanup_hash" '
