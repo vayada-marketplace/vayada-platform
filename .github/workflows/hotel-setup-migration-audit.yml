@@ -6,7 +6,7 @@ on:
       mode:
         description: Fixed ledger diagnostic or pre-readiness migration transition
         type: choice
-        options: [failed_0441, readiness_0463_0464]
+        options: [failed_0441, readiness_0463_0464, logo_inspection]
         default: failed_0441
         required: true
       image_digest:
@@ -46,6 +46,7 @@ jobs:
           case "$AUDIT_MODE" in
             failed_0441) mode=--audit-hotel-setup-migration ;;
             readiness_0463_0464) mode=--audit-hotel-setup-readiness-migrations ;;
+            logo_inspection) mode=--inspect-hotel-setup-logo-migration ;;
             *) exit 2 ;;
           esac
           bash scripts/run-target-database-runtime-preflight.sh "$mode" "$IMAGE_DIGEST"

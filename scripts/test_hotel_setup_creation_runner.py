@@ -96,7 +96,7 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
         self.root = Path(self.temp.name)
         for directory in ('scripts', 'deployment', 'bin', 'capture'):
             (self.root / directory).mkdir()
-        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'run-hotel-setup-logo-cleanup.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'stage-hotel-setup-migration-scope.mjs', 'stage-hotel-setup-logo-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'hotel-setup-approved-legacy-helper-repair.mjs', 'hotel-setup-tenant-helper-repair.mjs', 'coordinated_release.py'):
+        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'run-hotel-setup-logo-cleanup.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'inspect-hotel-setup-logo-migration.mjs', 'stage-hotel-setup-migration-scope.mjs', 'stage-hotel-setup-logo-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'hotel-setup-approved-legacy-helper-repair.mjs', 'hotel-setup-tenant-helper-repair.mjs', 'coordinated_release.py'):
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copy(ROOT / 'deployment/coordinated-release-v1.json', self.root / 'deployment/coordinated-release-v1.json')
         (self.root / 'deployment/hotel-setup-command-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
@@ -545,29 +545,31 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
             self.env = previous
 
     def test_readiness_migration_audit_is_fixed_read_only_and_canonical(self):
-        task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1'
-        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main', EXPECTED_TASK=task,
-                        MOCK_CURRENT_TASK=task, MOCK_STARTUP='true')
-        inventory = self.root / 'deployment/hotel-setup-bootstrap-images.json'
-        inventory.write_text(json.dumps({DIGEST: {key: 'b' * 40 for key in ('primarySource', 'rollbackSource', 'publisherSource')}}))
-        result = self.run_wrapper('--audit-hotel-setup-readiness-migrations', DIGEST)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        definition = json.loads((self.root / 'capture/definition.json').read_text())
-        self.assertNotIn('taskRoleArn', definition)
-        item, = definition['containerDefinitions']
-        self.assertEqual(item['image'], '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST)
-        self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
-        self.assertEqual(item['environment'], [])
-        self.assertEqual(item['workingDirectory'], '/app')
-        self.assertFalse(item['privileged'])
-        for key in ('entryPoint', 'mountPoints', 'volumesFrom', 'environmentFiles'):
-            self.assertNotIn(key, item)
-        overrides = json.loads((self.root / 'capture/overrides.json').read_text())
-        self.assertLessEqual(len(json.dumps(overrides)), 8192)
-        inventory.write_text('{}')
-        (self.root / 'capture/calls.jsonl').unlink()
-        self.assertNotEqual(self.run_wrapper('--audit-hotel-setup-readiness-migrations', DIGEST).returncode, 0)
-        self.assertFalse((self.root / 'capture/calls.jsonl').exists())
+        for mode in ('--audit-hotel-setup-readiness-migrations', '--inspect-hotel-setup-logo-migration'):
+            with self.subTest(mode=mode):
+                task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1'
+                self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main', EXPECTED_TASK=task,
+                                MOCK_CURRENT_TASK=task, MOCK_STARTUP='true')
+                inventory = self.root / 'deployment/hotel-setup-bootstrap-images.json'
+                inventory.write_text(json.dumps({DIGEST: {key: 'b' * 40 for key in ('primarySource', 'rollbackSource', 'publisherSource')}}))
+                result = self.run_wrapper(mode, DIGEST)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                definition = json.loads((self.root / 'capture/definition.json').read_text())
+                self.assertNotIn('taskRoleArn', definition)
+                item, = definition['containerDefinitions']
+                self.assertEqual(item['image'], '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST)
+                self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
+                self.assertEqual(item['environment'], [])
+                self.assertEqual(item['workingDirectory'], '/app')
+                self.assertFalse(item['privileged'])
+                for key in ('entryPoint', 'mountPoints', 'volumesFrom', 'environmentFiles'):
+                    self.assertNotIn(key, item)
+                overrides = json.loads((self.root / 'capture/overrides.json').read_text())
+                self.assertLessEqual(len(json.dumps(overrides)), 8192)
+                inventory.write_text('{}')
+                (self.root / 'capture/calls.jsonl').unlink()
+                self.assertNotEqual(self.run_wrapper(mode, DIGEST).returncode, 0)
+                self.assertFalse((self.root / 'capture/calls.jsonl').exists())
 
     def test_migration_audit_uses_fixed_owner_injection_and_rejects_changed_task(self):
         task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1'
