@@ -35,11 +35,11 @@ try {
     const rows = (await client.query(`SELECT status,environment,name,checksum_sha256 FROM platform.schema_migrations
       WHERE version=$1 ORDER BY applied_at DESC,id DESC`,[version])).rows;
     if (version==='0464' && !rows.some(row=>row.status==='applied')) throw new Error();
-    if (rows.some(row=>row.status!=='applied' || row.environment!=='production' || row.name!==name || row.checksum_sha256!==hash)) throw new Error();
+    if (rows.some(row=>row.status!=='applied' || row.environment!=='production' || row.name!==name.slice(5,-4) || row.checksum_sha256!==hash)) throw new Error();
   }
   const ledger = (await client.query(`SELECT version,name,status,environment,checksum_sha256,failure_reason
     FROM platform.schema_migrations WHERE version >= '0466' ORDER BY applied_at DESC,id DESC`)).rows;
-  if (ledger.some(row=>row.version!=='0466' || row.name!=='0466_hotel_setup_logo_scope.sql' || row.status!=='failed' || row.environment!=='production' ||
+  if (ledger.some(row=>row.version!=='0466' || row.name!=='hotel_setup_logo_scope' || row.status!=='failed' || row.environment!=='production' ||
       row.checksum_sha256!==checksum || !/permission denied to create role/i.test(row.failure_reason??''))) throw new Error();
   const existing = await client.query("SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='vayada_next_hotel_setup_logo_scope'");
   if (existing.rowCount) throw new Error();
