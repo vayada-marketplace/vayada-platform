@@ -639,7 +639,7 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
             'capturedTaskDefinitionArn': task, 'capturedImage': '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST,
             'dependentFrontendsCompatible': False, 'createdAt': '2026-10-03T17:00:00.000Z'}
         self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main', EXPECTED_TASK=task,
-                        MOCK_CURRENT_TASK=task, MOCK_HOLD=json.dumps(hold), MOCK_RECEIPT=json.dumps({"status":"PASS","migration":"0466","scopeRole":"vayada_next_hotel_setup_logo_scope","login":False,"businessGrantsAdded":False,"migrationOwner":"vayada_target_prod_user","migrationOwnerCanCreateRole":False,"creatorAdminOnlyMembership":True}))
+                        MOCK_CURRENT_TASK=task, MOCK_HOLD=json.dumps(hold), MOCK_RECEIPT=json.dumps({"status":"PASS","migration":"0466","scopeRole":"vayada_next_hotel_setup_logo_scope","login":False,"businessGrantsAdded":False,"migrationOwner":"vayada_target_prod_user","migrationOwnerCanCreateRole":False,"creatorAdminOnlyMembership":True,"scopeIncomingMemberships":1}))
         (self.root / 'deployment/hotel-setup-bootstrap-images.json').write_text(json.dumps(
             {DIGEST: {key: 'b' * 40 for key in ('primarySource', 'rollbackSource', 'publisherSource')}}))
         result = self.run_wrapper('--stage-hotel-setup-logo-migration-scope', DIGEST)
@@ -665,10 +665,20 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
                 self.assertNotIn('run-task', operations)
             self.env = previous
 
-    def test_logo_scope_rejects_generic_pass_receipt(self):
+    def test_logo_scope_receipt_requires_exact_zero_or_one_membership(self):
         self.test_logo_scope_requires_all_callers_and_both_private_services_stopped()
-        self.env['MOCK_RECEIPT']='{"status":"PASS"}'
-        self.assertNotEqual(self.run_wrapper('--stage-hotel-setup-logo-migration-scope',DIGEST).returncode,0)
+        receipt = json.loads(self.env['MOCK_RECEIPT'])
+        for count in (0, 1):
+            self.env['MOCK_RECEIPT'] = json.dumps({**receipt, 'scopeIncomingMemberships': count})
+            result = self.run_wrapper('--stage-hotel-setup-logo-migration-scope', DIGEST)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        for invalid in ({'status': 'PASS'},
+                        {key: value for key, value in receipt.items() if key != 'scopeIncomingMemberships'},
+                        *({**receipt, 'scopeIncomingMemberships': count} for count in (-1, 2, None, '0', True)),
+                        {**receipt, 'unexpected': True}):
+            self.env['MOCK_RECEIPT'] = json.dumps(invalid)
+            self.assertNotEqual(self.run_wrapper('--stage-hotel-setup-logo-migration-scope', DIGEST).returncode, 0)
+
 
     def test_owner_lookup_receives_no_sdk_role_and_only_owner_secret(self):
         self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
