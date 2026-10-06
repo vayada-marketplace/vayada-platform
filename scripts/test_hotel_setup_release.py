@@ -283,7 +283,7 @@ class ReleaseTest(unittest.TestCase):
     def test_private_stop_refuses_confirmation_while_a_task_remains_running(self):
         self.run_private_stop(denial='final_running')
 
-    def run_failed_start_stop(self, denial=None):
+    def run_failed_start_stop(self, denial=None, history_count=0):
         public_task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1197'
         family = 'vayada-hotel-setup-property-primary'
         target = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/' + family + ':3'
@@ -311,6 +311,8 @@ class ReleaseTest(unittest.TestCase):
             'dependentFrontendsCompatible':False,'createdAt':'2026-10-06T09:00:00.000Z'}
         prefix = 'arn:aws:ecs:eu-west-1:269416271598:task/' + release.CLUSTER + '/'
         live, failed, historical, replacement = (prefix + c * 32 for c in 'abcd')
+        history = [prefix + f'{int("e" * 32, 16) + index:032x}' for index in range(history_count)]
+        described, wait_clock = [], {'elapsed': 0}
         writes, reads = [], {'public':0,'private':0,'health':0,'hold':0,'physical':0}
         def mocked_aws(*args, **kwargs):
             operation = args[1]
@@ -348,13 +350,16 @@ class ReleaseTest(unittest.TestCase):
                 return {'TargetHealthDescriptions':[{'TargetHealth':{'State':'healthy' if healthy else 'unhealthy'}}]}
             if operation == 'list-tasks':
                 return {'taskArns': ([] if writes else [live]) if args[-1] == 'RUNNING' else
-                        [failed,historical] + ([live] if writes else []) + ([replacement] if writes and denial == 'replacement_draining' else [])}
+                        [failed,historical] + history + ([live] if writes else []) + ([replacement] if writes and denial == 'replacement_draining' else [])}
             if operation == 'describe-tasks':
                 reads['physical'] += 1
-                if denial == 'missing' or denial == 'stopped_missing' and writes:
+                batch = args[args.index('--tasks')+1:]
+                self.assertLessEqual(len(batch), 100)
+                described.append(set(batch))
+                if denial == 'missing' or denial == 'stopped_missing' and writes or denial == 'late_missing' and history[-1] in batch:
                     return {'tasks':[],'failures':[{'reason':'MISSING'}]}
                 tasks = []
-                for arn in args[args.index('--tasks')+1:]:
+                for arn in batch:
                     state = 'PROVISIONING' if arn == live and not writes else 'STOPPED'
                     desired = 'RUNNING' if state == 'PROVISIONING' else 'STOPPED'
                     if arn == historical and (denial in ('mixed_live','mixed_draining') or
@@ -362,11 +367,14 @@ class ReleaseTest(unittest.TestCase):
                         state = 'RUNNING' if denial == 'mixed_live' else 'DEACTIVATING'
                         desired = 'RUNNING' if denial == 'mixed_live' else 'STOPPED'
                     if writes and (denial == 'final_draining' and arn == live or arn == replacement): state = 'DEACTIVATING'
+                    if writes and denial == 'late_draining' and arn == history[-1]: state = 'DEACTIVATING'
                     if denial == 'unknown_status' and arn == live: state = 'UNKNOWN'
                     tasks.append({'taskArn':arn,'taskDefinitionArn':old if arn == historical else target,
                         'clusterArn':'arn:aws:ecs:eu-west-1:269416271598:cluster/'+release.CLUSTER,
                         'group':'service:'+release.PRIVATE['property'],'desiredStatus':desired,'lastStatus':state,
                         'containers':[{'name':'hotel-setup','exitCode':0 if denial == 'no_failure' else 1}]})
+                    if denial == 'late_foreign' and arn == history[-1]: tasks[-1]['group'] = 'service:other'
+                if denial == 'late_incomplete' and history[-1] in batch: tasks.pop()
                 return {'tasks':tasks}
             if operation == 'update-service':
                 writes.append((args,kwargs))
@@ -375,6 +383,9 @@ class ReleaseTest(unittest.TestCase):
             raise AssertionError(operation)
         def mocked_wait(*args, **kwargs):
             if denial == 'wait_timeout': raise subprocess.TimeoutExpired('aws',300)
+            if args[0][3] == 'tasks-stopped':
+                self.assertLessEqual(args[0].index('--region') - args[0].index('--tasks') - 1, 100)
+                wait_clock['elapsed'] += 300 if denial == 'wait_deadline' else 1
         argv = ['release','--service','creation' if denial == 'wrong_service' else 'property','--purpose','property',
                 '--state','stop_failed_start','--image-digest',private_digest,'--expected-public-task',public_task,'--private-task',target]
         with tempfile.TemporaryDirectory() as directory:
@@ -384,21 +395,43 @@ class ReleaseTest(unittest.TestCase):
                     **({} if denial == 'unapproved_history' else {old_digest:'b'*40})}))
             with patch.object(release,'ROOT',Path(directory)), patch.object(release,'aws',side_effect=mocked_aws), \
                     patch.object(release.subprocess,'run',side_effect=mocked_wait) as wait, patch('sys.argv',argv), \
+                    patch.object(release.time,'monotonic',side_effect=lambda: wait_clock['elapsed']), \
                     patch.dict(release.os.environ,{'GITHUB_ACTIONS':'true','GITHUB_REF':'refs/heads/main'}):
                 if denial:
                     with self.assertRaises((RuntimeError,subprocess.SubprocessError)): release.main()
                     self.assertEqual(len(writes), int(denial in ('unknown_mutation','wait_timeout','final_running',
-                        'final_draining','replacement_draining','stopped_missing')))
+                        'final_draining','replacement_draining','stopped_missing','late_draining','wait_deadline')))
+                    if denial == 'wait_deadline': self.assertEqual(len(wait.call_args_list), 2)
                 else:
                     release.main()
                     self.assertEqual(writes, [(('ecs','update-service','--cluster',release.CLUSTER,'--service',
                         release.PRIVATE['property'],'--desired-count','0'),{'single_attempt':True})])
-                    self.assertEqual(len(wait.call_args_list), 2)
-                    self.assertTrue(all(call.kwargs == {'check':True,'timeout':300} for call in wait.call_args_list))
-                    self.assertTrue({live,failed,historical}.issubset(set(wait.call_args_list[-1].args[0])))
+                    expected = {live,failed,historical,*history}
+                    batch_count = (len(expected) + 99) // 100
+                    self.assertEqual(len(described), 4 * batch_count)
+                    for offset in range(0, len(described), batch_count):
+                        self.assertEqual(set().union(*described[offset:offset + batch_count]), expected)
+                    self.assertEqual(len(wait.call_args_list), 1 + batch_count)
+                    self.assertEqual(wait.call_args_list[0].kwargs, {'check':True,'timeout':300})
+                    waited = set()
+                    for index, call in enumerate(wait.call_args_list[1:]):
+                        self.assertEqual(call.kwargs, {'check':True,'timeout':300 - index})
+                        command = call.args[0]
+                        waited.update(command[command.index('--tasks') + 1:command.index('--region')])
+                    self.assertEqual(waited, expected)
 
     def test_failed_start_stop_retains_reviewed_rollback_task_and_physically_stops_all_tasks(self):
         self.run_failed_start_stop()
+
+    def test_failed_start_stop_batches_all_201_tasks_for_inspection_and_waits(self):
+        self.run_failed_start_stop(history_count=198)
+
+    def test_failed_start_stop_refuses_incomplete_foreign_or_draining_later_batches(self):
+        for denial in ('late_missing','late_incomplete','late_foreign','late_draining'):
+            with self.subTest(denial=denial): self.run_failed_start_stop(denial, history_count=198)
+
+    def test_failed_start_stop_preserves_total_task_wait_deadline_across_batches(self):
+        self.run_failed_start_stop('wait_deadline', history_count=198)
 
     def test_failed_start_stop_refuses_healthy_changed_unheld_or_mixed_attempts(self):
         for denial in ('wrong_service','stable','healthy','became_healthy','public_changed','private_changed',

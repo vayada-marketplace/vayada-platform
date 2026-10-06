@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location('setup_coordinated_release', ROOT / 'scripts/coordinated_release.py')
@@ -191,17 +192,24 @@ def stop_failed_start(args, current):
                 'Failed-start recovery refuses a healthy or unknown target')
         return hold, primary[0]['rolloutState']
 
+    def batches(arns):
+        ordered = sorted(arns)
+        return (ordered[offset:offset + 100] for offset in range(0, len(ordered), 100))
+
     def physical(previous=()):
         arns = set(previous)
+        # The AWS CLI automatically retrieves every list-tasks page.
         for status in ('RUNNING', 'STOPPED'):
             arns.update(aws('ecs', 'list-tasks', '--cluster', CLUSTER, '--service-name', destination,
                             '--desired-status', status)['taskArns'])
-        require(0 < len(arns) <= 100 and all(re.fullmatch(r'arn:aws:ecs:eu-west-1:269416271598:task/'
-                + re.escape(CLUSTER) + r'/[a-f0-9]{32}', arn) for arn in arns), 'Unbounded or missing failed-start tasks')
-        result = aws('ecs', 'describe-tasks', '--cluster', CLUSTER, '--tasks', *sorted(arns))
-        tasks = result['tasks']
-        require(not result.get('failures') and len(tasks) == len(arns) and {t['taskArn'] for t in tasks} == arns,
-                'Failed-start physical task inspection incomplete')
+        require(arns and all(re.fullmatch(r'arn:aws:ecs:eu-west-1:269416271598:task/'
+                + re.escape(CLUSTER) + r'/[a-f0-9]{32}', arn) for arn in arns), 'Invalid or missing failed-start tasks')
+        tasks = []
+        for batch in batches(arns):
+            result = aws('ecs', 'describe-tasks', '--cluster', CLUSTER, '--tasks', *batch)
+            require(not result.get('failures') and len(result['tasks']) == len(batch)
+                    and {t['taskArn'] for t in result['tasks']} == set(batch), 'Failed-start physical task inspection incomplete')
+            tasks.extend(result['tasks'])
         for task in tasks:
             require(task.get('clusterArn') == 'arn:aws:ecs:eu-west-1:269416271598:cluster/' + CLUSTER
                     and task.get('group') == 'service:' + destination, 'Failed-start physical task identity differs')
@@ -225,8 +233,12 @@ def stop_failed_start(args, current):
     subprocess.run(['aws', 'ecs', 'wait', 'services-stable', '--cluster', CLUSTER, '--services', destination,
                     '--region', REGION], check=True, timeout=300)
     captured, _ = physical(captured)
-    subprocess.run(['aws', 'ecs', 'wait', 'tasks-stopped', '--cluster', CLUSTER, '--tasks', *sorted(captured),
-                    '--region', REGION], check=True, timeout=300)
+    deadline = time.monotonic() + 300
+    for batch in batches(captured):
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, 'Failed-start physical task wait timed out')
+        subprocess.run(['aws', 'ecs', 'wait', 'tasks-stopped', '--cluster', CLUSTER, '--tasks', *batch,
+                        '--region', REGION], check=True, timeout=remaining)
     _, tasks = physical(captured)
     final = service(destination)
     require(final['taskDefinition'] == target and final['desiredCount'] == final['runningCount'] == final['pendingCount'] == 0
