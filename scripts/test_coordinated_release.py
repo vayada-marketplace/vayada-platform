@@ -800,7 +800,7 @@ class ActivationTests(unittest.TestCase):
                     "taskDefinition": live_definition,
                     "digest": desired if recovering else previous,
                     "taskDefinitionArn": "live-task", "image": "repository@" + previous}
-                pending = {"rollbackTaskDefinitionArn": "previous-task", "rollbackImage": "repository@" + previous} if recovering else None
+                pending = {"rollbackTaskDefinitionArn": "previous-task", "rollbackImage": "repository@" + previous, "deployedTaskDefinitionArn": "live-task"} if recovering else None
                 aws.verify_api_split_image.side_effect = release.ReleaseError("unattested") if reject_desired else [None, release.ReleaseError("unattested rollback")]
                 with tempfile.TemporaryDirectory() as directory:
                     path = Path(directory) / "plan.json"
@@ -821,6 +821,59 @@ class ActivationTests(unittest.TestCase):
                         aws.register_rendered_task.assert_not_called()
                         aws.update_service.assert_not_called()
                         clear.assert_not_called()
+
+    def test_interrupted_api_recovery_retains_exact_deployed_task(self):
+        key = "next-target-backend"
+        desired = "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965"
+        old = "sha256:bafc5880043ff7019d9921d195a5d5998d8b99f57b95bf3f251e85b0e1e8c698"
+        repo = "269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api"
+        prefix = "arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:"
+        historical = {"containerDefinitions": [{"name": "vayada-next-api", "image": repo+"@"+old,
+            "environment": [{"name":"FINANCE_EXPORT_WORKER_ENABLED","value":"false"},
+                            {"name":"HOTEL_SETUP_LOGO_COMMAND_ADMISSION","value":"blocked"}]}]}
+        manifest = copy.deepcopy(self.manifest)
+        manifest["services"][key]["digest"] = desired
+        for stale in (True, False):
+            with self.subTest(stale=stale), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)/"manifest.json"; path.write_text(json.dumps(manifest))
+                live = copy.deepcopy(historical); live["containerDefinitions"][0]["image"] = repo+"@"+desired
+                if stale:
+                    live["containerDefinitions"][0]["environment"][-1]["value"] = "enabled"
+                    live["containerDefinitions"][0]["environment"].append({"name":"HOTEL_SETUP_LOGO_COMMAND_ORIGIN","value":"https://hotel-setup-property-command.vayada.com"})
+                    live["containerDefinitions"][0]["secrets"] = [{"name":"HOTEL_SETUP_LOGO_COMMAND_INTERNAL_TOKEN","valueFrom":"fixture"}]
+                current = prefix+("1200" if stale else "1197")
+                pending = {"schemaVersion":1,"operationId":"interrupted-logo","service":key,
+                    "manifestId":manifest["manifestId"],"desiredDigest":desired,
+                    "rollbackTaskDefinitionArn":prefix+"1196","rollbackImage":repo+"@"+old,
+                    "deployedTaskDefinitionArn":prefix+"1197","startedAt":release.iso_now(),"status":"mutating"}
+                aws = mock.Mock(); aws.get_parameter.return_value = pending
+                aws.service_snapshot.return_value = {"taskDefinition":live,"taskDefinitionArn":current,"digest":desired,"image":repo+"@"+desired}
+                aws.json.return_value = {"taskDefinition":historical}
+                actual = release.Aws(release.CommandRunner(), self.config)
+                actual.json = lambda *args: {"imageDetails":[{"imageDigest":args[-1].split("=",1)[1]}]}
+                aws.verify_api_split_image.side_effect = actual.verify_api_split_image
+                smoke = mock.Mock(side_effect=release.ReleaseError("smoke failed"))
+                plan = {"schemaVersion":1,"manifestId":manifest["manifestId"],"manifestSha256":release.sha256_file(path),
+                    "operationId":"resume-logo","services":{key:{"action":"verify"}}}
+                args = argparse.Namespace(service=key, manifest=path)
+                if not stale:
+                    interrupted_smoke = mock.Mock(side_effect=KeyboardInterrupt)
+                    with self.assertRaises(KeyboardInterrupt):
+                        release.reconcile_service_with_dependencies(args,self.config,manifest,plan,aws,release.CommandRunner(),interrupted_smoke,lambda *_:None)
+                    persisted = aws.put_parameter.call_args_list[1].args[1]
+                    self.assertEqual(persisted["deployedTaskDefinitionArn"], current)
+                    self.assertEqual(persisted["rollbackTaskDefinitionArn"], prefix+"1196")
+                    self.assertEqual(persisted["status"], "prepared")
+                    aws.get_parameter.return_value = copy.deepcopy(persisted)
+                    aws.put_parameter.reset_mock()
+                with mock.patch.object(release,"clear_hold") as clear, mock.patch.object(release,"write_hold"):
+                    with self.assertRaisesRegex(release.ReleaseError,"changed task" if stale else "smoke failed"):
+                        release.reconcile_service_with_dependencies(args,self.config,manifest,plan,aws,release.CommandRunner(),smoke,lambda *_:None)
+                    if stale:
+                        smoke.assert_not_called(); aws.put_parameter.assert_not_called()
+                        aws.register_rendered_task.assert_not_called(); aws.update_service.assert_not_called(); clear.assert_not_called()
+                    else:
+                        smoke.assert_called_once(); aws.update_service.assert_called_once_with(key,prefix+"1196")
 
     def test_legacy_stale_events_remain_fenced_after_system_rollback(self):
         args = argparse.Namespace(config=release.DEFAULT_CONFIG, service=self.key, event_name="repository_dispatch")
