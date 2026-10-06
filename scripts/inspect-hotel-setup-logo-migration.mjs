@@ -11,9 +11,14 @@ const manifest = new Map([
   ['0469', ['0469_hotel_setup_logo_projection.sql', '774808fd4e8fcd220d0ebaed02e8864684203cd34f67b792714e714e3d1023e5']],
 ]);
 const roles = ['vayada_admin', 'vayada_target_prod_user', 'vayada_next_hotel_setup_logo_scope'];
+const owners = [
+  {owner: 'animals', property: 'f4b1d762-7592-4182-b103-20b53014c171', organization: '2734e584-022d-432a-9637-ccb0cce59c53', actor: 'a729d719-2297-4be7-8f7a-12bdf87da1b3'},
+  {owner: 'sri', property: '1dee5712-6074-4fb0-8b1d-ec3601943526', organization: '6a717155-a188-45f3-87e5-5c8408f41a87', actor: 'b9eec40b-2e2d-4ff1-b3d4-6d6e03bb58d9'},
+];
 const knownRoles = new Set([...roles, 'rdsadmin', 'rds_superuser', 'postgres']);
 const digest = value => createHash('sha256').update(value).digest('hex');
-const roleName = name => knownRoles.has(name) ? {name} : {name: 'other', nameSha256: digest(name)};
+for (const owner of owners) owner.prefix = `vayada_next_hotel_setup_logo_${digest(`${owner.property}:property_logo`).slice(0,16)}_`;
+const roleName = name => knownRoles.has(name) || owners.some(owner => new RegExp(`^${owner.prefix}[a-f0-9]{12}$`).test(name)) ? {name} : {name: 'other', nameSha256: digest(name)};
 const validHash = value => /^[a-f0-9]{64}$/.test(value ?? '') ? value : null;
 const selfGrant = value => {
   if (value === null || value === '') return value;
@@ -33,6 +38,10 @@ try {
   for (const [name, hash] of manifest.values()) {
     if (digest(readFileSync(`/app/packages/backend-migration/migrations/${name}`)) !== hash) throw new Error();
   }
+  const inventoryPath = '/app/apps/api/dist/hotelSetupLogoPrivileges.js';
+  if (digest(readFileSync(inventoryPath)) !== '65944cbb9cbed464fdd91b3052ce40c5422a09dc8bf3a98376d2340f74c91c22') throw new Error();
+  // Reuse only the pinned immutable inventory; never invoke its command/proof functions.
+  const {HOTEL_SETUP_LOGO_PRIVILEGES: inventory, HOTEL_SETUP_LOGO_RLS_HELPERS: helpers} = await import(inventoryPath);
   url.pathname = '/vayada_target_prod';
   client = new pg.Client({connectionString: url.href.replace('?sslmode=require', ''),
     connectionTimeoutMillis: 10000, query_timeout: 15000,
@@ -88,6 +97,102 @@ try {
   inspection.memberships = {total: memberships[0]?.total ?? 0, edges: memberships.map(row => ({
     parent: roleName(row.parent), member: roleName(row.member), grantor: roleName(row.grantor),
     grantorSuperuser: row.grantor_superuser, admin: row.admin_option, inherit: row.inherit_option, set: row.set_option}))};
+  stage = 'bootstrap_capabilities';
+  const requiredColumns = Object.entries(inventory).flatMap(([table, privileges]) => Object.entries(privileges)
+    .flatMap(([privilege, columns]) => columns.map(column => ({table_name: table, privilege, column_name: column}))));
+  inspection.bootstrapCapabilities = {
+    databaseConnectGrant: (await client.query("SELECT pg_catalog.has_database_privilege(current_user,current_database(),'CONNECT WITH GRANT OPTION') AS allowed")).rows[0].allowed,
+    parent: (await client.query(`SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname=$1) AS present,
+      EXISTS(SELECT 1 FROM pg_catalog.pg_auth_members edge JOIN pg_catalog.pg_roles parent ON parent.oid=edge.roleid
+        JOIN pg_catalog.pg_roles member ON member.oid=edge.member WHERE parent.rolname=$1 AND member.rolname=current_user AND edge.admin_option) AS direct_admin_edge`, [roles[2]])).rows[0],
+    schemas: (await client.query(`SELECT name, pg_catalog.has_schema_privilege(current_user,namespace.oid,'USAGE WITH GRANT OPTION') AS usage_grant
+      FROM pg_catalog.unnest($1::text[]) required(name) LEFT JOIN pg_catalog.pg_namespace namespace ON namespace.nspname=name ORDER BY name`,
+      [[...new Set(Object.keys(inventory).map(table => table.split('.')[0]))]])).rows,
+    columns: (await client.query(`SELECT required.table_name,required.privilege,count(*)::int AS expected_columns,
+      count(attribute.attnum)::int AS found_columns,
+      count(*) FILTER(WHERE pg_catalog.has_column_privilege(current_user,relation.oid,attribute.attnum,required.privilege||' WITH GRANT OPTION'))::int AS grantable_columns
+      FROM pg_catalog.jsonb_to_recordset($1::jsonb) required(table_name text,privilege text,column_name text)
+      LEFT JOIN pg_catalog.pg_class relation ON relation.oid=pg_catalog.to_regclass(required.table_name)
+      LEFT JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid=relation.oid AND attribute.attname=required.column_name AND attribute.attnum>0 AND NOT attribute.attisdropped
+      GROUP BY required.table_name,required.privilege ORDER BY required.table_name,required.privilege`, [JSON.stringify(requiredColumns)])).rows,
+    mediaDeleteGrant: (await client.query("SELECT pg_catalog.has_table_privilege(current_user,pg_catalog.to_regclass('hotel_catalog.property_media'),'DELETE WITH GRANT OPTION') AS allowed")).rows[0].allowed,
+    helpers: (await client.query(`SELECT signature,procedure.oid IS NOT NULL AS present,
+      procedure.proowner=(SELECT relowner FROM pg_catalog.pg_class WHERE oid='platform.hotel_setup_property_scopes'::regclass) AS expected_owner,
+      pg_catalog.has_function_privilege(parent.oid,procedure.oid,'EXECUTE') AS parent_execute,
+      pg_catalog.has_function_privilege(parent.oid,procedure.oid,'EXECUTE WITH GRANT OPTION') AS parent_grant
+      FROM pg_catalog.unnest($1::text[]) required(signature)
+      LEFT JOIN pg_catalog.pg_proc procedure ON procedure.oid=CASE WHEN signature='platform.hotel_setup_reader_audit_allowed(platform.product_audit_events)' AND pg_catalog.to_regclass('platform.product_audit_events') IS NULL THEN NULL ELSE pg_catalog.to_regprocedure(signature) END
+      LEFT JOIN pg_catalog.pg_roles parent ON parent.rolname=$2 ORDER BY signature`, [helpers,roles[2]])).rows,
+  };
+  stage = 'bootstrap_attempts';
+  const scopeColumns = ['database_login','property_id','organization_id','actor_user_id','operation_class','active','credential_role_oid','credential_secret_version','credential_ready_at'];
+  const scopeCatalog = (await client.query(`SELECT count(*)::int AS columns,
+    pg_catalog.has_table_privilege(current_user,'platform.hotel_setup_property_scopes','SELECT') AS readable
+    FROM pg_catalog.pg_attribute WHERE attrelid='platform.hotel_setup_property_scopes'::regclass AND attname=ANY($1) AND attnum>0 AND NOT attisdropped`, [scopeColumns])).rows[0];
+  const passwordReadable = (await client.query(`SELECT pg_catalog.has_column_privilege(current_user,'pg_catalog.pg_authid','oid','SELECT')
+    AND pg_catalog.has_column_privilege(current_user,'pg_catalog.pg_authid','rolpassword','SELECT') AS allowed`)).rows[0].allowed;
+  const authorityTables = {
+    'identity.users': ['id','status'], 'identity.organizations': ['id','kind','status'],
+    'identity.organization_memberships': ['id','user_id','organization_id','status','role_key','permission_overrides','role_definition_id','property_access_mode','access_origin','pms_access_enabled','booking_access_enabled'],
+    'identity.organization_roles': ['id','organization_id','security_class','base_role_key','preset_key','default_permissions'],
+    'identity.role_permission_grants': ['organization_kind','role_key','permission_key'],
+    'identity.membership_property_assignments': ['membership_id','property_id'],
+    'identity.organization_resource_links': ['organization_id','product','resource_type','resource_id','relationship','status'],
+    'hotel_catalog.properties': ['id'],
+  };
+  const authorityColumns = Object.entries(authorityTables).flatMap(([table,columns]) => columns.map(column => ({table_name:table,column_name:column})));
+  const authorityReadable = (await client.query(`SELECT bool_and(COALESCE(pg_catalog.has_column_privilege(current_user,relation.oid,attribute.attnum,'SELECT'),false)) AS allowed
+    FROM pg_catalog.jsonb_to_recordset($1::jsonb) required(table_name text,column_name text)
+    LEFT JOIN pg_catalog.pg_class relation ON relation.oid=pg_catalog.to_regclass(required.table_name)
+    LEFT JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid=relation.oid AND attribute.attname=required.column_name AND attribute.attnum>0 AND NOT attribute.attisdropped`, [JSON.stringify(authorityColumns)])).rows[0].allowed;
+  inspection.logoBootstraps = [];
+  for (const owner of owners) {
+    const attempt = {owner: owner.owner, passwordPresenceReadable: passwordReadable, authorityReadable};
+    if (authorityReadable) attempt.authority = (await client.query(`SELECT
+      EXISTS(SELECT 1 FROM identity.users WHERE id=$3::uuid AND status='active') AS actor_active,
+      EXISTS(SELECT 1 FROM identity.organizations WHERE id=$2::uuid AND kind='hotel_group' AND status='active') AS organization_active,
+      EXISTS(SELECT 1 FROM hotel_catalog.properties WHERE id=$1::uuid) AS property_present,
+      EXISTS(SELECT 1 FROM identity.organization_resource_links WHERE organization_id=$2::uuid AND product='hotel_catalog'
+        AND resource_type='property' AND lower(resource_id)=$1::uuid::text AND relationship='owner' AND status='active') AS owner_link,
+      (SELECT count(*)::int FROM identity.organization_memberships WHERE organization_id=$2::uuid AND user_id=$3::uuid AND status='active') AS membership_count,
+      EXISTS(SELECT 1 FROM identity.organization_memberships WHERE organization_id=$2::uuid AND user_id=$3::uuid AND status='active'
+        AND pms_access_enabled IS NOT NULL AND booking_access_enabled IS NOT NULL) AS product_flags_valid,
+      EXISTS(SELECT 1 FROM identity.organization_memberships member LEFT JOIN identity.organization_roles definition
+        ON definition.id=member.role_definition_id AND definition.organization_id=member.organization_id
+        WHERE member.organization_id=$2::uuid AND member.user_id=$3::uuid AND member.status='active' AND member.role_key='hotel_owner'
+        AND (member.permission_overrides IS NULL OR member.permission_overrides='{"grant":[],"deny":[]}'::jsonb)
+        AND (member.role_definition_id IS NULL OR (definition.security_class='account_admin' AND definition.base_role_key='hotel_owner'
+          AND definition.preset_key='account_admin' AND definition.default_permissions='[]'::jsonb))) AS exact_owner_membership,
+      EXISTS(SELECT 1 FROM identity.organization_memberships member WHERE member.organization_id=$2::uuid AND member.user_id=$3::uuid AND member.status='active' AND member.access_origin='agency'
+        AND (member.property_access_mode='all' OR (member.property_access_mode='assigned' AND EXISTS(
+          SELECT 1 FROM identity.membership_property_assignments WHERE membership_id=member.id AND property_id=$1::uuid)))) AS property_access,
+      EXISTS(SELECT 1 FROM identity.role_permission_grants WHERE organization_kind='hotel_group' AND role_key='hotel_owner'
+        AND permission_key='hotel_catalog.setup.manage') AS setup_permission`, [owner.property,owner.organization,owner.actor])).rows[0];
+    const staged = (await client.query(`SELECT role.oid,role.rolname,role.rolcanlogin,role.rolsuper,role.rolcreaterole,role.rolcreatedb,role.rolinherit,role.rolreplication,role.rolbypassrls,
+      role.rolconfig IS NOT NULL AS has_settings,role.rolvaliduntil IS NOT NULL AS has_expiry,count(*) OVER()::int AS total,
+      (SELECT count(*)::int FROM pg_catalog.pg_auth_members WHERE member=role.oid) AS outgoing_memberships,
+      (SELECT count(*)::int FROM pg_catalog.pg_auth_members WHERE roleid=role.oid) AS incoming_memberships,
+      (SELECT count(*)::int FROM pg_catalog.pg_auth_members edge JOIN pg_catalog.pg_roles parent ON parent.oid=edge.roleid
+        WHERE edge.member=role.oid AND parent.rolname=$2 AND edge.inherit_option AND NOT edge.set_option AND NOT edge.admin_option) AS exact_scope_edges
+      FROM pg_catalog.pg_roles role WHERE pg_catalog.left(role.rolname::text,length($1))=$1 ORDER BY role.oid LIMIT 5`, [owner.prefix,roles[2]])).rows;
+    const passwords = passwordReadable && staged.length ? (await client.query('SELECT oid,rolpassword IS NOT NULL AS present FROM pg_catalog.pg_authid WHERE oid=ANY($1::oid[])', [staged.map(role => role.oid)])).rows : [];
+    attempt.roles = {total: staged[0]?.total ?? 0, entries: staged.map(({rolname,total,...role}) => ({...role, ...roleName(rolname), passwordPresent: passwords.find(entry => entry.oid===role.oid)?.present ?? null}))};
+    attempt.scopes = {columnsPresent: scopeCatalog.columns===scopeColumns.length, readable: scopeCatalog.readable};
+    if (attempt.scopes.columnsPresent && attempt.scopes.readable) {
+      const scopes = (await client.query(`SELECT scope.database_login::text AS login,scope.property_id=$1::uuid AS property_matches,
+        scope.organization_id=$2::uuid AS organization_matches,scope.actor_user_id=$3::uuid AS actor_matches,
+        scope.operation_class='property_logo' AS operation_matches,scope.active,scope.credential_role_oid AS credential_role_oid,
+        scope.credential_role_oid=role.oid AS role_oid_matches,scope.credential_secret_version,
+        scope.credential_ready_at IS NOT NULL AS ready_at_present,count(*) OVER()::int AS total
+        FROM platform.hotel_setup_property_scopes scope LEFT JOIN pg_catalog.pg_roles role ON role.rolname=scope.database_login
+        WHERE (scope.property_id=$1::uuid AND scope.operation_class='property_logo') OR pg_catalog.left(scope.database_login::text,length($4))=$4
+        ORDER BY scope.database_login LIMIT 5`, [owner.property,owner.organization,owner.actor,owner.prefix])).rows;
+      attempt.scopes.total = scopes[0]?.total ?? 0;
+      attempt.scopes.entries = scopes.map(({login,total,credential_secret_version,...scope}) => ({...scope, login: roleName(login), secretVersionPresent: credential_secret_version!==null,
+        secretVersion: /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(credential_secret_version ?? '') ? credential_secret_version : null}));
+    }
+    inspection.logoBootstraps.push(attempt);
+  }
   stage = 'ledger';
   inspection.ledger = [];
   for (const [version, [name, hash]] of manifest) {

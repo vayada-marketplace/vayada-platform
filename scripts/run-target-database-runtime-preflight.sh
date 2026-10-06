@@ -538,7 +538,7 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $vay2017_public_key == "" then [] else [{name:"VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64",value:$vay2017_public_key}] end) +
       (if $vay2017_principal == "" then [] else [{name:"CHANNEX_ADOPTION_EXECUTION_PRINCIPAL",value:$vay2017_principal}] end))}]}')"
 definition_environment='[]'
-if [[ "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair || "$legacy_helper_scope" == hotel_setup_tenant_helpers ]]; then
+if [[ "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair || "$legacy_helper_scope" == hotel_setup_tenant_helpers || "$mode" == --inspect-hotel-setup-logo-migration ]]; then
   # Nonsecret reviewed code and public CA live only in the disposable definition.
   # Keep runtime arguments under ECS's override limit; credentials stay secret-injected.
   definition_environment="$(jq -c '[.containerOverrides[0].environment[] | select(.name=="VAYADA_DB_RUNTIME_PREFLIGHT_CODE" or .name=="VAYADA_DB_RDS_CA_BUNDLE_GZIP")]' <<<"$overrides")"
