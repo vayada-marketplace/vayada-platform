@@ -41,6 +41,7 @@ on:
       - "scripts/audit-hotel-setup-readiness-migrations.mjs"
       - "scripts/inspect-hotel-setup-logo-migration.mjs"
       - "scripts/recover-hotel-setup-logo-staged-role.mjs"
+      - "scripts/test_hotel_setup_logo_staged_recovery_native.mjs"
       - ".github/workflows/hotel-setup-logo-staged-recovery.yml"
       - "scripts/test_hotel_setup_logo_inspection_native.mjs"
       - "scripts/stage-hotel-setup-logo-migration-scope.mjs"
@@ -324,6 +325,7 @@ jobs:
           node --experimental-vm-modules scripts/test-hotel-setup-readiness-migrations.mjs
           node --check scripts/inspect-hotel-setup-logo-migration.mjs
           node --check scripts/recover-hotel-setup-logo-staged-role.mjs
+          node --check scripts/test_hotel_setup_logo_staged_recovery_native.mjs
           node --check scripts/test_hotel_setup_logo_inspection_native.mjs
           node --check scripts/stage-hotel-setup-logo-migration-scope.mjs
           node --check scripts/test_hotel_setup_logo_parent_native.mjs
