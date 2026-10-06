@@ -49,6 +49,21 @@ vay2017_phase=""
 vay2017_source_import_phase=""
 logo_recovery_phase=""
 logo_recovery_frozen=""
+logo_reader_phase=""
+logo_reader_frozen=""
+if [[ "$mode" == --repair-hotel-setup-logo-reader ]]; then
+  [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main &&
+     "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_REPOSITORY:-}" == vayada-marketplace/vayada-platform &&
+     "$#" -eq 4 && "$2" =~ ^(inspect|apply|verify)$ &&
+     "$4" == sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965 &&
+     "${EXPECTED_TASK:-}" == arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1197 ]] || exit 2
+  [[ ( "$2" == inspect && -z "$3" ) || ( "$2" == apply && "$3" =~ ^[a-f0-9]{64}$ ) ||
+     ( "$2" == verify && "$3" =~ ^[1-9][0-9]{0,9}$ && "$3" -le 4294967295 ) ]] || exit 2
+  logo_reader_phase="$2"; logo_reader_frozen="$3"
+  # Exact new mode reuses the existing all-blocked, active-hold, physically-zero gates.
+  mode=--stage-hotel-setup-logo-migration-scope
+  set -- "$mode" "$4"
+fi
 if [[ "$mode" == --recover-hotel-setup-logo-staged-role ]]; then
   [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main &&
      "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_REPOSITORY:-}" == vayada-marketplace/vayada-platform &&
@@ -314,10 +329,15 @@ case "${mode}" in
     ;;
   --audit-hotel-setup-migration|--audit-hotel-setup-readiness-migrations|--inspect-hotel-setup-logo-migration|--stage-hotel-setup-migration-scope|--stage-hotel-setup-logo-migration-scope)
     [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main && "$#" -eq 2 && "$2" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 2
+    if [[ -n "$logo_reader_phase" ]]; then
+      jq -e --arg digest "$2" '.[ $digest ] == "3efb2195a823f40b7cd5a716db5bf08ac3fe90ad"' \
+        "$(dirname "${BASH_SOURCE[0]}")/../deployment/hotel-setup-property-images.json" >/dev/null || exit 1
+    else
     inventory="$(dirname "${BASH_SOURCE[0]}")/../deployment/hotel-setup-bootstrap-images.json"
     jq -e --arg digest "$2" '.[ $digest ] | type == "object" and
       (.primarySource | test("^[a-f0-9]{40}$")) and (.rollbackSource | test("^[a-f0-9]{40}$")) and
       (.publisherSource | test("^[a-f0-9]{40}$"))' "${inventory}" >/dev/null || exit 1
+    fi
     ca_required=true
     family="vayada-next-api-db-runtime-preflight"
     code_file="audit-hotel-setup-migration.mjs"
@@ -326,10 +346,17 @@ case "${mode}" in
     [[ "${mode}" != "--stage-hotel-setup-migration-scope" ]] || code_file="stage-hotel-setup-migration-scope.mjs"
     [[ "${mode}" != "--stage-hotel-setup-logo-migration-scope" ]] || code_file="stage-hotel-setup-logo-migration-scope.mjs"
     [[ -z "$logo_recovery_phase" ]] || code_file="recover-hotel-setup-logo-staged-role.mjs"
+    [[ -z "$logo_reader_phase" ]] || code_file="hotel-setup-logo-reader-cutover.mjs"
     secret_name="HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL"
     secret_parameter="/vayada/prod/db-marketplace-url"
     task_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$2"
     creation_execution_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution"
+    if [[ "$logo_reader_phase" == verify ]]; then
+      secret_name="HOTEL_SETUP_COMMAND_READER_DATABASE_URL"
+      secret_parameter="arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-command/prod/reader-database-url-WqoWDT"
+      creation_execution_role="arn:aws:iam::269416271598:role/vayada-hotel-setup-property-execution"
+      log_group="/ecs/vayada-hotel-setup-property"
+    fi
     ;;
   --audit-hotel-setup-owner)
     [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main && "$#" -eq 3 ]] || exit 2
@@ -502,13 +529,14 @@ elif [[ -n "${vay2017_phase}" ]]; then
 else
   bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';if(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP)process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();if(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_HELPER)fs.writeFileSync('/app/channex-policy-consumer-roles.mjs',z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_HELPER,'base64')));fs.writeFileSync(p,z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));if(process.env.HOTEL_SETUP_READER_RLS_MODE)process.argv[1]=p;import(p).catch(()=>{console.error(JSON.stringify({status:'FAIL',code:'runtime_preflight_bootstrap_failed'}));process.exit(1)})"
 fi
-[[ -z "$logo_recovery_phase" ]] || bootstrap="process.argv[1]='/app/.vayada-db-runtime-preflight.mjs';$bootstrap"
+[[ -z "$logo_recovery_phase" && -z "$logo_reader_phase" ]] || bootstrap="process.argv[1]='/app/.vayada-db-runtime-preflight.mjs';$bootstrap"
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
   --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg reader_rls_mode "${reader_rls_mode}" --arg reader_rls_frozen "${reader_rls_frozen}" --arg legacy_helper_mode "${legacy_helper_mode}" --arg legacy_helper_frozen "${legacy_helper_frozen}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg financials_readiness_property "${financials_readiness_property}" \
   --arg folio_required "${folio_required}" --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
   --arg owner_email "${owner_email}" --arg property_id "${property_id}" --arg property_operation "${property_operation}" --arg creation_purpose "${creation_purpose}" --arg creation_org "${creation_org}" --arg creation_actor "${creation_actor}" \
   --arg logo_cleanup_kind "${logo_cleanup_kind}" --arg logo_cleanup_target "${logo_cleanup_target}" --arg logo_cleanup_phase "${logo_cleanup_phase}" --arg logo_cleanup_hash "${logo_cleanup_hash}" \
   --arg logo_recovery_phase "$logo_recovery_phase" --arg logo_recovery_frozen "$logo_recovery_frozen" \
+  --arg logo_reader_phase "$logo_reader_phase" --arg logo_reader_frozen "$logo_reader_frozen" \
   --arg vay2017_source_import_phase "${vay2017_source_import_phase}" \
   --arg vay2017_signing_key_id "${VAY2017_PREFLIGHT_SIGNING_KEY_ID:-}" --arg vay2017_input "${VAY2017_PREFLIGHT_INPUT_GZIP_BASE64:-}" --arg vay2017_signature "${VAY2017_PREFLIGHT_SIGNATURE:-}" --arg vay2017_public_key "${VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64:-}" --arg vay2017_principal "${CHANNEX_ADOPTION_EXECUTION_PRINCIPAL:-}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
@@ -519,6 +547,9 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $legacy_helper_frozen == "" then [] else [{name:"HOTEL_SETUP_LEGACY_HELPER_FROZEN",value:$legacy_helper_frozen}] end) +
       (if $logo_recovery_phase == "" then [] else [{name:"HOTEL_SETUP_LOGO_RECOVERY_PHASE",value:$logo_recovery_phase},
         {name:"HOTEL_SETUP_LOGO_RECOVERY_FROZEN",value:$logo_recovery_frozen},
+        {name:"GITHUB_ACTIONS",value:"true"},{name:"GITHUB_REF",value:"refs/heads/main"}] end) +
+      (if $logo_reader_phase == "" then [] else [{name:"HOTEL_SETUP_LOGO_READER_PHASE",value:$logo_reader_phase},
+        {name:"HOTEL_SETUP_LOGO_READER_FROZEN",value:$logo_reader_frozen},
         {name:"GITHUB_ACTIONS",value:"true"},{name:"GITHUB_REF",value:"refs/heads/main"}] end) +
       (if $reader_rls_mode == "" then [] else [{name:"HOTEL_SETUP_READER_RLS_MODE",value:$reader_rls_mode},
         {name:"GITHUB_ACTIONS",value:"true"},{name:"GITHUB_REF",value:"refs/heads/main"}] end) +
@@ -556,7 +587,7 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $vay2017_public_key == "" then [] else [{name:"VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64",value:$vay2017_public_key}] end) +
       (if $vay2017_principal == "" then [] else [{name:"CHANNEX_ADOPTION_EXECUTION_PRINCIPAL",value:$vay2017_principal}] end))}]}')"
 definition_environment='[]'
-if [[ "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair || "$legacy_helper_scope" == hotel_setup_tenant_helpers || "$mode" == --inspect-hotel-setup-logo-migration || -n "$logo_recovery_phase" ]]; then
+if [[ "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair || "$legacy_helper_scope" == hotel_setup_tenant_helpers || "$mode" == --inspect-hotel-setup-logo-migration || -n "$logo_recovery_phase" || -n "$logo_reader_phase" ]]; then
   # Nonsecret reviewed code and public CA live only in the disposable definition.
   # Keep runtime arguments under ECS's override limit; credentials stay secret-injected.
   definition_environment="$(jq -c '[.containerOverrides[0].environment[] | select(.name=="VAYADA_DB_RUNTIME_PREFLIGHT_CODE" or .name=="VAYADA_DB_RDS_CA_BUNDLE_GZIP")]' <<<"$overrides")"
@@ -592,6 +623,9 @@ else
 fi
 source_definition="$(aws ecs describe-task-definition --task-definition "${current_task}" --region "${region}" \
   --query taskDefinition --output json)"
+if [[ -n "$logo_reader_phase" ]]; then
+  jq -e --arg image "$task_image" '[.containerDefinitions[]|select(.name=="vayada-next-api")|.image]==[$image]' <<<"$source_definition" >/dev/null || exit 1
+fi
 if [[ -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-hotel-setup-migration" || ( "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--inspect-hotel-setup-logo-migration" ) || ( "${mode}" == "--stage-hotel-setup-migration-scope" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ]]; then
   [[ "${EXPECTED_TASK:-}" == "${current_task}" && "${current_task}" == arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:* ]] || exit 1
   public_state="$(aws ecs describe-services --cluster "${service_cluster}" --services "${service}" --region "${region}" --query 'services[0]' --output json)"
@@ -610,6 +644,9 @@ validate_hold(hold,load_config(),'next-target-backend')
 assert hold['status']=='active' and hold['capturedTaskDefinitionArn']==sys.argv[3]
 assert hold['dependentFrontendsCompatible'] is False
 PYCODE
+    if [[ -n "$logo_reader_phase" ]]; then
+      jq -e --arg image "$task_image" '.capturedImage==$image' <<<"$hold" >/dev/null || exit 1
+    fi
     private_state="$(aws ecs describe-services --cluster "${service_cluster}" --services vayada-hotel-setup-property-service --region "${region}" --query '{services:services,failures:failures}' --output json)"
     jq -e '(.services|length)==1 and (.failures|length)==0 and .services[0].desiredCount==0 and
       .services[0].runningCount==0 and .services[0].pendingCount==0' <<<"${private_state}" >/dev/null || exit 1
@@ -772,6 +809,9 @@ fi
 if [[ -n "$logo_recovery_phase" ]]; then
   [[ "$logo_recovery_phase" == inspect ]] && vay2017_expected_status="PLAN" || vay2017_expected_status="PASS"
 fi
+if [[ -n "$logo_reader_phase" ]]; then
+  [[ "$logo_reader_phase" == inspect ]] && vay2017_expected_status="PLAN" || vay2017_expected_status="PASS"
+fi
 if [[ "${vay2017_phase}" == "prepare" ]]; then vay2017_expected_status="prepared";
 elif [[ "${vay2017_phase}" == "execute" ]]; then vay2017_expected_status="complete";
 elif [[ "${vay2017_phase}" == "cleanup" ]]; then vay2017_expected_status="clean";
@@ -784,13 +824,38 @@ task="$(aws ecs describe-tasks --cluster "${cluster}" --tasks "${task_arn}" --re
 for _ in {1..10}; do
   messages="$(aws logs get-log-events --log-group-name "${log_group}" --log-stream-name "${log_stream}" \
     --start-from-head --region "${region}" --query 'events[].message' --output json 2>/dev/null || echo '[]')"
-  jq -e --arg expected "${vay2017_expected_status}" --arg reader "$reader_rls_mode" --arg exit "$(jq -r '.exitCode' <<<"${task}")" \
+  jq -e --arg logo_reader "$logo_reader_phase" --arg expected "${vay2017_expected_status}" --arg reader "$reader_rls_mode" --arg exit "$(jq -r '.exitCode' <<<"${task}")" \
     'if type != "array" then false elif $reader == "inspect" and $exit == "1" then length > 0
       else any(.[]; fromjson? | select(type == "object") | .status == "PASS" or .status == "BLOCKED" or
         ((.scope=="hotel_setup_approved_legacy_helper_repair" or .scope=="hotel_setup_tenant_helpers") and (.status=="UNCERTAIN" or .status=="COMMITTED_UNVERIFIED")) or
+        ($logo_reader != "" and .scope=="hotel_setup_logo_reader_cutover" and (.status=="FAIL" or .status=="UNCERTAIN" or .status=="COMMITTED_UNVERIFIED")) or
         ($expected != "" and .status == $expected)) end' <<<"${messages}" >/dev/null 2>&1 && break
   sleep 2
 done
+
+if [[ -n "$logo_reader_phase" ]]; then
+  if [[ "$(jq -r '.exitCode' <<<"$task")" != 0 ]]; then
+    jq -c '.[]|fromjson?|select(.scope=="hotel_setup_logo_reader_cutover" and
+      (.status=="FAIL" or .status=="UNCERTAIN" or .status=="COMMITTED_UNVERIFIED"))|
+      {status,scope,stage:(if (.stage|type)=="string" and (.stage|test("^[a-z_]{1,40}$")) then .stage else null end),
+       sqlState:(if (.sqlState|type)=="string" and (.sqlState|test("^[A-Z0-9]{5}$")) then .sqlState else null end)}' <<<"$messages"
+    echo "Property reader cutover requires inspection." >&2; exit 1
+  fi
+  jq -ce --arg phase "$logo_reader_phase" --arg expected "$vay2017_expected_status" --arg frozen "$logo_reader_frozen" '
+    [.[]|fromjson?|select(type=="object" and .status==$expected and .scope=="hotel_setup_logo_reader_cutover" and
+      .phase==$phase and .login=="vayada_next_hotel_setup_reader" and .businessWrites==false and
+      (.roleOid|type=="number" and floor==. and .>0 and .<=4294967295) and
+      (if $phase=="verify" then keys==["businessWrites","login","phase","roleOid","scope","status"] and .roleOid==($frozen|tonumber)
+       else keys==["businessWrites","fingerprint","login","missingColumns","phase","roleOid","scope","status"] and
+        (.fingerprint|test("^[a-f0-9]{64}$")) and ($phase=="inspect" or .fingerprint==$frozen) and
+        (.missingColumns|type=="array" and length<=9 and length==(unique|length) and all(.[]; . as $column |
+          (["platform.hotel_setup_property_scopes:actor_user_id:SELECT"]+
+           (["id","actor_user_id","owner_organization_id","requested_purpose","property_id","resource_product","resource_type","resource_id"]|
+             map("platform.media_upload_sessions:"+.+":SELECT")))|index($column)!=null)) end))]|select(length==1)|.[0]' <<<"$messages" || {
+    echo "Property reader cutover returned invalid evidence; inspection required." >&2; exit 1;
+  }
+  exit 0
+fi
 
 if [[ -n "$logo_recovery_phase" ]]; then
   if [[ "$(jq -r '.exitCode' <<<"$task")" != 0 ]]; then

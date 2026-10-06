@@ -96,7 +96,7 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
         self.root = Path(self.temp.name)
         for directory in ('scripts', 'deployment', 'bin', 'capture'):
             (self.root / directory).mkdir()
-        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'run-hotel-setup-logo-cleanup.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'inspect-hotel-setup-logo-migration.mjs', 'recover-hotel-setup-logo-staged-role.mjs', 'stage-hotel-setup-migration-scope.mjs', 'stage-hotel-setup-logo-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'hotel-setup-approved-legacy-helper-repair.mjs', 'hotel-setup-tenant-helper-repair.mjs', 'coordinated_release.py'):
+        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'run-hotel-setup-logo-cleanup.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'inspect-hotel-setup-logo-migration.mjs', 'recover-hotel-setup-logo-staged-role.mjs', 'hotel-setup-logo-reader-cutover.mjs', 'stage-hotel-setup-migration-scope.mjs', 'stage-hotel-setup-logo-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'hotel-setup-approved-legacy-helper-repair.mjs', 'hotel-setup-tenant-helper-repair.mjs', 'coordinated_release.py'):
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copy(ROOT / 'deployment/coordinated-release-v1.json', self.root / 'deployment/coordinated-release-v1.json')
         (self.root / 'deployment/hotel-setup-command-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
@@ -737,6 +737,67 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
             calls.unlink(missing_ok=True)
             self.assertNotEqual(self.run_wrapper('--recover-hotel-setup-logo-staged-role', phase, frozen, DIGEST).returncode, 0)
             self.assertFalse(calls.exists())
+
+    def test_logo_reader_cutover_pins_existing_reader_image_and_held_offline_scope(self):
+        digest = 'sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965'
+        image = '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + digest
+        task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1197'
+        hold = {'schemaVersion': 1, 'status': 'active', 'service': 'next-target-backend',
+            'physicalIdentity': {'accountId': '269416271598', 'region': 'eu-west-1',
+                'cluster': 'vayada-backend-cluster', 'ecsService': 'vayada-next-api-service'},
+            'reason': 'reviewed reader cutover', 'operationId': 'reader-123', 'manifestId': None,
+            'capturedTaskDefinitionArn': task, 'capturedImage': image,
+            'dependentFrontendsCompatible': False, 'createdAt': '2026-10-06T17:00:00.000Z'}
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main', GITHUB_EVENT_NAME='workflow_dispatch',
+            GITHUB_REPOSITORY='vayada-marketplace/vayada-platform', EXPECTED_TASK=task, MOCK_CURRENT_TASK=task,
+            MOCK_PUBLIC_IMAGE=image, MOCK_HOLD=json.dumps(hold), MOCK_STARTUP='1')
+        (self.root/'deployment/hotel-setup-property-images.json').write_text(json.dumps({digest:'3efb2195a823f40b7cd5a716db5bf08ac3fe90ad'}))
+        base = {'status':'PLAN','scope':'hotel_setup_logo_reader_cutover','phase':'inspect',
+            'login':'vayada_next_hotel_setup_reader','roleOid':12345,'fingerprint':'b'*64,
+            'missingColumns':['platform.hotel_setup_property_scopes:actor_user_id:SELECT'],'businessWrites':False}
+        for phase, frozen in [('inspect',''),('apply','b'*64),('verify','12345')]:
+            receipt = {**base,'phase':phase,'status':'PLAN' if phase=='inspect' else 'PASS'}
+            if phase=='verify':
+                for key in ['fingerprint','missingColumns']: receipt.pop(key)
+            self.env['MOCK_RECEIPT']=json.dumps(receipt)
+            result=self.run_wrapper('--repair-hotel-setup-logo-reader',phase,frozen,digest)
+            self.assertEqual(result.returncode,0,result.stderr)
+            definition=json.loads((self.root/'capture/definition.json').read_text()); item,=definition['containerDefinitions']
+            self.assertNotIn('taskRoleArn',definition); self.assertEqual(item['image'],image)
+            for key in ['entryPoint','environmentFiles','mountPoints','volumesFrom']: self.assertNotIn(key,item)
+            self.assertFalse(item['privileged']); self.assertEqual(item['workingDirectory'],'/app')
+            secret = {'name':'HOTEL_SETUP_COMMAND_READER_DATABASE_URL','valueFrom':'arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-command/prod/reader-database-url-WqoWDT'} if phase=='verify' else {'name':'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL','valueFrom':'/vayada/prod/db-marketplace-url'}
+            self.assertEqual(item['secrets'],[secret])
+            self.assertEqual(definition['executionRoleArn'],'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-'+('execution' if phase=='verify' else 'bootstrap-execution'))
+            environment={e['name']:e['value'] for e in item['environment']}
+            self.assertEqual(set(environment),{'VAYADA_DB_RUNTIME_PREFLIGHT_CODE','VAYADA_DB_RDS_CA_BUNDLE_GZIP'})
+            self.assertEqual(gzip.decompress(base64.b64decode(environment['VAYADA_DB_RUNTIME_PREFLIGHT_CODE'])),(ROOT/'scripts/hotel-setup-logo-reader-cutover.mjs').read_bytes())
+            override_bytes=(self.root/'capture/overrides.json').read_bytes(); self.assertLessEqual(len(override_bytes),8192)
+            override=json.loads(override_bytes)['containerOverrides'][0]; arguments={e['name']:e['value'] for e in override['environment']}
+            self.assertEqual(arguments['HOTEL_SETUP_LOGO_READER_PHASE'],phase); self.assertEqual(arguments['HOTEL_SETUP_LOGO_READER_FROZEN'],frozen)
+            command=override['command']; command[2]=command[2].replace('/app/.vayada-db-runtime-preflight.mjs',str((self.root/'injected-reader.mjs').resolve()))
+            actual=subprocess.run(command,cwd=self.root,capture_output=True,text=True,timeout=20,env={'PATH':os.environ['PATH'],**environment,**arguments,secret['name']:'invalid-destination'})
+            self.assertEqual(actual.returncode,1); self.assertEqual(actual.stdout,'')
+            self.assertEqual(json.loads(actual.stderr)['stage'],'configuration')
+        self.env['MOCK_RECEIPT']=json.dumps(base); calls=self.root/'capture/calls.jsonl'
+        for change in [{'GITHUB_REF':'refs/heads/other'},{'EXPECTED_TASK':task[:-4]+'1196'},{'MOCK_PUBLIC_IMAGE':'unreviewed'},
+                       {'MOCK_PROPERTY_RUNNING':'1'},{'MOCK_CREATION_RUNNING':'1'},{'MOCK_DRAINING':'1'},
+                       {'MOCK_ADMISSION':'enabled'},{'MOCK_CREATION_ADMISSION':'enabled'},{'MOCK_LOGO_ADMISSION':'enabled'},
+                       {'MOCK_HOLD':json.dumps({**hold,'capturedImage':image[:-1]+'0'})},
+                       {'MOCK_HOLD':json.dumps({**hold,'status':'released'})},
+                       {'MOCK_HOLD':json.dumps({**hold,'capturedTaskDefinitionArn':task[:-4]+'1196'})}]:
+            previous=self.env.copy();self.env.update(change);calls.unlink(missing_ok=True)
+            self.assertNotEqual(self.run_wrapper('--repair-hotel-setup-logo-reader','inspect','',digest).returncode,0)
+            operations=[json.loads(line)[1] for line in calls.read_text().splitlines()] if calls.exists() else []
+            self.assertNotIn('register-task-definition',operations);self.assertNotIn('run-task',operations);self.env=previous
+        for phase,frozen,wrong_image in [('inspect','','sha256:'+'a'*64),('apply','',digest),('inspect','b'*64,digest),('verify','0',digest),('verify','4294967296',digest)]:
+            calls.unlink(missing_ok=True);self.assertNotEqual(self.run_wrapper('--repair-hotel-setup-logo-reader',phase,frozen,wrong_image).returncode,0);self.assertFalse(calls.exists())
+        for invalid in [{**base,'extra':True},{**base,'roleOid':True},{**base,'missingColumns':['platform.other:secret:SELECT']},
+                        {**base,'missingColumns':base['missingColumns']*2}]:
+            self.env['MOCK_RECEIPT']=json.dumps(invalid);self.assertNotEqual(self.run_wrapper('--repair-hotel-setup-logo-reader','inspect','',digest).returncode,0)
+        self.env.update(MOCK_EXIT_CODE='2',MOCK_RECEIPT=json.dumps({'status':'UNCERTAIN','scope':base['scope'],'stage':'commit','sqlState':None,'unsafe':'private-sentinel'}))
+        result=self.run_wrapper('--repair-hotel-setup-logo-reader','apply','b'*64,digest)
+        self.assertNotEqual(result.returncode,0);self.assertEqual(json.loads(result.stdout),{'status':'UNCERTAIN','scope':base['scope'],'stage':'commit','sqlState':None});self.assertNotIn('private-sentinel',result.stdout+result.stderr)
 
     def test_owner_lookup_receives_no_sdk_role_and_only_owner_secret(self):
         self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
