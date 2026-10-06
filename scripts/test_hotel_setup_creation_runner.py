@@ -96,7 +96,7 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
         self.root = Path(self.temp.name)
         for directory in ('scripts', 'deployment', 'bin', 'capture'):
             (self.root / directory).mkdir()
-        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'run-hotel-setup-logo-cleanup.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'inspect-hotel-setup-logo-migration.mjs', 'stage-hotel-setup-migration-scope.mjs', 'stage-hotel-setup-logo-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'hotel-setup-approved-legacy-helper-repair.mjs', 'hotel-setup-tenant-helper-repair.mjs', 'coordinated_release.py'):
+        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'run-hotel-setup-logo-cleanup.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'inspect-hotel-setup-logo-migration.mjs', 'recover-hotel-setup-logo-staged-role.mjs', 'stage-hotel-setup-migration-scope.mjs', 'stage-hotel-setup-logo-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'hotel-setup-approved-legacy-helper-repair.mjs', 'hotel-setup-tenant-helper-repair.mjs', 'coordinated_release.py'):
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copy(ROOT / 'deployment/coordinated-release-v1.json', self.root / 'deployment/coordinated-release-v1.json')
         (self.root / 'deployment/hotel-setup-command-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
@@ -688,6 +688,55 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
             self.env['MOCK_RECEIPT'] = json.dumps(invalid)
             self.assertNotEqual(self.run_wrapper('--stage-hotel-setup-logo-migration-scope', DIGEST).returncode, 0)
 
+
+    def test_staged_logo_recovery_reuses_hold_gates_and_requires_exact_plan(self):
+        self.test_logo_scope_requires_all_callers_and_both_private_services_stopped()
+        self.env.update(GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REPOSITORY='vayada-marketplace/vayada-platform')
+        receipt = {'status': 'PLAN', 'scope': 'hotel_setup_logo_staged_recovery', 'phase': 'inspect',
+            'login': 'vayada_next_hotel_setup_logo_37f915790bff5732_072438f4e0a8', 'roleOid': 247978,
+            'fingerprint': 'b'*64, 'roleRemoved': False, 'businessWrites': False}
+        for phase in ('inspect', 'apply'):
+            self.env['MOCK_RECEIPT'] = json.dumps({**receipt, 'phase': phase,
+                'status': 'PLAN' if phase == 'inspect' else 'PASS', 'roleRemoved': phase == 'apply'})
+            result = self.run_wrapper('--recover-hotel-setup-logo-staged-role', phase, '' if phase == 'inspect' else 'b'*64, DIGEST)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            definition = json.loads((self.root/'capture/definition.json').read_text())
+            item, = definition['containerDefinitions']
+            self.assertNotIn('taskRoleArn', definition)
+            self.assertNotIn('entryPoint', item)
+            self.assertNotIn('environmentFiles', item)
+            self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
+            environment = {entry['name']: entry['value'] for entry in item['environment']}
+            self.assertEqual(set(environment), {'VAYADA_DB_RUNTIME_PREFLIGHT_CODE', 'VAYADA_DB_RDS_CA_BUNDLE_GZIP'})
+            self.assertEqual(gzip.decompress(base64.b64decode(environment['VAYADA_DB_RUNTIME_PREFLIGHT_CODE'])), (ROOT/'scripts/recover-hotel-setup-logo-staged-role.mjs').read_bytes())
+            overrides = json.loads((self.root/'capture/overrides.json').read_text())
+            arguments = {entry['name']: entry['value'] for entry in overrides['containerOverrides'][0]['environment']}
+            self.assertEqual(arguments['HOTEL_SETUP_LOGO_RECOVERY_PHASE'], phase)
+            self.assertEqual(arguments['HOTEL_SETUP_LOGO_RECOVERY_FROZEN'], '' if phase == 'inspect' else 'b'*64)
+            self.assertLessEqual(len((self.root/'capture/overrides.json').read_bytes()), 8192)
+            command = overrides['containerOverrides'][0]['command']
+            command[2] = command[2].replace('/app/.vayada-db-runtime-preflight.mjs', str((self.root/'injected-recovery.mjs').resolve()))
+            actual = subprocess.run(command, cwd=self.root, capture_output=True, text=True, timeout=20,
+                env={'PATH': os.environ['PATH'], **environment, **arguments, 'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL': 'invalid-destination'})
+            self.assertEqual((actual.returncode, actual.stdout), (1, ''), actual.stderr)
+            self.assertEqual(json.loads(actual.stderr), {'status': 'FAIL', 'scope': 'hotel_setup_logo_staged_recovery', 'code': 'hotel_setup_logo_staged_recovery_unavailable'})
+        calls = self.root/'capture/calls.jsonl'
+        for changes in ({'GITHUB_REF': 'refs/heads/unreviewed'}, {'GITHUB_REPOSITORY': 'elsewhere/repo'},
+                        {'MOCK_PROPERTY_RUNNING': '1'}, {'MOCK_CREATION_RUNNING': '1'},
+                        {'MOCK_LOGO_ADMISSION': 'enabled'}, {'MOCK_CREATION_ADMISSION': 'enabled'}, {'MOCK_DRAINING': '1'}):
+            previous = self.env.copy(); self.env.update(changes); calls.unlink(missing_ok=True)
+            self.assertNotEqual(self.run_wrapper('--recover-hotel-setup-logo-staged-role', 'apply', 'b'*64, DIGEST).returncode, 0)
+            operations = [json.loads(line)[1] for line in calls.read_text().splitlines()] if calls.exists() else []
+            self.assertNotIn('register-task-definition', operations); self.assertNotIn('run-task', operations)
+            self.env = previous
+        for invalid in ({**receipt, 'roleOid': 247979}, {**receipt, 'unexpected': True}, {**receipt, 'roleRemoved': True}):
+            self.env['MOCK_RECEIPT'] = json.dumps(invalid)
+            self.assertNotEqual(self.run_wrapper('--recover-hotel-setup-logo-staged-role', 'inspect', '', DIGEST).returncode, 0)
+        self.env['MOCK_RECEIPT'] = json.dumps(receipt)
+        for phase, frozen in (('apply', ''), ('inspect', 'b'*64), ('retry', '')):
+            calls.unlink(missing_ok=True)
+            self.assertNotEqual(self.run_wrapper('--recover-hotel-setup-logo-staged-role', phase, frozen, DIGEST).returncode, 0)
+            self.assertFalse(calls.exists())
 
     def test_owner_lookup_receives_no_sdk_role_and_only_owner_secret(self):
         self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
