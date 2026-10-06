@@ -47,6 +47,18 @@ vay2017_source_sha=""
 vay2017_execution_id=""
 vay2017_phase=""
 vay2017_source_import_phase=""
+logo_recovery_phase=""
+logo_recovery_frozen=""
+if [[ "$mode" == --recover-hotel-setup-logo-staged-role ]]; then
+  [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main &&
+     "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_REPOSITORY:-}" == vayada-marketplace/vayada-platform &&
+     "$#" -eq 4 && "$2" =~ ^(inspect|apply)$ && "$4" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 2
+  [[ ( "$2" == inspect && -z "$3" ) || ( "$2" == apply && "$3" =~ ^[a-f0-9]{64}$ ) ]] || exit 2
+  logo_recovery_phase="$2"; logo_recovery_frozen="$3"
+  # Reuse the fixed logo parent's held-release and physically-stopped-service gates.
+  mode=--stage-hotel-setup-logo-migration-scope
+  set -- "$mode" "$4"
+fi
 case "${mode}" in
   preflight|--preflight-folio-command)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -313,6 +325,7 @@ case "${mode}" in
     [[ "${mode}" != "--inspect-hotel-setup-logo-migration" ]] || code_file="inspect-hotel-setup-logo-migration.mjs"
     [[ "${mode}" != "--stage-hotel-setup-migration-scope" ]] || code_file="stage-hotel-setup-migration-scope.mjs"
     [[ "${mode}" != "--stage-hotel-setup-logo-migration-scope" ]] || code_file="stage-hotel-setup-logo-migration-scope.mjs"
+    [[ -z "$logo_recovery_phase" ]] || code_file="recover-hotel-setup-logo-staged-role.mjs"
     secret_name="HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL"
     secret_parameter="/vayada/prod/db-marketplace-url"
     task_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$2"
@@ -489,11 +502,13 @@ elif [[ -n "${vay2017_phase}" ]]; then
 else
   bootstrap="const fs=require('node:fs'),z=require('node:zlib'),p='/app/.vayada-db-runtime-preflight.mjs';if(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP)process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();if(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_HELPER)fs.writeFileSync('/app/channex-policy-consumer-roles.mjs',z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_HELPER,'base64')));fs.writeFileSync(p,z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RUNTIME_PREFLIGHT_CODE,'base64')));if(process.env.HOTEL_SETUP_READER_RLS_MODE)process.argv[1]=p;import(p).catch(()=>{console.error(JSON.stringify({status:'FAIL',code:'runtime_preflight_bootstrap_failed'}));process.exit(1)})"
 fi
+[[ -z "$logo_recovery_phase" ]] || bootstrap="process.argv[1]='/app/.vayada-db-runtime-preflight.mjs';$bootstrap"
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
   --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg reader_rls_mode "${reader_rls_mode}" --arg reader_rls_frozen "${reader_rls_frozen}" --arg legacy_helper_mode "${legacy_helper_mode}" --arg legacy_helper_frozen "${legacy_helper_frozen}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg financials_readiness_property "${financials_readiness_property}" \
   --arg folio_required "${folio_required}" --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
   --arg owner_email "${owner_email}" --arg property_id "${property_id}" --arg property_operation "${property_operation}" --arg creation_purpose "${creation_purpose}" --arg creation_org "${creation_org}" --arg creation_actor "${creation_actor}" \
   --arg logo_cleanup_kind "${logo_cleanup_kind}" --arg logo_cleanup_target "${logo_cleanup_target}" --arg logo_cleanup_phase "${logo_cleanup_phase}" --arg logo_cleanup_hash "${logo_cleanup_hash}" \
+  --arg logo_recovery_phase "$logo_recovery_phase" --arg logo_recovery_frozen "$logo_recovery_frozen" \
   --arg vay2017_source_import_phase "${vay2017_source_import_phase}" \
   --arg vay2017_signing_key_id "${VAY2017_PREFLIGHT_SIGNING_KEY_ID:-}" --arg vay2017_input "${VAY2017_PREFLIGHT_INPUT_GZIP_BASE64:-}" --arg vay2017_signature "${VAY2017_PREFLIGHT_SIGNATURE:-}" --arg vay2017_public_key "${VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64:-}" --arg vay2017_principal "${CHANNEX_ADOPTION_EXECUTION_PRINCIPAL:-}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
@@ -502,6 +517,9 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $legacy_helper_mode == "" then [] else [{name:"HOTEL_SETUP_LEGACY_HELPER_MODE",value:$legacy_helper_mode},
         {name:"GITHUB_ACTIONS",value:"true"},{name:"GITHUB_REF",value:"refs/heads/main"}] end) +
       (if $legacy_helper_frozen == "" then [] else [{name:"HOTEL_SETUP_LEGACY_HELPER_FROZEN",value:$legacy_helper_frozen}] end) +
+      (if $logo_recovery_phase == "" then [] else [{name:"HOTEL_SETUP_LOGO_RECOVERY_PHASE",value:$logo_recovery_phase},
+        {name:"HOTEL_SETUP_LOGO_RECOVERY_FROZEN",value:$logo_recovery_frozen},
+        {name:"GITHUB_ACTIONS",value:"true"},{name:"GITHUB_REF",value:"refs/heads/main"}] end) +
       (if $reader_rls_mode == "" then [] else [{name:"HOTEL_SETUP_READER_RLS_MODE",value:$reader_rls_mode},
         {name:"GITHUB_ACTIONS",value:"true"},{name:"GITHUB_REF",value:"refs/heads/main"}] end) +
       (if $reader_rls_mode == "property_creation" or $reader_rls_mode == "property_commands" then
@@ -538,7 +556,7 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $vay2017_public_key == "" then [] else [{name:"VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64",value:$vay2017_public_key}] end) +
       (if $vay2017_principal == "" then [] else [{name:"CHANNEX_ADOPTION_EXECUTION_PRINCIPAL",value:$vay2017_principal}] end))}]}')"
 definition_environment='[]'
-if [[ "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair || "$legacy_helper_scope" == hotel_setup_tenant_helpers || "$mode" == --inspect-hotel-setup-logo-migration ]]; then
+if [[ "$legacy_helper_scope" == hotel_setup_approved_legacy_helper_repair || "$legacy_helper_scope" == hotel_setup_tenant_helpers || "$mode" == --inspect-hotel-setup-logo-migration || -n "$logo_recovery_phase" ]]; then
   # Nonsecret reviewed code and public CA live only in the disposable definition.
   # Keep runtime arguments under ECS's override limit; credentials stay secret-injected.
   definition_environment="$(jq -c '[.containerOverrides[0].environment[] | select(.name=="VAYADA_DB_RUNTIME_PREFLIGHT_CODE" or .name=="VAYADA_DB_RDS_CA_BUNDLE_GZIP")]' <<<"$overrides")"
@@ -751,6 +769,9 @@ vay2017_expected_status=""
 if [[ -n "$logo_cleanup_phase" ]]; then
   [[ "$logo_cleanup_phase" == plan ]] && vay2017_expected_status="PLAN" || vay2017_expected_status="PASS"
 fi
+if [[ -n "$logo_recovery_phase" ]]; then
+  [[ "$logo_recovery_phase" == inspect ]] && vay2017_expected_status="PLAN" || vay2017_expected_status="PASS"
+fi
 if [[ "${vay2017_phase}" == "prepare" ]]; then vay2017_expected_status="prepared";
 elif [[ "${vay2017_phase}" == "execute" ]]; then vay2017_expected_status="complete";
 elif [[ "${vay2017_phase}" == "cleanup" ]]; then vay2017_expected_status="clean";
@@ -771,6 +792,24 @@ for _ in {1..10}; do
   sleep 2
 done
 
+if [[ -n "$logo_recovery_phase" ]]; then
+  if [[ "$(jq -r '.exitCode' <<<"$task")" != 0 ]]; then
+    jq -c '.[] | fromjson? | select(.scope=="hotel_setup_logo_staged_recovery" and
+      (.status=="FAIL" or .status=="UNCERTAIN" or .status=="COMMITTED_UNVERIFIED")) |
+      {status,scope,stage:(if (.stage|type)=="string" and (.stage|test("^[a-z_]{1,40}$")) then .stage else null end),
+       sqlState:(if (.sqlState|type)=="string" and (.sqlState|test("^[A-Z0-9]{5}$")) then .sqlState else null end)}' <<<"$messages"
+    echo "Staged logo role recovery requires inspection." >&2; exit 1
+  fi
+  jq -ce --arg phase "$logo_recovery_phase" --arg expected "$vay2017_expected_status" --arg frozen "$logo_recovery_frozen" '
+    [.[] | fromjson? | select(type=="object" and keys==["businessWrites","fingerprint","login","phase","roleOid","roleRemoved","scope","status"] and
+      .status==$expected and .scope=="hotel_setup_logo_staged_recovery" and .phase==$phase and
+      .login=="vayada_next_hotel_setup_logo_37f915790bff5732_072438f4e0a8" and .roleOid==247978 and
+      .roleRemoved==($phase=="apply") and .businessWrites==false and (.fingerprint|test("^[a-f0-9]{64}$")) and
+      ($frozen=="" or .fingerprint==$frozen))] | select(length==1) | .[0]' <<<"$messages" || {
+      echo "Staged logo recovery returned invalid evidence; inspection required." >&2; exit 1;
+  }
+  exit 0
+fi
 if [[ "${mode}" == "--stage-hotel-setup-logo-migration-scope" ]]; then
   [[ "$(jq -r '.exitCode' <<<"$task")" == 0 ]] || { echo "Logo parent staging requires inspection." >&2; exit 1; }
   jq -ce '[.[] | fromjson? | select((.scopeIncomingMemberships==0 or .scopeIncomingMemberships==1) and .=={status:"PASS",migration:"0466",scopeRole:"vayada_next_hotel_setup_logo_scope",
