@@ -31,8 +31,9 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def aws(*args):
-    result = subprocess.run(['aws', *args, '--region', REGION, '--output', 'json'], check=True, capture_output=True, text=True)
+def aws(*args, single_attempt=False):
+    options = {'env': {**os.environ, 'AWS_MAX_ATTEMPTS': '1'}, 'timeout': 60} if single_attempt else {}
+    result = subprocess.run(['aws', *args, '--region', REGION, '--output', 'json'], check=True, capture_output=True, text=True, **options)
     return json.loads(result.stdout)
 
 
@@ -127,6 +128,112 @@ def approved(digest, inventory):
     require(re.fullmatch(r'[a-f0-9]{40}', source) is not None, 'Image lacks reviewed proof')
 
 
+def validate_private_definition(definition, purpose, digest):
+    item = container(definition, 'hotel-setup')
+    marker = 'property-' if purpose == 'property' else ''
+    require(definition.get('executionRoleArn') == 'arn:aws:iam::269416271598:role/vayada-hotel-setup-' + marker + 'execution' and definition.get('taskRoleArn') == 'arn:aws:iam::269416271598:role/vayada-hotel-setup-' + marker + 'task', 'Wrong private identities')
+    require(len(definition['containerDefinitions']) == 1 and item.get('readonlyRootFilesystem') is True and item.get('privileged') is False, 'Unsafe private container')
+    injected = item.get('secrets', [])
+    require(len(injected) == 2 and {entry['name'] for entry in injected} == {'HOTEL_SETUP_COMMAND_READER_DATABASE_URL', 'HOTEL_SETUP_COMMAND_INTERNAL_TOKEN'}, 'Unexpected private credentials')
+    secret_prefix = 'hotel-setup-creation/prod/' if purpose == 'creation' else 'hotel-setup-command/prod/'
+    for entry in injected:
+        name = 'reader-database-url' if entry['name'].endswith('READER_DATABASE_URL') else 'internal-token'
+        require(re.fullmatch(r'arn:aws:secretsmanager:eu-west-1:269416271598:secret:' + re.escape(secret_prefix + name) + r'-[A-Za-z0-9]{6}', entry['valueFrom']), 'Wrong private secret namespace')
+    require(environment(item).get('HOTEL_SETUP_COMMAND_SECRET_PREFIX') == ('hotel-setup-command/prod/organization/' if purpose == 'creation' else 'hotel-setup-command/prod/property/'), 'Wrong native secret prefix')
+    require(item['image'] == REPOSITORY + '@' + digest, 'Staged image differs')
+    require(environment(item).get('HOTEL_SETUP_COMMAND_MODE') == ('property_creation' if purpose == 'creation' else 'property_commands'), 'Wrong private mode')
+    require(definition['family'] in (('vayada-hotel-setup-primary', 'vayada-hotel-setup-rollback') if purpose == 'creation' else ('vayada-hotel-setup-property-primary', 'vayada-hotel-setup-property-rollback')), 'Wrong staged family')
+
+
+def stop_failed_start(args, current):
+    """Stop only the reviewed, unhealthy property attempt; never retry a mutation."""
+    destination, target = PRIVATE['property'], args.private_task
+    public_image = container(current, 'vayada-next-api')['image']
+    require(all(environment(container(current, 'vayada-next-api')).get(prefix + '_ADMISSION') == 'blocked'
+                for prefix in PREFIX.values()), 'Failed start recovery requires all callers blocked')
+    checked = {target}
+
+    def reviewed(definition_arn):
+        require(TASK.fullmatch(definition_arn), 'Invalid failed-start task definition')
+        if definition_arn not in checked:
+            definition = aws('ecs', 'describe-task-definition', '--task-definition', definition_arn)['taskDefinition']
+            require(definition.get('taskDefinitionArn') == definition_arn, 'Historical private definition differs')
+            image = container(definition, 'hotel-setup')['image']
+            require(image.startswith(REPOSITORY + '@'), 'Historical private image must be immutable')
+            digest = image.split('@')[1]
+            approved(digest, 'hotel-setup-property-images.json')
+            validate_private_definition(definition, 'property', digest)
+            checked.add(definition_arn)
+
+    def gate(expected_hold=None):
+        require(stable(service(PUBLIC), args.expected_public_task), 'Public task changed before failed-start stop')
+        hold = json.loads(aws('ssm', 'get-parameter', '--name',
+            '/vayada/prod/coordinated-deployments/v1/services/next-target-backend/hold')['Parameter']['Value'])
+        coordinated.validate_hold(hold, coordinated.load_config(), 'next-target-backend')
+        require(hold['status'] == 'active' and hold['capturedTaskDefinitionArn'] == args.expected_public_task
+                and hold['capturedImage'] == public_image and hold['dependentFrontendsCompatible'] is False
+                and (expected_hold is None or hold == expected_hold), 'Failed-start recovery hold differs')
+        private = service(destination)
+        require(private['taskDefinition'] == target and private['desiredCount'] == 1 and not stable(private, target),
+                'Failed-start recovery requires the exact unstable private task')
+        deployments = private['deployments']
+        primary = [d for d in deployments if d['status'] == 'PRIMARY']
+        require(len(primary) == 1 and primary[0]['taskDefinition'] == target
+                and primary[0].get('rolloutState') in ('IN_PROGRESS', 'FAILED'), 'Private start is not failing or in progress')
+        for deployment in deployments:
+            reviewed(deployment['taskDefinition'])
+            require(deployment['taskDefinition'] == target or all(deployment[key] == 0
+                    for key in ('desiredCount', 'runningCount', 'pendingCount')), 'Mixed active private deployments')
+        groups = private.get('loadBalancers', [])
+        require(len(groups) == 1, 'Expected exactly one private target group')
+        health = aws('elbv2', 'describe-target-health', '--target-group-arn', groups[0]['targetGroupArn'])['TargetHealthDescriptions']
+        require(all(t['TargetHealth']['State'] in ('initial', 'unhealthy', 'draining', 'unused', 'unavailable') for t in health),
+                'Failed-start recovery refuses a healthy or unknown target')
+        return hold, primary[0]['rolloutState']
+
+    def physical(previous=()):
+        arns = set(previous)
+        for status in ('RUNNING', 'STOPPED'):
+            arns.update(aws('ecs', 'list-tasks', '--cluster', CLUSTER, '--service-name', destination,
+                            '--desired-status', status)['taskArns'])
+        require(0 < len(arns) <= 100 and all(re.fullmatch(r'arn:aws:ecs:eu-west-1:269416271598:task/'
+                + re.escape(CLUSTER) + r'/[a-f0-9]{32}', arn) for arn in arns), 'Unbounded or missing failed-start tasks')
+        result = aws('ecs', 'describe-tasks', '--cluster', CLUSTER, '--tasks', *sorted(arns))
+        tasks = result['tasks']
+        require(not result.get('failures') and len(tasks) == len(arns) and {t['taskArn'] for t in tasks} == arns,
+                'Failed-start physical task inspection incomplete')
+        for task in tasks:
+            require(task.get('clusterArn') == 'arn:aws:ecs:eu-west-1:269416271598:cluster/' + CLUSTER
+                    and task.get('group') == 'service:' + destination, 'Failed-start physical task identity differs')
+            require(task.get('desiredStatus') in ('RUNNING', 'STOPPED') and task.get('lastStatus') in
+                    ('PROVISIONING', 'PENDING', 'ACTIVATING', 'RUNNING', 'DEACTIVATING', 'STOPPING', 'DEPROVISIONING', 'STOPPED'),
+                    'Unknown failed-start physical task status')
+            reviewed(task['taskDefinitionArn'])
+            require(task['taskDefinitionArn'] == target or task.get('desiredStatus') == task.get('lastStatus') == 'STOPPED',
+                    'Mixed live or draining private task definitions')
+        return arns, tasks
+
+    hold, rollout = gate()
+    captured, tasks = physical()
+    require(rollout == 'FAILED' or any(t['taskDefinitionArn'] == target and t.get('lastStatus') == 'STOPPED'
+            and any(c.get('name') == 'hotel-setup' and type(c.get('exitCode')) is int and c['exitCode'] != 0
+                    for c in t.get('containers', [])) for t in tasks), 'No failed private start evidence')
+    gate(hold)
+    captured, _ = physical(captured)
+    gate(hold)
+    aws('ecs', 'update-service', '--cluster', CLUSTER, '--service', destination, '--desired-count', '0', single_attempt=True)
+    subprocess.run(['aws', 'ecs', 'wait', 'services-stable', '--cluster', CLUSTER, '--services', destination,
+                    '--region', REGION], check=True, timeout=300)
+    captured, _ = physical(captured)
+    subprocess.run(['aws', 'ecs', 'wait', 'tasks-stopped', '--cluster', CLUSTER, '--tasks', *sorted(captured),
+                    '--region', REGION], check=True, timeout=300)
+    _, tasks = physical(captured)
+    final = service(destination)
+    require(final['taskDefinition'] == target and final['desiredCount'] == final['runningCount'] == final['pendingCount'] == 0
+            and all(t.get('desiredStatus') == t.get('lastStatus') == 'STOPPED' for t in tasks), 'Failed-start stop is unconfirmed')
+    print(json.dumps({'status': 'PASS', 'service': destination, 'taskDefinition': target, 'admission': 'stop_failed_start'}))
+
+
 def initial_restore_target(public, expected, digest, hold, captured, candidate):
     """Restore only the captured pre-cutover task after an initial caller failure."""
     coordinated.validate_hold(hold, coordinated.load_config(), 'next-target-backend')
@@ -193,12 +300,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--service', choices=['public', 'creation', 'property'], required=True)
     parser.add_argument('--purpose', choices=['creation', 'property', 'logo'], required=True)
-    parser.add_argument('--state', choices=['hold', 'blocked', 'enabled', 'start', 'stop', 'restore_initial'], required=True)
+    parser.add_argument('--state', choices=['hold', 'blocked', 'enabled', 'start', 'stop', 'stop_failed_start', 'restore_initial'], required=True)
     parser.add_argument('--image-digest', required=True)
     parser.add_argument('--expected-public-task', required=True)
     parser.add_argument('--private-task', default='')
     args = parser.parse_args()
     require(os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('GITHUB_REF') == 'refs/heads/main', 'Reviewed main CI only')
+    require(args.state != 'stop_failed_start' or args.service == args.purpose == 'property', 'Failed-start recovery is property-only')
     require(TASK.fullmatch(args.expected_public_task), 'Invalid reviewed public task')
     public = service(PUBLIC)
     if args.state == 'restore_initial':
@@ -242,8 +350,8 @@ def main():
             target = aws('ecs', 'register-task-definition', '--cli-input-json', 'file://' + str(path))['taskDefinition']['taskDefinitionArn']
         destination = PUBLIC
     else:
-        require(args.service == args.purpose and args.state in ('start', 'stop'), 'Invalid private release')
-        require((args.state == 'start' and TASK.fullmatch(args.private_task)) or
+        require(args.service == args.purpose and args.state in ('start', 'stop', 'stop_failed_start'), 'Invalid private release')
+        require((args.state in ('start', 'stop_failed_start') and TASK.fullmatch(args.private_task)) or
                 (args.state == 'stop' and not args.private_task), 'Invalid private task selection')
         approved(args.image_digest, 'hotel-setup-command-images.json' if args.service == 'creation' else 'hotel-setup-property-images.json')
         public_image = container(current, 'vayada-next-api')['image']
@@ -259,24 +367,18 @@ def main():
             require(stable(private), 'Private stop requires one stable task')
             target = private['taskDefinition']
             require(TASK.fullmatch(target), 'Invalid serving private task')
+        elif args.state == 'stop_failed_start':
+            require(private['taskDefinition'] == args.private_task, 'Failed private task changed')
+            target = args.private_task
         else:
             require(private['desiredCount'] == private['runningCount'] == private['pendingCount'] == 0, 'Private initial start requires zero tasks')
             target = args.private_task
         definition = aws('ecs', 'describe-task-definition', '--task-definition', target)['taskDefinition']
-        item = container(definition, 'hotel-setup')
-        marker = 'property-' if args.service == 'property' else ''
-        require(definition.get('executionRoleArn') == 'arn:aws:iam::269416271598:role/vayada-hotel-setup-' + marker + 'execution' and definition.get('taskRoleArn') == 'arn:aws:iam::269416271598:role/vayada-hotel-setup-' + marker + 'task', 'Wrong private identities')
-        require(len(definition['containerDefinitions']) == 1 and item.get('readonlyRootFilesystem') is True and item.get('privileged') is False, 'Unsafe private container')
-        injected = item.get('secrets', [])
-        require(len(injected) == 2 and {entry['name'] for entry in injected} == {'HOTEL_SETUP_COMMAND_READER_DATABASE_URL', 'HOTEL_SETUP_COMMAND_INTERNAL_TOKEN'}, 'Unexpected private credentials')
-        secret_prefix = 'hotel-setup-creation/prod/' if args.service == 'creation' else 'hotel-setup-command/prod/'
-        for entry in injected:
-            name = 'reader-database-url' if entry['name'].endswith('READER_DATABASE_URL') else 'internal-token'
-            require(re.fullmatch(r'arn:aws:secretsmanager:eu-west-1:269416271598:secret:' + re.escape(secret_prefix + name) + r'-[A-Za-z0-9]{6}', entry['valueFrom']), 'Wrong private secret namespace')
-        require(environment(item).get('HOTEL_SETUP_COMMAND_SECRET_PREFIX') == ('hotel-setup-command/prod/organization/' if args.service == 'creation' else 'hotel-setup-command/prod/property/'), 'Wrong native secret prefix')
-        require(item['image'] == REPOSITORY + '@' + args.image_digest, 'Staged image differs')
-        require(environment(item).get('HOTEL_SETUP_COMMAND_MODE') == ('property_creation' if args.service == 'creation' else 'property_commands'), 'Wrong private mode')
-        require(definition['family'] in (('vayada-hotel-setup-primary', 'vayada-hotel-setup-rollback') if args.service == 'creation' else ('vayada-hotel-setup-property-primary', 'vayada-hotel-setup-property-rollback')), 'Wrong staged family')
+        require(args.state != 'stop_failed_start' or definition.get('taskDefinitionArn') == target, 'Failed private definition differs')
+        validate_private_definition(definition, args.service, args.image_digest)
+        if args.state == 'stop_failed_start':
+            stop_failed_start(args, current)
+            return
     # Recheck immediately before the only service mutation.
     require(stable(service(PUBLIC), args.expected_public_task), 'Public task changed before release')
     if args.state == 'stop':
