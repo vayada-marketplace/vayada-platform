@@ -283,6 +283,172 @@ class ReleaseTest(unittest.TestCase):
     def test_private_stop_refuses_confirmation_while_a_task_remains_running(self):
         self.run_private_stop(denial='final_running')
 
+    def run_failed_start_stop(self, denial=None, history_count=0):
+        public_task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1197'
+        family = 'vayada-hotel-setup-property-primary'
+        target = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/' + family + ':3'
+        old = target[:-1] + '5'  # Circuit breaker has returned to the approved older revision.
+        old_digest = 'sha256:' + 'b' * 64
+        private_digest = 'sha256:' + 'c' * 64
+        public = copy.deepcopy(self.task)
+        public['containerDefinitions'][0]['image'] = release.REPOSITORY + '@' + DIGEST
+        public['containerDefinitions'][0]['environment'] += [
+            {'name': prefix + '_ADMISSION', 'value': 'enabled' if denial == 'unblocked_' + purpose else 'blocked'}
+            for purpose, prefix in release.PREFIX.items()]
+        definition = {'taskDefinitionArn':target, 'family':family,
+            'executionRoleArn':'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-execution',
+            'taskRoleArn':'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-task',
+            'containerDefinitions':[{'name':'hotel-setup','image':release.REPOSITORY+'@'+private_digest,
+                'readonlyRootFilesystem':True,'privileged':False,
+                'environment':[{'name':'HOTEL_SETUP_COMMAND_MODE','value':'property_commands'},
+                    {'name':'HOTEL_SETUP_COMMAND_SECRET_PREFIX','value':'hotel-setup-command/prod/property/'}],
+                'secrets':[{'name':'HOTEL_SETUP_COMMAND_INTERNAL_TOKEN','valueFrom':TOKEN},
+                    {'name':'HOTEL_SETUP_COMMAND_READER_DATABASE_URL','valueFrom':TOKEN.replace('internal-token','reader-database-url')}]}]}
+        hold = {'schemaVersion':1,'status':'active','service':'next-target-backend',
+            'physicalIdentity':{'accountId':'269416271598','region':release.REGION,'cluster':release.CLUSTER,'ecsService':release.PUBLIC},
+            'reason':'failed property start inspection','operationId':'control-123','manifestId':None,
+            'capturedTaskDefinitionArn':public_task,'capturedImage':release.REPOSITORY+'@'+DIGEST,
+            'dependentFrontendsCompatible':False,'createdAt':'2026-10-06T09:00:00.000Z'}
+        prefix = 'arn:aws:ecs:eu-west-1:269416271598:task/' + release.CLUSTER + '/'
+        live, failed, historical, replacement = (prefix + c * 32 for c in 'abcd')
+        history = [prefix + f'{int("e" * 32, 16) + index:032x}' for index in range(history_count)]
+        described, wait_clock = [], {'elapsed': 0}
+        writes, reads = [], {'public':0,'private':0,'health':0,'hold':0,'physical':0}
+        def mocked_aws(*args, **kwargs):
+            operation = args[1]
+            if operation == 'describe-services':
+                is_public = args[-1] == release.PUBLIC
+                key = 'public' if is_public else 'private'; reads[key] += 1
+                task = public_task if is_public else target
+                if denial == key + '_changed' and reads[key] > 2: task = old
+                if is_public:
+                    return {'services':[{'taskDefinition':task,'desiredCount':1,'runningCount':1,'pendingCount':0,
+                        'deployments':[{'status':'PRIMARY','rolloutState':'COMPLETED'}]}]}
+                stable = denial == 'stable'
+                counts = [0, int(denial == 'final_running'), 0] if writes else [1, int(stable), int(not stable)]
+                return {'services':[{'taskDefinition':task,'desiredCount':counts[0],'runningCount':counts[1],'pendingCount':counts[2],
+                    'loadBalancers':[{'targetGroupArn':'property-target'}], 'deployments':[
+                        {'status':'PRIMARY','rolloutState':'COMPLETED' if stable else 'IN_PROGRESS','taskDefinition':target,
+                            'desiredCount':counts[0],'runningCount':counts[1],'pendingCount':counts[2]},
+                        {'status':'ACTIVE','rolloutState':'COMPLETED','taskDefinition':old,
+                            'desiredCount':0,'runningCount':int(denial == 'mixed_deployment'),'pendingCount':0}]}]}
+            if operation == 'describe-task-definition':
+                if args[-1] == public_task: return {'taskDefinition':public}
+                value = copy.deepcopy(definition); value['taskDefinitionArn'] = args[-1]
+                if args[-1] == old: value['containerDefinitions'][0]['image'] = release.REPOSITORY+'@'+old_digest
+                if denial == 'role': value['taskRoleArn'] = 'broad-role'
+                if denial == 'definition': value['taskDefinitionArn'] = old
+                return {'taskDefinition':value}
+            if operation == 'get-parameter':
+                reads['hold'] += 1; value = copy.deepcopy(hold)
+                if denial == 'hold_image': value['capturedImage'] = release.REPOSITORY+'@'+old_digest
+                if denial == 'hold_changed' and reads['hold'] > 1: value['operationId'] = 'control-456'
+                return {'Parameter':{'Value':json.dumps(value)}}
+            if operation == 'describe-target-health':
+                reads['health'] += 1
+                healthy = denial == 'healthy' or denial == 'became_healthy' and reads['health'] > 1
+                return {'TargetHealthDescriptions':[{'TargetHealth':{'State':'healthy' if healthy else 'unhealthy'}}]}
+            if operation == 'list-tasks':
+                return {'taskArns': ([] if writes else [live]) if args[-1] == 'RUNNING' else
+                        [failed,historical] + history + ([live] if writes else []) + ([replacement] if writes and denial == 'replacement_draining' else [])}
+            if operation == 'describe-tasks':
+                reads['physical'] += 1
+                batch = args[args.index('--tasks')+1:]
+                self.assertLessEqual(len(batch), 100)
+                described.append(set(batch))
+                if denial == 'missing' or denial == 'stopped_missing' and writes or denial == 'late_missing' and history[-1] in batch:
+                    return {'tasks':[],'failures':[{'reason':'MISSING'}]}
+                tasks = []
+                for arn in batch:
+                    state = 'PROVISIONING' if arn == live and not writes else 'STOPPED'
+                    desired = 'RUNNING' if state == 'PROVISIONING' else 'STOPPED'
+                    if arn == historical and (denial in ('mixed_live','mixed_draining') or
+                            denial == 'physical_changed' and reads['physical'] > 1):
+                        state = 'RUNNING' if denial == 'mixed_live' else 'DEACTIVATING'
+                        desired = 'RUNNING' if denial == 'mixed_live' else 'STOPPED'
+                    if writes and (denial == 'final_draining' and arn == live or arn == replacement): state = 'DEACTIVATING'
+                    if writes and denial == 'late_draining' and arn == history[-1]: state = 'DEACTIVATING'
+                    if denial == 'unknown_status' and arn == live: state = 'UNKNOWN'
+                    tasks.append({'taskArn':arn,'taskDefinitionArn':old if arn == historical else target,
+                        'clusterArn':'arn:aws:ecs:eu-west-1:269416271598:cluster/'+release.CLUSTER,
+                        'group':'service:'+release.PRIVATE['property'],'desiredStatus':desired,'lastStatus':state,
+                        'containers':[{'name':'hotel-setup','exitCode':0 if denial == 'no_failure' else 1}]})
+                    if denial == 'late_foreign' and arn == history[-1]: tasks[-1]['group'] = 'service:other'
+                if denial == 'late_incomplete' and history[-1] in batch: tasks.pop()
+                return {'tasks':tasks}
+            if operation == 'update-service':
+                writes.append((args,kwargs))
+                if denial == 'unknown_mutation': raise subprocess.TimeoutExpired('aws',60)
+                return {}
+            raise AssertionError(operation)
+        def mocked_wait(*args, **kwargs):
+            if denial == 'wait_timeout': raise subprocess.TimeoutExpired('aws',300)
+            if args[0][3] == 'tasks-stopped':
+                self.assertLessEqual(args[0].index('--region') - args[0].index('--tasks') - 1, 100)
+                wait_clock['elapsed'] += 300 if denial == 'wait_deadline' else 1
+        argv = ['release','--service','creation' if denial == 'wrong_service' else 'property','--purpose','property',
+                '--state','stop_failed_start','--image-digest',private_digest,'--expected-public-task',public_task,'--private-task',target]
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory,'deployment').mkdir()
+            for name in ('hotel-setup-caller-images.json','hotel-setup-property-images.json'):
+                Path(directory,'deployment',name).write_text(json.dumps({DIGEST:'a'*40, private_digest:'c'*40,
+                    **({} if denial == 'unapproved_history' else {old_digest:'b'*40})}))
+            with patch.object(release,'ROOT',Path(directory)), patch.object(release,'aws',side_effect=mocked_aws), \
+                    patch.object(release.subprocess,'run',side_effect=mocked_wait) as wait, patch('sys.argv',argv), \
+                    patch.object(release.time,'monotonic',side_effect=lambda: wait_clock['elapsed']), \
+                    patch.dict(release.os.environ,{'GITHUB_ACTIONS':'true','GITHUB_REF':'refs/heads/main'}):
+                if denial:
+                    with self.assertRaises((RuntimeError,subprocess.SubprocessError)): release.main()
+                    self.assertEqual(len(writes), int(denial in ('unknown_mutation','wait_timeout','final_running',
+                        'final_draining','replacement_draining','stopped_missing','late_draining','wait_deadline')))
+                    if denial == 'wait_deadline': self.assertEqual(len(wait.call_args_list), 2)
+                else:
+                    release.main()
+                    self.assertEqual(writes, [(('ecs','update-service','--cluster',release.CLUSTER,'--service',
+                        release.PRIVATE['property'],'--desired-count','0'),{'single_attempt':True})])
+                    expected = {live,failed,historical,*history}
+                    batch_count = (len(expected) + 99) // 100
+                    self.assertEqual(len(described), 4 * batch_count)
+                    for offset in range(0, len(described), batch_count):
+                        self.assertEqual(set().union(*described[offset:offset + batch_count]), expected)
+                    self.assertEqual(len(wait.call_args_list), 1 + batch_count)
+                    self.assertEqual(wait.call_args_list[0].kwargs, {'check':True,'timeout':300})
+                    waited = set()
+                    for index, call in enumerate(wait.call_args_list[1:]):
+                        self.assertEqual(call.kwargs, {'check':True,'timeout':300 - index})
+                        command = call.args[0]
+                        waited.update(command[command.index('--tasks') + 1:command.index('--region')])
+                    self.assertEqual(waited, expected)
+
+    def test_failed_start_stop_retains_reviewed_rollback_task_and_physically_stops_all_tasks(self):
+        self.run_failed_start_stop()
+
+    def test_failed_start_stop_batches_all_201_tasks_for_inspection_and_waits(self):
+        self.run_failed_start_stop(history_count=198)
+
+    def test_failed_start_stop_refuses_incomplete_foreign_or_draining_later_batches(self):
+        for denial in ('late_missing','late_incomplete','late_foreign','late_draining'):
+            with self.subTest(denial=denial): self.run_failed_start_stop(denial, history_count=198)
+
+    def test_failed_start_stop_preserves_total_task_wait_deadline_across_batches(self):
+        self.run_failed_start_stop('wait_deadline', history_count=198)
+
+    def test_failed_start_stop_refuses_healthy_changed_unheld_or_mixed_attempts(self):
+        for denial in ('wrong_service','stable','healthy','became_healthy','public_changed','private_changed',
+                'unblocked_creation','unblocked_property','unblocked_logo','hold_image','hold_changed','role','definition',
+                'mixed_deployment','mixed_live','mixed_draining','physical_changed','missing','unknown_status','no_failure','unapproved_history'):
+            with self.subTest(denial=denial): self.run_failed_start_stop(denial)
+
+    def test_failed_start_stop_never_retries_unknown_mutation_or_confirms_uncertain_drain(self):
+        for denial in ('unknown_mutation','wait_timeout','final_running','final_draining','replacement_draining','stopped_missing'):
+            with self.subTest(denial=denial): self.run_failed_start_stop(denial)
+
+    def test_failed_start_mutation_disables_sdk_retries_and_has_a_timeout(self):
+        with patch.object(release.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout='{}')) as run:
+            release.aws('ecs','update-service',single_attempt=True)
+            self.assertEqual(run.call_args.kwargs['env']['AWS_MAX_ATTEMPTS'], '1')
+            self.assertEqual(run.call_args.kwargs['timeout'], 60)
+
     def test_secret_supplied_admission_cannot_bypass_blocked_environment(self):
         item = {'environment':[{'name':'HOTEL_SETUP_COMMAND_ADMISSION','value':'blocked'}],
                 'secrets':[{'name':'HOTEL_SETUP_COMMAND_ADMISSION','valueFrom':'fixture'}]}
