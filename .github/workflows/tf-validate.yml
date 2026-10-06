@@ -44,6 +44,7 @@ on:
       - "scripts/test_hotel_setup_logo_staged_recovery_native.mjs"
       - ".github/workflows/hotel-setup-logo-staged-recovery.yml"
       - "scripts/hotel-setup-logo-reader-cutover.mjs"
+      - "scripts/test_hotel_setup_logo_reader_cutover_native.mjs"
       - ".github/workflows/hotel-setup-logo-reader-repair.yml"
       - "scripts/test_hotel_setup_logo_inspection_native.mjs"
       - "scripts/stage-hotel-setup-logo-migration-scope.mjs"
@@ -329,6 +330,7 @@ jobs:
           node --check scripts/recover-hotel-setup-logo-staged-role.mjs
           node --check scripts/test_hotel_setup_logo_staged_recovery_native.mjs
           node --check scripts/hotel-setup-logo-reader-cutover.mjs
+          node --check scripts/test_hotel_setup_logo_reader_cutover_native.mjs
           node --check scripts/test_hotel_setup_logo_inspection_native.mjs
           node --check scripts/stage-hotel-setup-logo-migration-scope.mjs
           node --check scripts/test_hotel_setup_logo_parent_native.mjs
