@@ -559,13 +559,22 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
                 item, = definition['containerDefinitions']
                 self.assertEqual(item['image'], '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST)
                 self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
-                self.assertEqual(item['environment'], [])
                 self.assertEqual(item['workingDirectory'], '/app')
                 self.assertFalse(item['privileged'])
                 for key in ('entryPoint', 'mountPoints', 'volumesFrom', 'environmentFiles'):
                     self.assertNotIn(key, item)
                 overrides = json.loads((self.root / 'capture/overrides.json').read_text())
                 self.assertLessEqual(len(json.dumps(overrides)), 8192)
+                if mode == '--inspect-hotel-setup-logo-migration':
+                    stored = {entry['name']: entry['value'] for entry in item['environment']}
+                    self.assertEqual(set(stored), {'VAYADA_DB_RUNTIME_PREFLIGHT_CODE', 'VAYADA_DB_RDS_CA_BUNDLE_GZIP'})
+                    self.assertTrue(set(stored).isdisjoint(entry['name'] for entry in overrides['containerOverrides'][0]['environment']))
+                    decoded = gzip.decompress(base64.b64decode(stored['VAYADA_DB_RUNTIME_PREFLIGHT_CODE']))
+                    self.assertEqual(decoded, (ROOT / 'scripts/inspect-hotel-setup-logo-migration.mjs').read_bytes())
+                    self.assertEqual(gzip.decompress(base64.b64decode(stored['VAYADA_DB_RDS_CA_BUNDLE_GZIP'])).decode().strip(),
+                                     Path(self.env['MOCK_CA']).read_text().strip())
+                else:
+                    self.assertEqual(item['environment'], [])
                 inventory.write_text('{}')
                 (self.root / 'capture/calls.jsonl').unlink()
                 self.assertNotEqual(self.run_wrapper(mode, DIGEST).returncode, 0)
