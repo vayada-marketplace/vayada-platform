@@ -773,9 +773,9 @@ done
 
 if [[ "${mode}" == "--stage-hotel-setup-logo-migration-scope" ]]; then
   [[ "$(jq -r '.exitCode' <<<"$task")" == 0 ]] || { echo "Logo parent staging requires inspection." >&2; exit 1; }
-  jq -ce '[.[] | fromjson? | select(.=={status:"PASS",migration:"0466",scopeRole:"vayada_next_hotel_setup_logo_scope",
+  jq -ce '[.[] | fromjson? | select((.scopeIncomingMemberships==0 or .scopeIncomingMemberships==1) and .=={status:"PASS",migration:"0466",scopeRole:"vayada_next_hotel_setup_logo_scope",
     login:false,businessGrantsAdded:false,migrationOwner:"vayada_target_prod_user",
-    migrationOwnerCanCreateRole:false,creatorAdminOnlyMembership:true})] | select(length==1) | .[0]' <<<"$messages" || {
+    migrationOwnerCanCreateRole:false,creatorAdminOnlyMembership:true,scopeIncomingMemberships:.scopeIncomingMemberships})] | select(length==1) | .[0]' <<<"$messages" || {
     echo "Logo parent staging returned invalid evidence; inspection required." >&2; exit 1;
   }
   exit 0

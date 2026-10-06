@@ -66,24 +66,26 @@ try {
       JOIN pg_catalog.pg_roles grantor ON grantor.oid=membership.grantor
       WHERE membership.roleid=role.oid ORDER BY membership.member,membership.grantor LIMIT 3) edge) AS creator_edges
     FROM pg_catalog.pg_roles role WHERE rolname='vayada_next_hotel_setup_logo_scope'`)).rows[0] ?? null;
+  // RDS can omit the stock PostgreSQL creator edge; an edge present must remain ADMIN-only.
   const verified = await client.query(`SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='vayada_next_hotel_setup_logo_scope'
     AND NOT (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolinherit OR rolreplication OR rolbypassrls)
     AND rolconfig IS NULL AND rolvaliduntil IS NULL AND rolconnlimit=-1
     AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_auth_members edge
       WHERE edge.member=pg_catalog.pg_roles.oid)
-    AND (SELECT count(*) FROM pg_catalog.pg_auth_members edge WHERE edge.roleid=pg_catalog.pg_roles.oid)=1
+    AND ((SELECT count(*) FROM pg_catalog.pg_auth_members edge WHERE edge.roleid=pg_catalog.pg_roles.oid)=0 OR (
+    (SELECT count(*) FROM pg_catalog.pg_auth_members edge WHERE edge.roleid=pg_catalog.pg_roles.oid)=1
     AND EXISTS(SELECT 1 FROM pg_catalog.pg_auth_members edge
       JOIN pg_catalog.pg_roles creator ON creator.oid=edge.member
       JOIN pg_catalog.pg_roles bootstrap ON bootstrap.oid=edge.grantor
       WHERE edge.roleid=pg_catalog.pg_roles.oid AND creator.rolname='vayada_admin'
-        AND edge.admin_option AND NOT edge.inherit_option AND NOT edge.set_option AND bootstrap.rolsuper)
+        AND edge.admin_option AND NOT edge.inherit_option AND NOT edge.set_option AND bootstrap.rolsuper)))
     AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_db_role_setting setting
       WHERE setting.setrole=pg_catalog.pg_roles.oid)`);
   if (verified.rowCount !== 1) throw new Error();
   stage = 'commit';
   commitStarted = true;
   await client.query('COMMIT');
-  console.log(JSON.stringify({status:'PASS',migration:'0466',scopeRole:'vayada_next_hotel_setup_logo_scope',login:false,businessGrantsAdded:false,migrationOwner:'vayada_target_prod_user',migrationOwnerCanCreateRole:false,creatorAdminOnlyMembership:true}));
+  console.log(JSON.stringify({status:'PASS',migration:'0466',scopeRole:'vayada_next_hotel_setup_logo_scope',login:false,businessGrantsAdded:false,migrationOwner:'vayada_target_prod_user',migrationOwnerCanCreateRole:false,creatorAdminOnlyMembership:true,scopeIncomingMemberships:parentPosture.incoming_memberships}));
 } catch (error) {
   await client?.query('ROLLBACK').catch(() => {});
   console.error(JSON.stringify({status:'FAIL',code:commitStarted ? 'hotel_setup_scope_commit_inspection_required' : 'hotel_setup_scope_staging_unavailable',

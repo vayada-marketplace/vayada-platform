@@ -47,14 +47,28 @@ const catalogSnapshot=async()=>(await setup.query(`SELECT md5(json_build_object(
  'schemas',(SELECT json_agg(r ORDER BY oid) FROM pg_namespace r),
  'relations',(SELECT json_agg(r ORDER BY oid) FROM pg_class r),
  'functions',(SELECT json_agg(r ORDER BY oid) FROM pg_proc r))::text) AS hash`)).rows[0].hash;
-let uncertain=false,selfGrant=false,denyLock=false;
+let uncertain=false,selfGrant=false,denyLock=false,edgeMode='stock';
 async function run(){
  const catalogBefore=await catalogSnapshot(),globalBefore=await globalSnapshot();
  let receipt,exit;
  class Client extends pg.Client {
-  constructor(options){assert.equal(options.ssl.rejectUnauthorized,true);assert.equal(options.ssl.ca,ca??'test-ca');const connection=new URL(url);connection.username='vayada_admin';connection.password='local-stage-test';super({connectionString:connection.href,ssl});}
-  async connect(){await super.connect();if(selfGrant)await super.query("SET createrole_self_grant='inherit,set'");}
-  async query(...args){if(denyLock&&args[0].includes('pg_advisory_xact_lock'))return super.query("SELECT 'SECRET_SENTINEL_DO_NOT_LOG'::integer");const value=await super.query(...args);if(uncertain&&args[0]==='COMMIT')throw Error('acknowledgement lost');return value;}
+  constructor(options){assert.equal(options.ssl.rejectUnauthorized,true);assert.equal(options.ssl.ca,ca??'test-ca');const connection=new URL(url);if(edgeMode==='stock'){connection.username='vayada_admin';connection.password='local-stage-test';}super({connectionString:connection.href,ssl});}
+  async connect(){await super.connect();if(edgeMode!=='stock')await super.query('SET SESSION AUTHORIZATION vayada_admin');if(selfGrant)await super.query("SET createrole_self_grant='inherit,set'");}
+  async query(...args){
+   if(denyLock&&args[0].includes('pg_advisory_xact_lock'))return super.query("SELECT 'SECRET_SENTINEL_DO_NOT_LOG'::integer");
+   const create=args[0].startsWith('CREATE ROLE vayada_next_hotel_setup_logo_scope');
+   // Catalog emulation only: stock PG's NS creator cannot revoke its bootstrap-granted edge.
+   // The zero-edge fixture creates as its owned superuser; every production check still runs NS.
+   if(create&&edgeMode==='none')await super.query('RESET SESSION AUTHORIZATION');
+   const value=await super.query(...args);
+   if(create&&edgeMode!=='stock'){
+    await super.query('RESET SESSION AUTHORIZATION');
+    if(edgeMode==='foreign')await super.query('REVOKE vayada_next_hotel_setup_logo_scope FROM vayada_admin');
+    if(edgeMode==='foreign'||edgeMode==='extra')await super.query('GRANT vayada_next_hotel_setup_logo_scope TO vayada_target_prod_user WITH ADMIN TRUE, INHERIT FALSE, SET FALSE');
+    await super.query('SET SESSION AUTHORIZATION vayada_admin');
+   }
+   if(uncertain&&args[0]==='COMMIT')throw Error('acknowledgement lost');return value;
+  }
  }
  const context=vm.createContext({URL,process:{env:{HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL:'postgresql://vayada_admin:synthetic@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require',VAYADA_DB_RDS_CA_BUNDLE:ca??'test-ca'},set exitCode(v){exit=v;}},console:{log:v=>receipt=JSON.parse(v),error:v=>receipt=JSON.parse(v)}});
  const modules={pg:{default:{Client}},'node:crypto':{createHash},'node:fs':{readFileSync:path=>readFileSync(`${migrationDir}/${path.split('/').at(-1)}`)}};
@@ -78,7 +92,18 @@ assert.equal(inherited.exit,1);assert.equal(inherited.receipt.stage,'parent_veri
 assert.equal(inherited.receipt.parentPosture.incoming_memberships,2);
 assert.ok(inherited.receipt.parentPosture.creator_edges.some(edge=>edge.creator_matches&&edge.admin_option&&!edge.inherit_option&&!edge.set_option&&edge.grantor_superuser));
 assert.ok(inherited.receipt.parentPosture.creator_edges.some(edge=>edge.creator_matches&&!edge.admin_option&&edge.inherit_option&&edge.set_option&&!edge.grantor_superuser));await absent();
-const result=await run();assert.equal(result.receipt.status,'PASS');assert.equal(result.receipt.migrationOwnerCanCreateRole,false);
+for(const [mode,count]of [['foreign',1],['extra',2]]){
+ edgeMode=mode;const rejected=await run();edgeMode='stock';
+ assert.equal(rejected.exit,1);assert.equal(rejected.receipt.stage,'parent_verify');
+ assert.equal(rejected.receipt.parentPosture.incoming_memberships,count);
+ assert.ok(rejected.receipt.parentPosture.creator_edges.some(edge=>!edge.creator_matches));await absent();
+}
+const expectedReceipt=count=>({status:'PASS',migration:'0466',scopeRole:'vayada_next_hotel_setup_logo_scope',login:false,businessGrantsAdded:false,migrationOwner:'vayada_target_prod_user',migrationOwnerCanCreateRole:false,creatorAdminOnlyMembership:true,scopeIncomingMemberships:count});
+edgeMode='none';const zero=await run();edgeMode='stock';
+assert.deepEqual(zero.receipt,expectedReceipt(0));assert.equal(zero.exit,undefined);
+assert.equal((await setup.query("SELECT count(*)::int AS count FROM pg_catalog.pg_auth_members WHERE roleid='vayada_next_hotel_setup_logo_scope'::regrole OR member='vayada_next_hotel_setup_logo_scope'::regrole")).rows[0].count,0);
+await setup.query('DROP ROLE vayada_next_hotel_setup_logo_scope');
+const result=await run();assert.deepEqual(result.receipt,expectedReceipt(1));assert.equal(result.exit,undefined);
 const posture=(await setup.query("SELECT rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolinherit,rolreplication,rolbypassrls FROM pg_catalog.pg_roles WHERE rolname='vayada_next_hotel_setup_logo_scope'")).rows[0];assert.ok(Object.values(posture).every(value=>value===false));
 const edges=(await setup.query("SELECT member::regrole::text AS member,admin_option,inherit_option,set_option FROM pg_catalog.pg_auth_members WHERE roleid='vayada_next_hotel_setup_logo_scope'::regrole OR member='vayada_next_hotel_setup_logo_scope'::regrole")).rows;assert.deepEqual(edges,[{member:'vayada_admin',admin_option:true,inherit_option:false,set_option:false}]);assert.equal(result.receipt.creatorAdminOnlyMembership,true);
 assert.equal((await run()).exit,1); // No adopting an already-existing global parent.
@@ -95,4 +120,4 @@ assert.equal((await setup.query('SELECT count(*)::int AS count FROM platform.sch
  assert.equal(await globalSnapshot(),before,'Exact global roles/settings/membership/database ACL cleanup differs');
  await admin.end();
 }
-console.log('PASS: native fixed parent staging, canonical ledger denials, strict self-grant rejection with rolled-back posture, bounded SQLSTATE without error text, exact protected-admin-only membership, ledger/catalog preservation, unknown COMMIT and exact global cleanup');
+console.log('PASS: real NS creator with exact stock ADMIN-only edge, zero-edge native catalog emulation (not RDS authority proof), exact 0/1 receipts, foreign/extra/self-grant rejection, canonical ledger denials, bounded SQLSTATE without error text, ledger/catalog preservation, unknown COMMIT and exact global cleanup');
