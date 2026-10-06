@@ -1674,6 +1674,8 @@ def reconcile_service_with_dependencies(
         rollback_task_definition = pending["rollbackTaskDefinitionArn"]
         rollback_image = pending["rollbackImage"]
         recovering_mutation = rollback_task_definition != before["taskDefinitionArn"]
+        if recovering_mutation and pending.get("deployedTaskDefinitionArn") != before["taskDefinitionArn"]:
+            fail(f"{key} changed task after the interrupted deployment; refusing historical rollback")
     if before["digest"] != image["digest"] or recovering_mutation:
         # Check the retained pre-mutation image as well, including interrupted retries.
         rollback_definition = before.get("taskDefinition", {})
@@ -1692,6 +1694,8 @@ def reconcile_service_with_dependencies(
         "startedAt": iso_now(),
         "status": "prepared",
     }
+    if recovering_mutation:
+        operation["deployedTaskDefinitionArn"] = before["taskDefinitionArn"]
     aws.put_parameter(operation_path, operation)
     aws.put_parameter(pending_path, operation)
     deployed_task = None
