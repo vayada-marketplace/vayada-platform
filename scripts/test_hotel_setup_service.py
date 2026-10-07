@@ -71,6 +71,30 @@ class HotelSetupServiceTests(unittest.TestCase):
         self.assertEqual(resources['aws_ecs_service.hotel_setup_property[0]']['desired_count'], 0)
         self.assertIn('aws_iam_role_policy.hotel_setup_logo_media[0]', resources)
 
+    def test_profile_credentials_extend_only_property_task_and_bootstrap_reads(self):
+        prefix = 'arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-command/prod/property/vayada_next_hotel_setup_'
+        selected = {'credentials': True, 'mode': 'property_creation', 'property_credentials': True, 'logo_storage': True,
+                    'extra_files': ['hotel_setup_property_bootstrap.tf']}
+        plans = {}
+        for profile in (False, True):
+            result = plan(False, service={**selected, 'profile_credentials': profile})
+            plans[profile] = {r['address']: r['values'] for r in result['planned_values']['root_module']['resources']}
+        for profile, resources in plans.items():
+            expected = [prefix + kind + '_*' for kind in ('property', 'logo', *(('profile',) if profile else ()))]
+            native, = json.loads(resources['aws_iam_role_policy.hotel_setup_property_native_secrets[0]']['policy'])['Statement']
+            self.assertEqual((native['Action'], native['Resource']), (['secretsmanager:GetSecretValue'], expected))
+            bootstrap, = json.loads(resources['aws_iam_role_policy.hotel_setup_property_bootstrap[0]']['policy'])['Statement']
+            self.assertEqual(bootstrap['Action'], ['secretsmanager:CreateSecret', 'secretsmanager:DescribeSecret',
+                                                   'secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue'])
+            self.assertEqual(bootstrap['Resource'], expected)
+            # Injected reader/token reads stay container-exact (unknown until apply) and never gain native prefixes.
+            self.assertNotIn('policy', resources['aws_iam_role_policy.hotel_setup_property_execution_secrets[0]'])
+            self.assertFalse(any(address.startswith('aws_ecs_') for address in resources))
+        changed = {address for address in plans[True] if plans[True][address] != plans[False].get(address)}
+        self.assertEqual(changed, {'aws_iam_role_policy.hotel_setup_property_native_secrets[0]',
+                                   'aws_iam_role_policy.hotel_setup_property_bootstrap[0]'})
+        self.assertEqual(set(plans[True]), set(plans[False]))
+
     def test_creation_mode_isolated_and_still_not_started(self):
         selected = {'enabled': True, 'credentials': True, 'mode': 'property_creation',
                     'digests': {'primary': DIGEST, 'rollback': ROLLBACK},
