@@ -9,9 +9,12 @@ const policyConsumerFunctions = channexManagementWorkerFunctions.filter(name =>
 
 // The checked-in runner selects grant vs preflight; the matrix is shipped in the
 // attested application image, shared with the worker startup check.
+// VAYADA_DB_CHANNEX_SCOPE=connection (VAY-2055) admits the 'enable' operation for
+// unbound hotels instead of one canary property; the allowlist is left untouched.
 let client;
 try {
   const grant = process.env.VAYADA_DB_GRANT_SCOPE === "channex_management";
+  const connection = process.env.VAYADA_DB_CHANNEX_SCOPE === "connection";
   const raw = grant ? process.env.TARGET_DATABASE_MIGRATION_URL : process.env.PMS_CHANNEX_MANAGEMENT_DATABASE_URL;
   if (!raw || !process.env.VAYADA_DB_RDS_CA_BUNDLE) throw new Error("channex_worker_connection_missing");
   const url = new URL(raw);
@@ -23,7 +26,8 @@ try {
   await client.connect();
   await client.query("SET search_path TO pg_catalog");
   const propertyId = process.env.PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID;
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(propertyId??"")) throw new Error("channex_worker_property_required");
+  if (connection ? propertyId !== undefined : !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(propertyId??"")) throw new Error("channex_worker_property_required");
+  const scope = connection ? {connectionScope:true} : {propertyId};
   await client.query("BEGIN");
   const existingPolicyConsumerRoles = (await client.query(
     "SELECT rolname FROM pg_roles WHERE rolname=ANY($1::text[]) ORDER BY rolname",
@@ -43,10 +47,17 @@ try {
     for (const functionName of policyConsumerFunctions)
       await client.query(`GRANT EXECUTE ON FUNCTION ${functionName} TO ${policyConsumerRoles.join(",")}`);
     await assertChannexManagementWorkerBoundary(client,{allowMissingGrants:true});
-    await client.query("LOCK TABLE platform.channex_management_worker_properties IN EXCLUSIVE MODE");
-    const scope = (await client.query("SELECT property_id::text FROM platform.channex_management_worker_properties")).rows;
-    if (scope.some(row=>row.property_id!==propertyId)) throw new Error("channex_worker_property_scope_mismatch");
-    await client.query("INSERT INTO platform.channex_management_worker_properties(property_id) VALUES($1) ON CONFLICT DO NOTHING",[propertyId]);
+    if (connection) {
+      await client.query("LOCK TABLE platform.channex_management_worker_operations IN EXCLUSIVE MODE");
+      const operations = (await client.query("SELECT operation_type FROM platform.channex_management_worker_operations")).rows;
+      if (operations.some(row=>row.operation_type!=="enable")) throw new Error("channex_worker_operation_scope_mismatch");
+      await client.query("INSERT INTO platform.channex_management_worker_operations(operation_type) VALUES('enable') ON CONFLICT DO NOTHING");
+    } else {
+      await client.query("LOCK TABLE platform.channex_management_worker_properties IN EXCLUSIVE MODE");
+      const scope = (await client.query("SELECT property_id::text FROM platform.channex_management_worker_properties")).rows;
+      if (scope.some(row=>row.property_id!==propertyId)) throw new Error("channex_worker_property_scope_mismatch");
+      await client.query("INSERT INTO platform.channex_management_worker_properties(property_id) VALUES($1) ON CONFLICT DO NOTHING",[propertyId]);
+    }
     await client.query(`GRANT USAGE ON SCHEMA platform,finance,booking,identity,hotel_catalog,pms TO ${role}`);
     for (const [table,privileges] of Object.entries(channexManagementWorkerPrivileges))
       for (const [kind,columns] of Object.entries(privileges))
@@ -55,7 +66,7 @@ try {
     const login = (await client.query("SELECT current_user,session_user")).rows[0];
     if (login.current_user !== role || login.session_user !== role) throw new Error("channex_worker_login_mismatch");
   }
-  await assertChannexManagementWorkerBoundary(client,{propertyId});
+  await assertChannexManagementWorkerBoundary(client,scope);
   const consumerAccess = await client.query(
     `WITH required_roles(name) AS (SELECT unnest($1::text[])),
       required_functions(name) AS (SELECT unnest($2::text[]))
@@ -70,7 +81,7 @@ try {
   );
   if (consumerAccess.rowCount) throw new Error("channex_worker_policy_consumer_function_access_missing");
   await client.query("COMMIT");
-  console.log(JSON.stringify({status:"PASS",role,mode:grant?"grant":"preflight"}));
+  console.log(JSON.stringify({status:"PASS",role,mode:grant?"grant":"preflight",scope:connection?"connection":"canary"}));
 } catch(error) {
   await client?.query("ROLLBACK").catch(()=>{});
   console.error(JSON.stringify({status:"FAIL",code:/^channex_worker_[a-z_]+$/.test(error.message)?error.message:error.code??"channex_worker_failed"}));

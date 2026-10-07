@@ -49,3 +49,50 @@ image probe; no AWS calls, deployed secret verification or provider writes were
 performed. Migration0410 admits provision availability only when the locked
 published-offer room exactly matches the active mapping; deploy and preflight
 that reviewed revision before scheduling an exclusive provider smoke.
+
+## Connection-only production scope (VAY-2055)
+
+Production `vayada-next-api` may run only Channex `enable` (connection) jobs,
+and only for hotels that have no Channex binding yet, so onboarding can prepare
+a brand-new hotel for the Airbnb import. The same `vayada_next_channex_management_worker`
+login, SSM secret and `PMS_CHANNEX_MANAGEMENT_DATABASE_URL` mapping are reused.
+Provisioning, ARI, booking sync, markups and messaging stay `observe_only`, and
+the worker's claim query, row-level security and startup preflight each refuse
+anything else. The application image must contain migration 0473 and the
+matching boundary digests.
+
+Database scope is the operation, not a property list: the owner-managed table
+`platform.channex_management_worker_operations` admits `enable`, and policies
+admit a hotel's catalog, location, room types, binding claim and connection rows
+only while an admitted enable job for that hotel is pending or running. The
+worker can insert exactly one active enable claim and one connected connection
+row per hotel and can never retarget, release or disconnect an existing binding.
+
+Rollout, in this order, each step reviewed and approved separately
+(instructions, not evidence). Migration 0473 also changes policies that the
+hotel-setup services attest, so the image that contains it must be admitted to
+the hotel-setup inventories and deployed to those services together with the
+next API; the next API runs the migration at startup.
+
+```sh
+# 0. Deploy the image containing migration 0473 to vayada-next-api and the
+#    hotel-setup services; verify the running digest is REVIEWED_IMAGE_DIGEST.
+# 1. Admit the operation and apply the enable grants with that image. The grant
+#    fails closed (policy_drift) until 0473 is applied.
+bash scripts/run-target-database-runtime-preflight.sh --grant-channex-connection-worker sha256:REVIEWED_IMAGE_DIGEST
+# 2. Prove the dedicated login sees the connection scope and nothing wider.
+bash scripts/run-target-database-runtime-preflight.sh --preflight-channex-connection-worker sha256:REVIEWED_IMAGE_DIGEST
+# 3. Terraform: channex_connection_worker_secret_mapped = true (maps the secret only).
+# 4. Terraform: channex_connection_worker_enabled = true (worker on, connection
+#    mutating). Only after step 0 is live: an older image rejects this shape at
+#    startup with channex_worker_scope_unsupported.
+```
+
+The grant refuses an operations table that contains anything but `enable` and
+leaves the canary property allowlist untouched. `Deploy App Service` keeps the
+Terraform-declared connection scope on `next-target-backend` only when the
+dedicated secret is mapped and exactly `PMS_CHANNEX_WORKER_ENABLED=true` with
+`PMS_CHANNEX_CONNECTION_MODE=mutating` is declared; every other durable
+capability is still forced to `observe_only` on each deployment. Inspect the
+`pms.channex.management` queue for pending non-enable jobs before and after the
+rollout: the connection worker must leave them untouched.
