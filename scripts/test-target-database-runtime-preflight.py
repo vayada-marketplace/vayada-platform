@@ -68,6 +68,7 @@ class RuntimePreflightContractTest(unittest.TestCase):
             "runtime_destructive_relation_access_forbidden",
             "runtime_sequence_access_forbidden",
             "runtime_security_definer_execute_forbidden",
+            "runtime_function_execute_missing",
         ):
             self.assertIn(code, CHECK)
         # The legacy allowlist is still asserted exactly until the follow-up removes it.
@@ -104,6 +105,17 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertIn("platform.domain_events", js_list(CHECK, "appendOnly"))
         self.assertEqual(js_list(CHECK, "noDelete"), ["hotel_catalog.properties"])
         self.assertEqual(len(js_list(CHECK, "identityLockOnly")), 6)
+        # Trigger-invoked Channex helpers revoked from PUBLIC by the worker provisioning (VAY-2054 follow-up).
+        self.assertEqual(js_list(CHECK, "runtimeExecutableFunctions"), js_list(GRANT, "runtimeExecutableFunctions"))
+        self.assertEqual(js_list(CHECK, "runtimeExecutableFunctions"), [
+            "pms.enqueue_restriction_ari(uuid,text)",
+            "pms.claim_channex_external_rate(uuid,text,text,uuid,jsonb)",
+        ])
+        self.assertIn("runtime_function_security_definer", GRANT)
+        self.assertIn("runtime_function_execute_scope_too_broad", GRANT)
+        self.assertIn("REVOKE EXECUTE ON FUNCTION ${name} FROM ${role}", GRANT)
+        self.assertLess(CHECK.index('"runtime_security_definer_execute_forbidden"'),
+                        CHECK.index('"runtime_function_execute_missing"'))
         for name in ("identityColumns", "productIdentityColumns"):
             self.assertEqual(js_object(CHECK, name), js_object(GRANT, name), name)
         extended = js_object(CHECK, "productIdentityColumns")

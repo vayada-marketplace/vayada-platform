@@ -797,6 +797,27 @@ VAY-965 matrix exactly. The decision and the protected list with reasons live in
 the application repo at `engineering/api-runtime-database-role.md`; the
 executable list is `scripts/grant-target-database-runtime-product-dml.mjs`.
 
+The grant also gives the login `EXECUTE` on two trigger-invoked Channex helpers
+(app migrations 0167 and 0314, both invoker rights):
+`pms.enqueue_restriction_ari(uuid,text)` and
+`pms.claim_channex_external_rate(uuid,text,text,uuid,jsonb)`. The Channex
+management worker provisioning (`scripts/channex-management-worker-database.mjs`)
+revokes `EXECUTE` on its worker boundary functions from PUBLIC and grants them to
+the worker only (the `platform.*` policy helpers also go to the policy-consumer
+roles). After that, the API's own writes to `pms.rate_rules`,
+`pms.operating_calendar_revisions`, `platform.outbox_events` and
+`pms.channex_offer_create_attempts` fire triggers that `PERFORM` those two
+helpers as the API login and fail with SQLSTATE 42501 (observed 2026-10-07 on
+`PUT /api/pms/properties/:id/operating-calendar`). The list is
+`runtimeExecutableFunctions` in the grant script and the preflight. The grant
+fails closed when a listed helper is missing (`runtime_function_missing`), is
+`SECURITY DEFINER` (`runtime_function_security_definer`) or is not owned by the
+migration owner (`runtime_function_owner_required`), and verifies that it added
+no other function grant (`runtime_function_execute_scope_too_broad`). A worker
+re-provision only revokes from PUBLIC, so the direct grant survives it; if a
+migration recreates a helper, re-run the grant. `pms.enqueue_inventory_ari`
+(migration 0323) is not on the worker boundary list and keeps PUBLIC `EXECUTE`.
+
 Apply from the operator lane (`--profile vayada`):
 
 ```bash
@@ -842,13 +863,16 @@ append-only and `hotel_catalog.properties` keeps no `DELETE`
 `created_at` lock column (`runtime_identity_lock_column_missing`), identity
 writes stay within the extended product-link column matrix plus that lock column
 (`runtime_identity_write_scope_too_broad`), no other schema is
-writable, sequences allow at most `USAGE, SELECT`, and the login has no role
-memberships. A partial state fails closed
+writable, sequences allow at most `USAGE, SELECT`, the login has no role
+memberships, and the two trigger-invoked Channex helpers are executable
+(`runtime_function_execute_missing`, directly or through PUBLIC where the worker
+provisioning has not run). A partial state fails closed
 (`runtime_product_dml_posture_partial`). `--preflight-runtime-product-dml`
 refuses the legacy posture (`runtime_product_dml_required`). A follow-up removes
 the legacy branch once production has switched.
 
 Rollback: `scripts/run-target-database-runtime-preflight.sh --revoke-runtime-product-dml`
-revokes the schema-wide DML and default privileges and restores the legacy
-allowlist (table and column grants) so the legacy preflight posture passes
-again. It does not change application migrations.
+revokes the schema-wide DML and default privileges, revokes `EXECUTE` on the
+two Channex helpers, and restores the legacy allowlist (table and column grants)
+so the legacy preflight posture passes again. It does not change application
+migrations.

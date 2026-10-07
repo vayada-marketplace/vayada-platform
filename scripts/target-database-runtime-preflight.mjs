@@ -44,6 +44,12 @@ const appendOnly = [
   "finance.affiliate_percentage_policy_approvals",
 ];
 const noDelete = ["hotel_catalog.properties"];
+// Trigger-invoked Channex helpers the Channex management worker provisioning revokes from
+// PUBLIC; the API's product writes PERFORM them through triggers (VAY-2054 follow-up).
+// Keep identical to scripts/grant-target-database-runtime-product-dml.mjs.
+const runtimeExecutableFunctions = [
+  "pms.enqueue_restriction_ari(uuid,text)", "pms.claim_channex_external_rate(uuid,text,text,uuid,jsonb)",
+];
 const identityLockOnly = [
   "identity.organizations", "identity.users", "identity.organization_memberships",
   "identity.role_permission_grants", "identity.membership_property_assignments", "identity.organization_roles",
@@ -128,6 +134,7 @@ const detailedCodes = new Set([
   "runtime_relation_read_missing", "runtime_security_definer_execute_forbidden",
   "runtime_protected_relation_read_forbidden", "runtime_product_dml_missing",
   "runtime_identity_write_scope_too_broad", "runtime_unapproved_relation_write_forbidden",
+  "runtime_function_execute_missing",
 ]);
 
 function check(condition, code) {
@@ -511,6 +518,16 @@ try {
       [productSchemas, migrationOwner],
     );
     check(Number(sequenceDefaults.rows[0].schemas) === productSchemas.length, "runtime_default_privileges_missing");
+    // The trigger-invoked Channex helpers stay executable (directly, or through PUBLIC where the
+    // worker provisioning has not run yet); SECURITY DEFINER EXECUTE was already rejected above.
+    await requireNoMissing(
+      client,
+      `SELECT fn.name FROM unnest($1::text[]) AS fn(name)
+         LEFT JOIN pg_proc AS procedure ON procedure.oid = to_regprocedure(fn.name)
+        WHERE procedure.oid IS NULL OR NOT has_function_privilege(current_user, procedure.oid, 'EXECUTE')`,
+      [runtimeExecutableFunctions],
+      "runtime_function_execute_missing",
+    );
   }
 
   // Receipt table: the API reads only owner_user_ids.
