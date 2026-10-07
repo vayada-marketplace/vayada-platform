@@ -682,12 +682,14 @@ if [[ "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--
     echo "Property reader bootstrap requires explicit blocked caller admission." >&2; exit 1;
   }
   if [[ "${mode}" == "--provision-hotel-setup-property-native" ]]; then
-    # Actor-bound purposes forward through the same private service: absent or exactly blocked.
-    jq -e '[.containerDefinitions[] | select(.name == "vayada-next-api") | .environment[] |
-      select(.name == "HOTEL_SETUP_LOGO_COMMAND_ADMISSION" or .name == "HOTEL_SETUP_PROFILE_COMMAND_ADMISSION")] |
-      (group_by(.name) | all(length == 1)) and all(.value == "blocked")' <<<"${source_definition}" >/dev/null &&
-      jq -e 'all(.containerDefinitions[] | select(.name == "vayada-next-api") | .secrets[]?;
-        .name != "HOTEL_SETUP_LOGO_COMMAND_ADMISSION" and .name != "HOTEL_SETUP_PROFILE_COMMAND_ADMISSION")' <<<"${source_definition}" >/dev/null || {
+    # Actor-bound purposes forward through the same private service: exactly blocked, or never
+    # released (no admission, origin or token). Admission is never accepted from secrets.
+    jq -e '[.containerDefinitions[] | select(.name == "vayada-next-api")][0] as $api |
+      all("HOTEL_SETUP_LOGO_COMMAND", "HOTEL_SETUP_PROFILE_COMMAND"; . as $prefix |
+        [$api.environment[] | select(.name == $prefix + "_ADMISSION")] as $admission |
+        ($admission | length == 1 and .[0].value == "blocked") or ($admission | length == 0) and
+        all(($api.environment + ($api.secrets // []))[]; .name != $prefix + "_ORIGIN" and .name != $prefix + "_INTERNAL_TOKEN")) and
+      all(($api.secrets // [])[]; .name != "HOTEL_SETUP_LOGO_COMMAND_ADMISSION" and .name != "HOTEL_SETUP_PROFILE_COMMAND_ADMISSION")' <<<"${source_definition}" >/dev/null || {
       echo "Property native bootstrap requires blocked actor-bound caller admission." >&2; exit 1;
     }
   fi

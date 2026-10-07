@@ -65,6 +65,35 @@ def require_logo_media_policy(task):
             'Live logo media permissions differ from the reviewed policy')
 
 
+def caller_blocked(item, purpose, optional=False):
+    """Blocked, or (for a caller installed later) never released: no admission, origin or token."""
+    prefix = PREFIX[purpose]
+    admission = environment(item).get(prefix + '_ADMISSION')
+    if admission is not None or not optional:
+        return admission == 'blocked'
+    names = {entry.get('name') for entry in item.get('environment', []) + item.get('secrets', [])}
+    return not names & {prefix + '_ORIGIN', prefix + '_INTERNAL_TOKEN'}
+
+
+def require_profile_secret_policy(task):
+    """Profile forwarding needs the isolated private task to read exactly the profile native prefix."""
+    role = 'vayada-hotel-setup-property-task'
+    require(task.get('taskRoleArn') == 'arn:aws:iam::269416271598:role/' + role,
+            'Profile forwarding requires the isolated private task role')
+    policy = aws('iam', 'get-role-policy', '--role-name', role,
+                 '--policy-name', 'hotel-setup-property-native-secret-read')['PolicyDocument']
+    statement = policy.get('Statement', [])
+    prefix = 'arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-command/prod/property/vayada_next_hotel_setup_'
+    resources = statement[0].get('Resource', []) if len(statement) == 1 else []
+    resources = [resources] if isinstance(resources, str) else resources
+    require(policy.get('Version') == '2012-10-17' and len(statement) == 1 and
+            set(statement[0]) == {'Effect', 'Action', 'Resource'} and statement[0]['Effect'] == 'Allow' and
+            statement[0]['Action'] in ('secretsmanager:GetSecretValue', ['secretsmanager:GetSecretValue']) and
+            prefix + 'profile_*' in resources and len(resources) == len(set(resources)) and
+            set(resources) <= {prefix + kind + '_*' for kind in ('property', 'logo', 'profile')},
+            'Live profile native-secret permissions differ from the reviewed policy')
+
+
 def stable(state, task=None):
     return (state['desiredCount'] == state['runningCount'] == 1 and state['pendingCount'] == 0
             and len(state['deployments']) == 1 and state['deployments'][0]['rolloutState'] == 'COMPLETED' and state['deployments'][0].get('status') == 'PRIMARY'
@@ -154,9 +183,9 @@ def stop_failed_start(args, current):
     """Stop only the reviewed, unhealthy property attempt; never retry a mutation."""
     destination, target = PRIVATE['property'], args.private_task
     public_image = container(current, 'vayada-next-api')['image']
-    admissions = environment(container(current, 'vayada-next-api'))
-    require(all(admissions.get(PREFIX[purpose] + '_ADMISSION', 'blocked' if purpose in OPTIONAL_CALLERS else None) == 'blocked'
-                for purpose in PREFIX), 'Failed start recovery requires all callers blocked')
+    api = container(current, 'vayada-next-api')
+    require(all(caller_blocked(api, purpose, purpose in OPTIONAL_CALLERS) for purpose in PREFIX),
+            'Failed start recovery requires all callers blocked')
     checked = {target}
 
     def reviewed(definition_arn):
@@ -360,8 +389,15 @@ def main():
                 require(environment(container(private_task, 'hotel-setup')).get('HOTEL_SETUP_LOGO_COMMAND_ADMISSION') == 'enabled', 'Private logo admission must be enabled before forwarding')
                 require_logo_media_policy(private_task)
             if args.purpose == 'profile':
-                # The serving private task must carry the reviewed profile route; its rollback is checked in Terraform.
+                # Both the serving private task and the staged rollback must carry the reviewed profile route.
                 approved(private_image.split('@')[1], 'hotel-setup-profile-images.json')
+                rollback = aws('ecs', 'describe-task-definition', '--task-definition', 'vayada-hotel-setup-property-rollback')['taskDefinition']
+                rollback_image = container(rollback, 'hotel-setup')['image']
+                require(rollback_image.startswith(REPOSITORY + '@'), 'Rollback image must be immutable')
+                validate_private_definition(rollback, 'property', rollback_image.split('@')[1])
+                for inventory in ('hotel-setup-property-images.json', 'hotel-setup-profile-images.json'):
+                    approved(rollback_image.split('@')[1], inventory)
+                require_profile_secret_policy(private_task)
             token = aws('secretsmanager', 'describe-secret', '--secret-id', SECRET[args.purpose])['ARN']
         definition = prepare_public(current, args.purpose, args.state, args.image_digest, token)
         with tempfile.TemporaryDirectory() as directory:
@@ -380,7 +416,7 @@ def main():
         require(environment(container(current, 'vayada-next-api')).get(PREFIX[args.purpose] + '_ADMISSION') == 'blocked', 'Caller admission must be blocked')
         if args.service == 'property':
             for purpose in ACTOR_IMAGES:
-                require(environment(container(current, 'vayada-next-api')).get(PREFIX[purpose] + '_ADMISSION', 'blocked') == 'blocked',
+                require(caller_blocked(container(current, 'vayada-next-api'), purpose, optional=True),
                         purpose.capitalize() + ' admission must be blocked before property service mutation')
         destination = PRIVATE[args.service]
         private = service(destination)

@@ -27,12 +27,18 @@ application repository (PRs #2898–#2900). The parent role is pre-staged first;
   PostgreSQL 16/17 profile lifecycle proofs for that exact image.
 - The protected bootstrap workflow accepts `operation=property_profile` with the exact
   property, organization and Owner actor. Every native property bootstrap now also
-  requires the logo and profile callers to be absent or exactly `blocked`.
+  requires the logo and profile callers to be exactly `blocked` or never released
+  (no admission, origin or token).
 - The protected release accepts `purpose=profile` (public only: `hold`, `blocked`,
   `enabled`). Enabling requires the existing property pair, a profile-proved public
-  image and a stable, healthy property service whose image is profile-proved. Any
-  property service start/stop requires property, logo and profile admission blocked
-  (profile may be absent before its first release).
+  image, a stable, healthy property service whose image is profile-proved, a staged
+  `vayada-hotel-setup-property-rollback` image that is also profile-proved, and the live
+  property task policy reading the exact profile prefix. Any property service
+  start/stop requires property admission blocked and logo/profile blocked or never
+  released (no admission, origin or token).
+- Prefer releasing `enabled` directly. A profile `hold` (or any installed profile
+  admission) makes every later API image deployment require an image in the profile
+  inventory, except the unchanged installed image.
 - Retention: ordinary Terraform apply cannot remove or change an installed profile
   admission or origin/token pair, and API deployments cannot select an image outside
   the profile inventory while a profile caller is configured (except the unchanged
@@ -44,14 +50,20 @@ application repository (PRs #2898–#2900). The parent role is pre-staged first;
    merge the application DB slice; startup applies 0470–0472.
 2. Build and register the private primary, rollback and operational bootstrap images
    from the reviewed application source; deploy the private property-service primary.
+   While logo stays enabled, the new private images must also be in the logo inventory
+   and the new public image in the caller, split/ongoing-export and logo inventories.
 3. Merge this change; normal Terraform plan/apply updates only the two IAM policies.
 4. Protected pause: block property and logo admission, stop the property service, run
    `hotel-setup-property-bootstrap.yml` with `operation=property_profile` per original
    Owner and property, then restart the property service and re-enable callers.
 5. Deploy web apps that send `Idempotency-Key` on profile edits.
-6. After product sign-off on Owner-only editing, register the profile-proved images,
-   release `purpose=profile state=enabled` through `hotel-setup-release.yml`, then set
-   `profile = "enabled"` in tfvars so ordinary apply retains it.
+6. After product sign-off on Owner-only editing, register the profile-proved images
+   (public, and both `hotel_setup_property_image_digests` primary and rollback, which the
+   Terraform precondition also checks), release `purpose=profile state=enabled` through
+   `hotel-setup-release.yml`, then set `profile = "enabled"` in tfvars so ordinary apply
+   retains it.
 
 Rollback: release `purpose=profile state=blocked` (the pair is retained) before rolling
-the private service back to an image without the profile route.
+the private service back to an image without the profile route, then set
+`profile = "blocked"` in tfvars; ordinary apply rejects any plan that differs from the
+installed admission.

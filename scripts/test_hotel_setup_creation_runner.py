@@ -526,10 +526,17 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
             self.assertNotIn('update-service', operations)
         self.env['MOCK_PROFILE_ADMISSION'] = ''
         # Every native property bootstrap now requires both actor-bound callers absent or exactly blocked.
+        # A never-released actor caller is absent (no admission, origin or token); a leftover pair is not.
+        for overrides in ({'MOCK_LOGO_ABSENT': '1'}, {'MOCK_PROFILE_ADMISSION': 'blocked', 'MOCK_PROFILE_ORIGIN': '1', 'MOCK_PROFILE_TOKEN': '1'}):
+            previous = self.env.copy()
+            self.env.update(overrides)
+            result = self.run_wrapper(*args)
+            self.assertEqual(result.returncode, 0, (overrides, result.stderr))
+            self.env = previous
         for operation in ('property_profile', 'property_logo', 'launch_settings'):
             for overrides in ({'MOCK_PROFILE_ADMISSION': 'enabled'}, {'MOCK_PROFILE_ADMISSION': 'blocked,blocked'},
                               {'MOCK_PROFILE_SECRET': '1'}, {'MOCK_LOGO_ADMISSION': 'enabled'}, {'MOCK_ADMISSION': 'enabled'},
-                              {'MOCK_PROPERTY_RUNNING': '1'}):
+                              {'MOCK_PROFILE_ORIGIN': '1'}, {'MOCK_PROFILE_TOKEN': '1'}, {'MOCK_PROPERTY_RUNNING': '1'}):
                 calls.unlink(missing_ok=True)
                 previous = self.env.copy()
                 self.env.update(overrides)

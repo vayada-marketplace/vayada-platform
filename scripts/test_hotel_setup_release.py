@@ -96,14 +96,32 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(json.loads((ROOT / 'deployment/hotel-setup-profile-images.json').read_text()), {})
         with self.assertRaises(RuntimeError): release.approved(DIGEST, 'hotel-setup-profile-images.json')
 
-    def run_public_profile(self, state, private_profile=True, public_profile=True, private_running=True):
+    def private_definition(self, family, digest):
+        return {'family': family, 'executionRoleArn': 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-execution',
+            'taskRoleArn': 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-task',
+            'containerDefinitions': [{'name': 'hotel-setup', 'image': release.REPOSITORY + '@' + digest,
+                'readonlyRootFilesystem': True, 'privileged': False,
+                'environment': [{'name': 'HOTEL_SETUP_COMMAND_MODE', 'value': 'property_commands'},
+                                {'name': 'HOTEL_SETUP_COMMAND_SECRET_PREFIX', 'value': 'hotel-setup-command/prod/property/'}],
+                'secrets': [{'name': 'HOTEL_SETUP_COMMAND_INTERNAL_TOKEN', 'valueFrom': TOKEN},
+                            {'name': 'HOTEL_SETUP_COMMAND_READER_DATABASE_URL', 'valueFrom': TOKEN.replace('internal-token', 'reader-database-url')}]}]}
+
+    PROFILE_POLICY = {'Version': '2012-10-17', 'Statement': [{'Effect': 'Allow', 'Action': ['secretsmanager:GetSecretValue'],
+        'Resource': ['arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-command/prod/property/vayada_next_hotel_setup_' + kind + '_*'
+                     for kind in ('property', 'logo', 'profile')]}]}
+
+    def run_public_profile(self, state, private_profile=True, public_profile=True, private_running=True,
+                           rollback_profile=True, policy=None, installed_profile=None):
         public_task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1200'
         private_task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-hotel-setup-property-primary:5'
-        private_digest = 'sha256:' + 'c' * 64
+        private_digest, rollback_digest = 'sha256:' + 'c' * 64, 'sha256:' + 'd' * 64
         public = release.prepare_public(self.task, 'property', 'enabled', DIGEST, TOKEN)
+        if installed_profile:
+            public = release.prepare_public(public, 'profile', installed_profile, DIGEST, TOKEN)
         public['taskDefinitionArn'] = public_task
-        private = {'family': 'vayada-hotel-setup-property-primary', 'containerDefinitions': [{'name': 'hotel-setup',
-            'image': release.REPOSITORY + '@' + private_digest, 'environment': []}]}
+        private = self.private_definition('vayada-hotel-setup-property-primary', private_digest)
+        rollback = self.private_definition('vayada-hotel-setup-property-rollback', rollback_digest)
+        live_policy = policy or self.PROFILE_POLICY
         registered, guarded, updated = [], [], []
         def mocked_aws(*args):
             operation = args[1]
@@ -114,7 +132,12 @@ class ReleaseTest(unittest.TestCase):
                 return {'services': [{'taskDefinition': task, 'desiredCount': running, 'runningCount': running, 'pendingCount': 0,
                     'loadBalancers': [{'targetGroupArn': 'target'}], 'deployments': [{'status': 'PRIMARY', 'rolloutState': 'COMPLETED'}]}]}
             if operation == 'describe-task-definition':
-                return {'taskDefinition': public if args[-1] == public_task else private}
+                return {'taskDefinition': {public_task: public, private_task: private,
+                                           'vayada-hotel-setup-property-rollback': rollback}[args[-1]]}
+            if operation == 'get-role-policy':
+                self.assertEqual(args[2:], ('--role-name', 'vayada-hotel-setup-property-task',
+                                            '--policy-name', 'hotel-setup-property-native-secret-read'))
+                return {'PolicyDocument': copy.deepcopy(live_policy)}
             if operation == 'describe-images': return {'imageDetails': []}
             if operation == 'describe-target-health': return {'TargetHealthDescriptions': [{'TargetHealth': {'State': 'healthy'}}]}
             if operation == 'describe-secret': return {'ARN': TOKEN}
@@ -129,9 +152,10 @@ class ReleaseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, 'deployment').mkdir()
             inventories = {'hotel-setup-caller-images.json': {DIGEST: 'a' * 40},
-                'hotel-setup-property-images.json': {private_digest: 'c' * 40},
+                'hotel-setup-property-images.json': {private_digest: 'c' * 40, rollback_digest: 'd' * 40},
                 'hotel-setup-profile-images.json': {**({DIGEST: 'a' * 40} if public_profile else {}),
-                                                    **({private_digest: 'c' * 40} if private_profile else {})}}
+                                                    **({private_digest: 'c' * 40} if private_profile else {}),
+                                                    **({rollback_digest: 'd' * 40} if rollback_profile else {})}}
             for name, value in inventories.items():
                 Path(directory, 'deployment', name).write_text(json.dumps(value))
             argv = ['release', '--service', 'public', '--purpose', 'profile', '--state', state,
@@ -154,9 +178,47 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(registered['executionRoleArn'], release.EXECUTION)
         self.assertEqual(registered['taskRoleArn'], 'existing-public-task-role')
         self.assertEqual(item['image'], release.REPOSITORY + '@' + DIGEST)
-        for options in ({'private_profile': False}, {'public_profile': False}, {'private_running': False}):
-            with self.subTest(**options), self.assertRaises(RuntimeError): self.run_public_profile('enabled', **options)
+        broad = copy.deepcopy(self.PROFILE_POLICY)
+        broad['Statement'][0]['Resource'] = ['arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-command/prod/property/*']
+        missing = copy.deepcopy(self.PROFILE_POLICY)
+        missing['Statement'][0]['Resource'] = missing['Statement'][0]['Resource'][:2]
+        writes = copy.deepcopy(self.PROFILE_POLICY)
+        writes['Statement'][0]['Action'] = ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue']
+        for options in ({'private_profile': False}, {'public_profile': False}, {'private_running': False},
+                        {'rollback_profile': False}, {'policy': broad}, {'policy': missing}, {'policy': writes}):
+            with self.subTest(options=list(options)), self.assertRaises(RuntimeError):
+                self.run_public_profile('enabled', **options)
         with self.assertRaises(RuntimeError): self.run_public_profile('start')
+
+    def test_public_profile_hold_and_blocked_follow_initial_and_retained_pair_rules(self):
+        # hold only adds blocked admission to the installed image; it needs no profile-proved image.
+        held, = self.run_public_profile('hold', public_profile=False, private_profile=False, rollback_profile=False)
+        env = release.environment(held['containerDefinitions'][0])
+        self.assertEqual(env['HOTEL_SETUP_PROFILE_COMMAND_ADMISSION'], 'blocked')
+        self.assertNotIn('HOTEL_SETUP_PROFILE_COMMAND_ORIGIN', env)
+        with self.assertRaises(RuntimeError): self.run_public_profile('hold', installed_profile='enabled')
+        # blocked keeps the installed pair and requires the profile-proved public image.
+        blocked, = self.run_public_profile('blocked', installed_profile='enabled', private_profile=False, rollback_profile=False)
+        env = release.environment(blocked['containerDefinitions'][0])
+        self.assertEqual((env['HOTEL_SETUP_PROFILE_COMMAND_ADMISSION'], env['HOTEL_SETUP_PROFILE_COMMAND_ORIGIN']),
+                         ('blocked', 'https://hotel-setup-property-command.vayada.com'))
+        with self.assertRaises(RuntimeError): self.run_public_profile('blocked', installed_profile='enabled', public_profile=False)
+        with self.assertRaises(RuntimeError): self.run_public_profile('blocked')
+
+    def test_unreleased_caller_requires_no_leftover_pair(self):
+        api = {'environment': [{'name': 'HOTEL_SETUP_COMMAND_ADMISSION', 'value': 'blocked'}], 'secrets': []}
+        self.assertTrue(release.caller_blocked(api, 'profile', optional=True))
+        self.assertFalse(release.caller_blocked(api, 'profile'))
+        self.assertFalse(release.caller_blocked(api, 'logo'))
+        for extra in ({'environment': [{'name': 'HOTEL_SETUP_PROFILE_COMMAND_ORIGIN', 'value': release.ORIGIN['profile']}]},
+                      {'secrets': [{'name': 'HOTEL_SETUP_PROFILE_COMMAND_INTERNAL_TOKEN', 'valueFrom': TOKEN}]},
+                      {'environment': [{'name': 'HOTEL_SETUP_PROFILE_COMMAND_INTERNAL_TOKEN', 'value': 'inline'}]}):
+            item = {key: api[key] + extra.get(key, []) for key in ('environment', 'secrets')}
+            self.assertFalse(release.caller_blocked(item, 'profile', optional=True), extra)
+        for value, expected in (('blocked', True), ('enabled', False)):
+            item = {'environment': api['environment'] + [{'name': 'HOTEL_SETUP_PROFILE_COMMAND_ADMISSION', 'value': value},
+                {'name': 'HOTEL_SETUP_PROFILE_COMMAND_ORIGIN', 'value': release.ORIGIN['profile']}], 'secrets': []}
+            self.assertEqual(release.caller_blocked(item, 'profile', optional=True), expected)
 
     def test_initial_logo_hold_retains_the_installed_image_and_absent_pair(self):
         task = copy.deepcopy(self.task)
@@ -266,6 +328,11 @@ class ReleaseTest(unittest.TestCase):
         if denial in ('profile_enabled', 'logo_enabled'):
             name = release.PREFIX[denial.split('_')[0]] + '_ADMISSION'
             next(entry for entry in caller['environment'] if entry['name'] == name)['value'] = 'enabled'
+        if denial == 'profile_leftover_pair':
+            caller['environment'] = [entry for entry in caller['environment'] if entry['name'] != 'HOTEL_SETUP_PROFILE_COMMAND_ADMISSION']
+            caller['environment'].append({'name': 'HOTEL_SETUP_PROFILE_COMMAND_ORIGIN', 'value': release.ORIGIN['profile']})
+            caller['secrets'].append({'name': 'HOTEL_SETUP_PROFILE_COMMAND_INTERNAL_TOKEN',
+                'valueFrom': 'arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-command/prod/internal-token-AbCd12'})
         if denial in ('hold','origin_missing'):
             caller['environment'] = [entry for entry in caller['environment'] if entry['name'] != selected_prefix + '_ORIGIN']
         if denial in ('hold','token_missing'):
@@ -369,7 +436,7 @@ class ReleaseTest(unittest.TestCase):
 
     def test_property_stop_requires_actor_callers_blocked_and_accepts_unreleased_profile(self):
         self.run_private_stop('property', denial='profile_absent')
-        for denial in ('profile_enabled', 'logo_enabled'):
+        for denial in ('profile_enabled', 'logo_enabled', 'profile_leftover_pair'):
             with self.subTest(denial=denial): self.run_private_stop('property', denial=denial)
         self.run_private_stop('creation', denial='profile_enabled')  # Creation does not use the property service.
 
@@ -401,8 +468,10 @@ class ReleaseTest(unittest.TestCase):
         public['containerDefinitions'][0]['image'] = release.REPOSITORY + '@' + DIGEST
         public['containerDefinitions'][0]['environment'] += [
             {'name': prefix + '_ADMISSION', 'value': 'enabled' if denial == 'unblocked_' + purpose else 'blocked'}
-            for purpose, prefix in release.PREFIX.items() if not (purpose == 'profile' and denial == 'profile_absent')
+            for purpose, prefix in release.PREFIX.items() if not (purpose == 'profile' and denial in ('profile_absent', 'profile_leftover_pair'))
             and not (purpose == 'logo' and denial == 'logo_absent')]
+        if denial == 'profile_leftover_pair':
+            public['containerDefinitions'][0]['environment'].append({'name': 'HOTEL_SETUP_PROFILE_COMMAND_ORIGIN', 'value': release.ORIGIN['profile']})
         definition = {'taskDefinitionArn':target, 'family':family,
             'executionRoleArn':'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-execution',
             'taskRoleArn':'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-task',
@@ -533,7 +602,7 @@ class ReleaseTest(unittest.TestCase):
 
     def test_failed_start_stop_accepts_only_an_unreleased_profile_caller_as_blocked(self):
         self.run_failed_start_stop('profile_absent')
-        for denial in ('unblocked_profile', 'logo_absent'):
+        for denial in ('unblocked_profile', 'logo_absent', 'profile_leftover_pair'):
             with self.subTest(denial=denial): self.run_failed_start_stop(denial)
 
     def test_failed_start_stop_batches_all_201_tasks_for_inspection_and_waits(self):
