@@ -1171,6 +1171,8 @@ docker exec "${database_container}" psql -U postgres -c \
 docker exec "${database_container}" psql -U postgres -c \
   "GRANT UPDATE (id) ON vayada_migration_evidence.database_attestations TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_protected_relation_column_write_forbidden
+docker exec "${database_container}" psql -U postgres -c \
+  "REVOKE UPDATE (id) ON vayada_migration_evidence.database_attestations FROM vayada_next_api_runtime" >/dev/null
 
 
 # VAY-2054: one owner-checked product DML grant, protected list re-verified, rollback restores the legacy allowlist.
