@@ -92,14 +92,19 @@ case "${mode}" in
     secret_parameter="/vayada/prod/target-database-runtime-url"
     family="vayada-next-api-db-runtime-preflight"
     ;;
-  --grant-runtime-product-dml|--revoke-runtime-product-dml)
-    # VAY-2054: the one reviewed grant set for the ordinary API login, and its rollback.
+  --grant-runtime-product-dml|--revoke-runtime-product-dml|--inspect-runtime-product-dml)
+    # VAY-2054: the one reviewed grant set for the ordinary API login, its dry run and its rollback.
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
+    # Granting before the posture-aware preflight is on main would fail every tf-apply.
+    grep -q 'runtime_product_dml_posture_partial' "$(dirname "${BASH_SOURCE[0]}")/target-database-runtime-preflight.mjs" || {
+      echo "The posture-aware runtime preflight must be merged before the product DML grant modes run." >&2; exit 2;
+    }
     ca_required=true
     code_file="grant-target-database-runtime-product-dml.mjs"
     code_in_definition="true"
     grant_scope="product_dml"
     [[ "${mode}" == "--revoke-runtime-product-dml" ]] && grant_scope="revoke_product_dml"
+    [[ "${mode}" == "--inspect-runtime-product-dml" ]] && grant_scope="inspect_product_dml"
     secret_name="TARGET_DATABASE_MIGRATION_URL"
     secret_parameter="/vayada/prod/target-database-url"
     family="vayada-next-api-db-runtime-preflight"

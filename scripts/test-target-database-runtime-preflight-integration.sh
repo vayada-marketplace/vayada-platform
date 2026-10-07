@@ -155,6 +155,9 @@ CREATE TABLE booking.pricing_quotes (id uuid PRIMARY KEY);
 CREATE TABLE finance.expense_generation_dispatches (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_room_availability_attempts (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_ari_schedule_sources (id uuid PRIMARY KEY);
+CREATE TABLE pms.channel_sync_status (id uuid PRIMARY KEY);
+CREATE TABLE pms.channex_offer_create_receipts (id uuid PRIMARY KEY);
+CREATE TABLE booking.pricing_authority_future (id uuid PRIMARY KEY);
 CREATE SEQUENCE booking.fixture_sequence;
 CREATE TABLE identity.organizations (id uuid PRIMARY KEY, name text, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE identity.users (id uuid PRIMARY KEY, status text, created_at timestamptz NOT NULL DEFAULT now());
@@ -200,7 +203,8 @@ GRANT SELECT ON platform.schema_migrations, distribution.public_room_offer_snaps
   hotel_catalog.property_setup_sessions, hotel_catalog.property_setup_step_drafts,
   booking.pricing_authority_heads, booking.pricing_authority_revisions, booking.pricing_quotes,
   finance.expense_generation_dispatches, pms.channex_room_availability_attempts,
-  pms.channex_ari_schedule_sources, identity.organizations, identity.users,
+  pms.channex_ari_schedule_sources, pms.channel_sync_status, pms.channex_offer_create_receipts,
+  booking.pricing_authority_future, identity.organizations, identity.users,
   identity.organization_memberships, identity.role_permission_grants,
   identity.membership_property_assignments, identity.organization_roles TO vayada_next_api_runtime;
 GRANT EXECUTE ON FUNCTION app.hotel_count() TO vayada_next_api_runtime;
@@ -668,6 +672,8 @@ if product_membership="$(run_grant legacy_owner owner 1 product_dml 2>&1)"; then
 fi
 grep -F '"code":"runtime_role_membership_forbidden"' <<<"${product_membership}" >/dev/null
 owner_psql "REVOKE elevated FROM vayada_next_api_runtime" >/dev/null
+run_grant legacy_owner owner 1 inspect_product_dml | grep -F '"committed":false' >/dev/null
+[[ "$(owner_psql "SELECT has_table_privilege('vayada_next_api_runtime','hotel_catalog.property_setup_step_drafts','INSERT')")" == f ]]
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
@@ -725,6 +731,10 @@ expect_runtime_denied "INSERT INTO platform.schema_migrations(name) VALUES ('999
 expect_runtime_denied "UPDATE booking.pricing_authority_heads SET revision = 1 WHERE false"
 expect_runtime_denied "INSERT INTO marketplace.affiliate_click_occurrences(id) VALUES ('00000000-0000-4000-8000-000000000106')"
 expect_runtime_denied "INSERT INTO finance.expense_generation_dispatches(id) VALUES ('00000000-0000-4000-8000-000000000107')"
+expect_runtime_denied "INSERT INTO pms.channel_sync_status(id) VALUES ('00000000-0000-4000-8000-00000000010a')"
+expect_runtime_denied "INSERT INTO booking.pricing_authority_future(id) VALUES ('00000000-0000-4000-8000-00000000010b')"
+runtime_psql "INSERT INTO pms.channex_offer_create_receipts(id) VALUES ('00000000-0000-4000-8000-00000000010c')" >/dev/null
+expect_runtime_denied "UPDATE pms.channex_offer_create_receipts SET id = id WHERE false"
 expect_runtime_denied "UPDATE platform.product_audit_events SET id = id WHERE false"
 expect_runtime_denied "DELETE FROM platform.domain_events WHERE false"
 expect_runtime_denied "DELETE FROM hotel_catalog.properties WHERE false"
