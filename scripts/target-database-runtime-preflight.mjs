@@ -285,9 +285,9 @@ try {
     `SELECT namespace.nspname, relation.relname, privilege.name
        FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
        CROSS JOIN (VALUES ('TRUNCATE'),('REFERENCES'),('TRIGGER')${maintainPrivilegeValue}) AS privilege(name)
-      WHERE ${applicationSchemas} AND relation.relkind IN ${relationKinds}
+      WHERE ${applicationSchemas} AND relation.relkind IN ${relationKinds} AND relation.oid <> $1::regclass
         AND has_table_privilege(current_user, relation.oid, privilege.name)`,
-    [],
+    [receipt],
     "runtime_destructive_relation_access_forbidden",
   );
   await requireNoMissing(
