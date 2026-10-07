@@ -29,12 +29,18 @@ const noWrite = [
   "booking.affiliate_click_admissions", "booking.affiliate_original_booking_bindings",
   "finance.expense_generation_dispatches", "pms.channex_room_availability_attempts",
   "pms.channex_room_availability_receipts", "pms.channex_room_availability_reconciliation_attestations",
-  "pms.channex_ari_schedule_sources",
+  "pms.channex_ari_schedule_sources", "pms.channel_sync_status",
 ];
 const noWritePatterns = [
   "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|hotel_setup_|identity_migration_)",
+  "^booking\\.pricing_authority_", "^pms\\.channex_room_availability_", "^pms\\.channex_ari_schedule_",
+  "^(marketplace|booking)\\.affiliate_click_", "^finance\\.expense_generation_",
 ];
-const appendOnly = ["platform.product_audit_events", "platform.domain_events"];
+const appendOnly = [
+  "platform.product_audit_events", "platform.domain_events", "booking.addon_revenue_evidence",
+  "pms.channex_offer_ari_receipts", "pms.channex_offer_create_receipts", "pms.channex_offer_target_versions",
+  "finance.commission_rate_changes", "distribution.external_api_usage_events",
+];
 const noDelete = ["hotel_catalog.properties"];
 const identityLockOnly = [
   "identity.organizations", "identity.users", "identity.organization_memberships",

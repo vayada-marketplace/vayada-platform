@@ -921,9 +921,14 @@ executable list is `scripts/grant-target-database-runtime-product-dml.mjs`.
 Apply from the operator lane (`--profile vayada`):
 
 ```bash
+scripts/run-target-database-runtime-preflight.sh --inspect-runtime-product-dml   # dry run: applies, verifies, rolls back
 scripts/run-target-database-runtime-preflight.sh --grant-runtime-product-dml
 scripts/run-target-database-runtime-preflight.sh --preflight-runtime-product-dml
 ```
+
+The three modes refuse to start unless the posture-aware preflight is in the
+same checkout, so they cannot run from a `main` that would fail the next
+`tf-apply`.
 
 The grant task uses only the migration-owner URL and the pinned RDS CA, runs in
 one transaction with a 5 s lock timeout, and fails closed when the login is not

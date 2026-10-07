@@ -98,7 +98,8 @@ class RuntimePreflightContractTest(unittest.TestCase):
             "platform.channex_management_worker_properties",
         ):
             self.assertIn(relation, js_list(CHECK, "noWrite"))
-        self.assertEqual(js_list(CHECK, "appendOnly"), ["platform.product_audit_events", "platform.domain_events"])
+        self.assertIn("platform.product_audit_events", js_list(CHECK, "appendOnly"))
+        self.assertIn("platform.domain_events", js_list(CHECK, "appendOnly"))
         self.assertEqual(js_list(CHECK, "noDelete"), ["hotel_catalog.properties"])
         self.assertEqual(len(js_list(CHECK, "identityLockOnly")), 6)
         self.assertIn("'vayada_migration_evidence'", CHECK)
