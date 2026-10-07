@@ -901,3 +901,54 @@ These are column-scoped privileges, not tenant-scoped privileges; route
 owner authorization remains the tenant boundary. The UPDATE grants on link,
 billing and profile keys permit row locks but are real column write privileges.
 Never replace this runtime connection with migration-owner credentials.
+
+### Target database runtime role: product DML grant (VAY-2054)
+
+The ordinary API login `vayada_next_api_runtime` receives ordinary DML on the
+product schemas (`hotel_catalog`, `booking`, `pms`, `marketplace`,
+`distribution`, `finance`, `platform`) plus default privileges for future
+tables, and is denied a short protected list (credential scope tables,
+migration ledger and evidence, worker allowlists, pricing authority, guarded
+affiliate evidence, worker-only Channex and Finance state). On `identity.*` it
+only gains `UPDATE (created_at)` on the six tables the API row-locks (platform
+#240 precedent: PostgreSQL needs an `UPDATE` privilege on one column for
+`FOR SHARE`/`FOR UPDATE`); no authorization column becomes writable, and no
+policy or trigger is added because the hotel-setup native preflights pin that
+posture. On the two product-link tables the VAY-965 setup-track column matrix
+is extended for the product posture only: `identity.product_entitlements`
+gains `INSERT (resource_product, resource_type, resource_id)` and
+`UPDATE (metadata)`, `identity.organization_resource_links` gains
+`UPDATE (status, updated_at)`, so Financials module activation, the new-hotel
+Financials default and marketplace offer operator grant/archive work under the
+ordinary login (human decision 2026-10-07). The revoke scope restores the
+VAY-965 matrix exactly. The decision and the protected list with reasons live in
+the application repo at `engineering/api-runtime-database-role.md`; the
+executable list is `scripts/grant-target-database-runtime-product-dml.mjs`.
+
+Apply from the operator lane (`--profile vayada`):
+
+```bash
+scripts/run-target-database-runtime-preflight.sh --grant-runtime-product-dml
+scripts/run-target-database-runtime-preflight.sh --preflight-runtime-product-dml
+```
+
+The grant task uses only the migration-owner URL and the pinned RDS CA, runs in
+one transaction with a 5 s lock timeout, and fails closed when the login is not
+a plain non-owner login without role memberships, when any product relation is
+not owned by the migration owner, when an identity lock table has no
+`created_at` column, or when the protected list is still writable or readable
+after the grant.
+Re-running it is a no-op. Run it again after any migration that adds a
+protected-class table; the preflight names the relation. Before committing it
+also runs the preflight's global posture checks (no TRUNCATE/REFERENCES/
+TRIGGER/MAINTAIN anywhere, no default privileges for the login from any other
+role or schema, no SECURITY DEFINER EXECUTE, no owned objects, no role
+memberships, PUBLIC grants included), so pre-existing drift is never committed
+together with the grant. The reviewed code and the CA travel in the disposable
+task definition, not in the run-task override; the plain `preflight` mode uses
+the same path (verified read-only against production on 2026-10-07).
+
+Rollback: `scripts/run-target-database-runtime-preflight.sh --revoke-runtime-product-dml`
+revokes the schema-wide DML and default privileges and restores the legacy
+allowlist (table and column grants) so the legacy preflight posture passes
+again. It does not change application migrations.
