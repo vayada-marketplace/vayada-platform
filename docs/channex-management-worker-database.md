@@ -80,9 +80,12 @@ next API; the next API runs the migration at startup.
 # 1. Admit the operation and apply the enable grants with that image. The grant
 #    fails closed (policy_drift) until 0473 is applied.
 bash scripts/run-target-database-runtime-preflight.sh --grant-channex-connection-worker sha256:REVIEWED_IMAGE_DIGEST
-# 2. Terraform: channex_connection_worker_secret_mapped = true (maps the secret
-#    only). This also lets the API execution role read the worker secret, which
-#    the one-off preflight task inherits, so it must precede step 3.
+# 2. Admin bootstrap (outside CI): add the worker SSM parameter to the inline
+#    policy public-api-existing-parameters-and-exact-setup-tokens on
+#    vayada-next-api-setup-caller-execution. The platform deploy role may not
+#    change that policy (iam:PutRolePolicy is denied), so Terraform alone fails.
+#    Then Terraform: channex_connection_worker_secret_mapped = true. The one-off
+#    preflight task inherits the API execution role, so this precedes step 3.
 # 3. Prove the dedicated login sees the connection scope and nothing wider.
 bash scripts/run-target-database-runtime-preflight.sh --preflight-channex-connection-worker sha256:REVIEWED_IMAGE_DIGEST
 # 4. Terraform: channex_connection_worker_enabled = true (worker on, connection
