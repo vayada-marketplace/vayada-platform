@@ -223,8 +223,8 @@ GRANT SELECT ON marketplace.affiliate_links, marketplace.affiliate_agreement_lif
   booking.affiliate_click_admissions, booking.affiliate_original_booking_bindings,
   finance.affiliate_earning_reconciliation_revisions, finance.affiliate_eligible_earning_revisions,
   finance.affiliate_earning_allocations, finance.affiliate_earning_allocation_items,
-  platform.pricing_runtime_property_scopes, platform.channex_management_worker_properties
-  TO vayada_next_api_runtime;
+  platform.pricing_runtime_property_scopes, platform.channex_management_worker_properties,
+  platform.domain_events TO vayada_next_api_runtime;
 GRANT INSERT ON platform.product_audit_events, platform.domain_events, platform.jobs,
   finance.expense_categories, finance.expenses, finance.recurring_expense_rules, finance.folios,
   finance.folio_revisions, finance.folio_lines, finance.folio_payment_references TO vayada_next_api_runtime;
