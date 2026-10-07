@@ -914,7 +914,14 @@ only gains `UPDATE (created_at)` on the six tables the API row-locks (platform
 #240 precedent: PostgreSQL needs an `UPDATE` privilege on one column for
 `FOR SHARE`/`FOR UPDATE`); no authorization column becomes writable, and no
 policy or trigger is added because the hotel-setup native preflights pin that
-posture. The VAY-965 setup-track column matrix is unchanged. The decision and the protected list with reasons live in
+posture. On the two product-link tables the VAY-965 setup-track column matrix
+is extended for the product posture only: `identity.product_entitlements`
+gains `INSERT (resource_product, resource_type, resource_id)` and
+`UPDATE (metadata)`, `identity.organization_resource_links` gains
+`UPDATE (status, updated_at)`, so Financials module activation, the new-hotel
+Financials default and marketplace offer operator grant/archive work under the
+ordinary login (human decision 2026-10-07). The revoke scope restores the
+VAY-965 matrix exactly. The decision and the protected list with reasons live in
 the application repo at `engineering/api-runtime-database-role.md`; the
 executable list is `scripts/grant-target-database-runtime-product-dml.mjs`.
 
