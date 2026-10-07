@@ -87,12 +87,14 @@ const applicationSchemas = `
   AND nspname NOT LIKE 'pg_temp_%'
 `;
 const relationKinds = "('r','p','v','m','f')";
+// The receipt table keeps its own dedicated checks below.
 const protectedWriteFilter = `(
-  namespace.nspname = 'vayada_migration_evidence'
-  OR format('%I.%I', namespace.nspname, relation.relname) = ANY($1::text[])
-  OR format('%I.%I', namespace.nspname, relation.relname) ~ ANY($2::text[])
+  (namespace.nspname = 'vayada_migration_evidence'
+   OR format('%I.%I', namespace.nspname, relation.relname) = ANY($1::text[])
+   OR format('%I.%I', namespace.nspname, relation.relname) ~ ANY($2::text[]))
+  AND format('%I.%I', namespace.nspname, relation.relname) <> 'platform.legacy_owner_bootstrap_receipts'
 )`;
-const protectedWriteParameters = [[...noRead, ...noWrite, receipt], [...noReadPatterns, ...noWritePatterns]];
+const protectedWriteParameters = [[...noRead, ...noWrite], [...noReadPatterns, ...noWritePatterns]];
 const protectedReadFilter = `(
   namespace.nspname = 'vayada_migration_evidence'
   OR format('%I.%I', namespace.nspname, relation.relname) = ANY($1::text[])
