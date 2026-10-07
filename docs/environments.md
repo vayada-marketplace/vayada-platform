@@ -933,6 +933,24 @@ Re-running it is a no-op. Run it again after any migration that adds a
 protected-class table; the preflight names the relation. The reviewed code and
 the CA travel in the disposable task definition, not in the run-task override.
 
+The runtime preflight (`scripts/target-database-runtime-preflight.mjs`, run by
+every `tf-apply`) detects the posture from the migration owner's default
+privileges in the seven product schemas. With none it asserts the legacy
+allowlist exactly as before; with all seven it asserts the product DML posture:
+every non-protected product relation has `SELECT, INSERT, UPDATE, DELETE`
+(`runtime_product_dml_missing`), the protected list and name patterns are not
+writable (`runtime_protected_relation_write_forbidden`) or readable
+(`runtime_protected_relation_read_forbidden`), audit and domain events stay
+append-only and `hotel_catalog.properties` keeps no `DELETE`
+(`runtime_narrowed_relation_writable`), the identity lock-only policy exists
+(`runtime_identity_lock_only_policy_missing`), identity writes stay within the
+column matrix (`runtime_identity_write_scope_too_broad`), no other schema is
+writable, sequences allow at most `USAGE, SELECT`, and the login has no role
+memberships. A partial state fails closed
+(`runtime_product_dml_posture_partial`). `--preflight-runtime-product-dml`
+refuses the legacy posture (`runtime_product_dml_required`). A follow-up removes
+the legacy branch once production has switched.
+
 Rollback: `scripts/run-target-database-runtime-preflight.sh --revoke-runtime-product-dml`
 revokes the schema-wide DML and default privileges and restores the legacy
 allowlist (table and column grants) so the legacy preflight posture passes

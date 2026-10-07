@@ -380,7 +380,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertNotIn('extra_secret_', branch)
         self.assertIn('if [[ "$code_in_definition" == true || "$legacy_helper_scope"', RUNNER)
         self.assertIn('  if [[ "$code_in_definition" == true || -n "$reader_rls_mode"', RUNNER)
-        preflight = RUNNER.split('  preflight|--preflight-folio-command|--preflight-runtime-product-dml)', 1)[1].split('    ;;', 1)[0]
+        preflight = RUNNER.split('  preflight|--preflight-runtime-product-dml)', 1)[1].split('    ;;', 1)[0]
         self.assertIn('product_dml_required="true"', preflight)
         self.assertIn('code_in_definition="true"', preflight)
         self.assertIn('{name:"VAYADA_DB_REQUIRE_PRODUCT_DML",value:"1"}', RUNNER)
