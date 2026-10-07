@@ -19,6 +19,7 @@ export_property=""
 export_id=""
 export_ongoing="false"
 channex_property=""
+channex_scope=""
 channex_image=""
 task_image=""
 creation_purpose=""
@@ -160,7 +161,7 @@ case "${mode}" in
       fi
     fi
     ;;
-  --provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker)
+  --provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker|--grant-channex-connection-worker|--preflight-channex-connection-worker)
     ca_required=true
     family="vayada-next-api-db-runtime-preflight"
     code_file="channex-management-worker-database.mjs"
@@ -175,6 +176,18 @@ case "${mode}" in
       secret_parameter="/vayada/prod/db-marketplace-url"
       extra_secret_name="PMS_CHANNEX_MANAGEMENT_DATABASE_URL"
       extra_secret_parameter="/vayada/prod/target-database-channex-management-worker-url"
+    elif [[ "${mode}" == *channex-connection-worker ]]; then
+      # VAY-2055: operation scope ('enable' for unbound hotels); no property argument.
+      [[ "$#" -eq 2 && "$2" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+        echo "Channex connection grant/preflight requires the immutable image digest." >&2; exit 2;
+      }
+      channex_scope="connection"
+      channex_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$2"
+      if [[ "${mode}" == "--grant-channex-connection-worker" ]]; then
+        grant_scope="channex_management"
+        secret_name="TARGET_DATABASE_MIGRATION_URL"
+        secret_parameter="/vayada/prod/target-database-url"
+      fi
     else
       [[ "$#" -eq 3 && "$2" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ && "$3" =~ ^sha256:[a-f0-9]{64}$ ]] || {
         echo "Channex grant/preflight requires the reviewed property UUID and immutable image digest." >&2; exit 2;
@@ -497,7 +510,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || ( "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--inspect-hotel-setup-logo-migration" ) || ( "${mode}" == "--stage-hotel-setup-migration-scope" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ) || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
+  if [[ -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || ( "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--inspect-hotel-setup-logo-migration" ) || ( "${mode}" == "--stage-hotel-setup-migration-scope" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ) || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker || "${mode}" == *channex-connection-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -539,7 +552,7 @@ else
 fi
 [[ -z "$logo_recovery_phase" && -z "$logo_reader_phase" ]] || bootstrap="process.argv[1]='/app/.vayada-db-runtime-preflight.mjs';$bootstrap"
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
-  --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg reader_rls_mode "${reader_rls_mode}" --arg reader_rls_frozen "${reader_rls_frozen}" --arg legacy_helper_mode "${legacy_helper_mode}" --arg legacy_helper_frozen "${legacy_helper_frozen}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg financials_readiness_property "${financials_readiness_property}" \
+  --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg reader_rls_mode "${reader_rls_mode}" --arg reader_rls_frozen "${reader_rls_frozen}" --arg legacy_helper_mode "${legacy_helper_mode}" --arg legacy_helper_frozen "${legacy_helper_frozen}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg channex_scope "${channex_scope}" --arg financials_readiness_property "${financials_readiness_property}" \
   --arg folio_required "${folio_required}" --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
   --arg owner_email "${owner_email}" --arg property_id "${property_id}" --arg property_operation "${property_operation}" --arg creation_purpose "${creation_purpose}" --arg creation_org "${creation_org}" --arg creation_actor "${creation_actor}" \
   --arg logo_cleanup_kind "${logo_cleanup_kind}" --arg logo_cleanup_target "${logo_cleanup_target}" --arg logo_cleanup_phase "${logo_cleanup_phase}" --arg logo_cleanup_hash "${logo_cleanup_hash}" \
@@ -584,6 +597,7 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $export_ongoing == "true" then [{name:"FINANCE_EXPORT_WORKER_ONGOING",value:"true"}] else [] end) +
       (if $financials_readiness_property == "" then [] else [{name:"FINANCIALS_READINESS_PROPERTY_ID",value:$financials_readiness_property}] end) +
       (if $channex_property == "" then [] else [{name:"PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID",value:$channex_property}] end) +
+      (if $channex_scope == "" then [] else [{name:"VAYADA_DB_CHANNEX_SCOPE",value:$channex_scope}] end) +
       (if $vay2017_phase == "" then [] else [{name:"VAY2017_PREFLIGHT_PHASE",value:$vay2017_phase}] end) +
       (if $vay2017_source_import_phase == "" then [] else [{name:"VAY2017_SOURCE_IMPORT_PHASE",value:$vay2017_source_import_phase}] end) +
       (if $vay2017_source_import_phase == "extract" then [{name:"SOURCE_ATTESTATION_OWNER",value:"vay2017_source_attestor_20260929"}] else [] end) +

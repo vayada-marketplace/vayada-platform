@@ -66,3 +66,9 @@ checks before reporting recovery. This PR's local config test is not live
 rollout evidence. Resume management only through a separate reviewed rollout
 with the least-privilege credential and worker preflight; do not flip the flag
 alone or reuse the general runtime credential.
+
+VAY-2055 adds the reviewed exception: when Terraform maps the dedicated worker
+secret and declares exactly `PMS_CHANNEX_WORKER_ENABLED=true` with
+`PMS_CHANNEX_CONNECTION_MODE=mutating`, `pause-next-api-channex-worker.py`
+preserves that connection-only scope and still pauses the other five durable
+capabilities. See `docs/channex-management-worker-database.md`.
