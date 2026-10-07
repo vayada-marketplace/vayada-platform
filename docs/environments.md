@@ -928,9 +928,14 @@ executable list is `scripts/grant-target-database-runtime-product-dml.mjs`.
 Apply from the operator lane (`--profile vayada`):
 
 ```bash
+scripts/run-target-database-runtime-preflight.sh --inspect-runtime-product-dml   # dry run: applies, verifies, rolls back
 scripts/run-target-database-runtime-preflight.sh --grant-runtime-product-dml
 scripts/run-target-database-runtime-preflight.sh --preflight-runtime-product-dml
 ```
+
+The three modes refuse to start unless the posture-aware preflight is in the
+same checkout, so they cannot run from a `main` that would fail the next
+`tf-apply`.
 
 The grant task uses only the migration-owner URL and the pinned RDS CA, runs in
 one transaction with a 5 s lock timeout, and fails closed when the login is not
@@ -947,6 +952,29 @@ memberships, PUBLIC grants included), so pre-existing drift is never committed
 together with the grant. The reviewed code and the CA travel in the disposable
 task definition, not in the run-task override; the plain `preflight` mode uses
 the same path (verified read-only against production on 2026-10-07).
+
+The runtime preflight (`scripts/target-database-runtime-preflight.mjs`, run by
+every `tf-apply`) detects the posture from the migration owner's default
+privileges in the seven product schemas. With none it asserts the legacy
+allowlist as before, with one deliberate tightening that applies to both
+postures: the no-read list, the name patterns and `vayada_migration_evidence`
+are unreadable (`pms.inventory_coverage_validation_queue` was only exempt from
+the required reads before); production passed this read-only on 2026-10-07.
+With all seven it asserts the product DML posture:
+every non-protected product relation has `SELECT, INSERT, UPDATE, DELETE`
+(`runtime_product_dml_missing`), the protected list and name patterns are not
+writable (`runtime_protected_relation_write_forbidden`) or readable
+(`runtime_protected_relation_read_forbidden`), audit and domain events stay
+append-only and `hotel_catalog.properties` keeps no `DELETE`
+(`runtime_narrowed_relation_writable`), the six identity lock tables carry the
+`created_at` lock column (`runtime_identity_lock_column_missing`), identity
+writes stay within the extended product-link column matrix plus that lock column
+(`runtime_identity_write_scope_too_broad`), no other schema is
+writable, sequences allow at most `USAGE, SELECT`, and the login has no role
+memberships. A partial state fails closed
+(`runtime_product_dml_posture_partial`). `--preflight-runtime-product-dml`
+refuses the legacy posture (`runtime_product_dml_required`). A follow-up removes
+the legacy branch once production has switched.
 
 Rollback: `scripts/run-target-database-runtime-preflight.sh --revoke-runtime-product-dml`
 revokes the schema-wide DML and default privileges and restores the legacy

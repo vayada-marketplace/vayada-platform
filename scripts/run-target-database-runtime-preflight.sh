@@ -42,7 +42,6 @@ legacy_helper_frozen=""
 legacy_helper_scope="hotel_setup_legacy_helper_inspection"
 financials_readiness_property=""
 financials_readiness_image_digest=""
-folio_required="false"
 product_dml_required="false"
 code_in_definition="false"
 vay2017_source_sha=""
@@ -84,9 +83,8 @@ if [[ "$mode" == --stage-hotel-setup-profile-migration-scope ]]; then
   mode=--stage-hotel-setup-logo-migration-scope
 fi
 case "${mode}" in
-  preflight|--preflight-folio-command|--preflight-runtime-product-dml)
+  preflight|--preflight-runtime-product-dml)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
-    [[ "${mode}" == "--preflight-folio-command" ]] && folio_required="true"
     [[ "${mode}" == "--preflight-runtime-product-dml" ]] && product_dml_required="true"
     code_file="target-database-runtime-preflight.mjs"
     code_in_definition="true"
@@ -561,7 +559,7 @@ fi
 [[ -z "$logo_recovery_phase" && -z "$logo_reader_phase" ]] || bootstrap="process.argv[1]='/app/.vayada-db-runtime-preflight.mjs';$bootstrap"
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
   --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg reader_rls_mode "${reader_rls_mode}" --arg reader_rls_frozen "${reader_rls_frozen}" --arg legacy_helper_mode "${legacy_helper_mode}" --arg legacy_helper_frozen "${legacy_helper_frozen}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg financials_readiness_property "${financials_readiness_property}" \
-  --arg folio_required "${folio_required}" --arg product_dml_required "${product_dml_required}" --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
+  --arg product_dml_required "${product_dml_required}" --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
   --arg owner_email "${owner_email}" --arg property_id "${property_id}" --arg property_operation "${property_operation}" --arg creation_purpose "${creation_purpose}" --arg creation_org "${creation_org}" --arg creation_actor "${creation_actor}" \
   --arg logo_cleanup_kind "${logo_cleanup_kind}" --arg logo_cleanup_target "${logo_cleanup_target}" --arg logo_cleanup_phase "${logo_cleanup_phase}" --arg logo_cleanup_hash "${logo_cleanup_hash}" \
   --arg logo_recovery_phase "$logo_recovery_phase" --arg logo_recovery_frozen "$logo_recovery_frozen" \
@@ -597,7 +595,6 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $creation_actor == "" then [] else [{name:"HOTEL_SETUP_COMMAND_ACTOR_USER_ID",value:$creation_actor}] end) +
       (if $ca == "" then [] else [{name:"VAYADA_DB_RDS_CA_BUNDLE_GZIP",value:$ca}] end) +
       (if $scope == "" then [] else [{name:"VAYADA_DB_GRANT_SCOPE",value:$scope}] end) +
-      (if $folio_required == "true" then [{name:"VAYADA_DB_REQUIRE_FOLIO_COMMAND",value:"1"}] else [] end) +
       (if $product_dml_required == "true" then [{name:"VAYADA_DB_REQUIRE_PRODUCT_DML",value:"1"}] else [] end) +
       (if $provision_scope == "" then [] else [{name:"VAYADA_DB_PROVISION_SCOPE",value:$provision_scope}] end) +
       (if $finance_property == "" then [] else [{name:"FINANCE_EXPENSE_WORKER_PROPERTY_ID",value:$finance_property}] end) +
