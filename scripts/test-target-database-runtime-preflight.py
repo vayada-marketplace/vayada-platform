@@ -16,6 +16,10 @@ def js_list(source: str, name: str) -> list[str]:
     return re.findall(r'"([^"]+)"', body)
 
 
+def js_object(source: str, name: str) -> str:
+    return re.search(rf"const {name} = \{{(.*?)\n\}};", source, re.S).group(1)
+
+
 class RuntimePreflightContractTest(unittest.TestCase):
     def test_runtime_identity_and_receipt_ownership_are_proved(self) -> None:
         self.assertIn('expectedRole = "vayada_next_api_runtime"', CHECK)
@@ -102,6 +106,13 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertIn("platform.domain_events", js_list(CHECK, "appendOnly"))
         self.assertEqual(js_list(CHECK, "noDelete"), ["hotel_catalog.properties"])
         self.assertEqual(len(js_list(CHECK, "identityLockOnly")), 6)
+        for name in ("identityColumns", "productIdentityColumns"):
+            self.assertEqual(js_object(CHECK, name), js_object(GRANT, name), name)
+        extended = js_object(CHECK, "productIdentityColumns")
+        for column in ('"resource_product", "resource_type", "resource_id"', '"metadata"', '"status", "updated_at"'):
+            self.assertIn(column, extended)
+        self.assertIn("productIdentityColumns, ...Object.fromEntries(lockColumns.rows", CHECK)
+        self.assertIn("...identityColumns,\n", CHECK)  # legacy staged columns stay on the VAY-965 matrix
         self.assertIn("'vayada_migration_evidence'", CHECK)
         self.assertIn('const identityLockColumn = "created_at"', CHECK)
         self.assertNotIn("pg_policy", CHECK)

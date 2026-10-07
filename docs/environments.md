@@ -958,7 +958,7 @@ writable (`runtime_protected_relation_write_forbidden`) or readable
 append-only and `hotel_catalog.properties` keeps no `DELETE`
 (`runtime_narrowed_relation_writable`), the six identity lock tables carry the
 `created_at` lock column (`runtime_identity_lock_column_missing`), identity
-writes stay within the column matrix plus that lock column
+writes stay within the extended product-link column matrix plus that lock column
 (`runtime_identity_write_scope_too_broad`), no other schema is
 writable, sequences allow at most `USAGE, SELECT`, and the login has no role
 memberships. A partial state fails closed
