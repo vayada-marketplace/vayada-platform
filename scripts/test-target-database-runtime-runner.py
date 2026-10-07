@@ -306,6 +306,8 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
                          'platform.finance_expense_worker_properties', 'pms.channex_room_availability_attempts',
                          'platform.legacy_owner_bootstrap_receipts', 'identity.organizations'):
             self.assertIn(f'"{relation}"', source)
+        for marker in ('productIdentityColumns', '"resource_product", "resource_type", "resource_id"', '"status", "updated_at"'):
+            self.assertIn(marker, source)
         self.assertNotIn('vayada_next_identity_runtime', source)
 
     def test_cleanup_is_scoped_to_dedicated_cluster_and_log_group(self) -> None:

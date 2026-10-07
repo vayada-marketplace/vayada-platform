@@ -57,6 +57,20 @@ export const identityColumns = {
     UPDATE: ["id"],
   },
 };
+// Product DML posture (VAY-2054 follow-up, human decision 2026-10-07): the three identity
+// writes the ordinary API makes on product-link tables (Financials module activation,
+// new-hotel Financials default, marketplace offer operator grant/archive) also work.
+// Keep identical to scripts/target-database-runtime-preflight.mjs.
+export const productIdentityColumns = {
+  "identity.product_entitlements": {
+    INSERT: [...identityColumns["identity.product_entitlements"].INSERT, "resource_product", "resource_type", "resource_id"],
+    UPDATE: [...identityColumns["identity.product_entitlements"].UPDATE, "metadata"],
+  },
+  "identity.organization_resource_links": {
+    INSERT: identityColumns["identity.organization_resource_links"].INSERT,
+    UPDATE: [...identityColumns["identity.organization_resource_links"].UPDATE, "status", "updated_at"],
+  },
+};
 // Posture before VAY-2054; restored by the revoke scope.
 export const legacyRelations = {
   "booking.guest_bookings": ["INSERT", "UPDATE", "DELETE"], "finance.payments": ["INSERT", "UPDATE"],
@@ -173,7 +187,7 @@ async function applyProductDml(client, supportsMaintain) {
   await client.query(`GRANT USAGE ON SCHEMA identity TO ${role}`);
   for (const [name, column] of Object.entries(await lockColumns(client)))
     await client.query(`GRANT SELECT, UPDATE ("${column}") ON ${ident(name)} TO ${role}`);
-  for (const [name, grants] of Object.entries(identityColumns))
+  for (const [name, grants] of Object.entries(productIdentityColumns))
     for (const [privilege, columns] of Object.entries(grants))
       await client.query(`GRANT ${privilege} (${columns.join(", ")}) ON ${ident(name)} TO ${role}`);
   return product.length;
@@ -204,6 +218,12 @@ async function revokeProductDml(client) {
         await client.query(`GRANT ${privilege} (${columns.join(", ")}) ON ${ident(name)} TO ${role}`);
   for (const [name, column] of Object.entries(await lockColumns(client)))
     await client.query(`REVOKE UPDATE ("${column}") ON ${ident(name)} FROM ${role}`);
+  // Back to the VAY-965 matrix: drop the product-posture identity columns.
+  for (const [name, grants] of Object.entries(productIdentityColumns))
+    for (const [privilege, columns] of Object.entries(grants)) {
+      const extra = columns.filter((column) => !identityColumns[name][privilege].includes(column));
+      if (extra.length) await client.query(`REVOKE ${privilege} (${extra.join(", ")}) ON ${ident(name)} FROM ${role}`);
+    }
   return product.length;
 }
 
@@ -262,7 +282,7 @@ async function verify(client, supportsMaintain, scope) {
      WHERE namespace.nspname = 'identity' AND relation.relkind IN ${relationKinds}
        AND has_table_privilege($1, relation.oid, privilege.name)`,
     [role, JSON.stringify(scope === "product_dml"
-      ? { ...identityColumns, ...Object.fromEntries(Object.entries(await lockColumns(client)).map(([name, column]) => [name, { UPDATE: [column] }])) }
+      ? { ...productIdentityColumns, ...Object.fromEntries(Object.entries(await lockColumns(client)).map(([name, column]) => [name, { UPDATE: [column] }])) }
       : identityColumns), destructive]);
   if (identityWrites.rowCount !== 0) fail("runtime_identity_write_scope_too_broad");
   const sequences = await client.query(`

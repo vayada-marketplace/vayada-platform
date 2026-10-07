@@ -57,6 +57,18 @@ const identityColumns = {
     UPDATE: ["id"],
   },
 };
+// Product DML posture: the product-link identity writes the ordinary API makes (VAY-2054 follow-up).
+// Keep identical to scripts/grant-target-database-runtime-product-dml.mjs.
+const productIdentityColumns = {
+  "identity.product_entitlements": {
+    INSERT: [...identityColumns["identity.product_entitlements"].INSERT, "resource_product", "resource_type", "resource_id"],
+    UPDATE: [...identityColumns["identity.product_entitlements"].UPDATE, "metadata"],
+  },
+  "identity.organization_resource_links": {
+    INSERT: identityColumns["identity.organization_resource_links"].INSERT,
+    UPDATE: [...identityColumns["identity.organization_resource_links"].UPDATE, "status", "updated_at"],
+  },
+};
 // Legacy allowlist posture (before the product DML grant). Removed by a follow-up once production
 // has switched; until then plain preflight accepts both postures so tf-apply never breaks.
 const legacyRequiredRelations = {
@@ -444,7 +456,7 @@ try {
          CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('DELETE')) AS privilege(name)
         WHERE namespace.nspname = 'identity' AND relation.relkind IN ${relationKinds}
           AND has_table_privilege(current_user, relation.oid, privilege.name)`,
-      [JSON.stringify({ ...identityColumns, ...Object.fromEntries(lockColumns.rows.map((row) => [row.name, { UPDATE: [row.attname] }])) })],
+      [JSON.stringify({ ...productIdentityColumns, ...Object.fromEntries(lockColumns.rows.map((row) => [row.name, { UPDATE: [row.attname] }])) })],
       "runtime_identity_write_scope_too_broad",
     );
     await requireNoMissing(
