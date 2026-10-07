@@ -944,9 +944,10 @@ every non-protected product relation has `SELECT, INSERT, UPDATE, DELETE`
 writable (`runtime_protected_relation_write_forbidden`) or readable
 (`runtime_protected_relation_read_forbidden`), audit and domain events stay
 append-only and `hotel_catalog.properties` keeps no `DELETE`
-(`runtime_narrowed_relation_writable`), the identity lock-only policy exists
-(`runtime_identity_lock_only_policy_missing`), identity writes stay within the
-column matrix (`runtime_identity_write_scope_too_broad`), no other schema is
+(`runtime_narrowed_relation_writable`), the six identity lock tables carry the
+`created_at` lock column (`runtime_identity_lock_column_missing`), identity
+writes stay within the column matrix plus that lock column
+(`runtime_identity_write_scope_too_broad`), no other schema is
 writable, sequences allow at most `USAGE, SELECT`, and the login has no role
 memberships. A partial state fails closed
 (`runtime_product_dml_posture_partial`). `--preflight-runtime-product-dml`

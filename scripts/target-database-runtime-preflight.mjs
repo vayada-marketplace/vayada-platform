@@ -40,6 +40,7 @@ const identityLockOnly = [
   "identity.organizations", "identity.users", "identity.organization_memberships",
   "identity.role_permission_grants", "identity.membership_property_assignments", "identity.organization_roles",
 ];
+const identityLockColumn = "created_at";
 const identityColumns = {
   "identity.product_entitlements": {
     INSERT: ["organization_id", "product", "entitlement_key", "status", "starts_at", "expires_at", "metadata"],
@@ -411,24 +412,14 @@ try {
   } else {
     // Product DML posture (VAY-2054).
     check(Number(role.rows[0].memberships) === 0, "runtime_role_membership_forbidden");
-    await requireNoMissing(
-      client,
-      `SELECT relation.name FROM unnest($1::text[]) AS relation(name)
-        WHERE NOT EXISTS (
-          SELECT 1 FROM pg_policy AS policy JOIN pg_class AS table_info ON table_info.oid = policy.polrelid
-           WHERE policy.polrelid = to_regclass(relation.name) AND table_info.relrowsecurity
-             AND policy.polname = 'api_runtime_lock_only' AND NOT policy.polpermissive AND policy.polcmd = 'w'
-             AND pg_get_expr(policy.polwithcheck, policy.polrelid) LIKE '%' || $2 || '%')`,
-      [identityLockOnly, expectedRole],
-      "runtime_identity_lock_only_policy_missing",
-    );
-    // Row locks need UPDATE on one column: the first primary-key column of each lock table.
+    // Row locks need UPDATE on one column (platform #240 precedent): the audit timestamp,
+    // because the hotel-setup native preflights pin the policy and trigger posture of these tables.
     const lockColumns = await client.query(
       `SELECT relation.name, attribute.attname
          FROM unnest($1::text[]) AS relation(name)
-         JOIN pg_index AS index ON index.indrelid = to_regclass(relation.name) AND index.indisprimary
-         JOIN pg_attribute AS attribute ON attribute.attrelid = index.indrelid AND attribute.attnum = index.indkey[0]`,
-      [identityLockOnly],
+         JOIN pg_attribute AS attribute ON attribute.attrelid = to_regclass(relation.name)
+          AND attribute.attname = $2 AND attribute.attnum > 0 AND NOT attribute.attisdropped`,
+      [identityLockOnly, identityLockColumn],
     );
     check(lockColumns.rowCount === identityLockOnly.length, "runtime_identity_lock_column_missing");
     await requireNoMissing(

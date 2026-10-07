@@ -1207,11 +1207,10 @@ expect_failure runtime_protected_relation_write_forbidden
 owner_psql "REVOKE INSERT ON platform.schema_migrations FROM vayada_next_api_runtime" >/dev/null
 owner_psql "GRANT UPDATE ON identity.users TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_identity_write_scope_too_broad
-owner_psql "REVOKE UPDATE ON identity.users FROM vayada_next_api_runtime; GRANT UPDATE (id) ON identity.users TO vayada_next_api_runtime" >/dev/null
-owner_psql "DROP POLICY api_runtime_lock_only ON identity.organizations" >/dev/null
-expect_failure runtime_identity_lock_only_policy_missing
-owner_psql "CREATE POLICY api_runtime_lock_only ON identity.organizations AS RESTRICTIVE FOR UPDATE TO PUBLIC USING (true)
-  WITH CHECK (current_user <> 'vayada_next_api_runtime' AND session_user <> 'vayada_next_api_runtime')" >/dev/null
+owner_psql "REVOKE UPDATE ON identity.users FROM vayada_next_api_runtime; GRANT UPDATE (created_at) ON identity.users TO vayada_next_api_runtime" >/dev/null
+owner_psql "ALTER TABLE identity.organizations RENAME COLUMN created_at TO created_at_renamed" >/dev/null
+expect_failure runtime_identity_lock_column_missing
+owner_psql "ALTER TABLE identity.organizations RENAME COLUMN created_at_renamed TO created_at" >/dev/null
 owner_psql "REVOKE INSERT ON hotel_catalog.property_setup_step_drafts FROM vayada_next_api_runtime" >/dev/null
 expect_failure runtime_product_dml_missing:1:hotel_catalog.property_setup_step_drafts.INSERT
 owner_psql "GRANT INSERT ON hotel_catalog.property_setup_step_drafts TO vayada_next_api_runtime" >/dev/null
