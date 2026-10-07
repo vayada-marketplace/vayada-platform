@@ -270,7 +270,8 @@ const codes = new Set([
   'target_evidence_shape_mismatch',
   'source_attestation_mismatch',
   'target_privilege_mismatch', 'target_attestor_mismatch', 'renewal_committed_requires_inspection',
-  '42501', '28P01', '3D000', '25006', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH',
+  '42501', '28P01', '3D000', '25006', '57P01', '08003', '08006',
+  'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH',
   'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'ERR_TLS_CERT_ALTNAME_INVALID',
 ]);
 const classes = new Set(['Error', 'TypeError', 'DatabaseError', 'AggregateError']);

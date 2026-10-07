@@ -67,8 +67,8 @@ test('preflight renews only the exact two roles on a synthetic PostgreSQL restor
     [[reader, writer]])).rows;
   assert.equal(roles.length, 2);
   for (const role of roles) assert.equal(role.rolvaliduntil.toISOString(), result.expiresAt);
-  assert.equal((await root.query('SELECT count(*)::int AS n FROM pg_roles WHERE rolvaliduntil = $1::timestamptz',
-    [result.expiresAt])).rows[0].n, 2, 'no other role may carry the renewed expiry');
+  assert.deepEqual((await root.query('SELECT rolname FROM pg_roles WHERE rolvaliduntil IS NOT NULL ORDER BY rolname'))
+    .rows.map((row) => row.rolname), [reader, writer].sort(), 'only the reader and writer may carry any expiry');
   assert.equal((await root.query(`SELECT count(*)::int AS n FROM ${relation(manifest.sources[0].tables[0])}`))
     .rows[0].n, 1);
   const fresh = await open(target, writer, targetCredential.password);

@@ -151,6 +151,6 @@ test('failed direct login after commit is never reported as a safe retry', async
 
 test('lost commit acknowledgement requires inspection, not a retry', async () => {
   const fake = fakeDatabase({ commitFailure: true });
-  await assert.rejects(runPreflight({ connect: fake.connect, now: () => now }),
-    /renewal_committed_requires_inspection/);
+  await assert.rejects(runPreflight({ connect: fake.connect, now: () => now }), (error) =>
+    error.message === 'renewal_committed_requires_inspection' && error.cause?.message === 'synthetic_lost_commit_ack');
 });

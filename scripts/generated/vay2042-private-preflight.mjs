@@ -747,7 +747,7 @@ async function runPreflight({ connect, checkCredentials = async () => {
       expiresAt: expiry
     };
   } catch (error) {
-    if (committed || commitAttempted) throw new Error("renewal_committed_requires_inspection");
+    if (committed || commitAttempted) throw new Error("renewal_committed_requires_inspection", { cause: error });
     throw error;
   } finally {
     if (locked) await control.query("SELECT pg_advisory_unlock(204220260925)").catch(() => {
@@ -780,7 +780,12 @@ var codes2 = /* @__PURE__ */ new Set([
   "28P01",
   "3D000",
   "25006",
+  "57P01",
+  "08003",
+  "08006",
   "ECONNREFUSED",
+  "ECONNRESET",
+  "EPIPE",
   "EHOSTUNREACH",
   "ENETUNREACH",
   "ENOTFOUND",
@@ -789,11 +794,13 @@ var codes2 = /* @__PURE__ */ new Set([
   "ERR_TLS_CERT_ALTNAME_INVALID"
 ]);
 var classes2 = /* @__PURE__ */ new Set(["Error", "TypeError", "DatabaseError", "AggregateError"]);
+var safeCode = (error) => codes2.has(error?.code) ? error.code : codes2.has(error?.message) ? error.message : "UNKNOWN";
 var safeFailure2 = (stage, error) => ({
   status: "FAIL",
   stage: stages2.has(stage) ? stage : "preflight",
-  code: codes2.has(error?.code) ? error.code : codes2.has(error?.message) ? error.message : "UNKNOWN",
-  errorClass: classes2.has(error?.name) ? error.name : "Other"
+  code: safeCode(error),
+  errorClass: classes2.has(error?.name) ? error.name : "Other",
+  ...error?.cause === void 0 ? {} : { cause: safeCode(error.cause) }
 });
 async function launch(env, { Client, SecretsManagerClient, DescribeSecretCommand }) {
   let stage = "configuration";
