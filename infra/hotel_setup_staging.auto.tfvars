@@ -12,8 +12,8 @@ hotel_setup_image_digests = {
   rollback = "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965"
 }
 hotel_setup_property_image_digests = {
-  primary  = "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965"
-  rollback = "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965"
+  primary  = "sha256:1c5ddf7c26ad738ce55dc360f17e67ed5cbf46a1a8e09505c71b88a59a463a75"
+  rollback = "sha256:1c5ddf7c26ad738ce55dc360f17e67ed5cbf46a1a8e09505c71b88a59a463a75"
 }
 # Retain both admitted callers after the protected activation and native proofs.
 # Later applies reject removal of installed origin/token pairs or enabled admission.
