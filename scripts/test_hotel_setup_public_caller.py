@@ -69,9 +69,10 @@ class PublicCallerTest(unittest.TestCase):
                                       'HOTEL_SETUP_PROFILE_COMMAND_ADMISSION':'blocked'})
         with self.assertRaises((subprocess.CalledProcessError, ValueError)): render(profile='unknown')
 
-    def test_checked_in_profile_caller_stays_off_while_credentials_are_staged(self):
+    def test_checked_in_profile_caller_retains_the_released_admission(self):
+        # VAY-965: profile was released enabled through hotel-setup-release.yml; ordinary apply must retain it.
         tfvars = (ROOT / 'infra/hotel_setup_staging.auto.tfvars').read_text()
-        self.assertIn('hotel_setup_public_caller = { creation = "enabled", property = "enabled", logo = "enabled", profile = "off" }', tfvars)
+        self.assertIn('hotel_setup_public_caller = { creation = "enabled", property = "enabled", logo = "enabled", profile = "enabled" }', tfvars)
         self.assertIn('enable_hotel_setup_profile_credentials = true', tfvars)
         self.assertIn('enable_hotel_setup_logo_storage    = true', tfvars)
         self.assertIn('hotel_setup_logo_private_admission = "enabled"', tfvars)
