@@ -252,7 +252,7 @@ export async function runPreflight({ connect, checkCredentials = async () => {},
     return { status: 'OK', stage: 'complete', scope: 'isolated-catalog-preflight',
       databases: 10, tables: 83, bound: false, expiresAt: expiry };
   } catch (error) {
-    if (committed || commitAttempted) throw new Error('renewal_committed_requires_inspection');
+    if (committed || commitAttempted) throw new Error('renewal_committed_requires_inspection', { cause: error });
     throw error;
   } finally {
     if (locked) await control.query('SELECT pg_advisory_unlock(204220260925)').catch(() => {});
@@ -274,9 +274,10 @@ const codes = new Set([
   'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'ERR_TLS_CERT_ALTNAME_INVALID',
 ]);
 const classes = new Set(['Error', 'TypeError', 'DatabaseError', 'AggregateError']);
+const safeCode = (error) => codes.has(error?.code) ? error.code : codes.has(error?.message) ? error.message : 'UNKNOWN';
 const safeFailure = (stage, error) => ({ status: 'FAIL', stage: stages.has(stage) ? stage : 'preflight',
-  code: codes.has(error?.code) ? error.code : codes.has(error?.message) ? error.message : 'UNKNOWN',
-  errorClass: classes.has(error?.name) ? error.name : 'Other' });
+  code: safeCode(error), errorClass: classes.has(error?.name) ? error.name : 'Other',
+  ...(error?.cause === undefined ? {} : { cause: safeCode(error.cause) }) });
 
 export async function launch(env, { Client, SecretsManagerClient, DescribeSecretCommand }) {
   let stage = 'configuration';
