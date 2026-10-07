@@ -163,11 +163,13 @@ async function applyProductDml(client, supportsMaintain) {
     }
   }
   await client.query(`GRANT SELECT (owner_user_ids) ON ${ident(receipt)} TO ${role}`);
-  for (const name of appendOnly) {
+  const present = new Set(product.map(({ name }) => name));
+  for (const name of appendOnly.filter((name) => present.has(name))) {
     await client.query(`REVOKE UPDATE, DELETE ON ${ident(name)} FROM ${role}`);
     await revokeAllColumns(client, name, "UPDATE");
   }
-  for (const name of noDelete) await client.query(`REVOKE DELETE ON ${ident(name)} FROM ${role}`);
+  for (const name of noDelete.filter((name) => present.has(name)))
+    await client.query(`REVOKE DELETE ON ${ident(name)} FROM ${role}`);
   await client.query(`GRANT USAGE ON SCHEMA identity TO ${role}`);
   for (const [name, column] of Object.entries(await lockColumns(client)))
     await client.query(`GRANT SELECT, UPDATE ("${column}") ON ${ident(name)} TO ${role}`);
