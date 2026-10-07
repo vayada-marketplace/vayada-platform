@@ -16,6 +16,8 @@ HARDENED_REVIEWED_PAIR = {
 }
 # VAY-965 profile-edit image D: natively proved primary and rollback for property_profile.
 PROFILE_EDIT_IMAGE = {'sha256:1c5ddf7c26ad738ce55dc360f17e67ed5cbf46a1a8e09505c71b88a59a463a75': '3e78a281a28930d3023de18385c90411a6006625'}
+# VAY-2055 connection-scope image: same digest serves next-api and both setup services.
+CONNECTION_SCOPE_IMAGE = {'sha256:eacd03ed0c836b1d1e77e1b8fdb0ba5bb3a178b218700a627f6552534f60c846': '480602efd31b71e7997be1c5aae2c23930be3933'}
 
 
 class HotelSetupServiceTests(unittest.TestCase):
@@ -171,7 +173,7 @@ class HotelSetupServiceTests(unittest.TestCase):
             self.assertEqual(resources[f'aws_ecs_task_definition.hotel_setup_property["{slot}"]']['family'], 'vayada-hotel-setup-property-' + slot)
         inventory = json.loads((ROOT / 'deployment/hotel-setup-property-images.json').read_text())
         proof = json.loads((ROOT / 'deployment/hotel-setup-property-image-proof.json').read_text())
-        self.assertEqual(inventory, {proof[slot]['digest']: proof[slot]['source'] for slot in ('primary', 'rollback')} | HARDENED_REVIEWED_PAIR | PROFILE_EDIT_IMAGE)
+        self.assertEqual(inventory, {proof[slot]['digest']: proof[slot]['source'] for slot in ('primary', 'rollback')} | HARDENED_REVIEWED_PAIR | PROFILE_EDIT_IMAGE | CONNECTION_SCOPE_IMAGE)
         self.assertNotEqual(proof['primary']['digest'], proof['rollback']['digest'])
         self.assertEqual(proof['verification']['postgresVersions'], [16, 17])
         source = (ROOT / 'infra/hotel_setup_property_service.tf').read_text()
@@ -239,7 +241,7 @@ class HotelSetupServiceTests(unittest.TestCase):
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
         inventory = json.loads((ROOT / 'deployment/hotel-setup-command-images.json').read_text())
         proof = json.loads((ROOT / 'deployment/hotel-setup-creation-image-proof.json').read_text())
-        self.assertEqual(inventory, {proof[key]['digest']: proof[key]['source'] for key in ('primary', 'rollback')} | HARDENED_REVIEWED_PAIR)
+        self.assertEqual(inventory, {proof[key]['digest']: proof[key]['source'] for key in ('primary', 'rollback')} | HARDENED_REVIEWED_PAIR | CONNECTION_SCOPE_IMAGE)
         for digest, source in inventory.items():
             self.assertRegex(digest, r'^sha256:[a-f0-9]{64}$')
             self.assertRegex(source, r'^[a-f0-9]{40}$')
