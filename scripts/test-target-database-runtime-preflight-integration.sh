@@ -21,6 +21,7 @@ cleanup() {
   rm -rf "${work}"
 }
 trap cleanup EXIT
+trap 'echo "integration test failed at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 docker network create "${network}" >/dev/null
 docker volume create "${node_modules_container}" >/dev/null
