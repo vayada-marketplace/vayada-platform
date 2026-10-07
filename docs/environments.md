@@ -956,7 +956,11 @@ the same path (verified read-only against production on 2026-10-07).
 The runtime preflight (`scripts/target-database-runtime-preflight.mjs`, run by
 every `tf-apply`) detects the posture from the migration owner's default
 privileges in the seven product schemas. With none it asserts the legacy
-allowlist exactly as before; with all seven it asserts the product DML posture:
+allowlist as before, with one deliberate tightening that applies to both
+postures: the no-read list, the name patterns and `vayada_migration_evidence`
+are unreadable (`pms.inventory_coverage_validation_queue` was only exempt from
+the required reads before); production passed this read-only on 2026-10-07.
+With all seven it asserts the product DML posture:
 every non-protected product relation has `SELECT, INSERT, UPDATE, DELETE`
 (`runtime_product_dml_missing`), the protected list and name patterns are not
 writable (`runtime_protected_relation_write_forbidden`) or readable

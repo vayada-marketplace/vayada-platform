@@ -1239,6 +1239,15 @@ owner_psql "REVOKE INSERT ON platform.schema_migrations FROM vayada_next_api_run
 owner_psql "GRANT UPDATE ON identity.users TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_identity_write_scope_too_broad
 owner_psql "REVOKE UPDATE ON identity.users FROM vayada_next_api_runtime; GRANT UPDATE (created_at) ON identity.users TO vayada_next_api_runtime" >/dev/null
+owner_psql "GRANT UPDATE (status) ON identity.users TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_identity_write_scope_too_broad:1:users.status.UPDATE
+owner_psql "REVOKE UPDATE (status) ON identity.users FROM vayada_next_api_runtime" >/dev/null
+owner_psql "GRANT INSERT ON platform.schema_migrations TO PUBLIC" >/dev/null
+expect_failure runtime_protected_relation_write_forbidden
+owner_psql "REVOKE INSERT ON platform.schema_migrations FROM PUBLIC" >/dev/null
+owner_psql "GRANT SELECT ON platform.hotel_setup_creation_scopes TO PUBLIC" >/dev/null
+expect_failure runtime_protected_relation_read_forbidden
+owner_psql "REVOKE SELECT ON platform.hotel_setup_creation_scopes FROM PUBLIC" >/dev/null
 owner_psql "ALTER TABLE identity.organizations RENAME COLUMN created_at TO created_at_renamed" >/dev/null
 expect_failure runtime_identity_lock_column_missing
 owner_psql "ALTER TABLE identity.organizations RENAME COLUMN created_at_renamed TO created_at" >/dev/null
