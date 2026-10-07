@@ -350,52 +350,9 @@ older credential. After a successful run, synchronize the repository's
 `TF_VAR_DB_MASTER_PASSWORD` secret from the protected parameter without putting
 the value in arguments or logs.
 
-The API records authentication and other product events in
-`platform.product_audit_events`. The migration owner must grant the runtime
-role only the missing privilege needed for this append-only sink. Runtime
-`SELECT` on application tables is already required by the preflight:
-
-```sql
-GRANT INSERT ON platform.product_audit_events TO vayada_next_api_runtime;
-```
-
-Use `scripts/run-target-database-runtime-preflight.sh --grant-product-audit-insert`
-to apply this one grant from a temporary task inside the database network.
-The task receives only the migration-owner URL and no application secrets;
-the runner checksum-pins the official eu-west-1 RDS CA bundle and the task
-verifies the database certificate and hostname. It checks table ownership
-and refuses to run if the runtime role has audit
-`UPDATE` or `DELETE`. Then run `scripts/run-target-database-runtime-preflight.sh`
-before relying on runtime login. Its allowlist requires audit
-`INSERT` while continuing to reject audit `UPDATE` and `DELETE`.
-
-After the affiliate migrations create the required relations, run
-`scripts/run-target-database-runtime-preflight.sh --grant-affiliate-read`.
-It grants the runtime role `SELECT` on this fixed list using the same
-owner-only, verified-RDS-certificate task:
-
-- `marketplace.affiliate_links`;
-- `marketplace.affiliate_agreement_lifecycle_events`;
-- `marketplace.affiliate_click_occurrences`;
-- `marketplace.affiliate_discrepancy_claims`;
-- `marketplace.affiliate_discrepancy_resolutions`;
-- `booking.affiliate_click_contexts`;
-- `booking.affiliate_click_admissions`;
-- `booking.affiliate_original_booking_bindings`.
-
-It refuses pre-existing writes or table/column `SELECT WITH GRANT OPTION`;
-affiliate write permissions require a separate review. The single `GRANT`
-statement is atomic. Run only from the reviewed operator grant lane, then
-rerun the runtime preflight before platform apply. Merging the helper does
-not execute it or grant database access.
-
-For the specific two-relation discrepancy failure, use the protected main-only
-`runtime-affiliate-read-repair.yml` workflow with the reviewed stable next API
-task-definition ARN. It shares the normal production mutation queue, checks the
-runtime secret mapping, and refuses a preflight failure other than these exact
-two missing reads. It invokes the fixed grant helper once, then verifies the
-full preflight. Do not retry it automatically, deploy a service, or apply
-Terraform from this repair lane. Any further blocker needs its own review.
+Writes for the ordinary API login are granted by the single reviewed product
+DML mode described in "Target database runtime role: product DML grant
+(VAY-2054)" below; the per-incident `--grant-*` modes were retired with it.
 
 The hotel setup relations `platform.hotel_setup_creation_scopes`,
 `platform.hotel_setup_linked_properties`, and
@@ -405,80 +362,6 @@ runtime any reads or writes on them to satisfy deployment checks. Preflight
 excludes them from required reads and rejects effective table/column reads
 (including PUBLIC or inherited grants), as well as writes. Migration 0436
 grants the setup scope role access to the scoped view; this does not change.
-
-When the runtime preflight reports missing reads for the four Finance affiliate
-earning projection relations, run
-`scripts/run-target-database-runtime-preflight.sh --grant-finance-affiliate-read`.
-The owner-checked task grants the API runtime role only `SELECT` on exactly:
-
-- `finance.affiliate_earning_reconciliation_revisions`;
-- `finance.affiliate_eligible_earning_revisions`;
-- `finance.affiliate_earning_allocations`;
-- `finance.affiliate_earning_allocation_items`.
-
-It refuses missing ownership, write privileges, or `SELECT WITH GRANT OPTION`
-and applies all four grants in one transaction. Rerun the runtime preflight
-before platform apply.
-
-When the runtime preflight reports missing reads for
-`platform.pricing_runtime_property_scopes` and
-`platform.channex_management_worker_properties`, run
-`scripts/run-target-database-runtime-preflight.sh --grant-platform-runtime-read`.
-The owner-checked task grants only `SELECT` on those two tables and refuses to
-run if the runtime role already has any write privilege on either table. Then
-rerun the runtime preflight before platform apply.
-
-Before routing booking-web attribution through `TARGET_DATABASE_URL` for the
-VAY-2038 identity credential split, run
-`scripts/run-target-database-runtime-preflight.sh --grant-domain-events-append`.
-The owner-checked grant allows only `SELECT` and `INSERT` on
-`platform.domain_events`; it refuses existing `UPDATE`, `DELETE`, or other
-destructive privileges. Verify the grant as the general runtime role and
-exercise the real booking-web event insertion before the later
-preflight-tightening PR. This release permits but does not yet require event
-`INSERT`, so platform apply remains safe before the grant. Do not change
-`AUTH_DATABASE_URL` or enable the separate identity role as part of this grant.
-
-For the paused Channex staging canary's saved-offer command, use
-`scripts/run-target-database-runtime-preflight.sh --grant-jobs-insert` to grant
-only `INSERT` on `platform.jobs` to the general runtime role. The owner-only
-runner rejects existing `UPDATE`, `DELETE`, and other job-table escalation.
-This grant is staged in the runtime preflight: it is allowed but not yet
-required until the grant is applied and the command/worker permission matrix
-has been reviewed. Keep the worker paused during that review; this grant alone
-does not authorize a provider write or prove worker readiness.
-
-For VAY-2039 expense-category creation, first deploy the application change
-that removes the property-row `FOR UPDATE` lock from the create path. After
-review, run `scripts/run-target-database-runtime-preflight.sh
---grant-expense-category-insert` to grant only `INSERT` on
-`finance.expense_categories` to the general runtime role. The owner-checked
-runner rejects existing `UPDATE`, `DELETE`, and other destructive privileges.
-Run the runtime preflight again and verify a bounded create/read/replay on the
-documented test property. This grant is staged (allowed but not yet required)
-to keep the rollout safe before application deployment. It does not authorize
-category updates/archival, expense writes, or Financials activation.
-
-For VAY-2037 supplier-bill creation and correction rows, first deploy the
-application change that removes the redundant property and expense row locks.
-Then run `scripts/run-target-database-runtime-preflight.sh
---grant-expense-insert` to grant only `INSERT` on `finance.expenses` to the
-general runtime role. The owner-checked runner refuses existing `UPDATE`,
-`DELETE`, or other destructive privileges. Run the standard runtime preflight
-again before the bounded create/read/correction/replay smoke. This grant does
-not authorize in-place expense updates, archive operations, payments,
-reservations, or Financials activation.
-
-For VAY-2046 recurring-expense creation, first deploy the application change
-that uses a plain property read on create while retaining the existing locks
-for update and disable. Then run
-`scripts/run-target-database-runtime-preflight.sh --grant-recurring-expense-insert`
-to grant only `INSERT` on `finance.recurring_expense_rules` to the general API
-runtime. The owner-checked grant rejects existing broader writes. Run the
-standard runtime preflight, then verify a bounded create/read/replay using the
-reviewed test property after its shared test window is released. This grant is
-staged (allowed but not yet required) and does not enable the expense worker or
-authorize recurring-rule updates.
 
 Roll out in two phases. First deploy application release
 `8c2cdef397522740c9fe7803efc2ed36d637bac5` (or retain an already-split task),
@@ -884,23 +767,12 @@ requirements: engineering/channex-webhook-cutover-plan.md in the application rep
 
 ### Hotel setup track command runtime repair (VAY-965)
 
-`PUT /api/hotel-setup/tracks` uses the ordinary API runtime connection. Its
-atomic transaction needs column writes as well as reads: `FOR UPDATE` itself
-requires an UPDATE privilege. Run the owner-checked fixed repair with:
-
-```bash
-scripts/run-target-database-runtime-preflight.sh --grant-hotel-setup-tracks
-scripts/run-target-database-runtime-preflight.sh
-```
-
-The helper grants only the column matrix in
-`scripts/grant-target-database-hotel-setup-tracks.mjs`, in one transaction. It
-adds no DELETE, table-wide writes, delegation, role membership or private
-setup scope access. The staged preflight allowlist accepts those columns.
-These are column-scoped privileges, not tenant-scoped privileges; route
-owner authorization remains the tenant boundary. The UPDATE grants on link,
-billing and profile keys permit row locks but are real column write privileges.
-Never replace this runtime connection with migration-owner credentials.
+`PUT /api/hotel-setup/tracks` uses the ordinary API runtime connection and
+needs the setup-track column matrix on `identity.product_entitlements` and
+`identity.organization_resource_links`. That matrix is now part of the product
+DML grant below (`--grant-runtime-product-dml`); the former
+`--grant-hotel-setup-tracks` mode is retired. Never replace this runtime
+connection with migration-owner credentials.
 
 ### Target database runtime role: product DML grant (VAY-2054)
 

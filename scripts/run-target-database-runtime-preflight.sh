@@ -115,39 +115,6 @@ case "${mode}" in
     family="vayada-next-api-db-runtime-preflight"
     financials_readiness_property="$2"
     ;;
-  --grant-hotel-setup-tracks|--grant-product-audit-insert|--grant-affiliate-read|--grant-finance-affiliate-read|--grant-platform-runtime-read|--grant-property-profile-lock|--grant-domain-events-append|--grant-jobs-insert|--grant-expense-category-insert|--grant-expense-insert|--grant-recurring-expense-insert|--grant-folio-command)
-    ca_required=true
-    code_file="grant-target-database-product-audit-insert.mjs"
-    if [[ "${mode}" == "--grant-hotel-setup-tracks" ]]; then
-      code_file="grant-target-database-hotel-setup-tracks.mjs"
-    elif [[ "${mode}" == "--grant-affiliate-read" ]]; then
-      grant_scope="affiliate_read"
-    elif [[ "${mode}" == "--grant-finance-affiliate-read" ]]; then
-      grant_scope="finance_affiliate_read"
-    elif [[ "${mode}" == "--grant-platform-runtime-read" ]]; then
-      grant_scope="platform_runtime_read"
-    elif [[ "${mode}" == "--grant-property-profile-lock" ]]; then
-      grant_scope="property_profile_lock"
-    elif [[ "${mode}" == "--grant-domain-events-append" ]]; then
-      grant_scope="domain_events_append"
-    elif [[ "${mode}" == "--grant-jobs-insert" ]]; then
-      grant_scope="jobs_insert"
-    elif [[ "${mode}" == "--grant-expense-category-insert" ]]; then
-      grant_scope="expense_category_insert"
-    elif [[ "${mode}" == "--grant-expense-insert" ]]; then
-      grant_scope="expense_insert"
-    elif [[ "${mode}" == "--grant-recurring-expense-insert" ]]; then
-      grant_scope="recurring_expense_insert"
-    elif [[ "${mode}" == "--grant-folio-command" ]]; then
-      code_file="grant-target-database-folio-command.mjs"
-    else
-      grant_scope="audit_insert"
-    fi
-    [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
-    secret_name="TARGET_DATABASE_MIGRATION_URL"
-    secret_parameter="/vayada/prod/target-database-url"
-    family="vayada-next-api-db-runtime-preflight"
-    ;;
   --provision-finance-expense-worker|--grant-finance-expense-worker|--preflight-finance-expense-worker)
     ca_required=true
     family="vayada-next-api-db-runtime-preflight"
@@ -511,7 +478,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "$code_in_definition" == true || -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || ( "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--inspect-hotel-setup-logo-migration" ) || ( "${mode}" == "--stage-hotel-setup-migration-scope" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ) || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
+  if [[ "$code_in_definition" == true || -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || ( "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--inspect-hotel-setup-logo-migration" ) || ( "${mode}" == "--stage-hotel-setup-migration-scope" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ) || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -527,7 +494,7 @@ if [[ "${ca_required}" == true ]]; then
     }
   fi
   ca_payload="$(printf '%s' "${ca_bundle}" | gzip -9 -c | base64 | tr -d '\n')"
-  if [[ ( -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--grant-expense-category-insert" || "${mode}" == "--grant-expense-insert" || "${mode}" == "--grant-recurring-expense-insert" || "${mode}" == "--grant-folio-command" || "${mode}" == "--grant-affiliate-read" || "${mode}" == "--grant-finance-affiliate-read" || "${mode}" == "--grant-platform-runtime-read" || "${mode}" == "--grant-property-profile-lock" || "${mode}" == "--grant-hotel-setup-tracks" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || ( "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--inspect-hotel-setup-logo-migration" ) || ( "${mode}" == "--stage-hotel-setup-migration-scope" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ) ) && "${#ca_payload}" -gt 2100 ]]; then
+  if [[ ( -n "$reader_rls_mode" || -n "$legacy_helper_mode" || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == "--provision-hotel-setup-scope" || ( "${mode}" == --provision-hotel-setup-creation-* || "${mode}" == "--provision-hotel-setup-property-reader" || "${mode}" == "--provision-hotel-setup-property-native" || "${mode}" == "--cleanup-hotel-setup-logo" || "${mode}" == "--audit-hotel-setup-owner" || "${mode}" == "--audit-hotel-setup-migration" || ( "${mode}" == "--audit-hotel-setup-readiness-migrations" || "${mode}" == "--inspect-hotel-setup-logo-migration" ) || ( "${mode}" == "--stage-hotel-setup-migration-scope" || "${mode}" == "--stage-hotel-setup-logo-migration-scope" ) ) ) && "${#ca_payload}" -gt 2100 ]]; then
     echo "Pinned grant CA payload exceeds the reviewed ECS override budget." >&2; exit 1
   fi
 fi

@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re
-import textwrap
 import unittest
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,28 +111,6 @@ class RuntimePreflightContractTest(unittest.TestCase):
                            CHECK.index('check(writableColumns.rowCount'))
         self.assertLess(CHECK.index('"runtime_protected_relation_read_forbidden"'),
                         CHECK.index('posture === "legacy") {'))
-
-    def test_repair_lane_is_fixed_main_only_and_serialized(self) -> None:
-        workflow = (ROOT / '.github/workflows/runtime-affiliate-read-repair.yml').read_text()
-        self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
-        self.assertIn('environment: platform-mutations-v2', workflow)
-        self.assertIn('group: production-ecs-mutations', workflow)
-        self.assertIn('queue: max', workflow)
-        self.assertIn('runtime_relation_read_missing:2:', workflow)
-        self.assertEqual(workflow.count('--grant-'), 1)
-        self.assertNotIn('run: terraform', workflow.lower())
-
-    def test_repair_only_accepts_the_exact_missing_read_failure(self) -> None:
-        workflow = (ROOT / '.github/workflows/runtime-affiliate-read-repair.yml').read_text()
-        guard = textwrap.dedent(workflow.split("python3 - <<'PY'\n", 1)[1].split('\n          PY', 1)[0])
-        known = 'runtime_relation_read_missing:2:marketplace.affiliate_discrepancy_claims,marketplace.affiliate_discrepancy_resolutions'
-        for output in (known, known.replace('claims,marketplace.affiliate_discrepancy_resolutions', 'resolutions,marketplace.affiliate_discrepancy_claims')):
-            with patch.object(Path, 'read_text', return_value=f'Runtime preflight task failed\n{output}\n'):
-                exec(guard, {})
-        for output in ('', 'PASS', known.replace(':2:', ':3:'), known.replace('affiliate_discrepancy_claims', 'affiliate_links'), known + '\n' + known):
-            with self.subTest(output=output), patch.object(Path, 'read_text', return_value=output):
-                with self.assertRaises(SystemExit):
-                    exec(guard, {})
 
 
 if __name__ == "__main__":
