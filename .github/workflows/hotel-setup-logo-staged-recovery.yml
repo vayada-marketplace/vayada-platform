@@ -1,0 +1,44 @@
+name: Recover the inspected disabled logo bootstrap role
+on:
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: Reviewed operational image containing the pinned logo inventory
+        required: true
+      expected_task_definition:
+        description: Exact stable held public API task with all setup callers blocked
+        required: true
+      phase:
+        type: choice
+        options: [inspect, apply]
+        required: true
+      expected_manifest_sha256:
+        description: Empty for inspection; exact PLAN fingerprint required for apply
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+jobs:
+  recover:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Inspect or revoke only the fixed unused bootstrap attempt
+        env:
+          EXPECTED_TASK: ${{ inputs.expected_task_definition }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          PHASE: ${{ inputs.phase }}
+          FROZEN: ${{ inputs.expected_manifest_sha256 }}
+        run: |
+          bash scripts/run-target-database-runtime-preflight.sh --recover-hotel-setup-logo-staged-role "$PHASE" "$FROZEN" "$IMAGE_DIGEST"

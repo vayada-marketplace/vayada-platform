@@ -369,13 +369,42 @@ and refuses to run if the runtime role has audit
 before relying on runtime login. Its allowlist requires audit
 `INSERT` while continuing to reject audit `UPDATE` and `DELETE`.
 
-After the affiliate migrations create `marketplace.affiliate_links` and
-`marketplace.affiliate_agreement_lifecycle_events`, run
+After the affiliate migrations create the required relations, run
 `scripts/run-target-database-runtime-preflight.sh --grant-affiliate-read`.
-It grants the runtime role `SELECT` on exactly those two tables using the same
-owner-only, verified-RDS-certificate task. It refuses pre-existing write
-privileges; affiliate write permissions require a separate review. Then rerun
-the runtime preflight before platform apply.
+It grants the runtime role `SELECT` on this fixed list using the same
+owner-only, verified-RDS-certificate task:
+
+- `marketplace.affiliate_links`;
+- `marketplace.affiliate_agreement_lifecycle_events`;
+- `marketplace.affiliate_click_occurrences`;
+- `marketplace.affiliate_discrepancy_claims`;
+- `marketplace.affiliate_discrepancy_resolutions`;
+- `booking.affiliate_click_contexts`;
+- `booking.affiliate_click_admissions`;
+- `booking.affiliate_original_booking_bindings`.
+
+It refuses pre-existing writes or table/column `SELECT WITH GRANT OPTION`;
+affiliate write permissions require a separate review. The single `GRANT`
+statement is atomic. Run only from the reviewed operator grant lane, then
+rerun the runtime preflight before platform apply. Merging the helper does
+not execute it or grant database access.
+
+For the specific two-relation discrepancy failure, use the protected main-only
+`runtime-affiliate-read-repair.yml` workflow with the reviewed stable next API
+task-definition ARN. It shares the normal production mutation queue, checks the
+runtime secret mapping, and refuses a preflight failure other than these exact
+two missing reads. It invokes the fixed grant helper once, then verifies the
+full preflight. Do not retry it automatically, deploy a service, or apply
+Terraform from this repair lane. Any further blocker needs its own review.
+
+The hotel setup relations `platform.hotel_setup_creation_scopes`,
+`platform.hotel_setup_linked_properties`, and
+`hotel_catalog.hotel_setup_effective_creation_scopes` are intentionally private
+to the dedicated hotel setup authority. Do **not** grant the ordinary API
+runtime any reads or writes on them to satisfy deployment checks. Preflight
+excludes them from required reads and rejects effective table/column reads
+(including PUBLIC or inherited grants), as well as writes. Migration 0436
+grants the setup scope role access to the scoped view; this does not change.
 
 When the runtime preflight reports missing reads for the four Finance affiliate
 earning projection relations, run
@@ -852,3 +881,23 @@ X-Vayada-Webhook-Token header. Preserve unrelated subscriptions. Rollback disabl
 these subscriptions and sets the review override to observe_only. Staging canary
 configuration always resets this override to observe_only. App contract and smoke
 requirements: engineering/channex-webhook-cutover-plan.md in the application repo.
+
+### Hotel setup track command runtime repair (VAY-965)
+
+`PUT /api/hotel-setup/tracks` uses the ordinary API runtime connection. Its
+atomic transaction needs column writes as well as reads: `FOR UPDATE` itself
+requires an UPDATE privilege. Run the owner-checked fixed repair with:
+
+```bash
+scripts/run-target-database-runtime-preflight.sh --grant-hotel-setup-tracks
+scripts/run-target-database-runtime-preflight.sh
+```
+
+The helper grants only the column matrix in
+`scripts/grant-target-database-hotel-setup-tracks.mjs`, in one transaction. It
+adds no DELETE, table-wide writes, delegation, role membership or private
+setup scope access. The staged preflight allowlist accepts those columns.
+These are column-scoped privileges, not tenant-scoped privileges; route
+owner authorization remains the tenant boundary. The UPDATE grants on link,
+billing and profile keys permit row locks but are real column write privileges.
+Never replace this runtime connection with migration-owner credentials.

@@ -1,0 +1,76 @@
+name: Inspect only approved legacy organization helper execution
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Verify authenticates only the two frozen native identities
+        type: choice
+        options: [inspect, verify]
+        default: inspect
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+jobs:
+  inspect:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Freeze metadata and optionally prove both native helper calls
+        env:
+          EXPECTED_TASK: arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1186
+          PROBE_MODE: ${{ inputs.mode }}
+          AWS_MAX_ATTEMPTS: "1"
+          AWS_RETRY_MODE: standard
+        run: |
+          set -euo pipefail
+          [[ "$PROBE_MODE" == inspect || "$PROBE_MODE" == verify ]] || exit 2
+          verify_services() {
+            aws ecs describe-services --cluster vayada-backend-cluster --region eu-west-1 \
+              --services vayada-next-api-service vayada-hotel-setup-service vayada-hotel-setup-property-service \
+              --output json > service-state.json
+            jq -e --arg public "$EXPECTED_TASK" '
+              (.failures|length)==0 and (.services|length)==3 and
+              all(.services[]; .desiredCount==1 and .runningCount==1 and .pendingCount==0 and
+                (.deployments|length)==1 and .deployments[0].status=="PRIMARY" and
+                .deployments[0].rolloutState=="COMPLETED") and
+              ([.services[]|select(.serviceName=="vayada-next-api-service")|.taskDefinition]==[$public]) and
+              ([.services[]|select(.serviceName=="vayada-hotel-setup-service")|.taskDefinition]==
+                ["arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-hotel-setup-primary:2"]) and
+              ([.services[]|select(.serviceName=="vayada-hotel-setup-property-service")|.taskDefinition]==
+                ["arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-hotel-setup-property-primary:1"])
+            ' service-state.json >/dev/null
+          }
+          verify_services
+          set +e
+          bash scripts/run-target-database-runtime-preflight.sh --inspect-hotel-setup-legacy-helpers > inspection.json
+          status=$?
+          set -e
+          if [[ "$status" == 2 ]]; then
+            jq -e '.status=="BLOCKED" and .scope=="hotel_setup_legacy_helper_inspection" and .mode=="inspect"' inspection.json >/dev/null
+            cat inspection.json
+            exit 2
+          fi
+          [[ "$status" == 0 ]] || exit "$status"
+          frozen=$(jq -er 'select(.status=="PASS" and .scope=="hotel_setup_legacy_helper_inspection" and
+            .mode=="inspect")|.fingerprint|select(test("^[a-f0-9]{64}$"))' inspection.json)
+          cat inspection.json
+          verify_services
+          if [[ "$PROBE_MODE" == verify ]]; then
+            bash scripts/run-target-database-runtime-preflight.sh --verify-hotel-setup-legacy-helpers "$frozen"
+            verify_services
+          fi

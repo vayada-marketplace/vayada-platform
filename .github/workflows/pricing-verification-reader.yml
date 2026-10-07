@@ -1,0 +1,62 @@
+name: Pricing verification reader identity (no plan)
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact reviewed current-main SHA; identity check only
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+
+jobs:
+  reader:
+    environment: vay1543-pricing-verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout reviewed code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Require exact reviewed current main
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_main_sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$WORKFLOW_REF" = refs/heads/main
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_SHA" = "$WORKFLOW_SHA"
+          test "$EXPECTED_SHA" = "$(git rev-parse HEAD)"
+          test "$EXPECTED_SHA" = "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+      - name: Configure existing reader only
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-plan
+          aws-region: eu-west-1
+          allowed-account-ids: "269416271598"
+          aws-profile: vayada
+          output-env-credentials: false
+          role-duration-seconds: 900
+          role-session-name: pricing-reader-${{ github.run_id }}
+      - name: Verify exact account and stable reader identity
+        run: |
+          set -euo pipefail
+          caller="$(env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN -u AWS_PROFILE -u AWS_DEFAULT_PROFILE aws sts get-caller-identity --profile vayada --output json)"
+          jq -e '
+            .Account == "269416271598" and
+            (.Arn | test("^arn:aws:sts::269416271598:assumed-role/vayada-github-actions-platform-plan/pricing-reader-[0-9]+$")) and
+            (.UserId | test("^AROAT5OTWB3XFQWPINYTU:pricing-reader-[0-9]+$")) and
+            ((.Arn | split("/") | last) == (.UserId | split(":") | last))
+          ' <<< "$caller" >/dev/null
+          echo 'Reader identity checked only; no plan, permission admission, activation or hold release.'

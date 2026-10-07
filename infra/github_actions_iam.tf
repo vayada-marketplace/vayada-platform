@@ -58,6 +58,7 @@ data "aws_iam_policy_document" "github_actions_platform_deploy" {
     resources = ["*"]
   }
 
+
   statement {
     effect  = "Allow"
     actions = ["iam:PassRole"]
@@ -221,6 +222,7 @@ data "aws_iam_policy_document" "github_actions_platform_deploy" {
     ]
     resources = ["*"]
   }
+
 
   statement {
     effect = "Allow"

@@ -176,6 +176,12 @@ jobs:
           fi
           rm planned-export-runtime.json
 
+      - name: Preserve installed hotel setup caller
+        run: |
+          terraform -chdir=infra show -json tfplan > planned-setup-caller.json
+          python3 scripts/assert-hotel-setup-caller-retained.py current-next-api-task-definition.json planned-setup-caller.json
+          rm planned-setup-caller.json
+
       - name: Terraform apply
         run: terraform apply -no-color tfplan
         working-directory: infra
@@ -259,6 +265,19 @@ jobs:
           echo "latest_task_definition=${latest_task_definition}" >> "$GITHUB_OUTPUT"
 
           if [ "$current_task_definition" = "$latest_task_definition" ]; then
+            echo "deploy_required=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          hold_active="$(PYTHONPATH=scripts python3 - <<'PY'
+          from coordinated_release import Aws, CommandRunner, active_hold, load_config
+          config = load_config()
+          aws = Aws(CommandRunner(), config)
+          print("true" if active_hold(aws, config, "next-target-backend") else "false")
+          PY
+          )"
+          if [ "$hold_active" = true ]; then
+            echo "Public API deployment remains held; retaining its serving task."
             echo "deploy_required=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi

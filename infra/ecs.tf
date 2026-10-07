@@ -520,7 +520,7 @@ resource "aws_ecs_task_definition" "services" {
   cpu                      = each.value.cpu
   memory                   = each.value.memory
   enable_fault_injection   = false
-  execution_role_arn       = data.aws_iam_role.ecs_task_execution.arn
+  execution_role_arn       = each.key == "next-target-backend" && length(local.hotel_setup_caller_configured) > 0 ? "arn:aws:iam::${var.aws_account_id}:role/${aws_iam_role.hotel_setup_public_execution[0].name}" : data.aws_iam_role.ecs_task_execution.arn
   task_role_arn            = try(each.value.task_role_arn, data.aws_iam_role.ecs_task.arn)
 
   container_definitions = jsonencode([
@@ -543,13 +543,13 @@ resource "aws_ecs_task_definition" "services" {
         ], each.value.environment) : each.value.environment, each.key == "next-target-backend" && var.finance_export_worker_enabled ? [
         { name = "NODE_EXTRA_CA_CERTS", value = "/tmp/finance-export-rds-ca.pem" },
         { name = "FINANCE_EXPORT_RDS_CA", value = file("${path.module}/../rehearsal/rds-ca-rsa2048-g1.pem") },
-      ] : [])
-      secrets = length(each.value.secrets) > 0 ? [
+      ] : [], each.key == "next-target-backend" ? local.hotel_setup_caller_environment : [])
+      secrets = length(each.value.secrets) > 0 ? concat([
         for s in each.value.secrets : {
           name      = s.name
           valueFrom = "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${s.valueFrom}"
         }
-      ] : null
+      ], each.key == "next-target-backend" ? local.hotel_setup_caller_secrets : []) : null
 
       logConfiguration = {
         logDriver = "awslogs"
@@ -675,7 +675,7 @@ resource "aws_ecs_service" "services" {
 
   network_configuration {
     subnets          = var.subnet_ids
-    security_groups  = [aws_security_group.ecs_tasks.id]
+    security_groups  = concat([aws_security_group.ecs_tasks.id], each.key == "next-target-backend" && length(local.hotel_setup_caller_configured) > 0 ? [aws_security_group.hotel_setup["caller"].id] : [])
     assign_public_ip = true
   }
 

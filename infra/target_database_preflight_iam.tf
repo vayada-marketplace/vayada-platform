@@ -64,6 +64,8 @@ data "aws_iam_policy_document" "target_database_preflight_deploy" {
     actions = ["logs:GetLogEvents"]
     resources = [
       "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/ecs/vayada-next-api:log-stream:*",
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/ecs/vayada-hotel-setup:log-stream:ecs/vayada-next-api/*",
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/ecs/vayada-hotel-setup-property:log-stream:ecs/vayada-next-api/*",
     ]
   }
 

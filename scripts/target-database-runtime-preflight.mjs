@@ -25,7 +25,26 @@ const stagedRelationPrivileges = {
   "platform.domain_events": ["INSERT"],
   "platform.jobs": ["INSERT"],
 };
+// VAY-965: columns used by the authorized setup track transaction; no private scope access.
 const stagedColumnPrivileges = {
+  "hotel_catalog.organization_setup_track_intents": {
+    INSERT: ["organization_id", "selected_tracks", "revision"],
+    UPDATE: ["selected_tracks", "revision", "updated_at"],
+  },
+  "identity.product_entitlements": {
+    INSERT: ["organization_id", "product", "entitlement_key", "status", "starts_at", "expires_at", "metadata"],
+    UPDATE: ["status", "starts_at", "expires_at", "updated_at"],
+  },
+  "identity.organization_resource_links": {
+    INSERT: ["organization_id", "product", "resource_type", "resource_id", "relationship", "status"],
+    UPDATE: ["id"],
+  },
+  "finance.billing_entitlements": { UPDATE: ["id"] },
+  "booking.booking_settings": { INSERT: ["property_id"] },
+  "marketplace.marketplace_hotel_profiles": {
+    INSERT: ["property_id", "organization_id", "source_system", "source_hotel_profile_id"],
+    UPDATE: ["property_id"],
+  },
   "finance.folios": { UPDATE: ["id"] },
   "pms.channel_operational_alerts": { UPDATE: ["resolved_at"] },
 };
@@ -33,6 +52,11 @@ const requiredColumnPrivileges = {
   "hotel_catalog.properties": { UPDATE: ["id"] },
 };
 const protectedRelations = [
+  "platform.hotel_setup_property_scopes",
+  "platform.hotel_setup_creation_scopes",
+  "platform.hotel_setup_linked_properties",
+  "platform.hotel_setup_reconciliation_cursors",
+  "hotel_catalog.hotel_setup_effective_creation_scopes",
   "platform.identity_migration_provenance",
   "platform.channex_adoption_approval_records",
   "platform.channex_adoption_approval_revocations",
@@ -196,28 +220,19 @@ try {
     [],
     "runtime_schema_create_forbidden",
   );
+  // Hotel setup scope evidence is private to the dedicated setup authority.
   await requireNoMissing(
     client,
-    `SELECT namespace.nspname, relation.relname
-       FROM pg_class AS relation
-       JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-      WHERE ${applicationSchemas}
-        AND relation.relkind IN ('r','p','v','m','f')
-        AND relation.oid <> $1::regclass
-        AND namespace.nspname <> 'vayada_migration_evidence'
-        AND format('%I.%I', namespace.nspname, relation.relname) NOT IN (
-          'marketplace.affiliate_click_quota_windows',
-          'pms.inventory_coverage_validation_queue',
-          'platform.identity_migration_provenance',
-          'platform.legacy_historical_binding_transitions',
-          'platform.channex_management_worker_properties',
-          'platform.finance_export_worker_properties',
-          'platform.finance_expense_worker_properties',
-          'platform.pricing_runtime_property_scopes'
-        )
-        AND NOT has_table_privilege(current_user, relation.oid, 'SELECT')`,
-    [receipt],
-    "runtime_relation_read_missing",
+    `SELECT oid FROM pg_class
+      WHERE oid IN (
+        to_regclass('platform.hotel_setup_property_scopes'),
+        to_regclass('platform.hotel_setup_creation_scopes'),
+        to_regclass('platform.hotel_setup_linked_properties'),
+        to_regclass('platform.hotel_setup_reconciliation_cursors'),
+        to_regclass('hotel_catalog.hotel_setup_effective_creation_scopes')
+      ) AND has_any_column_privilege(current_user, oid, 'SELECT')`,
+    [],
+    "runtime_hotel_setup_scope_read_forbidden",
   );
   // Migration before/after evidence is private to the migration authority.
   await requireNoMissing(
@@ -523,6 +538,37 @@ try {
   );
   check(writableColumns.rowCount === 0, "receipt_columns_writable");
   await client.query(`SELECT owner_user_ids FROM ${receipt} LIMIT 0`);
+
+  // Report missing reads only after checking the entire security boundary.
+  // The bounded repair lane must not mistake a masked violation for a read-only gap.
+  await requireNoMissing(
+    client,
+    `SELECT namespace.nspname, relation.relname
+       FROM pg_class AS relation
+       JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+      WHERE ${applicationSchemas}
+        AND relation.relkind IN ('r','p','v','m','f')
+        AND relation.oid <> $1::regclass
+        AND namespace.nspname <> 'vayada_migration_evidence'
+        AND format('%I.%I', namespace.nspname, relation.relname) NOT IN (
+          'marketplace.affiliate_click_quota_windows',
+          'pms.inventory_coverage_validation_queue',
+          'platform.identity_migration_provenance',
+          'platform.legacy_historical_binding_transitions',
+          'platform.channex_management_worker_properties',
+          'platform.finance_export_worker_properties',
+          'platform.finance_expense_worker_properties',
+          'platform.hotel_setup_property_scopes',
+          'platform.hotel_setup_creation_scopes',
+          'platform.hotel_setup_linked_properties',
+          'platform.hotel_setup_reconciliation_cursors',
+          'hotel_catalog.hotel_setup_effective_creation_scopes',
+          'platform.pricing_runtime_property_scopes'
+        )
+        AND NOT has_table_privilege(current_user, relation.oid, 'SELECT')`,
+    [receipt],
+    "runtime_relation_read_missing",
+  );
 
   console.log(
     JSON.stringify({

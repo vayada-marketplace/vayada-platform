@@ -28,6 +28,8 @@ const affiliateReadTables = [
   "marketplace.affiliate_links",
   "marketplace.affiliate_agreement_lifecycle_events",
   "marketplace.affiliate_click_occurrences",
+  "marketplace.affiliate_discrepancy_claims",
+  "marketplace.affiliate_discrepancy_resolutions",
   "booking.affiliate_click_contexts",
   "booking.affiliate_click_admissions",
   "booking.affiliate_original_booking_bindings",
@@ -209,6 +211,7 @@ async function grantAffiliateRead(client, supportsMaintain) {
     if (ownership.rowCount !== 1 || !ownership.rows[0].is_table_owner)
       throw new Error("affiliate_table_owner_required");
     const prohibited = [
+      "SELECT WITH GRANT OPTION",
       "INSERT", "UPDATE", "DELETE", "TRUNCATE", "TRIGGER", "REFERENCES",
       ...(supportsMaintain ? ["MAINTAIN"] : []),
     ];
@@ -219,7 +222,7 @@ async function grantAffiliateRead(client, supportsMaintain) {
       UNION ALL
       SELECT attribute.attname || ':' || privilege.name
         FROM pg_catalog.pg_attribute AS attribute
-        CROSS JOIN (VALUES ('INSERT'), ('UPDATE'), ('REFERENCES')) AS privilege(name)
+        CROSS JOIN (VALUES ('SELECT WITH GRANT OPTION'), ('INSERT'), ('UPDATE'), ('REFERENCES')) AS privilege(name)
        WHERE attribute.attrelid = pg_catalog.to_regclass($1)
          AND attribute.attnum > 0 AND NOT attribute.attisdropped
          AND pg_catalog.has_column_privilege(

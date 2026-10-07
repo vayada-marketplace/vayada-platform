@@ -60,9 +60,10 @@ CREATE SCHEMA finance AUTHORIZATION legacy_owner;
 CREATE SCHEMA pms AUTHORIZATION legacy_owner;
 CREATE SCHEMA marketplace AUTHORIZATION legacy_owner;
 CREATE SCHEMA hotel_catalog AUTHORIZATION legacy_owner;
+CREATE SCHEMA identity AUTHORIZATION legacy_owner;
 CREATE SCHEMA vayada_migration_evidence AUTHORIZATION legacy_owner;
-REVOKE ALL ON SCHEMA platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence FROM PUBLIC;
-GRANT USAGE ON SCHEMA platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence
+REVOKE ALL ON SCHEMA identity, platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence FROM PUBLIC;
+GRANT USAGE ON SCHEMA identity, platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence
   TO vayada_next_api_runtime;
 
 SET ROLE legacy_owner;
@@ -96,7 +97,27 @@ CREATE TABLE pms.channel_connections (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_links (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_agreement_lifecycle_events (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_click_occurrences (id uuid PRIMARY KEY);
+CREATE TABLE marketplace.affiliate_discrepancy_claims (id uuid PRIMARY KEY);
+CREATE TABLE marketplace.affiliate_discrepancy_resolutions (id uuid PRIMARY KEY);
 CREATE TABLE marketplace.affiliate_click_quota_windows (link_id uuid PRIMARY KEY, consumed integer);
+CREATE TABLE hotel_catalog.organization_setup_track_intents (
+  organization_id uuid PRIMARY KEY, selected_tracks text[], revision integer, updated_at timestamptz
+);
+CREATE TABLE identity.product_entitlements (
+  id uuid DEFAULT gen_random_uuid(), organization_id uuid, product text, entitlement_key text,
+  status text, starts_at timestamptz, expires_at timestamptz, metadata jsonb, updated_at timestamptz,
+  resource_product text
+);
+CREATE TABLE identity.organization_resource_links (
+  id uuid DEFAULT gen_random_uuid(), organization_id uuid, product text, resource_type text,
+  resource_id text, relationship text, status text
+);
+CREATE TABLE finance.billing_entitlements (id uuid DEFAULT gen_random_uuid(), billing_status text);
+CREATE TABLE booking.booking_settings (property_id uuid PRIMARY KEY, published boolean DEFAULT false);
+CREATE TABLE marketplace.marketplace_hotel_profiles (
+  property_id uuid PRIMARY KEY, organization_id uuid, source_system text, source_hotel_profile_id text,
+  status text DEFAULT 'draft'
+);
 CREATE TABLE hotel_catalog.properties (id uuid PRIMARY KEY, profile_revision integer NOT NULL DEFAULT 1);
 CREATE TABLE booking.affiliate_click_contexts (id uuid PRIMARY KEY);
 CREATE TABLE booking.affiliate_click_admissions (id uuid PRIMARY KEY);
@@ -109,6 +130,12 @@ CREATE TABLE platform.channex_management_worker_properties (property_id uuid PRI
 CREATE TABLE platform.finance_expense_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.finance_export_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.pricing_runtime_property_scopes (database_login name PRIMARY KEY);
+CREATE TABLE platform.hotel_setup_property_scopes (database_login name PRIMARY KEY, property_id uuid, organization_id uuid);
+CREATE TABLE platform.hotel_setup_creation_scopes (database_login name PRIMARY KEY, organization_id uuid);
+CREATE TABLE platform.hotel_setup_linked_properties (property_id uuid PRIMARY KEY);
+CREATE TABLE platform.hotel_setup_reconciliation_cursors (mode text PRIMARY KEY, scope_id uuid);
+CREATE VIEW hotel_catalog.hotel_setup_effective_creation_scopes WITH (security_barrier = true) AS
+  SELECT organization_id FROM platform.hotel_setup_creation_scopes WHERE database_login = session_user;
 CREATE TABLE pms.inventory_coverage_validation_queue (id uuid PRIMARY KEY);
 CREATE TABLE vayada_migration_evidence.database_attestations (id uuid PRIMARY KEY);
 CREATE TYPE app.hotel_state AS ENUM ('active', 'inactive');
@@ -136,7 +163,10 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON platform.idempotency_keys
 GRANT SELECT ON platform.product_audit_events
   TO vayada_next_api_runtime;
 GRANT SELECT ON platform.jobs TO vayada_next_api_runtime;
-GRANT SELECT ON hotel_catalog.properties TO vayada_next_api_runtime;
+GRANT SELECT, UPDATE (id) ON hotel_catalog.properties TO vayada_next_api_runtime;
+GRANT SELECT ON hotel_catalog.organization_setup_track_intents, identity.product_entitlements,
+  identity.organization_resource_links, finance.billing_entitlements,
+  booking.booking_settings, marketplace.marketplace_hotel_profiles TO vayada_next_api_runtime;
 GRANT SELECT ON platform.legacy_owner_approval_records,
   platform.legacy_owner_approval_revocations TO vayada_next_api_runtime;
 GRANT EXECUTE ON FUNCTION app.hotel_count() TO vayada_next_api_runtime;
@@ -151,6 +181,7 @@ docker run --rm \
 cp "${root}/scripts/target-database-runtime-preflight.mjs" "${work}/preflight.mjs"
 cp "${root}/scripts/provision-hotel-setup-scope-role.mjs" "${work}/hotel-setup-scope.mjs"
 cp "${root}/scripts/grant-target-database-product-audit-insert.mjs" "${work}/grant.mjs"
+cp "${root}/scripts/grant-target-database-hotel-setup-tracks.mjs" "${work}/setup-grant.mjs"
 cp "${root}/scripts/grant-target-database-folio-command.mjs" "${work}/folio-grant.mjs"
 
 run_hotel_setup_scope() {
@@ -179,6 +210,10 @@ fi
 grep -F '"code":"hotel_setup_scope_admin_privilege_missing"' <<<"${unprivileged_scope_output}" >/dev/null
 run_hotel_setup_scope hotel_setup_provision_admin provision | grep -F '"created":true' >/dev/null
 run_hotel_setup_scope hotel_setup_provision_admin provision | grep -F '"created":false' >/dev/null
+docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'GRANT SELECT ON hotel_catalog.hotel_setup_effective_creation_scopes TO vayada_next_hotel_setup_scope' >/dev/null
+docker exec "${database_container}" psql -U postgres -tAc \
+  "SELECT has_table_privilege('vayada_next_hotel_setup_scope', 'hotel_catalog.hotel_setup_effective_creation_scopes', 'SELECT')" | grep -Fx t >/dev/null
 docker exec "${database_container}" psql -U postgres -Atqc "
   SELECT NOT (rolcanlogin OR rolsuper OR rolcreaterole OR rolcreatedb OR
     rolinherit OR rolbypassrls OR rolreplication)
@@ -201,6 +236,7 @@ run_grant() {
   local grant_scope="${4:-audit_insert}"
   local grant_file="grant.mjs"
   [[ "${grant_scope}" == "folio_command" ]] && grant_file="folio-grant.mjs"
+  [[ "${grant_scope}" == "hotel_setup_tracks" ]] && grant_file="setup-grant.mjs"
   docker run --rm \
     --network "${network}" \
     --volume "${node_modules_container}:/work" \
@@ -234,6 +270,83 @@ expect_failure() {
   fi
   grep -F "${expected}" <<<"${output}" >/dev/null
 }
+
+# VAY-965: exact column grants must unblock row locks and provisioning, atomically.
+if setup_non_owner="$(run_grant vayada_next_api_runtime runtime 1 hotel_setup_tracks 2>&1)"; then
+  echo "setup grant accepted a non-owner" >&2; exit 1
+fi
+grep -F '"code":"42501"' <<<"${setup_non_owner}" >/dev/null
+if setup_untrusted="$(run_grant legacy_owner owner 0 hotel_setup_tracks 2>&1)"; then
+  echo "setup grant accepted an untrusted endpoint" >&2; exit 1
+fi
+grep -F '"code":"unexpected_database_host"' <<<"${setup_untrusted}" >/dev/null
+docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'GRANT SELECT(metadata) ON identity.product_entitlements TO vayada_next_api_runtime WITH GRANT OPTION' >/dev/null
+if setup_delegation="$(run_grant legacy_owner owner 1 hotel_setup_tracks 2>&1)"; then
+  echo "setup grant accepted column delegation" >&2; exit 1
+fi
+grep -F '"code":"setup_runtime_scope_too_broad"' <<<"${setup_delegation}" >/dev/null
+[[ "$(docker exec "${database_container}" psql -U postgres -Atqc \
+  "SELECT has_column_privilege('vayada_next_api_runtime','hotel_catalog.organization_setup_track_intents','selected_tracks','UPDATE')")" == f ]]
+docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'REVOKE GRANT OPTION FOR SELECT(metadata) ON identity.product_entitlements FROM vayada_next_api_runtime' >/dev/null
+if [[ "${postgres_version}" == 17 ]]; then
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    'GRANT MAINTAIN ON finance.billing_entitlements TO vayada_next_api_runtime' >/dev/null
+  if setup_maintain="$(run_grant legacy_owner owner 1 hotel_setup_tracks 2>&1)"; then
+    echo "setup grant accepted MAINTAIN" >&2; exit 1
+  fi
+  grep -F '"code":"setup_runtime_scope_too_broad"' <<<"${setup_maintain}" >/dev/null
+  [[ "$(docker exec "${database_container}" psql -U postgres -Atqc \
+    "SELECT has_column_privilege('vayada_next_api_runtime','hotel_catalog.organization_setup_track_intents','selected_tracks','UPDATE')")" == f ]]
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    'REVOKE MAINTAIN ON finance.billing_entitlements FROM vayada_next_api_runtime' >/dev/null
+fi
+docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'ALTER TABLE marketplace.marketplace_hotel_profiles OWNER TO postgres' >/dev/null
+if setup_partial="$(run_grant legacy_owner owner 1 hotel_setup_tracks 2>&1)"; then
+  echo "setup grant accepted mixed ownership" >&2; exit 1
+fi
+grep -F '"code":"42501"' <<<"${setup_partial}" >/dev/null
+[[ "$(docker exec "${database_container}" psql -U postgres -Atqc \
+  "SELECT has_column_privilege('vayada_next_api_runtime','hotel_catalog.organization_setup_track_intents','selected_tracks','UPDATE')")" == f ]]
+docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'ALTER TABLE marketplace.marketplace_hotel_profiles OWNER TO legacy_owner' >/dev/null
+run_grant legacy_owner owner 1 hotel_setup_tracks | grep -F '"grant":"hotel_setup_tracks:columns"' >/dev/null
+run_grant legacy_owner owner 1 hotel_setup_tracks | grep -F '"grant":"hotel_setup_tracks:columns"' >/dev/null
+docker exec -i "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+BEGIN;
+SET LOCAL ROLE vayada_next_api_runtime;
+INSERT INTO hotel_catalog.organization_setup_track_intents (organization_id,selected_tracks,revision)
+  VALUES ('00000000-0000-4000-8000-000000000001',ARRAY['hotel_operations'],1);
+SELECT * FROM hotel_catalog.organization_setup_track_intents FOR UPDATE;
+UPDATE hotel_catalog.organization_setup_track_intents SET selected_tracks=ARRAY['hotel_operations','creator_marketplace'], revision=2, updated_at=now();
+INSERT INTO identity.product_entitlements (organization_id,product,entitlement_key,status,starts_at,expires_at,metadata)
+  VALUES ('00000000-0000-4000-8000-000000000001','pms','property-management','active',now(),null,'{}');
+SELECT * FROM identity.product_entitlements FOR UPDATE;
+UPDATE identity.product_entitlements SET status='active', starts_at=now(), expires_at=null, updated_at=now();
+INSERT INTO identity.organization_resource_links (organization_id,product,resource_type,resource_id,relationship,status)
+  VALUES ('00000000-0000-4000-8000-000000000001','pms','pms_property','00000000-0000-4000-8000-000000000002','owner','active');
+SELECT * FROM identity.organization_resource_links FOR UPDATE;
+SELECT * FROM finance.billing_entitlements FOR UPDATE;
+INSERT INTO booking.booking_settings (property_id) VALUES ('00000000-0000-4000-8000-000000000002');
+INSERT INTO marketplace.marketplace_hotel_profiles (property_id,organization_id,source_system,source_hotel_profile_id)
+  VALUES ('00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001','marketplace','fixture');
+SELECT * FROM marketplace.marketplace_hotel_profiles FOR UPDATE;
+DO $$ BEGIN
+  BEGIN UPDATE identity.product_entitlements SET resource_product='pms';
+    RAISE EXCEPTION 'unlisted entitlement column allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE identity.organization_resource_links SET status='active';
+    RAISE EXCEPTION 'link status mutation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE finance.billing_entitlements SET billing_status='active';
+    RAISE EXCEPTION 'billing mutation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE booking.booking_settings SET published=true;
+    RAISE EXCEPTION 'publication allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM hotel_catalog.organization_setup_track_intents;
+    RAISE EXCEPTION 'setup deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+END $$;
+ROLLBACK;
+SQL
 
 if untrusted_host_output="$(run_grant legacy_owner owner 0 2>&1)"; then
   echo "non-RDS grant without explicit test fixture unexpectedly passed" >&2
@@ -272,13 +385,40 @@ fi
 grep -F '"code":"audit_table_owner_required"' <<<"${non_owner_output}" >/dev/null
 run_grant legacy_owner owner | grep -F '"status":"PASS"' >/dev/null
 
-expect_failure runtime_relation_read_missing
+# A missing read must never mask an unexpected authority leak before repair.
+docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'GRANT SELECT ON platform.hotel_setup_creation_scopes TO vayada_next_api_runtime' >/dev/null
+expect_failure runtime_hotel_setup_scope_read_forbidden
+docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'REVOKE SELECT ON platform.hotel_setup_creation_scopes FROM vayada_next_api_runtime' >/dev/null
+
+if affiliate_missing_output="$(run_preflight 2>&1)"; then
+  echo "runtime preflight unexpectedly passed before affiliate read grants" >&2
+  exit 1
+fi
+for table in marketplace.affiliate_discrepancy_claims marketplace.affiliate_discrepancy_resolutions; do
+  grep -F "${table}" <<<"${affiliate_missing_output}" >/dev/null
+done
+if grep -E 'platform.hotel_setup_(creation_scopes|linked_properties)|hotel_catalog.hotel_setup_effective_creation_scopes' <<<"${affiliate_missing_output}"; then
+  echo "runtime preflight incorrectly requires private hotel setup reads" >&2
+  exit 1
+fi
 if affiliate_non_owner_output="$(run_grant vayada_next_api_runtime runtime 1 affiliate_read 2>&1)"; then
   echo "non-owner affiliate read grant unexpectedly passed" >&2
   exit 1
 fi
 grep -F '"code":"affiliate_table_owner_required"' <<<"${affiliate_non_owner_output}" >/dev/null
 run_grant legacy_owner owner 1 affiliate_read | grep -F '"grant":"affiliate_tables:SELECT"' >/dev/null
+
+for table in marketplace.affiliate_discrepancy_claims marketplace.affiliate_discrepancy_resolutions; do
+  docker exec -e PGPASSWORD=runtime "${database_container}" \
+    psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+    -c "SELECT count(*) FROM ${table}" >/dev/null
+  for privilege in INSERT UPDATE DELETE TRUNCATE; do
+    docker exec "${database_container}" psql -U postgres -tAc \
+      "SELECT has_table_privilege('vayada_next_api_runtime', '${table}', '${privilege}')" | grep -Fx f >/dev/null
+  done
+done
 
 if finance_missing_output="$(run_preflight 2>&1)"; then
   echo "runtime preflight unexpectedly passed before Finance affiliate read grant" >&2
@@ -492,6 +632,28 @@ fi
 grep -F '"code":"affiliate_runtime_write_scope_too_broad"' <<<"${affiliate_column_output}" >/dev/null
 docker exec "${database_container}" psql -U postgres -c \
   "REVOKE UPDATE (id) ON booking.affiliate_click_admissions FROM vayada_next_api_runtime" >/dev/null
+
+for table in marketplace.affiliate_discrepancy_claims marketplace.affiliate_discrepancy_resolutions; do
+  for privilege in INSERT 'UPDATE (id)' SELECT 'SELECT (id)'; do
+    grant_option=""
+    [[ "${privilege}" == SELECT* ]] && grant_option=' WITH GRANT OPTION'
+    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+      "GRANT ${privilege} ON ${table} TO vayada_next_api_runtime${grant_option}" >/dev/null
+    if discrepancy_broad_output="$(run_grant legacy_owner owner 1 affiliate_read 2>&1)"; then
+      echo "affiliate read grant accepted excessive discrepancy privilege" >&2
+      exit 1
+    fi
+    grep -F '"code":"affiliate_runtime_write_scope_too_broad"' <<<"${discrepancy_broad_output}" >/dev/null
+    if [[ -n "${grant_option}" ]]; then
+      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+        "REVOKE GRANT OPTION FOR ${privilege} ON ${table} FROM vayada_next_api_runtime" >/dev/null
+    else
+      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+        "REVOKE ${privilege} ON ${table} FROM vayada_next_api_runtime" >/dev/null
+    fi
+  done
+done
+run_grant legacy_owner owner 1 affiliate_read | grep -F '"grant":"affiliate_tables:SELECT"' >/dev/null
 
 docker exec -e PGPASSWORD=runtime "${database_container}" \
   psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
@@ -756,6 +918,46 @@ for table in finance_expense_worker_properties finance_export_worker_properties;
     expect_failure runtime_finance_worker_scope_read_forbidden
     docker exec "${database_container}" psql -U postgres -c \
       "REVOKE ${privilege} ON platform.${table} FROM vayada_next_api_runtime" >/dev/null
+  done
+done
+run_preflight | grep -F '"status":"PASS"' >/dev/null
+
+# Exact hotel setup exclusions must reject leaked direct, PUBLIC and inherited reads.
+for entry in \
+  platform.hotel_setup_property_scopes:database_login \
+  platform.hotel_setup_creation_scopes:database_login \
+  platform.hotel_setup_linked_properties:property_id \
+  platform.hotel_setup_reconciliation_cursors:scope_id \
+  hotel_catalog.hotel_setup_effective_creation_scopes:organization_id; do
+  table="${entry%:*}"
+  column="${entry#*:}"
+  for grantee in vayada_next_api_runtime PUBLIC elevated; do
+    if [[ "${grantee}" == elevated ]]; then
+      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+        'GRANT elevated TO vayada_next_api_runtime WITH INHERIT TRUE, SET FALSE, ADMIN FALSE' >/dev/null
+    fi
+    for privilege in SELECT "SELECT (${column})"; do
+      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+        "GRANT ${privilege} ON ${table} TO ${grantee}" >/dev/null
+      expect_failure runtime_hotel_setup_scope_read_forbidden
+      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+        "REVOKE ${privilege} ON ${table} FROM ${grantee}" >/dev/null
+    done
+    if [[ "${grantee}" == elevated ]]; then
+      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+        'REVOKE elevated FROM vayada_next_api_runtime' >/dev/null
+    fi
+  done
+  for privilege in INSERT "UPDATE (${column})"; do
+    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+      "GRANT ${privilege} ON ${table} TO vayada_next_api_runtime" >/dev/null
+    if [[ "${privilege}" == INSERT ]]; then
+      expect_failure runtime_protected_relation_write_forbidden
+    else
+      expect_failure runtime_protected_relation_column_write_forbidden
+    fi
+    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+      "REVOKE ${privilege} ON ${table} FROM vayada_next_api_runtime" >/dev/null
   done
 done
 run_preflight | grep -F '"status":"PASS"' >/dev/null
