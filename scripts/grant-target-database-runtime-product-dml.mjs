@@ -28,12 +28,19 @@ export const noWrite = [
   "booking.affiliate_click_admissions", "booking.affiliate_original_booking_bindings",
   "finance.expense_generation_dispatches", "pms.channex_room_availability_attempts",
   "pms.channex_room_availability_receipts", "pms.channex_room_availability_reconciliation_attestations",
-  "pms.channex_ari_schedule_sources",
+  "pms.channex_ari_schedule_sources", "pms.channel_sync_status",
 ];
 export const noWritePatterns = [
   "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|hotel_setup_|identity_migration_)",
+  "^booking\\.pricing_authority_", "^pms\\.channex_room_availability_", "^pms\\.channex_ari_schedule_",
+  "^(marketplace|booking)\\.affiliate_click_", "^finance\\.expense_generation_",
 ];
-export const appendOnly = ["platform.product_audit_events", "platform.domain_events"];
+// Insert-only evidence without database-enforced immutability: the API never updates or deletes it.
+export const appendOnly = [
+  "platform.product_audit_events", "platform.domain_events", "booking.addon_revenue_evidence",
+  "pms.channex_offer_ari_receipts", "pms.channex_offer_create_receipts", "pms.channex_offer_target_versions",
+  "finance.commission_rate_changes", "distribution.external_api_usage_events",
+];
 export const noDelete = ["hotel_catalog.properties"];
 export const identityLockOnly = [
   "identity.organizations", "identity.users", "identity.organization_memberships",
@@ -311,7 +318,8 @@ try {
     ssl = { ca, rejectUnauthorized: true, servername: url.hostname };
   }
   const scope = process.env.VAYADA_DB_GRANT_SCOPE;
-  if (!["product_dml", "revoke_product_dml"].includes(scope)) fail("unknown_grant_scope");
+  if (!["product_dml", "revoke_product_dml", "inspect_product_dml"].includes(scope)) fail("unknown_grant_scope");
+  if (localFixture && url.username === "vayada_target_prod_user") fail("unexpected_database_host");
   client = new pg.Client({ connectionString: url.toString(), ssl,
     connectionTimeoutMillis: 10_000, statement_timeout: 60_000, query_timeout: 60_000 });
   await client.connect();
@@ -321,12 +329,13 @@ try {
   const version = await client.query("SELECT current_setting('server_version_num')::integer AS value");
   const supportsMaintain = version.rows[0].value >= 170000;
   await assertPosture(client);
-  const count = scope === "product_dml"
-    ? await applyProductDml(client, supportsMaintain)
-    : await revokeProductDml(client);
-  await verify(client, supportsMaintain, scope);
-  await client.query("COMMIT");
-  console.log(JSON.stringify({ status: "PASS", grant: scope, relations: count, schemas }));
+  const count = scope === "revoke_product_dml"
+    ? await revokeProductDml(client)
+    : await applyProductDml(client, supportsMaintain);
+  await verify(client, supportsMaintain, scope === "revoke_product_dml" ? scope : "product_dml");
+  // The inspect scope proves the grant would commit, then leaves the database untouched.
+  await client.query(scope === "inspect_product_dml" ? "ROLLBACK" : "COMMIT");
+  console.log(JSON.stringify({ status: "PASS", grant: scope, relations: count, schemas, committed: scope !== "inspect_product_dml" }));
 } catch (error) {
   await client?.query("ROLLBACK").catch(() => undefined);
   const code = error instanceof Failure ? error.message : error.code ?? "runtime_product_dml_failed";
