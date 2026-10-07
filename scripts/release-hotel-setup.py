@@ -19,10 +19,14 @@ REGION = 'eu-west-1'
 CLUSTER = 'vayada-backend-cluster'
 REPOSITORY = '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api'
 PUBLIC = 'vayada-next-api-service'
-PRIVATE = {'creation': 'vayada-hotel-setup-service', 'property': 'vayada-hotel-setup-property-service', 'logo': 'vayada-hotel-setup-property-service'}
-PREFIX = {'creation': 'HOTEL_SETUP_CREATION_COMMAND', 'property': 'HOTEL_SETUP_COMMAND', 'logo': 'HOTEL_SETUP_LOGO_COMMAND'}
-ORIGIN = {'creation': 'https://hotel-setup-command.vayada.com', 'property': 'https://hotel-setup-property-command.vayada.com', 'logo': 'https://hotel-setup-property-command.vayada.com'}
-SECRET = {'creation': 'hotel-setup-creation/prod/internal-token', 'property': 'hotel-setup-command/prod/internal-token', 'logo': 'hotel-setup-command/prod/internal-token'}
+PRIVATE = {'creation': 'vayada-hotel-setup-service', 'property': 'vayada-hotel-setup-property-service', 'logo': 'vayada-hotel-setup-property-service', 'profile': 'vayada-hotel-setup-property-service'}
+PREFIX = {'creation': 'HOTEL_SETUP_CREATION_COMMAND', 'property': 'HOTEL_SETUP_COMMAND', 'logo': 'HOTEL_SETUP_LOGO_COMMAND', 'profile': 'HOTEL_SETUP_PROFILE_COMMAND'}
+ORIGIN = {'creation': 'https://hotel-setup-command.vayada.com', 'property': 'https://hotel-setup-property-command.vayada.com', 'logo': 'https://hotel-setup-property-command.vayada.com', 'profile': 'https://hotel-setup-property-command.vayada.com'}
+SECRET = {'creation': 'hotel-setup-creation/prod/internal-token', 'property': 'hotel-setup-command/prod/internal-token', 'logo': 'hotel-setup-command/prod/internal-token', 'profile': 'hotel-setup-command/prod/internal-token'}
+# Purposes forwarded through the existing property pair; each needs its own protocol image inventory.
+ACTOR_IMAGES = {'logo': 'hotel-setup-logo-images.json', 'profile': 'hotel-setup-profile-images.json'}
+# Installed after the original three; absent means never released, which is equivalent to blocked.
+OPTIONAL_CALLERS = ('profile',)
 EXECUTION = 'arn:aws:iam::269416271598:role/vayada-next-api-setup-caller-execution'
 TASK = re.compile(r'^arn:aws:ecs:eu-west-1:269416271598:task-definition/[a-zA-Z0-9_-]+:[1-9][0-9]*$')
 
@@ -97,18 +101,18 @@ def prepare_public(task, purpose, state, digest, token=None):
     pairs = [entry for entry in secrets if entry['name'] == prefix + '_INTERNAL_TOKEN']
     require(len(pairs) <= 1, 'Ambiguous token')
     if state == 'hold':
-        if purpose == 'logo':
-            require(item['image'] == REPOSITORY + '@' + digest, 'Initial logo hold must retain the installed immutable image')
+        if purpose in ACTOR_IMAGES:
+            require(item['image'] == REPOSITORY + '@' + digest, 'Initial ' + purpose + ' hold must retain the installed immutable image')
         require(prefix + '_ORIGIN' not in env and not pairs, 'Initial hold cannot remove an existing pair')
     elif state == 'blocked':
         require(result.get('executionRoleArn') == EXECUTION, 'Blocked pair requires isolated public execution identity')
         require(env.get(prefix + '_ORIGIN') == ORIGIN[purpose] and len(pairs) == 1, 'Blocked rollback must retain its pair')
     else:
         require(state == 'enabled' and token, 'Invalid caller release')
-        if purpose == 'logo':
+        if purpose in ACTOR_IMAGES:
             require(env.get(PREFIX['property'] + '_ORIGIN') == ORIGIN['property'] and
                     any(entry['name'] == PREFIX['property'] + '_INTERNAL_TOKEN' and entry['valueFrom'] == token for entry in secrets),
-                    'Logo forwarding requires the existing isolated property caller pair')
+                    purpose.capitalize() + ' forwarding requires the existing isolated property caller pair')
         env[prefix + '_ORIGIN'] = ORIGIN[purpose]
         item['secrets'] = [entry for entry in secrets if entry['name'] != prefix + '_INTERNAL_TOKEN'] + [{'name': prefix + '_INTERNAL_TOKEN', 'valueFrom': token}]
         result['executionRoleArn'] = EXECUTION
@@ -150,8 +154,9 @@ def stop_failed_start(args, current):
     """Stop only the reviewed, unhealthy property attempt; never retry a mutation."""
     destination, target = PRIVATE['property'], args.private_task
     public_image = container(current, 'vayada-next-api')['image']
-    require(all(environment(container(current, 'vayada-next-api')).get(prefix + '_ADMISSION') == 'blocked'
-                for prefix in PREFIX.values()), 'Failed start recovery requires all callers blocked')
+    admissions = environment(container(current, 'vayada-next-api'))
+    require(all(admissions.get(PREFIX[purpose] + '_ADMISSION', 'blocked' if purpose in OPTIONAL_CALLERS else None) == 'blocked'
+                for purpose in PREFIX), 'Failed start recovery requires all callers blocked')
     checked = {target}
 
     def reviewed(definition_arn):
@@ -311,7 +316,7 @@ def restore_initial_public(args, public):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--service', choices=['public', 'creation', 'property'], required=True)
-    parser.add_argument('--purpose', choices=['creation', 'property', 'logo'], required=True)
+    parser.add_argument('--purpose', choices=['creation', 'property', 'logo', 'profile'], required=True)
     parser.add_argument('--state', choices=['hold', 'blocked', 'enabled', 'start', 'stop', 'stop_failed_start', 'restore_initial'], required=True)
     parser.add_argument('--image-digest', required=True)
     parser.add_argument('--expected-public-task', required=True)
@@ -338,10 +343,10 @@ def main():
             subprocess.run(['python3', str(ROOT / 'scripts/assert-next-api-split-compatible-image.py'), 'next-target-backend', 'vayada-next-api', args.image_digest, str(image_file), str(task_file)], check=True)
         subprocess.run(['python3', str(ROOT / 'scripts/coordinated_release.py'), 'guard-legacy', '--service', 'next-target-backend', '--event-name', 'workflow_dispatch', '--operation-id', 'setup-' + os.environ['GITHUB_RUN_ID'], '--reason', 'reviewed hotel setup caller release'], check=True)
         token = None
-        if args.purpose == 'logo':
-            require(args.state in ('hold', 'blocked', 'enabled'), 'Logo release only changes public admission')
+        if args.purpose in ACTOR_IMAGES:
+            require(args.state in ('hold', 'blocked', 'enabled'), args.purpose.capitalize() + ' release only changes public admission')
             if args.state != 'hold':
-                approved(args.image_digest, 'hotel-setup-logo-images.json')
+                approved(args.image_digest, ACTOR_IMAGES[args.purpose])
         if args.state == 'enabled':
             private = service(PRIVATE[args.purpose])
             require(stable(private), 'Private service must be healthy before admission')
@@ -354,6 +359,9 @@ def main():
                 approved(private_image.split('@')[1], 'hotel-setup-logo-images.json')
                 require(environment(container(private_task, 'hotel-setup')).get('HOTEL_SETUP_LOGO_COMMAND_ADMISSION') == 'enabled', 'Private logo admission must be enabled before forwarding')
                 require_logo_media_policy(private_task)
+            if args.purpose == 'profile':
+                # The serving private task must carry the reviewed profile route; its rollback is checked in Terraform.
+                approved(private_image.split('@')[1], 'hotel-setup-profile-images.json')
             token = aws('secretsmanager', 'describe-secret', '--secret-id', SECRET[args.purpose])['ARN']
         definition = prepare_public(current, args.purpose, args.state, args.image_digest, token)
         with tempfile.TemporaryDirectory() as directory:
@@ -371,7 +379,9 @@ def main():
         approved(public_image.split('@')[1], 'hotel-setup-caller-images.json')
         require(environment(container(current, 'vayada-next-api')).get(PREFIX[args.purpose] + '_ADMISSION') == 'blocked', 'Caller admission must be blocked')
         if args.service == 'property':
-            require(environment(container(current, 'vayada-next-api')).get(PREFIX['logo'] + '_ADMISSION', 'blocked') == 'blocked', 'Logo admission must be blocked before property service mutation')
+            for purpose in ACTOR_IMAGES:
+                require(environment(container(current, 'vayada-next-api')).get(PREFIX[purpose] + '_ADMISSION', 'blocked') == 'blocked',
+                        purpose.capitalize() + ' admission must be blocked before property service mutation')
         destination = PRIVATE[args.service]
         private = service(destination)
         if args.state == 'stop':
