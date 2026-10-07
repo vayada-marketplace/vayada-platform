@@ -16,7 +16,7 @@ export const noRead = [
 ];
 export const noReadPatterns = [
   "^platform\\.(hotel_setup_|identity_migration_|legacy_historical_binding_)",
-  "^platform\\..*_worker_properties$", "^hotel_catalog\\.hotel_setup_",
+  "^platform\\.finance_.*_worker_properties$", "^hotel_catalog\\.hotel_setup_",
 ];
 export const noWrite = [
   "platform.schema_migrations", "platform.pricing_runtime_property_scopes",
