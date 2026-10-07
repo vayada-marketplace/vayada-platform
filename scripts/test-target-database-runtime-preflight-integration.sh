@@ -156,24 +156,13 @@ CREATE TABLE finance.expense_generation_dispatches (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_room_availability_attempts (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_ari_schedule_sources (id uuid PRIMARY KEY);
 CREATE SEQUENCE booking.fixture_sequence;
-CREATE TABLE identity.organizations (id uuid PRIMARY KEY, name text);
-CREATE TABLE identity.users (id uuid PRIMARY KEY, status text);
-CREATE TABLE identity.organization_memberships (id uuid PRIMARY KEY);
-CREATE TABLE identity.role_permission_grants (id uuid PRIMARY KEY);
-CREATE TABLE identity.membership_property_assignments (membership_id uuid, property_id uuid, PRIMARY KEY (membership_id, property_id));
-CREATE TABLE identity.organization_roles (id uuid PRIMARY KEY);
+CREATE TABLE identity.organizations (id uuid PRIMARY KEY, name text, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE identity.users (id uuid PRIMARY KEY, status text, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE identity.organization_memberships (id uuid PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE identity.role_permission_grants (id uuid PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE identity.membership_property_assignments (membership_id uuid, property_id uuid, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (membership_id, property_id));
+CREATE TABLE identity.organization_roles (id uuid PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now());
 INSERT INTO identity.organizations (id, name) VALUES ('00000000-0000-4000-8000-00000000aa01', 'fixture');
-DO $$
-DECLARE item regclass;
-BEGIN
-  FOREACH item IN ARRAY ARRAY['identity.organizations','identity.users','identity.organization_memberships',
-    'identity.role_permission_grants','identity.membership_property_assignments','identity.organization_roles']::regclass[] LOOP
-    EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', item);
-    EXECUTE format('CREATE POLICY api_runtime_existing_access ON %s TO PUBLIC USING (true) WITH CHECK (true)', item);
-    EXECUTE format('CREATE POLICY api_runtime_lock_only ON %s AS RESTRICTIVE FOR UPDATE TO PUBLIC USING (true)
-      WITH CHECK (current_user <> ''vayada_next_api_runtime'' AND session_user <> ''vayada_next_api_runtime'')', item);
-  END LOOP;
-END $$;
 CREATE TABLE vayada_migration_evidence.database_attestations (id uuid PRIMARY KEY);
 CREATE TYPE app.hotel_state AS ENUM ('active', 'inactive');
 CREATE FUNCTION app.hotel_count() RETURNS bigint
@@ -1196,14 +1185,13 @@ if product_untrusted="$(run_grant legacy_owner owner 0 product_dml 2>&1)"; then
   echo "product DML grant accepted an untrusted endpoint" >&2; exit 1
 fi
 grep -F '"code":"unexpected_database_host"' <<<"${product_untrusted}" >/dev/null
-owner_psql "DROP POLICY api_runtime_lock_only ON identity.users" >/dev/null
-if product_no_policy="$(run_grant legacy_owner owner 1 product_dml 2>&1)"; then
-  echo "product DML grant accepted a missing identity lock-only policy" >&2; exit 1
+owner_psql "ALTER TABLE identity.users RENAME COLUMN created_at TO created_at_renamed" >/dev/null
+if product_no_lock_column="$(run_grant legacy_owner owner 1 product_dml 2>&1)"; then
+  echo "product DML grant accepted a missing identity lock column" >&2; exit 1
 fi
-grep -F '"code":"runtime_identity_lock_only_policy_missing"' <<<"${product_no_policy}" >/dev/null
+grep -F '"code":"runtime_identity_lock_column_missing"' <<<"${product_no_lock_column}" >/dev/null
 [[ "$(owner_psql "SELECT has_table_privilege('vayada_next_api_runtime','hotel_catalog.property_setup_step_drafts','INSERT')")" == f ]]
-owner_psql "CREATE POLICY api_runtime_lock_only ON identity.users AS RESTRICTIVE FOR UPDATE TO PUBLIC USING (true)
-  WITH CHECK (current_user <> 'vayada_next_api_runtime' AND session_user <> 'vayada_next_api_runtime')" >/dev/null
+owner_psql "ALTER TABLE identity.users RENAME COLUMN created_at_renamed TO created_at" >/dev/null
 owner_psql "GRANT elevated TO vayada_next_api_runtime" >/dev/null
 if product_membership="$(run_grant legacy_owner owner 1 product_dml 2>&1)"; then
   echo "product DML grant accepted a role membership" >&2; exit 1
@@ -1257,6 +1245,7 @@ runtime_psql "SELECT nextval('booking.fixture_sequence')" >/dev/null
 [[ "$(runtime_psql "SELECT name FROM identity.organizations WHERE id = '00000000-0000-4000-8000-00000000aa01' FOR UPDATE")" == fixture ]]
 expect_runtime_denied "UPDATE identity.organizations SET name = 'changed' WHERE id = '00000000-0000-4000-8000-00000000aa01'"
 expect_runtime_denied "UPDATE identity.organizations SET id = id WHERE id = '00000000-0000-4000-8000-00000000aa01'"
+runtime_psql "UPDATE identity.organizations SET created_at = created_at WHERE id = '00000000-0000-4000-8000-00000000aa01'" >/dev/null
 [[ "$(owner_psql "SELECT name FROM identity.organizations WHERE id = '00000000-0000-4000-8000-00000000aa01'")" == fixture ]]
 expect_runtime_denied "INSERT INTO identity.users(id) VALUES ('00000000-0000-4000-8000-000000000104')"
 expect_runtime_denied "INSERT INTO platform.hotel_setup_creation_scopes(database_login) VALUES ('x')"
