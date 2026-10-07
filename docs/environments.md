@@ -901,3 +901,39 @@ These are column-scoped privileges, not tenant-scoped privileges; route
 owner authorization remains the tenant boundary. The UPDATE grants on link,
 billing and profile keys permit row locks but are real column write privileges.
 Never replace this runtime connection with migration-owner credentials.
+
+### Target database runtime role: product DML grant (VAY-2054)
+
+The ordinary API login `vayada_next_api_runtime` receives ordinary DML on the
+product schemas (`hotel_catalog`, `booking`, `pms`, `marketplace`,
+`distribution`, `finance`, `platform`) plus default privileges for future
+tables, and is denied a short protected list (credential scope tables,
+migration ledger and evidence, worker allowlists, pricing authority, guarded
+affiliate evidence, worker-only Channex and Finance state). On `identity.*` it
+only gains `UPDATE (id)` for row locks on six tables that application
+migration `0475` makes lock-only for this login; the VAY-965 setup-track column
+matrix is unchanged. The decision and the protected list with reasons live in
+the application repo at `engineering/api-runtime-database-role.md`; the
+executable list is `scripts/grant-target-database-runtime-product-dml.mjs`.
+
+Apply from the operator lane (`--profile vayada`) after application migration
+`0475` is deployed:
+
+```bash
+scripts/run-target-database-runtime-preflight.sh --grant-runtime-product-dml
+scripts/run-target-database-runtime-preflight.sh --preflight-runtime-product-dml
+```
+
+The grant task uses only the migration-owner URL and the pinned RDS CA, runs in
+one transaction with a 5 s lock timeout, and fails closed when the login is not
+a plain non-owner login without role memberships, when any product relation is
+not owned by the migration owner, when the identity lock-only policy is missing,
+or when the protected list is still writable or readable after the grant.
+Re-running it is a no-op. Run it again after any migration that adds a
+protected-class table; the preflight names the relation. The reviewed code and
+the CA travel in the disposable task definition, not in the run-task override.
+
+Rollback: `scripts/run-target-database-runtime-preflight.sh --revoke-runtime-product-dml`
+revokes the schema-wide DML and default privileges and restores the legacy
+allowlist (table and column grants) so the legacy preflight posture passes
+again. It does not change application migrations.

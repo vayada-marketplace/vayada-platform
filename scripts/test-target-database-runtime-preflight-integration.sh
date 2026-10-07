@@ -60,10 +60,11 @@ CREATE SCHEMA finance AUTHORIZATION legacy_owner;
 CREATE SCHEMA pms AUTHORIZATION legacy_owner;
 CREATE SCHEMA marketplace AUTHORIZATION legacy_owner;
 CREATE SCHEMA hotel_catalog AUTHORIZATION legacy_owner;
+CREATE SCHEMA distribution AUTHORIZATION legacy_owner;
 CREATE SCHEMA identity AUTHORIZATION legacy_owner;
 CREATE SCHEMA vayada_migration_evidence AUTHORIZATION legacy_owner;
-REVOKE ALL ON SCHEMA identity, platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence FROM PUBLIC;
-GRANT USAGE ON SCHEMA identity, platform, app, booking, finance, pms, marketplace, hotel_catalog, vayada_migration_evidence
+REVOKE ALL ON SCHEMA identity, platform, app, booking, finance, pms, marketplace, hotel_catalog, distribution, vayada_migration_evidence FROM PUBLIC;
+GRANT USAGE ON SCHEMA identity, platform, app, booking, finance, pms, marketplace, hotel_catalog, distribution, vayada_migration_evidence
   TO vayada_next_api_runtime;
 
 SET ROLE legacy_owner;
@@ -137,6 +138,41 @@ CREATE TABLE platform.hotel_setup_reconciliation_cursors (mode text PRIMARY KEY,
 CREATE VIEW hotel_catalog.hotel_setup_effective_creation_scopes WITH (security_barrier = true) AS
   SELECT organization_id FROM platform.hotel_setup_creation_scopes WHERE database_login = session_user;
 CREATE TABLE pms.inventory_coverage_validation_queue (id uuid PRIMARY KEY);
+-- VAY-2054 product DML fixture: ordinary product tables, protected classes and the identity lock set.
+CREATE TABLE platform.schema_migrations (name text PRIMARY KEY);
+CREATE TABLE distribution.public_room_offer_snapshots (id uuid PRIMARY KEY);
+CREATE TABLE platform.outbox_events (id uuid PRIMARY KEY);
+CREATE TABLE platform.job_attempts (id uuid PRIMARY KEY);
+CREATE TABLE platform.dead_letter_events (id uuid PRIMARY KEY);
+CREATE TABLE platform.media_objects (id uuid PRIMARY KEY);
+CREATE TABLE platform.production_cutover_runs (id uuid PRIMARY KEY);
+CREATE TABLE hotel_catalog.property_setup_sessions (id uuid PRIMARY KEY);
+CREATE TABLE hotel_catalog.property_setup_step_drafts (id uuid PRIMARY KEY, revision integer DEFAULT 1);
+CREATE TABLE booking.pricing_authority_heads (id uuid PRIMARY KEY, revision integer);
+CREATE TABLE booking.pricing_authority_revisions (id uuid PRIMARY KEY);
+CREATE TABLE booking.pricing_quotes (id uuid PRIMARY KEY);
+CREATE TABLE finance.expense_generation_dispatches (id uuid PRIMARY KEY);
+CREATE TABLE pms.channex_room_availability_attempts (id uuid PRIMARY KEY);
+CREATE TABLE pms.channex_ari_schedule_sources (id uuid PRIMARY KEY);
+CREATE SEQUENCE booking.fixture_sequence;
+CREATE TABLE identity.organizations (id uuid PRIMARY KEY, name text);
+CREATE TABLE identity.users (id uuid PRIMARY KEY, status text);
+CREATE TABLE identity.organization_memberships (id uuid PRIMARY KEY);
+CREATE TABLE identity.role_permission_grants (id uuid PRIMARY KEY);
+CREATE TABLE identity.membership_property_assignments (id uuid PRIMARY KEY);
+CREATE TABLE identity.organization_roles (id uuid PRIMARY KEY);
+INSERT INTO identity.organizations (id, name) VALUES ('00000000-0000-4000-8000-00000000aa01', 'fixture');
+DO $$
+DECLARE item regclass;
+BEGIN
+  FOREACH item IN ARRAY ARRAY['identity.organizations','identity.users','identity.organization_memberships',
+    'identity.role_permission_grants','identity.membership_property_assignments','identity.organization_roles']::regclass[] LOOP
+    EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', item);
+    EXECUTE format('CREATE POLICY api_runtime_existing_access ON %s TO PUBLIC USING (true) WITH CHECK (true)', item);
+    EXECUTE format('CREATE POLICY api_runtime_lock_only ON %s AS RESTRICTIVE FOR UPDATE TO PUBLIC USING (true)
+      WITH CHECK (current_user <> ''vayada_next_api_runtime'' AND session_user <> ''vayada_next_api_runtime'')', item);
+  END LOOP;
+END $$;
 CREATE TABLE vayada_migration_evidence.database_attestations (id uuid PRIMARY KEY);
 CREATE TYPE app.hotel_state AS ENUM ('active', 'inactive');
 CREATE FUNCTION app.hotel_count() RETURNS bigint
@@ -169,6 +205,14 @@ GRANT SELECT ON hotel_catalog.organization_setup_track_intents, identity.product
   booking.booking_settings, marketplace.marketplace_hotel_profiles TO vayada_next_api_runtime;
 GRANT SELECT ON platform.legacy_owner_approval_records,
   platform.legacy_owner_approval_revocations TO vayada_next_api_runtime;
+GRANT SELECT ON platform.schema_migrations, distribution.public_room_offer_snapshots, platform.outbox_events, platform.job_attempts,
+  platform.dead_letter_events, platform.media_objects, platform.production_cutover_runs,
+  hotel_catalog.property_setup_sessions, hotel_catalog.property_setup_step_drafts,
+  booking.pricing_authority_heads, booking.pricing_authority_revisions, booking.pricing_quotes,
+  finance.expense_generation_dispatches, pms.channex_room_availability_attempts,
+  pms.channex_ari_schedule_sources, identity.organizations, identity.users,
+  identity.organization_memberships, identity.role_permission_grants,
+  identity.membership_property_assignments, identity.organization_roles TO vayada_next_api_runtime;
 GRANT EXECUTE ON FUNCTION app.hotel_count() TO vayada_next_api_runtime;
 REVOKE ALL ON FUNCTION app.owner_only() FROM PUBLIC;
 GRANT USAGE ON TYPE app.hotel_state TO vayada_next_api_runtime;
@@ -183,6 +227,7 @@ cp "${root}/scripts/provision-hotel-setup-scope-role.mjs" "${work}/hotel-setup-s
 cp "${root}/scripts/grant-target-database-product-audit-insert.mjs" "${work}/grant.mjs"
 cp "${root}/scripts/grant-target-database-hotel-setup-tracks.mjs" "${work}/setup-grant.mjs"
 cp "${root}/scripts/grant-target-database-folio-command.mjs" "${work}/folio-grant.mjs"
+cp "${root}/scripts/grant-target-database-runtime-product-dml.mjs" "${work}/product-dml-grant.mjs"
 
 run_hotel_setup_scope() {
   local database_role="${1:-postgres}"
@@ -237,6 +282,7 @@ run_grant() {
   local grant_file="grant.mjs"
   [[ "${grant_scope}" == "folio_command" ]] && grant_file="folio-grant.mjs"
   [[ "${grant_scope}" == "hotel_setup_tracks" ]] && grant_file="setup-grant.mjs"
+  [[ "${grant_scope}" == "product_dml" || "${grant_scope}" == "revoke_product_dml" ]] && grant_file="product-dml-grant.mjs"
   docker run --rm \
     --network "${network}" \
     --volume "${node_modules_container}:/work" \
@@ -1125,5 +1171,83 @@ docker exec "${database_container}" psql -U postgres -c \
 docker exec "${database_container}" psql -U postgres -c \
   "GRANT UPDATE (id) ON vayada_migration_evidence.database_attestations TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_protected_relation_column_write_forbidden
+
+
+# VAY-2054: one owner-checked product DML grant, protected list re-verified, rollback restores the legacy allowlist.
+runtime_psql() {
+  docker exec -e PGPASSWORD=runtime "${database_container}" \
+    psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -Atqc "$1"
+}
+expect_runtime_denied() {
+  if runtime_psql "$1" >/dev/null 2>&1; then
+    echo "runtime role unexpectedly ran: $1" >&2; exit 1
+  fi
+}
+owner_psql() { docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -Atqc "$1"; }
+
+run_preflight | grep -F '"status":"PASS"' >/dev/null
+if product_non_owner="$(run_grant vayada_next_api_runtime runtime 1 product_dml 2>&1)"; then
+  echo "product DML grant accepted a non-owner" >&2; exit 1
+fi
+grep -F '"code":"runtime_dml_owner_required"' <<<"${product_non_owner}" >/dev/null
+if product_untrusted="$(run_grant legacy_owner owner 0 product_dml 2>&1)"; then
+  echo "product DML grant accepted an untrusted endpoint" >&2; exit 1
+fi
+grep -F '"code":"unexpected_database_host"' <<<"${product_untrusted}" >/dev/null
+owner_psql "DROP POLICY api_runtime_lock_only ON identity.users" >/dev/null
+if product_no_policy="$(run_grant legacy_owner owner 1 product_dml 2>&1)"; then
+  echo "product DML grant accepted a missing identity lock-only policy" >&2; exit 1
+fi
+grep -F '"code":"runtime_identity_lock_only_policy_missing"' <<<"${product_no_policy}" >/dev/null
+[[ "$(owner_psql "SELECT has_table_privilege('vayada_next_api_runtime','hotel_catalog.property_setup_step_drafts','INSERT')")" == f ]]
+owner_psql "CREATE POLICY api_runtime_lock_only ON identity.users AS RESTRICTIVE FOR UPDATE TO PUBLIC USING (true)
+  WITH CHECK (current_user <> 'vayada_next_api_runtime' AND session_user <> 'vayada_next_api_runtime')" >/dev/null
+owner_psql "GRANT elevated TO vayada_next_api_runtime" >/dev/null
+if product_membership="$(run_grant legacy_owner owner 1 product_dml 2>&1)"; then
+  echo "product DML grant accepted a role membership" >&2; exit 1
+fi
+grep -F '"code":"runtime_role_membership_forbidden"' <<<"${product_membership}" >/dev/null
+owner_psql "REVOKE elevated FROM vayada_next_api_runtime" >/dev/null
+run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
+run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
+
+runtime_psql "INSERT INTO hotel_catalog.property_setup_step_drafts(id) VALUES ('00000000-0000-4000-8000-000000000101')" >/dev/null
+runtime_psql "UPDATE hotel_catalog.property_setup_step_drafts SET revision = 2 WHERE id = '00000000-0000-4000-8000-000000000101'" >/dev/null
+runtime_psql "DELETE FROM hotel_catalog.property_setup_step_drafts WHERE id = '00000000-0000-4000-8000-000000000101'" >/dev/null
+runtime_psql "INSERT INTO platform.outbox_events(id) VALUES ('00000000-0000-4000-8000-000000000102')" >/dev/null
+runtime_psql "INSERT INTO platform.jobs(id) VALUES ('00000000-0000-4000-8000-000000000103')" >/dev/null
+runtime_psql "UPDATE platform.jobs SET id = id WHERE id = '00000000-0000-4000-8000-000000000103'" >/dev/null
+runtime_psql "SELECT nextval('booking.fixture_sequence')" >/dev/null
+[[ "$(runtime_psql "SELECT name FROM identity.organizations WHERE id = '00000000-0000-4000-8000-00000000aa01' FOR SHARE")" == fixture ]]
+[[ "$(runtime_psql "SELECT name FROM identity.organizations WHERE id = '00000000-0000-4000-8000-00000000aa01' FOR UPDATE")" == fixture ]]
+expect_runtime_denied "UPDATE identity.organizations SET name = 'changed' WHERE id = '00000000-0000-4000-8000-00000000aa01'"
+expect_runtime_denied "UPDATE identity.organizations SET id = id WHERE id = '00000000-0000-4000-8000-00000000aa01'"
+[[ "$(owner_psql "SELECT name FROM identity.organizations WHERE id = '00000000-0000-4000-8000-00000000aa01'")" == fixture ]]
+expect_runtime_denied "INSERT INTO identity.users(id) VALUES ('00000000-0000-4000-8000-000000000104')"
+expect_runtime_denied "INSERT INTO platform.hotel_setup_creation_scopes(database_login) VALUES ('x')"
+expect_runtime_denied "SELECT count(*) FROM platform.hotel_setup_creation_scopes"
+expect_runtime_denied "SELECT count(*) FROM hotel_catalog.hotel_setup_effective_creation_scopes"
+expect_runtime_denied "INSERT INTO platform.production_cutover_runs(id) VALUES ('00000000-0000-4000-8000-000000000105')"
+expect_runtime_denied "INSERT INTO platform.schema_migrations(name) VALUES ('9999')"
+expect_runtime_denied "UPDATE booking.pricing_authority_heads SET revision = 1 WHERE false"
+expect_runtime_denied "INSERT INTO marketplace.affiliate_click_occurrences(id) VALUES ('00000000-0000-4000-8000-000000000106')"
+expect_runtime_denied "INSERT INTO finance.expense_generation_dispatches(id) VALUES ('00000000-0000-4000-8000-000000000107')"
+expect_runtime_denied "UPDATE platform.product_audit_events SET id = id WHERE false"
+expect_runtime_denied "DELETE FROM platform.domain_events WHERE false"
+expect_runtime_denied "DELETE FROM hotel_catalog.properties WHERE false"
+expect_runtime_denied "SELECT setval('booking.fixture_sequence', 1)"
+expect_runtime_denied "SELECT authority_payload FROM platform.legacy_owner_bootstrap_receipts LIMIT 0"
+runtime_psql "SELECT owner_user_ids FROM platform.legacy_owner_bootstrap_receipts LIMIT 0" >/dev/null
+[[ "$(owner_psql "SELECT count(*) FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  WHERE n.nspname IN ('hotel_catalog','booking','pms','marketplace','distribution','finance','platform') AND d.defaclobjtype = 'r'")" == 7 ]]
+
+run_grant legacy_owner owner 1 revoke_product_dml | grep -F '"grant":"revoke_product_dml"' >/dev/null
+expect_runtime_denied "INSERT INTO hotel_catalog.property_setup_step_drafts(id) VALUES ('00000000-0000-4000-8000-000000000108')"
+expect_runtime_denied "SELECT name FROM identity.organizations FOR SHARE"
+runtime_psql "INSERT INTO booking.guest_bookings(id) VALUES ('00000000-0000-4000-8000-000000000109')" >/dev/null
+runtime_psql "SELECT count(*) FROM hotel_catalog.property_setup_step_drafts" >/dev/null
+[[ "$(owner_psql "SELECT count(*) FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  WHERE n.nspname IN ('hotel_catalog','booking','pms','marketplace','distribution','finance','platform')")" == 0 ]]
+run_preflight | grep -F '"status":"PASS"' >/dev/null
 
 echo "PostgreSQL ${postgres_version} runtime preflight integration passed"

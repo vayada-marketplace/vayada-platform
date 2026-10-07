@@ -368,6 +368,44 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         encoded_code = base64.b64encode(gzip.compress(grant_code, compresslevel=9, mtime=0))
         self.assertLessEqual(len(encoded_code) + 2100 + 1024, 8192)
 
+    def test_runtime_product_dml_modes_use_owner_secret_and_definition_environment(self) -> None:
+        branch = RUNNER.split('  --grant-runtime-product-dml|--revoke-runtime-product-dml)', 1)[1].split('    ;;', 1)[0]
+        self.assertIn('[[ "$#" -eq 1 ]]', branch)
+        self.assertIn('code_file="grant-target-database-runtime-product-dml.mjs"', branch)
+        self.assertIn('code_in_definition="true"', branch)
+        self.assertIn('grant_scope="product_dml"', branch)
+        self.assertIn('grant_scope="revoke_product_dml"', branch)
+        self.assertIn('secret_name="TARGET_DATABASE_MIGRATION_URL"', branch)
+        self.assertIn('secret_parameter="/vayada/prod/target-database-url"', branch)
+        self.assertNotIn('extra_secret_', branch)
+        self.assertIn('if [[ "$code_in_definition" == true || "$legacy_helper_scope"', RUNNER)
+        self.assertIn('  if [[ "$code_in_definition" == true || -n "$reader_rls_mode"', RUNNER)
+        preflight = RUNNER.split('  preflight|--preflight-folio-command|--preflight-runtime-product-dml)', 1)[1].split('    ;;', 1)[0]
+        self.assertIn('product_dml_required="true"', preflight)
+        self.assertIn('code_in_definition="true"', preflight)
+        self.assertIn('{name:"VAYADA_DB_REQUIRE_PRODUCT_DML",value:"1"}', RUNNER)
+        for mode in ('--grant-runtime-product-dml', '--revoke-runtime-product-dml', '--preflight-runtime-product-dml'):
+            invalid = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'), mode, 'unexpected'],
+                                     capture_output=True, text=True)
+            self.assertEqual(invalid.returncode, 2, mode)
+        source = (ROOT / 'scripts/grant-target-database-runtime-product-dml.mjs').read_text()
+        for marker in ('runtime_dml_owner_required', 'runtime_role_membership_forbidden',
+                       'runtime_identity_lock_only_policy_missing', 'runtime_protected_relation_writable',
+                       'runtime_protected_relation_readable', 'runtime_identity_write_scope_too_broad',
+                       'runtime_product_dml_missing', 'runtime_default_privileges_missing',
+                       'runtime_grant_option_forbidden', 'ALTER DEFAULT PRIVILEGES IN SCHEMA',
+                       'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA',
+                       'await client.query("BEGIN")', 'ROLLBACK', 'unexpected_database_host', 'rds_ca_missing',
+                       'VAYADA_AUDIT_GRANT_LOCAL_FIXTURE', '"revoke_product_dml"'):
+            self.assertIn(marker, source)
+        for relation in ('platform.hotel_setup_property_scopes', 'platform.identity_migration_provenance',
+                         'platform.schema_migrations', 'booking.pricing_authority_heads',
+                         'marketplace.affiliate_click_occurrences', 'finance.expense_generation_dispatches',
+                         'platform.finance_expense_worker_properties', 'pms.channex_room_availability_attempts',
+                         'platform.legacy_owner_bootstrap_receipts', 'identity.organizations'):
+            self.assertIn(f'"{relation}"', source)
+        self.assertNotIn('vayada_next_identity_runtime', source)
+
     def test_cleanup_is_scoped_to_dedicated_cluster_and_log_group(self) -> None:
         self.assertIn('cluster="vayada-target-database-runtime-preflight"', RUNNER)
         self.assertIn(
