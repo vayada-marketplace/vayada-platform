@@ -44,6 +44,14 @@ export const appendOnly = [
   "finance.affiliate_percentage_policy_approvals",
 ];
 export const noDelete = ["hotel_catalog.properties"];
+// Trigger-invoked Channex helpers (app migrations 0167 and 0314, invoker rights) that the
+// Channex management worker provisioning revokes from PUBLIC: the API's writes to
+// pms.rate_rules, pms.operating_calendar_revisions, platform.outbox_events and
+// pms.channex_offer_create_attempts fire triggers that PERFORM them, so the login needs a
+// direct EXECUTE. Keep identical to scripts/target-database-runtime-preflight.mjs.
+export const runtimeExecutableFunctions = [
+  "pms.enqueue_restriction_ari(uuid,text)", "pms.claim_channex_external_rate(uuid,text,text,uuid,jsonb)",
+];
 export const identityLockOnly = [
   "identity.organizations", "identity.users", "identity.organization_memberships",
   "identity.role_permission_grants", "identity.membership_property_assignments", "identity.organization_roles",
@@ -158,7 +166,31 @@ async function lockColumns(client) {
   return Object.fromEntries(identityLockOnly.map((name) => [name, identityLockColumn]));
 }
 
+// The listed functions must exist, be owned by the migration owner and keep invoker rights:
+// a SECURITY DEFINER helper would run as the owner and the posture check would reject it anyway.
+async function executableFunctions(client) {
+  const result = await client.query(`
+    SELECT fn.name, procedure.oid, procedure.prosecdef AS definer,
+           procedure.proowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) AS owned
+      FROM unnest($1::text[]) AS fn(name) LEFT JOIN pg_proc AS procedure ON procedure.oid = to_regprocedure(fn.name)`,
+    [runtimeExecutableFunctions]);
+  if (result.rows.some((row) => row.oid === null)) fail("runtime_function_missing");
+  if (result.rows.some((row) => row.definer)) fail("runtime_function_security_definer");
+  if (result.rows.some((row) => !row.owned)) fail("runtime_function_owner_required");
+  return result.rows;
+}
+async function directExecuteGrants(client) {
+  const result = await client.query(`
+    SELECT procedure.oid FROM pg_proc AS procedure
+      JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+      CROSS JOIN LATERAL aclexplode(procedure.proacl) AS entry
+     WHERE namespace.nspname NOT IN ('pg_catalog','information_schema')
+       AND entry.grantee = (SELECT oid FROM pg_roles WHERE rolname = $1) AND entry.privilege_type = 'EXECUTE'`, [role]);
+  return new Set(result.rows.map((row) => row.oid));
+}
+
 async function applyProductDml(client, supportsMaintain) {
+  const functions = await executableFunctions(client);
   const destructive = [...writePrivileges, ...(supportsMaintain ? ["MAINTAIN"] : [])].join(", ");
   for (const schema of schemas) {
     await client.query(`GRANT USAGE ON SCHEMA ${ident(schema)} TO ${role}`);
@@ -192,6 +224,7 @@ async function applyProductDml(client, supportsMaintain) {
   for (const [name, grants] of Object.entries(productIdentityColumns))
     for (const [privilege, columns] of Object.entries(grants))
       await client.query(`GRANT ${privilege} (${columns.join(", ")}) ON ${ident(name)} TO ${role}`);
+  for (const { name } of functions) await client.query(`GRANT EXECUTE ON FUNCTION ${name} TO ${role}`);
   return product.length;
 }
 
@@ -226,10 +259,13 @@ async function revokeProductDml(client) {
       const extra = columns.filter((column) => !identityColumns[name][privilege].includes(column));
       if (extra.length) await client.query(`REVOKE ${privilege} (${extra.join(", ")}) ON ${ident(name)} FROM ${role}`);
     }
+  for (const name of runtimeExecutableFunctions)
+    if ((await client.query(`SELECT to_regprocedure($1) IS NOT NULL AS present`, [name])).rows[0].present)
+      await client.query(`REVOKE EXECUTE ON FUNCTION ${name} FROM ${role}`);
   return product.length;
 }
 
-async function verify(client, supportsMaintain, scope) {
+async function verify(client, supportsMaintain, scope, executeBefore) {
   const destructive = [...writePrivileges, ...(supportsMaintain ? ["MAINTAIN"] : [])];
   const protectedWrites = await client.query(`
     SELECT namespace.nspname || '.' || relation.relname AS name, privilege.name AS privilege
@@ -320,6 +356,14 @@ async function verify(client, supportsMaintain, scope) {
        AND ((acl.defaclobjtype = 'r' AND entry.privilege_type = 'INSERT') OR (acl.defaclobjtype = 'S' AND entry.privilege_type = 'USAGE'))
      GROUP BY 1, 2`, [schemas, role]);
   if (defaults.rowCount !== schemas.length * 2) fail("runtime_default_privileges_missing");
+  const functions = await executableFunctions(client);
+  const executable = await client.query(
+    `SELECT bool_and(has_function_privilege($1, oid, 'EXECUTE')) AS all FROM unnest($2::oid[]) AS fn(oid)`,
+    [role, functions.map((row) => row.oid)]);
+  if (executable.rows[0].all !== true) fail("runtime_function_execute_missing");
+  const listed = new Set(functions.map((row) => row.oid));
+  for (const oid of await directExecuteGrants(client))
+    if (!listed.has(oid) && !executeBefore.has(oid)) fail("runtime_function_execute_scope_too_broad");
 }
 
 // Global posture checks the tf-apply preflight also makes; run before COMMIT so pre-existing
@@ -388,10 +432,11 @@ try {
   const version = await client.query("SELECT current_setting('server_version_num')::integer AS value");
   const supportsMaintain = version.rows[0].value >= 170000;
   await assertPosture(client);
+  const executeBefore = await directExecuteGrants(client);
   const count = scope === "revoke_product_dml"
     ? await revokeProductDml(client)
     : await applyProductDml(client, supportsMaintain);
-  await verify(client, supportsMaintain, scope === "revoke_product_dml" ? scope : "product_dml");
+  await verify(client, supportsMaintain, scope === "revoke_product_dml" ? scope : "product_dml", executeBefore);
   await verifyGlobalPosture(client, supportsMaintain);
   // The inspect scope proves the grant would commit, then leaves the database untouched.
   await client.query(scope === "inspect_product_dml" ? "ROLLBACK" : "COMMIT");

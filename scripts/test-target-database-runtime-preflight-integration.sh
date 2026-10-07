@@ -176,6 +176,43 @@ CREATE FUNCTION app.hotel_count() RETURNS bigint
   LANGUAGE sql AS 'SELECT count(*) FROM app.hotel';
 CREATE FUNCTION app.owner_only() RETURNS void
   LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS 'SELECT';
+-- VAY-2054 follow-up: trigger-invoked Channex helpers (app migrations 0167 and 0314), invoker rights.
+CREATE TABLE pms.rate_rules (id uuid PRIMARY KEY, property_id uuid NOT NULL);
+CREATE TABLE pms.channex_external_rate_owners (
+  connection_id uuid, external_rate_plan_id text, owner_kind text, owner_id uuid, legacy_identity jsonb,
+  PRIMARY KEY (connection_id, external_rate_plan_id)
+);
+CREATE TABLE pms.channex_offer_create_attempts (
+  id uuid PRIMARY KEY, connection_id uuid NOT NULL, external_rate_plan_id text NOT NULL, target_id uuid NOT NULL
+);
+INSERT INTO pms.channel_connections (id) VALUES ('00000000-0000-4000-8000-00000000cc01');
+CREATE FUNCTION pms.enqueue_restriction_ari(property uuid, source text) RETURNS void LANGUAGE sql AS $$
+  INSERT INTO platform.jobs (id) SELECT gen_random_uuid()
+   WHERE EXISTS (SELECT 1 FROM pms.channel_connections WHERE id = property);
+$$;
+CREATE FUNCTION pms.restriction_ari_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP <> 'INSERT' THEN PERFORM pms.enqueue_restriction_ari(OLD.property_id, 'rules:' || txid_current()); END IF;
+  IF TG_OP <> 'DELETE' THEN PERFORM pms.enqueue_restriction_ari(NEW.property_id, 'rules:' || txid_current()); END IF;
+  RETURN NULL;
+END;
+$$;
+CREATE TRIGGER pms_restriction_ari_changed AFTER INSERT OR UPDATE OR DELETE ON pms.rate_rules
+  FOR EACH ROW EXECUTE FUNCTION pms.restriction_ari_changed();
+CREATE FUNCTION pms.claim_channex_external_rate(connection uuid, external_id text, kind text, owner uuid, identity jsonb DEFAULT NULL)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO pms.channex_external_rate_owners VALUES (connection, external_id, kind, owner, identity) ON CONFLICT DO NOTHING;
+END;
+$$;
+CREATE FUNCTION pms.guard_channex_offer_create_attempt() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pms.claim_channex_external_rate(NEW.connection_id, NEW.external_rate_plan_id, 'offer', NEW.target_id);
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER channex_offer_create_attempt_guard BEFORE INSERT OR UPDATE ON pms.channex_offer_create_attempts
+  FOR EACH ROW EXECUTE FUNCTION pms.guard_channex_offer_create_attempt();
 RESET ROLE;
 
 REVOKE ALL ON platform.legacy_owner_bootstrap_receipts FROM PUBLIC;
@@ -214,6 +251,11 @@ GRANT SELECT ON platform.schema_migrations, distribution.public_room_offer_snaps
   identity.membership_property_assignments, identity.organization_roles TO vayada_next_api_runtime;
 GRANT EXECUTE ON FUNCTION app.hotel_count() TO vayada_next_api_runtime;
 REVOKE ALL ON FUNCTION app.owner_only() FROM PUBLIC;
+-- As scripts/channex-management-worker-database.mjs leaves the worker boundary helpers: no PUBLIC EXECUTE.
+REVOKE EXECUTE ON FUNCTION pms.enqueue_restriction_ari(uuid,text),
+  pms.claim_channex_external_rate(uuid,text,text,uuid,jsonb) FROM PUBLIC;
+GRANT SELECT ON pms.rate_rules, pms.channex_external_rate_owners, pms.channex_offer_create_attempts
+  TO vayada_next_api_runtime;
 GRANT USAGE ON TYPE app.hotel_state TO vayada_next_api_runtime;
 -- Legacy allowlist end-state: what the retired per-incident grants produced in production.
 GRANT SELECT ON marketplace.affiliate_links, marketplace.affiliate_agreement_lifecycle_events,
@@ -655,6 +697,7 @@ expect_runtime_denied() {
     echo "runtime role unexpectedly ran: $1" >&2; exit 1
   fi
   grep -F "ERROR:  42501:" <<<"${output}" >/dev/null || { echo "expected SQLSTATE 42501 for: $1" >&2; echo "${output}" >&2; exit 1; }
+  [[ -z "${2:-}" ]] || grep -F "$2" <<<"${output}" >/dev/null || { echo "expected '$2' for: $1" >&2; echo "${output}" >&2; exit 1; }
 }
 legacy_owner_psql() {
   docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d postgres -v ON_ERROR_STOP=1 -Atqc "$1"
@@ -699,6 +742,22 @@ if product_destructive_drift="$(run_grant legacy_owner owner 1 product_dml 2>&1)
 fi
 grep -F '"code":"runtime_destructive_privilege_forbidden"' <<<"${product_destructive_drift}" >/dev/null
 owner_psql "REVOKE TRUNCATE ON app.hotel FROM vayada_next_api_runtime" >/dev/null
+# Trigger-invoked Channex helpers: PUBLIC EXECUTE is gone, so the legacy login cannot run them.
+expect_runtime_denied "SELECT pms.enqueue_restriction_ari('00000000-0000-4000-8000-00000000cc01', 'test')" "for function enqueue_restriction_ari"
+# A SECURITY DEFINER helper or a missing helper rolls the whole grant back.
+owner_psql "ALTER FUNCTION pms.claim_channex_external_rate(uuid,text,text,uuid,jsonb) SECURITY DEFINER" >/dev/null
+if product_definer="$(run_grant legacy_owner owner 1 product_dml 2>&1)"; then
+  echo "product DML grant accepted a SECURITY DEFINER helper" >&2; exit 1
+fi
+grep -F '"code":"runtime_function_security_definer"' <<<"${product_definer}" >/dev/null
+[[ "$(owner_psql "SELECT has_table_privilege('vayada_next_api_runtime','hotel_catalog.property_setup_step_drafts','INSERT') OR has_function_privilege('vayada_next_api_runtime','pms.enqueue_restriction_ari(uuid,text)','EXECUTE')")" == f ]]
+owner_psql "ALTER FUNCTION pms.claim_channex_external_rate(uuid,text,text,uuid,jsonb) SECURITY INVOKER" >/dev/null
+owner_psql "ALTER FUNCTION pms.enqueue_restriction_ari(uuid,text) RENAME TO enqueue_restriction_ari_renamed" >/dev/null
+if product_missing_function="$(run_grant legacy_owner owner 1 product_dml 2>&1)"; then
+  echo "product DML grant accepted a missing helper" >&2; exit 1
+fi
+grep -F '"code":"runtime_function_missing"' <<<"${product_missing_function}" >/dev/null
+owner_psql "ALTER FUNCTION pms.enqueue_restriction_ari_renamed(uuid,text) RENAME TO enqueue_restriction_ari" >/dev/null
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
@@ -750,6 +809,24 @@ runtime_psql "INSERT INTO platform.outbox_events(id) VALUES ('00000000-0000-4000
 runtime_psql "INSERT INTO platform.jobs(id) VALUES ('00000000-0000-4000-8000-000000000103')" >/dev/null
 runtime_psql "UPDATE platform.jobs SET id = id WHERE id = '00000000-0000-4000-8000-000000000103'" >/dev/null
 runtime_psql "SELECT nextval('booking.fixture_sequence')" >/dev/null
+# Trigger-invoked Channex helpers run under the ordinary login (production failure of 2026-10-07).
+jobs_before="$(owner_psql "SELECT count(*) FROM platform.jobs")"
+runtime_psql "INSERT INTO pms.rate_rules(id, property_id) VALUES ('00000000-0000-4000-8000-00000000cc11', '00000000-0000-4000-8000-00000000cc01')" >/dev/null
+[[ "$(owner_psql "SELECT count(*) FROM platform.jobs")" == "$((jobs_before + 1))" ]]
+runtime_psql "INSERT INTO pms.channex_offer_create_attempts(id, connection_id, external_rate_plan_id, target_id)
+  VALUES ('00000000-0000-4000-8000-00000000cc12', '00000000-0000-4000-8000-00000000cc01', 'rate-1', '00000000-0000-4000-8000-00000000cc13')" >/dev/null
+[[ "$(owner_psql "SELECT owner_kind FROM pms.channex_external_rate_owners WHERE external_rate_plan_id = 'rate-1'")" == offer ]]
+# A lost direct grant fails the trigger exactly as production did; the preflight names the helper
+# and an idempotent re-run of the grant restores it.
+owner_psql "REVOKE EXECUTE ON FUNCTION pms.enqueue_restriction_ari(uuid,text) FROM vayada_next_api_runtime" >/dev/null
+expect_runtime_denied "INSERT INTO pms.rate_rules(id, property_id) VALUES ('00000000-0000-4000-8000-00000000cc14', '00000000-0000-4000-8000-00000000cc01')" "for function enqueue_restriction_ari"
+expect_failure "runtime_function_execute_missing:1:pms.enqueue_restriction_ari(uuid,text)"
+run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
+runtime_psql "INSERT INTO pms.rate_rules(id, property_id) VALUES ('00000000-0000-4000-8000-00000000cc14', '00000000-0000-4000-8000-00000000cc01')" >/dev/null
+run_preflight | grep -F '"posture":"product_dml"' >/dev/null
+owner_psql "ALTER FUNCTION pms.enqueue_restriction_ari(uuid,text) SECURITY DEFINER" >/dev/null
+expect_failure runtime_security_definer_execute_forbidden
+owner_psql "ALTER FUNCTION pms.enqueue_restriction_ari(uuid,text) SECURITY INVOKER" >/dev/null
 # Default privileges cover a table the migration owner creates after the grant.
 legacy_owner_psql "CREATE TABLE booking.created_after_grant (id uuid PRIMARY KEY)" >/dev/null
 runtime_psql "INSERT INTO booking.created_after_grant(id) VALUES ('00000000-0000-4000-8000-00000000010d')" >/dev/null
@@ -804,6 +881,8 @@ runtime_psql "SELECT owner_user_ids FROM platform.legacy_owner_bootstrap_receipt
 run_grant legacy_owner owner 1 revoke_product_dml | grep -F '"grant":"revoke_product_dml"' >/dev/null
 expect_runtime_denied "INSERT INTO hotel_catalog.property_setup_step_drafts(id) VALUES ('00000000-0000-4000-8000-000000000108')"
 expect_runtime_denied "SELECT name FROM identity.organizations FOR SHARE"
+[[ "$(owner_psql "SELECT has_function_privilege('vayada_next_api_runtime','pms.enqueue_restriction_ari(uuid,text)','EXECUTE') OR has_function_privilege('vayada_next_api_runtime','pms.claim_channex_external_rate(uuid,text,text,uuid,jsonb)','EXECUTE')")" == f ]]
+expect_runtime_denied "SELECT pms.enqueue_restriction_ari('00000000-0000-4000-8000-00000000cc01', 'test')" "for function enqueue_restriction_ari"
 [[ "$(owner_psql "SELECT has_column_privilege('vayada_next_api_runtime','identity.product_entitlements','resource_type','INSERT') OR has_column_privilege('vayada_next_api_runtime','identity.organization_resource_links','status','UPDATE')")" == f ]]
 # The revoke restores the staged VAY-965 column grants exactly.
 [[ "$(owner_psql "SELECT has_column_privilege('vayada_next_api_runtime','identity.product_entitlements','status','UPDATE') AND has_column_privilege('vayada_next_api_runtime','identity.organization_resource_links','id','UPDATE') AND has_column_privilege('vayada_next_api_runtime','marketplace.marketplace_hotel_profiles','property_id','INSERT') AND has_column_privilege('vayada_next_api_runtime','hotel_catalog.organization_setup_track_intents','selected_tracks','UPDATE') AND has_column_privilege('vayada_next_api_runtime','finance.folios','id','UPDATE') AND NOT has_table_privilege('vayada_next_api_runtime','marketplace.marketplace_hotel_profiles','INSERT')")" == t ]]
