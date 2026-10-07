@@ -420,6 +420,15 @@ try {
       [identityLockOnly, expectedRole],
       "runtime_identity_lock_only_policy_missing",
     );
+    // Row locks need UPDATE on one column: the first primary-key column of each lock table.
+    const lockColumns = await client.query(
+      `SELECT relation.name, attribute.attname
+         FROM unnest($1::text[]) AS relation(name)
+         JOIN pg_index AS index ON index.indrelid = to_regclass(relation.name) AND index.indisprimary
+         JOIN pg_attribute AS attribute ON attribute.attrelid = index.indrelid AND attribute.attnum = index.indkey[0]`,
+      [identityLockOnly],
+    );
+    check(lockColumns.rowCount === identityLockOnly.length, "runtime_identity_lock_column_missing");
     await requireNoMissing(
       client,
       `SELECT relation.relname, attribute.attname, privilege.name
@@ -436,7 +445,7 @@ try {
          CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('DELETE')) AS privilege(name)
         WHERE namespace.nspname = 'identity' AND relation.relkind IN ${relationKinds}
           AND has_table_privilege(current_user, relation.oid, privilege.name)`,
-      [JSON.stringify({ ...identityColumns, ...Object.fromEntries(identityLockOnly.map((name) => [name, { UPDATE: ["id"] }])) })],
+      [JSON.stringify({ ...identityColumns, ...Object.fromEntries(lockColumns.rows.map((row) => [row.name, { UPDATE: [row.attname] }])) })],
       "runtime_identity_write_scope_too_broad",
     );
     await requireNoMissing(
