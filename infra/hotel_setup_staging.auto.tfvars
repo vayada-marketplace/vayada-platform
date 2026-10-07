@@ -18,7 +18,7 @@ hotel_setup_property_image_digests = {
 # Retain both admitted callers after the protected activation and native proofs.
 # Later applies reject removal of installed origin/token pairs or enabled admission.
 # Profile edits stay off until the protected profile release; this change adds no caller.
-hotel_setup_public_caller = { creation = "enabled", property = "enabled", logo = "enabled", profile = "off" }
+hotel_setup_public_caller = { creation = "enabled", property = "enabled", logo = "enabled", profile = "enabled" }
 
 # Reviewed scoped logo protocol; automatic provisioning remains disabled.
 enable_hotel_setup_logo_storage    = true
