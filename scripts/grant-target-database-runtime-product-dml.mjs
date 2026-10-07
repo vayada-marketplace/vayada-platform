@@ -121,6 +121,18 @@ async function assertPosture(client) {
   if (Number(found.rows[0].n) !== schemas.length) fail("runtime_dml_schema_missing");
 }
 
+// Row locks need UPDATE on one column; use the first primary-key column of each lock table.
+async function lockColumns(client) {
+  const result = await client.query(`
+    SELECT relation.name, attribute.attname
+      FROM unnest($1::text[]) AS relation(name)
+      JOIN pg_index AS index ON index.indrelid = to_regclass(relation.name) AND index.indisprimary
+      JOIN pg_attribute AS attribute ON attribute.attrelid = index.indrelid AND attribute.attnum = index.indkey[0]`,
+    [identityLockOnly]);
+  if (result.rowCount !== identityLockOnly.length) fail("runtime_identity_lock_column_missing");
+  return Object.fromEntries(result.rows.map((row) => [row.name, row.attname]));
+}
+
 async function assertIdentityLockOnlyPolicies(client) {
   const missing = await client.query(`
     SELECT relation.name FROM unnest($1::text[]) AS relation(name)
@@ -161,7 +173,8 @@ async function applyProductDml(client, supportsMaintain) {
   }
   for (const name of noDelete) await client.query(`REVOKE DELETE ON ${ident(name)} FROM ${role}`);
   await client.query(`GRANT USAGE ON SCHEMA identity TO ${role}`);
-  for (const name of identityLockOnly) await client.query(`GRANT SELECT, UPDATE (id) ON ${ident(name)} TO ${role}`);
+  for (const [name, column] of Object.entries(await lockColumns(client)))
+    await client.query(`GRANT SELECT, UPDATE ("${column}") ON ${ident(name)} TO ${role}`);
   for (const [name, grants] of Object.entries(identityColumns))
     for (const [privilege, columns] of Object.entries(grants))
       await client.query(`GRANT ${privilege} (${columns.join(", ")}) ON ${ident(name)} TO ${role}`);
@@ -191,7 +204,8 @@ async function revokeProductDml(client) {
     if ((await client.query(`SELECT to_regclass($1) IS NOT NULL AS present`, [name])).rows[0].present)
       for (const [privilege, columns] of Object.entries(grants))
         await client.query(`GRANT ${privilege} (${columns.join(", ")}) ON ${ident(name)} TO ${role}`);
-  for (const name of identityLockOnly) await client.query(`REVOKE UPDATE (id) ON ${ident(name)} FROM ${role}`);
+  for (const [name, column] of Object.entries(await lockColumns(client)))
+    await client.query(`REVOKE UPDATE ("${column}") ON ${ident(name)} FROM ${role}`);
   return product.length;
 }
 
@@ -250,7 +264,7 @@ async function verify(client, supportsMaintain, scope) {
      WHERE namespace.nspname = 'identity' AND relation.relkind IN ${relationKinds}
        AND has_table_privilege($1, relation.oid, privilege.name)`,
     [role, JSON.stringify(scope === "product_dml"
-      ? { ...identityColumns, ...Object.fromEntries(identityLockOnly.map((name) => [name, { UPDATE: ["id"] }])) }
+      ? { ...identityColumns, ...Object.fromEntries(Object.entries(await lockColumns(client)).map(([name, column]) => [name, { UPDATE: [column] }])) }
       : identityColumns), destructive]);
   if (identityWrites.rowCount !== 0) fail("runtime_identity_write_scope_too_broad");
   const sequences = await client.query(`

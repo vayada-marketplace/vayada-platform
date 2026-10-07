@@ -159,7 +159,7 @@ CREATE TABLE identity.organizations (id uuid PRIMARY KEY, name text);
 CREATE TABLE identity.users (id uuid PRIMARY KEY, status text);
 CREATE TABLE identity.organization_memberships (id uuid PRIMARY KEY);
 CREATE TABLE identity.role_permission_grants (id uuid PRIMARY KEY);
-CREATE TABLE identity.membership_property_assignments (id uuid PRIMARY KEY);
+CREATE TABLE identity.membership_property_assignments (membership_id uuid, property_id uuid, PRIMARY KEY (membership_id, property_id));
 CREATE TABLE identity.organization_roles (id uuid PRIMARY KEY);
 INSERT INTO identity.organizations (id, name) VALUES ('00000000-0000-4000-8000-00000000aa01', 'fixture');
 DO $$
