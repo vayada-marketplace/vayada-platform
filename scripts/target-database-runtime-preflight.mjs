@@ -468,11 +468,11 @@ try {
          FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
          CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE')) AS privilege(name)
         WHERE namespace.nspname = ANY($3::text[]) AND relation.relkind IN ${relationKinds}
-          AND NOT ${protectedWriteFilter}
+          AND relation.oid <> $6::regclass AND NOT ${protectedWriteFilter}
           AND NOT (privilege.name IN ('UPDATE','DELETE') AND format('%I.%I', namespace.nspname, relation.relname) = ANY($4::text[]))
           AND NOT (privilege.name = 'DELETE' AND format('%I.%I', namespace.nspname, relation.relname) = ANY($5::text[]))
           AND NOT has_table_privilege(current_user, relation.oid, privilege.name)`,
-      [...protectedWriteParameters, productSchemas, appendOnly, noDelete],
+      [...protectedWriteParameters, productSchemas, appendOnly, noDelete, receipt],
       "runtime_product_dml_missing",
     );
     await requireNoMissing(
