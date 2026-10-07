@@ -31,7 +31,7 @@ elif operation=='describe-services' and value('--services') in ('vayada-hotel-se
 elif operation=='describe-services':
  print(json.dumps({'awsvpcConfiguration':{'subnets':['fixture'],'securityGroups':['fixture'],'assignPublicIp':'ENABLED'}}) if 'networkConfiguration' in value('--query') else os.environ.get('MOCK_CURRENT_TASK','arn:aws:ecs:eu-west-1:269416271598:task-definition/public:1'))
 elif operation=='describe-task-definition':
- print(json.dumps({'family':'public','taskRoleArn':'arn:aws:iam::269416271598:role/broad-serving-role','executionRoleArn':'fixture-execution','containerDefinitions':[{'name':'vayada-next-api','image':os.environ.get('MOCK_PUBLIC_IMAGE','ordinary-serving-image'),'logConfiguration':{'logDriver':'awslogs','options':{'awslogs-group':'/ecs/vayada-next-api','awslogs-region':'eu-west-1','awslogs-stream-prefix':'ecs'}},'environment':[{'name':'HOTEL_SETUP_CREATION_COMMAND_ADMISSION','value':os.environ.get('MOCK_CREATION_ADMISSION','blocked')},{'name':'HOTEL_SETUP_COMMAND_ADMISSION','value':os.environ.get('MOCK_ADMISSION','blocked')},{'name':'HOTEL_SETUP_LOGO_COMMAND_ADMISSION','value':os.environ.get('MOCK_LOGO_ADMISSION','blocked')}],'secrets':[{'name':'UNSAFE','valueFrom':'fixture'}],'portMappings':[{'containerPort':8003}],**({'entryPoint':['unsafe'],'workingDirectory':'/unsafe','mountPoints':[{'sourceVolume':'code','containerPath':'/app'}],'volumesFrom':[{'sourceContainer':'unsafe'}],'environmentFiles':[{'type':'s3','value':'unsafe'}],'privileged':True} if os.environ.get('MOCK_STARTUP') else {})}]}))
+ print(json.dumps({'family':'public','taskRoleArn':'arn:aws:iam::269416271598:role/broad-serving-role','executionRoleArn':'fixture-execution','containerDefinitions':[{'name':'vayada-next-api','image':os.environ.get('MOCK_PUBLIC_IMAGE','ordinary-serving-image'),'logConfiguration':{'logDriver':'awslogs','options':{'awslogs-group':'/ecs/vayada-next-api','awslogs-region':'eu-west-1','awslogs-stream-prefix':'ecs'}},'environment':[{'name':'HOTEL_SETUP_CREATION_COMMAND_ADMISSION','value':os.environ.get('MOCK_CREATION_ADMISSION','blocked')},{'name':'HOTEL_SETUP_COMMAND_ADMISSION','value':os.environ.get('MOCK_ADMISSION','blocked')},{'name':'HOTEL_SETUP_LOGO_COMMAND_ADMISSION','value':os.environ.get('MOCK_LOGO_ADMISSION','blocked')}]+([{'name':'HOTEL_SETUP_PROFILE_COMMAND_ADMISSION','value':value} for value in os.environ['MOCK_PROFILE_ADMISSION'].split(',')] if os.environ.get('MOCK_PROFILE_ADMISSION') else []),'secrets':[{'name':'UNSAFE','valueFrom':'fixture'}]+([{'name':'HOTEL_SETUP_PROFILE_COMMAND_ADMISSION','valueFrom':'fixture'}] if os.environ.get('MOCK_PROFILE_SECRET') else []),'portMappings':[{'containerPort':8003}],**({'entryPoint':['unsafe'],'workingDirectory':'/unsafe','mountPoints':[{'sourceVolume':'code','containerPath':'/app'}],'volumesFrom':[{'sourceContainer':'unsafe'}],'environmentFiles':[{'type':'s3','value':'unsafe'}],'privileged':True} if os.environ.get('MOCK_STARTUP') else {})}]}))
 elif operation=='register-task-definition':
  (root/'definition.json').write_text(value('--cli-input-json'))
  print('arn:aws:ecs:eu-west-1:269416271598:task-definition/fixture:1')
@@ -96,7 +96,7 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
         self.root = Path(self.temp.name)
         for directory in ('scripts', 'deployment', 'bin', 'capture'):
             (self.root / directory).mkdir()
-        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'run-hotel-setup-logo-cleanup.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'inspect-hotel-setup-logo-migration.mjs', 'recover-hotel-setup-logo-staged-role.mjs', 'hotel-setup-logo-reader-cutover.mjs', 'stage-hotel-setup-migration-scope.mjs', 'stage-hotel-setup-logo-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'hotel-setup-approved-legacy-helper-repair.mjs', 'hotel-setup-tenant-helper-repair.mjs', 'coordinated_release.py'):
+        for name in ('run-target-database-runtime-preflight.sh', 'provision-hotel-setup-creation-login.mjs', 'run-hotel-setup-property-bootstrap.mjs', 'run-hotel-setup-logo-cleanup.mjs', 'audit-hotel-setup-owner.mjs', 'audit-hotel-setup-migration.mjs', 'audit-hotel-setup-readiness-migrations.mjs', 'inspect-hotel-setup-logo-migration.mjs', 'recover-hotel-setup-logo-staged-role.mjs', 'hotel-setup-logo-reader-cutover.mjs', 'stage-hotel-setup-migration-scope.mjs', 'stage-hotel-setup-logo-migration-scope.mjs', 'stage-hotel-setup-profile-migration-scope.mjs', 'hotel-setup-reader-rls-permissions.mjs', 'hotel-setup-reader-rls-native-preflight.mjs', 'hotel-setup-legacy-helper-inspection.mjs', 'hotel-setup-approved-legacy-helper-repair.mjs', 'hotel-setup-tenant-helper-repair.mjs', 'coordinated_release.py'):
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copy(ROOT / 'deployment/coordinated-release-v1.json', self.root / 'deployment/coordinated-release-v1.json')
         (self.root / 'deployment/hotel-setup-command-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
@@ -688,6 +688,97 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
             self.env['MOCK_RECEIPT'] = json.dumps(invalid)
             self.assertNotEqual(self.run_wrapper('--stage-hotel-setup-logo-migration-scope', DIGEST).returncode, 0)
 
+
+    def test_profile_scope_reuses_logo_parent_gates_with_exact_profile_code(self):
+        task = 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1'
+        hold = {'schemaVersion': 1, 'status': 'active', 'service': 'next-target-backend',
+            'physicalIdentity': {'accountId': '269416271598', 'region': 'eu-west-1',
+                'cluster': 'vayada-backend-cluster', 'ecsService': 'vayada-next-api-service'},
+            'reason': 'reviewed profile parent stage', 'operationId': 'setup-456', 'manifestId': None,
+            'capturedTaskDefinitionArn': task, 'capturedImage': '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST,
+            'dependentFrontendsCompatible': False, 'createdAt': '2026-10-06T17:00:00.000Z'}
+        receipt = {"status": "PASS", "migration": "0470", "scopeRole": "vayada_next_hotel_setup_profile_scope", "login": False,
+                   "businessGrantsAdded": False, "migrationOwner": "vayada_target_prod_user", "migrationOwnerCanCreateRole": False,
+                   "creatorAdminOnlyMembership": True, "scopeIncomingMemberships": 1}
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main', EXPECTED_TASK=task,
+                        MOCK_CURRENT_TASK=task, MOCK_HOLD=json.dumps(hold), MOCK_RECEIPT=json.dumps(receipt))
+        (self.root / 'deployment/hotel-setup-bootstrap-images.json').write_text(json.dumps(
+            {DIGEST: {key: 'b' * 40 for key in ('primarySource', 'rollbackSource', 'publisherSource')}}))
+        # Before its own release the profile caller is absent; afterwards only blocked is accepted.
+        for profile in ('', 'blocked'):
+            self.env['MOCK_PROFILE_ADMISSION'] = profile
+            result = self.run_wrapper('--stage-hotel-setup-profile-migration-scope', DIGEST)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), receipt)
+            definition = json.loads((self.root / 'capture/definition.json').read_text())
+            item, = definition['containerDefinitions']
+            self.assertNotIn('taskRoleArn', definition)
+            self.assertEqual(definition['executionRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap-execution')
+            self.assertEqual(item['image'], '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST)
+            self.assertEqual(item['secrets'], [{'name': 'HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL', 'valueFrom': '/vayada/prod/db-marketplace-url'}])
+            self.assertEqual(item['environment'], [])
+            self.assertNotIn('entryPoint', item)
+            raw = (self.root / 'capture/overrides.json').read_text()
+            self.assertLessEqual(len(raw.encode()), 8192)
+            arguments = {entry['name']: entry['value'] for entry in json.loads(raw)['containerOverrides'][0]['environment']}
+            self.assertEqual(set(arguments), {'VAYADA_DB_RUNTIME_PREFLIGHT_CODE', 'VAYADA_DB_RDS_CA_BUNDLE_GZIP'})
+            self.assertEqual(gzip.decompress(base64.b64decode(arguments['VAYADA_DB_RUNTIME_PREFLIGHT_CODE'])),
+                             (ROOT / 'scripts/stage-hotel-setup-profile-migration-scope.mjs').read_bytes())
+        self.env['MOCK_PROFILE_ADMISSION'] = ''
+        calls = self.root / 'capture/calls.jsonl'
+        for overrides in ({'MOCK_HOLD': json.dumps({**hold, 'capturedTaskDefinitionArn': task[:-1]+'2'})},
+                          {'MOCK_PROPERTY_RUNNING': '1'}, {'MOCK_CREATION_RUNNING': '1'}, {'MOCK_ADMISSION': 'enabled'},
+                          {'MOCK_CREATION_ADMISSION': 'enabled'}, {'MOCK_LOGO_ADMISSION': 'enabled'},
+                          {'MOCK_PROFILE_ADMISSION': 'enabled'}, {'MOCK_PROFILE_ADMISSION': 'blocked,blocked'},
+                          {'MOCK_PROFILE_SECRET': '1'}, {'MOCK_DRAINING': '1'}, {'MOCK_GATE_DRIFT': '1'},
+                          {'GITHUB_REF': 'refs/heads/unreviewed'}):
+            calls.unlink(missing_ok=True)
+            (self.root / 'capture/overrides.json').unlink(missing_ok=True)
+            previous = self.env.copy()
+            self.env.update(overrides)
+            self.assertNotEqual(self.run_wrapper('--stage-hotel-setup-profile-migration-scope', DIGEST).returncode, 0, overrides)
+            operations = [json.loads(line)[1] for line in calls.read_text().splitlines()] if calls.exists() else []
+            if 'MOCK_GATE_DRIFT' in overrides:
+                self.assertIn('stop-task', operations)
+            else:
+                self.assertNotIn('register-task-definition', operations)
+                self.assertNotIn('run-task', operations)
+            self.env = previous
+        for args in ((), (DIGEST, 'extra'), ('sha256:' + 'c' * 64,)):
+            calls.unlink(missing_ok=True)
+            self.assertNotEqual(self.run_wrapper('--stage-hotel-setup-profile-migration-scope', *args).returncode, 0)
+            self.assertFalse(calls.exists() and 'run-task' in calls.read_text())
+
+    def test_profile_and_logo_parent_receipts_are_not_interchangeable(self):
+        self.test_profile_scope_reuses_logo_parent_gates_with_exact_profile_code()
+        receipt = json.loads(self.env['MOCK_RECEIPT'])
+        logo = {**receipt, 'migration': '0466', 'scopeRole': 'vayada_next_hotel_setup_logo_scope'}
+        for count in (0, 1):
+            self.env['MOCK_RECEIPT'] = json.dumps({**receipt, 'scopeIncomingMemberships': count})
+            self.assertEqual(self.run_wrapper('--stage-hotel-setup-profile-migration-scope', DIGEST).returncode, 0)
+        for invalid in (logo, {**receipt, 'migration': '0466'}, {**receipt, 'scopeRole': 'vayada_next_hotel_setup_logo_scope'},
+                        {**receipt, 'scopeIncomingMemberships': 2}, {**receipt, 'login': True}, {**receipt, 'unexpected': True}):
+            self.env['MOCK_RECEIPT'] = json.dumps(invalid)
+            self.assertNotEqual(self.run_wrapper('--stage-hotel-setup-profile-migration-scope', DIGEST).returncode, 0)
+        self.env['MOCK_RECEIPT'] = json.dumps(receipt)
+        self.assertNotEqual(self.run_wrapper('--stage-hotel-setup-logo-migration-scope', DIGEST).returncode, 0)
+        self.env['MOCK_RECEIPT'] = json.dumps(logo)
+        result = self.run_wrapper('--stage-hotel-setup-logo-migration-scope', DIGEST)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        overrides = json.loads((self.root / 'capture/overrides.json').read_text())
+        code = {entry['name']: entry['value'] for entry in overrides['containerOverrides'][0]['environment']}['VAYADA_DB_RUNTIME_PREFLIGHT_CODE']
+        self.assertEqual(gzip.decompress(base64.b64decode(code)), (ROOT / 'scripts/stage-hotel-setup-logo-migration-scope.mjs').read_bytes())
+        for profile in ('enabled', 'blocked,blocked'):
+            self.env['MOCK_PROFILE_ADMISSION'] = profile
+            self.assertNotEqual(self.run_wrapper('--stage-hotel-setup-logo-migration-scope', DIGEST).returncode, 0)
+
+    def test_profile_scope_is_only_dispatched_by_the_protected_workflow(self):
+        workflow = (ROOT / '.github/workflows/hotel-setup-migration-scope.yml').read_text()
+        self.assertIn('options: [property_0441, logo_0466, profile_0470]', workflow)
+        self.assertIn('profile_0470) mode=--stage-hotel-setup-profile-migration-scope ;;', workflow)
+        for required in ("if: github.ref == 'refs/heads/main'", 'environment: platform-mutations-v2',
+                         'group: production-ecs-mutations', 'persist-credentials: false'):
+            self.assertIn(required, workflow)
 
     def test_staged_logo_recovery_reuses_hold_gates_and_requires_exact_plan(self):
         self.test_logo_scope_requires_all_callers_and_both_private_services_stopped()

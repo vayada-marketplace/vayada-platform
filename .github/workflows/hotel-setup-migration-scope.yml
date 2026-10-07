@@ -6,7 +6,7 @@ on:
       scope:
         description: Fixed migration parent to stage
         type: choice
-        options: [property_0441, logo_0466]
+        options: [property_0441, logo_0466, profile_0470]
         default: property_0441
       image_digest:
         description: Reviewed operational image containing the selected exact migration
@@ -43,6 +43,7 @@ jobs:
           case "$SCOPE" in
             property_0441) mode=--stage-hotel-setup-migration-scope ;;
             logo_0466) mode=--stage-hotel-setup-logo-migration-scope ;;
+            profile_0470) mode=--stage-hotel-setup-profile-migration-scope ;;
             *) exit 2 ;;
           esac
           bash scripts/run-target-database-runtime-preflight.sh "$mode" "$IMAGE_DIGEST"
