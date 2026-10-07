@@ -396,6 +396,8 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
                        'runtime_protected_relation_readable', 'runtime_identity_write_scope_too_broad',
                        'runtime_product_dml_missing', 'runtime_default_privileges_missing',
                        'runtime_grant_option_forbidden', 'ALTER DEFAULT PRIVILEGES IN SCHEMA',
+                       'runtime_destructive_privilege_forbidden', 'runtime_foreign_default_privileges_forbidden',
+                       'runtime_security_definer_execute_forbidden', 'verifyGlobalPosture',
                        'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA',
                        'await client.query("BEGIN")', 'ROLLBACK', 'unexpected_database_host', 'rds_ca_missing',
                        'VAYADA_AUDIT_GRANT_LOCAL_FIXTURE', '"revoke_product_dml"'):

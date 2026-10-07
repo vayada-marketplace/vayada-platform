@@ -939,8 +939,14 @@ not owned by the migration owner, when an identity lock table has no
 `created_at` column, or when the protected list is still writable or readable
 after the grant.
 Re-running it is a no-op. Run it again after any migration that adds a
-protected-class table; the preflight names the relation. The reviewed code and
-the CA travel in the disposable task definition, not in the run-task override.
+protected-class table; the preflight names the relation. Before committing it
+also runs the preflight's global posture checks (no TRUNCATE/REFERENCES/
+TRIGGER/MAINTAIN anywhere, no default privileges for the login from any other
+role or schema, no SECURITY DEFINER EXECUTE, no owned objects, no role
+memberships, PUBLIC grants included), so pre-existing drift is never committed
+together with the grant. The reviewed code and the CA travel in the disposable
+task definition, not in the run-task override; the plain `preflight` mode uses
+the same path (verified read-only against production on 2026-10-07).
 
 Rollback: `scripts/run-target-database-runtime-preflight.sh --revoke-runtime-product-dml`
 revokes the schema-wide DML and default privileges and restores the legacy
