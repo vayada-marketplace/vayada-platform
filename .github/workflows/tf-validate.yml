@@ -49,6 +49,9 @@ on:
       - "scripts/test_hotel_setup_logo_inspection_native.mjs"
       - "scripts/stage-hotel-setup-logo-migration-scope.mjs"
       - "scripts/test_hotel_setup_logo_parent_native.mjs"
+      - "scripts/stage-hotel-setup-profile-migration-scope.mjs"
+      - "scripts/test_hotel_setup_profile_parent_native.mjs"
+      - ".github/workflows/hotel-setup-migration-scope.yml"
       - "scripts/test-hotel-setup-readiness-migrations.mjs"
       - ".github/workflows/hotel-setup-migration-audit.yml"
       - "docs/hotel-setup-readiness-migration-audit.md"
@@ -334,6 +337,8 @@ jobs:
           node --check scripts/test_hotel_setup_logo_inspection_native.mjs
           node --check scripts/stage-hotel-setup-logo-migration-scope.mjs
           node --check scripts/test_hotel_setup_logo_parent_native.mjs
+          node --check scripts/stage-hotel-setup-profile-migration-scope.mjs
+          node --check scripts/test_hotel_setup_profile_parent_native.mjs
           python3 scripts/test_hotel_setup_creation_runner.py
           node --check scripts/provision-hotel-setup-creation-login.mjs
           node --check scripts/test-hotel-setup-creation-bootstrap.mjs

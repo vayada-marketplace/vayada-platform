@@ -74,6 +74,13 @@ if [[ "$mode" == --recover-hotel-setup-logo-staged-role ]]; then
   mode=--stage-hotel-setup-logo-migration-scope
   set -- "$mode" "$4"
 fi
+profile_scope=""
+if [[ "$mode" == --stage-hotel-setup-profile-migration-scope ]]; then
+  [[ "$#" -eq 2 ]] || exit 2
+  profile_scope=0470
+  # The fixed profile parent reuses the logo parent's all-blocked, held and physically-stopped gates.
+  mode=--stage-hotel-setup-logo-migration-scope
+fi
 case "${mode}" in
   preflight|--preflight-folio-command)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -347,6 +354,7 @@ case "${mode}" in
     [[ "${mode}" != "--stage-hotel-setup-logo-migration-scope" ]] || code_file="stage-hotel-setup-logo-migration-scope.mjs"
     [[ -z "$logo_recovery_phase" ]] || code_file="recover-hotel-setup-logo-staged-role.mjs"
     [[ -z "$logo_reader_phase" ]] || code_file="hotel-setup-logo-reader-cutover.mjs"
+    [[ -z "$profile_scope" ]] || code_file="stage-hotel-setup-profile-migration-scope.mjs"
     secret_name="HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL"
     secret_parameter="/vayada/prod/db-marketplace-url"
     task_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$2"
@@ -706,7 +714,12 @@ logo_cleanup_release_gate() {
       select(.name=="HOTEL_SETUP_CREATION_COMMAND_ADMISSION" or .name=="HOTEL_SETUP_COMMAND_ADMISSION")] |
       length==2 and ([.[]|select(.name=="HOTEL_SETUP_CREATION_COMMAND_ADMISSION")]|length)==1 and ([.[]|select(.name=="HOTEL_SETUP_COMMAND_ADMISSION")]|length)==1 and all(.[];.value=="blocked")' <<<"$source_definition" >/dev/null || return 1
     jq -e 'all(.containerDefinitions[] | select(.name=="vayada-next-api") | .secrets[];
-      .name!="HOTEL_SETUP_CREATION_COMMAND_ADMISSION" and .name!="HOTEL_SETUP_COMMAND_ADMISSION")' <<<"$source_definition" >/dev/null || return 1
+      .name!="HOTEL_SETUP_CREATION_COMMAND_ADMISSION" and .name!="HOTEL_SETUP_COMMAND_ADMISSION" and .name!="HOTEL_SETUP_PROFILE_COMMAND_ADMISSION")' <<<"$source_definition" >/dev/null || return 1
+    # The profile caller is absent until its own release (no admission, origin or token); once installed it must be blocked.
+    jq -e '[.containerDefinitions[] | select(.name=="vayada-next-api")][0] as $api |
+      [$api.environment[] | select(.name=="HOTEL_SETUP_PROFILE_COMMAND_ADMISSION")] as $admission |
+      ($admission | length==1 and .[0].value=="blocked") or ($admission | length==0) and
+      all(($api.environment + ($api.secrets // []))[]; .name!="HOTEL_SETUP_PROFILE_COMMAND_ORIGIN" and .name!="HOTEL_SETUP_PROFILE_COMMAND_INTERNAL_TOKEN")' <<<"$source_definition" >/dev/null || return 1
     local current_hold
     current_hold="$(aws ssm get-parameter --name /vayada/prod/coordinated-deployments/v1/services/next-target-backend/hold --region "${region}" --query 'Parameter.Value' --output text)"
     [[ "$current_hold" == "$hold" ]] || return 1
@@ -876,11 +889,15 @@ if [[ -n "$logo_recovery_phase" ]]; then
   exit 0
 fi
 if [[ "${mode}" == "--stage-hotel-setup-logo-migration-scope" ]]; then
-  [[ "$(jq -r '.exitCode' <<<"$task")" == 0 ]] || { echo "Logo parent staging requires inspection." >&2; exit 1; }
-  jq -ce '[.[] | fromjson? | select((.scopeIncomingMemberships==0 or .scopeIncomingMemberships==1) and .=={status:"PASS",migration:"0466",scopeRole:"vayada_next_hotel_setup_logo_scope",
+  stage_label="Logo"; stage_migration="0466"; stage_role="vayada_next_hotel_setup_logo_scope"
+  if [[ -n "$profile_scope" ]]; then
+    stage_label="Profile"; stage_migration="0470"; stage_role="vayada_next_hotel_setup_profile_scope"
+  fi
+  [[ "$(jq -r '.exitCode' <<<"$task")" == 0 ]] || { echo "${stage_label} parent staging requires inspection." >&2; exit 1; }
+  jq -ce --arg migration "$stage_migration" --arg role "$stage_role" '[.[] | fromjson? | select((.scopeIncomingMemberships==0 or .scopeIncomingMemberships==1) and .=={status:"PASS",migration:$migration,scopeRole:$role,
     login:false,businessGrantsAdded:false,migrationOwner:"vayada_target_prod_user",
     migrationOwnerCanCreateRole:false,creatorAdminOnlyMembership:true,scopeIncomingMemberships:.scopeIncomingMemberships})] | select(length==1) | .[0]' <<<"$messages" || {
-    echo "Logo parent staging returned invalid evidence; inspection required." >&2; exit 1;
+    echo "${stage_label} parent staging returned invalid evidence; inspection required." >&2; exit 1;
   }
   exit 0
 fi
