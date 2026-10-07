@@ -29,6 +29,7 @@ export const noWrite = [
   "finance.expense_generation_dispatches", "pms.channex_room_availability_attempts",
   "pms.channex_room_availability_receipts", "pms.channex_room_availability_reconciliation_attestations",
   "pms.channex_ari_schedule_sources", "pms.channel_sync_status",
+  "booking.affiliate_referral_production_preflight_revocations",
 ];
 export const noWritePatterns = [
   "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|hotel_setup_|identity_migration_)",
@@ -40,6 +41,7 @@ export const appendOnly = [
   "platform.product_audit_events", "platform.domain_events", "booking.addon_revenue_evidence",
   "pms.channex_offer_ari_receipts", "pms.channex_offer_create_receipts", "pms.channex_offer_target_versions",
   "finance.commission_rate_changes", "distribution.external_api_usage_events",
+  "finance.affiliate_percentage_policy_approvals",
 ];
 export const noDelete = ["hotel_catalog.properties"];
 export const identityLockOnly = [
@@ -320,6 +322,41 @@ async function verify(client, supportsMaintain, scope) {
   if (defaults.rowCount !== schemas.length * 2) fail("runtime_default_privileges_missing");
 }
 
+// Global posture checks the tf-apply preflight also makes; run before COMMIT so pre-existing
+// drift is never committed together with the grant. PUBLIC grants count: has_*_privilege(role)
+// includes PUBLIC and inherited privileges.
+async function verifyGlobalPosture(client, supportsMaintain) {
+  const destructive = ["TRUNCATE", "REFERENCES", "TRIGGER", ...(supportsMaintain ? ["MAINTAIN"] : [])];
+  const destructiveGrants = await client.query(`
+    SELECT namespace.nspname || '.' || relation.relname AS name
+      FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+      CROSS JOIN unnest($2::text[]) AS privilege(name)
+     WHERE relation.relkind IN ${relationKinds} AND namespace.nspname NOT IN ('pg_catalog','information_schema')
+       AND relation.oid <> to_regclass($3) AND has_table_privilege($1, relation.oid, privilege.name)`,
+    [role, destructive, receipt]);
+  if (destructiveGrants.rowCount !== 0) fail("runtime_destructive_privilege_forbidden");
+  const foreignDefaults = await client.query(`
+    SELECT acl.oid FROM pg_default_acl AS acl
+      LEFT JOIN pg_namespace AS namespace ON namespace.oid = acl.defaclnamespace
+      CROSS JOIN LATERAL aclexplode(acl.defaclacl) AS entry
+     WHERE entry.grantee = (SELECT oid FROM pg_roles WHERE rolname = $1)
+       AND (acl.defaclrole <> (SELECT oid FROM pg_roles WHERE rolname = current_user)
+            OR namespace.nspname IS NULL OR NOT namespace.nspname = ANY($2::text[]))`,
+    [role, schemas]);
+  if (foreignDefaults.rowCount !== 0) fail("runtime_foreign_default_privileges_forbidden");
+  const definers = await client.query(`
+    SELECT procedure.oid FROM pg_proc AS procedure JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+     WHERE namespace.nspname NOT IN ('pg_catalog','information_schema') AND procedure.prosecdef
+       AND has_function_privilege($1, procedure.oid, 'EXECUTE')`, [role]);
+  if (definers.rowCount !== 0) fail("runtime_security_definer_execute_forbidden");
+  const owned = await client.query(`
+    SELECT relation.oid FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+     WHERE namespace.nspname NOT IN ('pg_catalog','information_schema') AND namespace.nspname NOT LIKE 'pg_%'
+       AND relation.relowner = (SELECT oid FROM pg_roles WHERE rolname = $1)
+    UNION ALL SELECT oid FROM pg_namespace WHERE nspowner = (SELECT oid FROM pg_roles WHERE rolname = $1)`, [role]);
+  if (owned.rowCount !== 0) fail("runtime_object_ownership_forbidden");
+}
+
 let client;
 try {
   const raw = process.env.TARGET_DATABASE_MIGRATION_URL;
@@ -355,6 +392,7 @@ try {
     ? await revokeProductDml(client)
     : await applyProductDml(client, supportsMaintain);
   await verify(client, supportsMaintain, scope === "revoke_product_dml" ? scope : "product_dml");
+  await verifyGlobalPosture(client, supportsMaintain);
   // The inspect scope proves the grant would commit, then leaves the database untouched.
   await client.query(scope === "inspect_product_dml" ? "ROLLBACK" : "COMMIT");
   console.log(JSON.stringify({ status: "PASS", grant: scope, relations: count, schemas, committed: scope !== "inspect_product_dml" }));

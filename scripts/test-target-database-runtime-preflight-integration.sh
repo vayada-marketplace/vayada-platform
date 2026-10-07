@@ -159,6 +159,7 @@ CREATE TABLE finance.expense_generation_dispatches (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_room_availability_attempts (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_ari_schedule_sources (id uuid PRIMARY KEY);
 CREATE TABLE pms.channel_sync_status (id uuid PRIMARY KEY);
+CREATE TABLE booking.affiliate_referral_production_preflight_revocations (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_offer_create_receipts (id uuid PRIMARY KEY);
 CREATE TABLE booking.pricing_authority_future (id uuid PRIMARY KEY);
 CREATE SEQUENCE booking.fixture_sequence;
@@ -207,6 +208,7 @@ GRANT SELECT ON platform.schema_migrations, distribution.public_room_offer_snaps
   booking.pricing_authority_heads, booking.pricing_authority_revisions, booking.pricing_quotes,
   finance.expense_generation_dispatches, pms.channex_room_availability_attempts,
   pms.channex_ari_schedule_sources, pms.channel_sync_status, pms.channex_offer_create_receipts,
+  booking.affiliate_referral_production_preflight_revocations,
   booking.pricing_authority_future, identity.organizations, identity.users,
   identity.organization_memberships, identity.role_permission_grants,
   identity.membership_property_assignments, identity.organization_roles TO vayada_next_api_runtime;
@@ -1177,9 +1179,15 @@ runtime_psql() {
     psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -Atqc "$1"
 }
 expect_runtime_denied() {
-  if runtime_psql "$1" >/dev/null 2>&1; then
+  local output
+  if output="$(docker exec -e PGPASSWORD=runtime "${database_container}" \
+    psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -Atq -c '\set VERBOSITY verbose' -c "$1" 2>&1)"; then
     echo "runtime role unexpectedly ran: $1" >&2; exit 1
   fi
+  grep -F "ERROR:  42501:" <<<"${output}" >/dev/null || { echo "expected SQLSTATE 42501 for: $1" >&2; echo "${output}" >&2; exit 1; }
+}
+legacy_owner_psql() {
+  docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d postgres -v ON_ERROR_STOP=1 -Atqc "$1"
 }
 owner_psql() { docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -Atqc "$1"; }
 
@@ -1207,6 +1215,20 @@ grep -F '"code":"runtime_role_membership_forbidden"' <<<"${product_membership}" 
 owner_psql "REVOKE elevated FROM vayada_next_api_runtime" >/dev/null
 run_grant legacy_owner owner 1 inspect_product_dml | grep -F '"committed":false' >/dev/null
 [[ "$(owner_psql "SELECT has_table_privilege('vayada_next_api_runtime','hotel_catalog.property_setup_step_drafts','INSERT')")" == f ]]
+# Pre-existing drift (a PUBLIC grant on a protected table) rolls the whole grant back.
+owner_psql "GRANT INSERT ON platform.schema_migrations TO PUBLIC" >/dev/null
+if product_public_drift="$(run_grant legacy_owner owner 1 product_dml 2>&1)"; then
+  echo "product DML grant accepted a PUBLIC grant on a protected table" >&2; exit 1
+fi
+grep -F '"code":"runtime_protected_relation_writable"' <<<"${product_public_drift}" >/dev/null
+[[ "$(owner_psql "SELECT has_table_privilege('vayada_next_api_runtime','hotel_catalog.property_setup_step_drafts','INSERT')")" == f ]]
+owner_psql "REVOKE INSERT ON platform.schema_migrations FROM PUBLIC" >/dev/null
+owner_psql "GRANT TRUNCATE ON app.hotel TO vayada_next_api_runtime" >/dev/null
+if product_destructive_drift="$(run_grant legacy_owner owner 1 product_dml 2>&1)"; then
+  echo "product DML grant accepted a pre-existing TRUNCATE grant" >&2; exit 1
+fi
+grep -F '"code":"runtime_destructive_privilege_forbidden"' <<<"${product_destructive_drift}" >/dev/null
+owner_psql "REVOKE TRUNCATE ON app.hotel FROM vayada_next_api_runtime" >/dev/null
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
@@ -1249,6 +1271,12 @@ runtime_psql "INSERT INTO platform.outbox_events(id) VALUES ('00000000-0000-4000
 runtime_psql "INSERT INTO platform.jobs(id) VALUES ('00000000-0000-4000-8000-000000000103')" >/dev/null
 runtime_psql "UPDATE platform.jobs SET id = id WHERE id = '00000000-0000-4000-8000-000000000103'" >/dev/null
 runtime_psql "SELECT nextval('booking.fixture_sequence')" >/dev/null
+# Default privileges cover a table the migration owner creates after the grant.
+legacy_owner_psql "CREATE TABLE booking.created_after_grant (id uuid PRIMARY KEY)" >/dev/null
+runtime_psql "INSERT INTO booking.created_after_grant(id) VALUES ('00000000-0000-4000-8000-00000000010d')" >/dev/null
+[[ "$(runtime_psql "SELECT count(*) FROM booking.created_after_grant")" == 1 ]]
+legacy_owner_psql "DROP TABLE booking.created_after_grant" >/dev/null
+expect_runtime_denied "INSERT INTO booking.affiliate_referral_production_preflight_revocations(id) VALUES ('00000000-0000-4000-8000-00000000010e')"
 [[ "$(runtime_psql "SELECT name FROM identity.organizations WHERE id = '00000000-0000-4000-8000-00000000aa01' FOR SHARE")" == fixture ]]
 [[ "$(runtime_psql "SELECT name FROM identity.organizations WHERE id = '00000000-0000-4000-8000-00000000aa01' FOR UPDATE")" == fixture ]]
 expect_runtime_denied "UPDATE identity.organizations SET name = 'changed' WHERE id = '00000000-0000-4000-8000-00000000aa01'"
@@ -1298,6 +1326,8 @@ run_grant legacy_owner owner 1 revoke_product_dml | grep -F '"grant":"revoke_pro
 expect_runtime_denied "INSERT INTO hotel_catalog.property_setup_step_drafts(id) VALUES ('00000000-0000-4000-8000-000000000108')"
 expect_runtime_denied "SELECT name FROM identity.organizations FOR SHARE"
 [[ "$(owner_psql "SELECT has_column_privilege('vayada_next_api_runtime','identity.product_entitlements','resource_type','INSERT') OR has_column_privilege('vayada_next_api_runtime','identity.organization_resource_links','status','UPDATE')")" == f ]]
+# The revoke restores the staged VAY-965 column grants exactly.
+[[ "$(owner_psql "SELECT has_column_privilege('vayada_next_api_runtime','identity.product_entitlements','status','UPDATE') AND has_column_privilege('vayada_next_api_runtime','identity.organization_resource_links','id','UPDATE') AND has_column_privilege('vayada_next_api_runtime','marketplace.marketplace_hotel_profiles','property_id','INSERT') AND has_column_privilege('vayada_next_api_runtime','hotel_catalog.organization_setup_track_intents','selected_tracks','UPDATE') AND has_column_privilege('vayada_next_api_runtime','finance.folios','id','UPDATE') AND NOT has_table_privilege('vayada_next_api_runtime','marketplace.marketplace_hotel_profiles','INSERT')")" == t ]]
 runtime_psql "INSERT INTO booking.guest_bookings(id) VALUES ('00000000-0000-4000-8000-000000000109')" >/dev/null
 runtime_psql "SELECT count(*) FROM hotel_catalog.property_setup_step_drafts" >/dev/null
 [[ "$(owner_psql "SELECT count(*) FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
