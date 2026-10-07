@@ -782,14 +782,15 @@ product schemas (`hotel_catalog`, `booking`, `pms`, `marketplace`,
 tables, and is denied a short protected list (credential scope tables,
 migration ledger and evidence, worker allowlists, pricing authority, guarded
 affiliate evidence, worker-only Channex and Finance state). On `identity.*` it
-only gains `UPDATE (id)` for row locks on six tables that application
-migration `0475` makes lock-only for this login; the VAY-965 setup-track column
-matrix is unchanged. The decision and the protected list with reasons live in
+only gains `UPDATE (created_at)` on the six tables the API row-locks (platform
+#240 precedent: PostgreSQL needs an `UPDATE` privilege on one column for
+`FOR SHARE`/`FOR UPDATE`); no authorization column becomes writable, and no
+policy or trigger is added because the hotel-setup native preflights pin that
+posture. The VAY-965 setup-track column matrix is unchanged. The decision and the protected list with reasons live in
 the application repo at `engineering/api-runtime-database-role.md`; the
 executable list is `scripts/grant-target-database-runtime-product-dml.mjs`.
 
-Apply from the operator lane (`--profile vayada`) after application migration
-`0475` is deployed:
+Apply from the operator lane (`--profile vayada`):
 
 ```bash
 scripts/run-target-database-runtime-preflight.sh --grant-runtime-product-dml
@@ -799,8 +800,9 @@ scripts/run-target-database-runtime-preflight.sh --preflight-runtime-product-dml
 The grant task uses only the migration-owner URL and the pinned RDS CA, runs in
 one transaction with a 5 s lock timeout, and fails closed when the login is not
 a plain non-owner login without role memberships, when any product relation is
-not owned by the migration owner, when the identity lock-only policy is missing,
-or when the protected list is still writable or readable after the grant.
+not owned by the migration owner, when an identity lock table has no
+`created_at` column, or when the protected list is still writable or readable
+after the grant.
 Re-running it is a no-op. Run it again after any migration that adds a
 protected-class table; the preflight names the relation. The reviewed code and
 the CA travel in the disposable task definition, not in the run-task override.
@@ -814,9 +816,10 @@ every non-protected product relation has `SELECT, INSERT, UPDATE, DELETE`
 writable (`runtime_protected_relation_write_forbidden`) or readable
 (`runtime_protected_relation_read_forbidden`), audit and domain events stay
 append-only and `hotel_catalog.properties` keeps no `DELETE`
-(`runtime_narrowed_relation_writable`), the identity lock-only policy exists
-(`runtime_identity_lock_only_policy_missing`), identity writes stay within the
-column matrix (`runtime_identity_write_scope_too_broad`), no other schema is
+(`runtime_narrowed_relation_writable`), the six identity lock tables carry the
+`created_at` lock column (`runtime_identity_lock_column_missing`), identity
+writes stay within the column matrix plus that lock column
+(`runtime_identity_write_scope_too_broad`), no other schema is
 writable, sequences allow at most `USAGE, SELECT`, and the login has no role
 memberships. A partial state fails closed
 (`runtime_product_dml_posture_partial`). `--preflight-runtime-product-dml`

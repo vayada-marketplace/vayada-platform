@@ -42,7 +42,7 @@ class RuntimePreflightContractTest(unittest.TestCase):
             "runtime_product_dml_required",
             "runtime_product_dml_missing",
             "runtime_narrowed_relation_writable",
-            "runtime_identity_lock_only_policy_missing",
+            "runtime_identity_lock_column_missing",
             "runtime_identity_write_scope_too_broad",
             "runtime_role_membership_forbidden",
             "runtime_default_privileges_missing",
@@ -100,7 +100,8 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertEqual(js_list(CHECK, "noDelete"), ["hotel_catalog.properties"])
         self.assertEqual(len(js_list(CHECK, "identityLockOnly")), 6)
         self.assertIn("'vayada_migration_evidence'", CHECK)
-        self.assertIn("polname = 'api_runtime_lock_only'", CHECK)
+        self.assertIn('const identityLockColumn = "created_at"', CHECK)
+        self.assertNotIn("pg_policy", CHECK)
 
     def test_database_execution_is_bounded(self) -> None:
         self.assertIn("connectionTimeoutMillis: 10_000", CHECK)

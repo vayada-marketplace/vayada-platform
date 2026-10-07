@@ -290,7 +290,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
             self.assertEqual(invalid.returncode, 2, mode)
         source = (ROOT / 'scripts/grant-target-database-runtime-product-dml.mjs').read_text()
         for marker in ('runtime_dml_owner_required', 'runtime_role_membership_forbidden',
-                       'runtime_identity_lock_only_policy_missing', 'runtime_protected_relation_writable',
+                       'runtime_identity_lock_column_missing', 'runtime_protected_relation_writable',
                        'runtime_protected_relation_readable', 'runtime_identity_write_scope_too_broad',
                        'runtime_product_dml_missing', 'runtime_default_privileges_missing',
                        'runtime_grant_option_forbidden', 'ALTER DEFAULT PRIVILEGES IN SCHEMA',
