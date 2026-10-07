@@ -117,7 +117,9 @@ class CompatibleImageTest(unittest.TestCase):
                 {"name": "HOTEL_SETUP_LOGO_COMMAND_ORIGIN", "value": "https://hotel-setup-property-command.vayada.com"}]
         self.assertNotEqual(run("next-target-backend", "vayada-next-api", VAY_846_DIGEST, [], environment=base + logo,
                                 caller_images=caller, profile_images=proved).returncode, 0)
-        self.assertEqual(json.loads((ROOT / "deployment/hotel-setup-profile-images.json").read_text()), {})
+        # Only the natively proved profile-edit image D (VAY-965, source 3e78a281a) is admitted.
+        self.assertEqual(json.loads((ROOT / "deployment/hotel-setup-profile-images.json").read_text()),
+                         {"sha256:1c5ddf7c26ad738ce55dc360f17e67ed5cbf46a1a8e09505c71b88a59a463a75": "3e78a281a28930d3023de18385c90411a6006625"})
 
     def test_accepts_reviewed_next_api_digest(self) -> None:
         reviewed = dict(

@@ -14,6 +14,8 @@ HARDENED_REVIEWED_PAIR = {
     'sha256:259f22ca5f9d90cfa87239adfff6a396bd3877598372c20a377dc055dfd3df6b': '187eeea3a5d6864283b854815334fe34c7ec752b',
     'sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965': '3efb2195a823f40b7cd5a716db5bf08ac3fe90ad',
 }
+# VAY-965 profile-edit image D: natively proved primary and rollback for property_profile.
+PROFILE_EDIT_IMAGE = {'sha256:1c5ddf7c26ad738ce55dc360f17e67ed5cbf46a1a8e09505c71b88a59a463a75': '3e78a281a28930d3023de18385c90411a6006625'}
 
 
 class HotelSetupServiceTests(unittest.TestCase):
@@ -169,7 +171,7 @@ class HotelSetupServiceTests(unittest.TestCase):
             self.assertEqual(resources[f'aws_ecs_task_definition.hotel_setup_property["{slot}"]']['family'], 'vayada-hotel-setup-property-' + slot)
         inventory = json.loads((ROOT / 'deployment/hotel-setup-property-images.json').read_text())
         proof = json.loads((ROOT / 'deployment/hotel-setup-property-image-proof.json').read_text())
-        self.assertEqual(inventory, {proof[slot]['digest']: proof[slot]['source'] for slot in ('primary', 'rollback')} | HARDENED_REVIEWED_PAIR)
+        self.assertEqual(inventory, {proof[slot]['digest']: proof[slot]['source'] for slot in ('primary', 'rollback')} | HARDENED_REVIEWED_PAIR | PROFILE_EDIT_IMAGE)
         self.assertNotEqual(proof['primary']['digest'], proof['rollback']['digest'])
         self.assertEqual(proof['verification']['postgresVersions'], [16, 17])
         source = (ROOT / 'infra/hotel_setup_property_service.tf').read_text()
