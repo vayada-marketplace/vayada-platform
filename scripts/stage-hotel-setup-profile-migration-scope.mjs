@@ -50,9 +50,9 @@ try {
     if (!rows.some(row=>row.status==='applied')) throw new Error();
     if (rows.some(row=>row.status!=='applied' || row.environment!=='production' || row.name!==name.slice(5,-4) || row.checksum_sha256!==hash)) throw new Error();
   }
-  // 0470 may be absent (pre-merge) or hold only exact CREATE ROLE denials; nothing later may exist.
+  // 0470 may be absent (pre-merge) or hold only exact CREATE ROLE denials; nothing else after 0469 may exist.
   const ledger = (await client.query(`SELECT version,name,status,environment,checksum_sha256,failure_reason
-    FROM platform.schema_migrations WHERE version >= '0470' ORDER BY applied_at DESC,id DESC`)).rows;
+    FROM platform.schema_migrations WHERE version > '0469' ORDER BY applied_at DESC,id DESC`)).rows;
   if (ledger.some(row=>row.version!=='0470' || row.name!=='hotel_setup_profile_edit_scope' || row.status!=='failed' || row.environment!=='production' ||
       row.checksum_sha256!==checksum || !/permission denied to create role/i.test(row.failure_reason??''))) throw new Error();
   stage = 'parent_absent';

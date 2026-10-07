@@ -725,9 +725,11 @@ logo_cleanup_release_gate() {
       length==2 and ([.[]|select(.name=="HOTEL_SETUP_CREATION_COMMAND_ADMISSION")]|length)==1 and ([.[]|select(.name=="HOTEL_SETUP_COMMAND_ADMISSION")]|length)==1 and all(.[];.value=="blocked")' <<<"$source_definition" >/dev/null || return 1
     jq -e 'all(.containerDefinitions[] | select(.name=="vayada-next-api") | .secrets[];
       .name!="HOTEL_SETUP_CREATION_COMMAND_ADMISSION" and .name!="HOTEL_SETUP_COMMAND_ADMISSION" and .name!="HOTEL_SETUP_PROFILE_COMMAND_ADMISSION")' <<<"$source_definition" >/dev/null || return 1
-    # The profile caller is absent until its own release; once installed it must be blocked.
-    jq -e '[.containerDefinitions[] | select(.name=="vayada-next-api") | .environment[] | select(.name=="HOTEL_SETUP_PROFILE_COMMAND_ADMISSION")] |
-      length==0 or (length==1 and .[0].value=="blocked")' <<<"$source_definition" >/dev/null || return 1
+    # The profile caller is absent until its own release (no admission, origin or token); once installed it must be blocked.
+    jq -e '[.containerDefinitions[] | select(.name=="vayada-next-api")][0] as $api |
+      [$api.environment[] | select(.name=="HOTEL_SETUP_PROFILE_COMMAND_ADMISSION")] as $admission |
+      ($admission | length==1 and .[0].value=="blocked") or ($admission | length==0) and
+      all(($api.environment + ($api.secrets // []))[]; .name!="HOTEL_SETUP_PROFILE_COMMAND_ORIGIN" and .name!="HOTEL_SETUP_PROFILE_COMMAND_INTERNAL_TOKEN")' <<<"$source_definition" >/dev/null || return 1
     local current_hold
     current_hold="$(aws ssm get-parameter --name /vayada/prod/coordinated-deployments/v1/services/next-target-backend/hold --region "${region}" --query 'Parameter.Value' --output text)"
     [[ "$current_hold" == "$hold" ]] || return 1
