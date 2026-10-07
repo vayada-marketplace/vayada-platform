@@ -80,9 +80,11 @@ next API; the next API runs the migration at startup.
 # 1. Admit the operation and apply the enable grants with that image. The grant
 #    fails closed (policy_drift) until 0473 is applied.
 bash scripts/run-target-database-runtime-preflight.sh --grant-channex-connection-worker sha256:REVIEWED_IMAGE_DIGEST
-# 2. Prove the dedicated login sees the connection scope and nothing wider.
+# 2. Terraform: channex_connection_worker_secret_mapped = true (maps the secret
+#    only). This also lets the API execution role read the worker secret, which
+#    the one-off preflight task inherits, so it must precede step 3.
+# 3. Prove the dedicated login sees the connection scope and nothing wider.
 bash scripts/run-target-database-runtime-preflight.sh --preflight-channex-connection-worker sha256:REVIEWED_IMAGE_DIGEST
-# 3. Terraform: channex_connection_worker_secret_mapped = true (maps the secret only).
 # 4. Terraform: channex_connection_worker_enabled = true (worker on, connection
 #    mutating). Only after step 0 is live: an older image rejects this shape at
 #    startup with channex_worker_scope_unsupported.
