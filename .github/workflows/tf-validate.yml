@@ -19,6 +19,8 @@ on:
       - "scripts/test_pricing_bootstrap_plan.py"
       - ".github/workflows/pricing-command-bootstrap-plan.yml"
       - "scripts/test_hotel_setup_credentials.py"
+      - "scripts/assert-hotel-setup-caller-retained.py"
+      - "scripts/test_hotel_setup_caller_retained.py"
       - "scripts/test_hotel_setup_public_caller.py"
       - "scripts/test_hotel_setup_release.py"
       - "scripts/test_hotel_setup_online_readiness.py"

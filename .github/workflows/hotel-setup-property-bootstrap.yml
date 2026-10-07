@@ -20,7 +20,7 @@ on:
         required: true
       operation:
         type: choice
-        options: [launch_settings, currency, currency_ready, feature_hub, property_logo]
+        options: [launch_settings, currency, currency_ready, feature_hub, property_logo, property_profile]
         required: true
 
 permissions:

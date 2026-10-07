@@ -17,8 +17,13 @@ hotel_setup_property_image_digests = {
 }
 # Retain both admitted callers after the protected activation and native proofs.
 # Later applies reject removal of installed origin/token pairs or enabled admission.
-hotel_setup_public_caller = { creation = "enabled", property = "enabled", logo = "enabled" }
+# Profile edits stay off until the protected profile release; this change adds no caller.
+hotel_setup_public_caller = { creation = "enabled", property = "enabled", logo = "enabled", profile = "off" }
 
 # Reviewed scoped logo protocol; automatic provisioning remains disabled.
 enable_hotel_setup_logo_storage    = true
 hotel_setup_logo_private_admission = "enabled"
+
+# Exact property_profile native secret reads for the property task and protected bootstrap
+# (VAY-965 profile edits). No caller admission, private task or image changes here.
+enable_hotel_setup_profile_credentials = true

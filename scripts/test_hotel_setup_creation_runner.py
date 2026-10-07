@@ -501,6 +501,57 @@ assert.equal(writes,1);assert.equal(spawns,1);assert.equal(exit,0);
         operations = [json.loads(line)[1] for line in (self.root / 'capture/calls.jsonl').read_text().splitlines()]
         self.assertNotIn('update-service', operations)
 
+    def test_profile_property_runner_is_actor_bound_and_requires_blocked_actor_callers(self):
+        actor = '33333333-3333-4333-8333-333333333333'
+        self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
+                        MOCK_PUBLIC_IMAGE='269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST)
+        (self.root / 'deployment/hotel-setup-caller-images.json').write_text(json.dumps({DIGEST: 'b' * 40}))
+        (self.root / 'deployment/hotel-setup-bootstrap-images.json').write_text(
+            json.dumps({DIGEST: {key: 'b' * 40 for key in ('primarySource', 'rollbackSource', 'publisherSource')}}))
+        args = ['--provision-hotel-setup-property-native', ORG, ACTOR, actor, 'property_profile', DIGEST]
+        calls = self.root / 'capture/calls.jsonl'
+        for profile in ('', 'blocked'):
+            calls.unlink(missing_ok=True)
+            self.env['MOCK_PROFILE_ADMISSION'] = profile
+            result = self.run_wrapper(*args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            definition = json.loads((self.root / 'capture/definition.json').read_text())
+            self.assertEqual(definition['taskRoleArn'], 'arn:aws:iam::269416271598:role/vayada-hotel-setup-property-bootstrap')
+            overrides = json.loads((self.root / 'capture/overrides.json').read_text())
+            env = {entry['name']: entry['value'] for entry in overrides['containerOverrides'][0]['environment']}
+            self.assertEqual((env['HOTEL_SETUP_COMMAND_PROPERTY_ID'], env['HOTEL_SETUP_COMMAND_ORGANIZATION_ID'],
+                              env['HOTEL_SETUP_COMMAND_ACTOR_USER_ID'], env['HOTEL_SETUP_COMMAND_OPERATION']),
+                             (ORG, ACTOR, actor, 'property_profile'))
+            operations = [json.loads(line)[1] for line in calls.read_text().splitlines()]
+            self.assertNotIn('update-service', operations)
+        self.env['MOCK_PROFILE_ADMISSION'] = ''
+        # Every native property bootstrap now requires both actor-bound callers absent or exactly blocked.
+        # A never-released actor caller is absent (no admission, origin or token); a leftover pair is not.
+        for overrides in ({'MOCK_LOGO_ABSENT': '1'}, {'MOCK_PROFILE_ADMISSION': 'blocked', 'MOCK_PROFILE_ORIGIN': '1', 'MOCK_PROFILE_TOKEN': '1'}):
+            previous = self.env.copy()
+            self.env.update(overrides)
+            result = self.run_wrapper(*args)
+            self.assertEqual(result.returncode, 0, (overrides, result.stderr))
+            self.env = previous
+        for operation in ('property_profile', 'property_logo', 'launch_settings'):
+            for overrides in ({'MOCK_PROFILE_ADMISSION': 'enabled'}, {'MOCK_PROFILE_ADMISSION': 'blocked,blocked'},
+                              {'MOCK_PROFILE_SECRET': '1'}, {'MOCK_LOGO_ADMISSION': 'enabled'}, {'MOCK_ADMISSION': 'enabled'},
+                              {'MOCK_PROFILE_ORIGIN': '1'}, {'MOCK_PROFILE_TOKEN': '1'}, {'MOCK_PROPERTY_RUNNING': '1'}):
+                calls.unlink(missing_ok=True)
+                previous = self.env.copy()
+                self.env.update(overrides)
+                self.assertNotEqual(self.run_wrapper(*args[:4], operation, DIGEST).returncode, 0, (operation, overrides))
+                operations = [json.loads(line)[1] for line in calls.read_text().splitlines()] if calls.exists() else []
+                self.assertNotIn('register-task-definition', operations)
+                self.assertNotIn('run-task', operations)
+                self.env = previous
+        for invalid in (['property_profiles'], ['profile'], ['property_profile', 'extra']):
+            calls.unlink(missing_ok=True)
+            self.assertNotEqual(self.run_wrapper(*args[:4], *invalid, DIGEST).returncode, 0)
+            self.assertFalse(calls.exists())
+        workflow = (ROOT / '.github/workflows/hotel-setup-property-bootstrap.yml').read_text()
+        self.assertIn('options: [launch_settings, currency, currency_ready, feature_hub, property_logo, property_profile]', workflow)
+
     def test_native_property_runner_is_main_only_and_proved_before_mutations(self):
         self.env.update(GITHUB_ACTIONS='true', GITHUB_REF='refs/heads/main',
                         MOCK_PUBLIC_IMAGE='269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@' + DIGEST)

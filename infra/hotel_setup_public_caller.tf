@@ -1,6 +1,6 @@
 # Caller activation is separate from zero-task private service staging.
 variable "hotel_setup_public_caller" {
-  type    = object({ creation = string, property = string, logo = optional(string, "off") })
+  type    = object({ creation = string, property = string, logo = optional(string, "off"), profile = optional(string, "off") })
   default = { creation = "off", property = "off" }
   validation {
     condition     = alltrue([for state in values(var.hotel_setup_public_caller) : contains(["off", "hold", "blocked", "enabled"], state)])
@@ -10,12 +10,13 @@ variable "hotel_setup_public_caller" {
 
 locals {
   hotel_setup_caller_configured = { for purpose, state in var.hotel_setup_public_caller : purpose => state if contains(["blocked", "enabled"], state) }
-  hotel_setup_caller_prefixes   = { creation = "HOTEL_SETUP_CREATION_COMMAND", property = "HOTEL_SETUP_COMMAND", logo = "HOTEL_SETUP_LOGO_COMMAND" }
-  hotel_setup_caller_origins    = { creation = "https://hotel-setup-command.vayada.com", property = "https://hotel-setup-property-command.vayada.com", logo = "https://hotel-setup-property-command.vayada.com" }
+  hotel_setup_caller_prefixes   = { creation = "HOTEL_SETUP_CREATION_COMMAND", property = "HOTEL_SETUP_COMMAND", logo = "HOTEL_SETUP_LOGO_COMMAND", profile = "HOTEL_SETUP_PROFILE_COMMAND" }
+  hotel_setup_caller_origins    = { creation = "https://hotel-setup-command.vayada.com", property = "https://hotel-setup-property-command.vayada.com", logo = "https://hotel-setup-property-command.vayada.com", profile = "https://hotel-setup-property-command.vayada.com" }
   hotel_setup_caller_tokens = {
     creation = try(aws_secretsmanager_secret.hotel_setup["internal_token"].arn, "")
     property = try(aws_secretsmanager_secret.hotel_setup_property["internal_token"].arn, "")
     logo     = try(aws_secretsmanager_secret.hotel_setup_property["internal_token"].arn, "")
+    profile  = try(aws_secretsmanager_secret.hotel_setup_property["internal_token"].arn, "")
   }
   hotel_setup_caller_environment = concat(
     [for purpose, state in var.hotel_setup_public_caller : {
@@ -42,8 +43,11 @@ resource "aws_iam_role" "hotel_setup_public_execution" {
         (!contains(keys(local.hotel_setup_caller_configured), "creation") || (var.enable_hotel_setup_credential_infrastructure && var.hotel_setup_command_mode == "property_creation")) &&
         (!contains(keys(local.hotel_setup_caller_configured), "property") || (var.enable_hotel_setup_property_credentials && var.enable_hotel_setup_property_network)) &&
         (!contains(keys(local.hotel_setup_caller_configured), "logo") || (var.enable_hotel_setup_property_credentials && var.enable_hotel_setup_property_network && var.enable_hotel_setup_logo_storage &&
-      (var.hotel_setup_public_caller.logo != "enabled" || var.hotel_setup_logo_private_admission == "enabled"))))
-      error_message = "Configured callers require their isolated credentials and network."
+        (var.hotel_setup_public_caller.logo != "enabled" || var.hotel_setup_logo_private_admission == "enabled"))) &&
+        (!contains(keys(local.hotel_setup_caller_configured), "profile") || (var.enable_hotel_setup_property_credentials && var.enable_hotel_setup_property_network && var.enable_hotel_setup_profile_credentials &&
+          (var.hotel_setup_public_caller.profile != "enabled" || alltrue([for digest in values(var.hotel_setup_property_image_digests) :
+      can(regex("^[a-f0-9]{40}$", lookup(local.hotel_setup_profile_image_inventory, digest, "")))])))))
+      error_message = "Configured callers require their isolated credentials and network; enabled profile edits also require profile-proved primary and rollback property images."
     }
   }
 }
@@ -64,4 +68,9 @@ resource "aws_iam_role_policy" "hotel_setup_public_execution" {
       { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = distinct([for secret in local.hotel_setup_caller_secrets : secret.valueFrom]) },
     ]
   })
+}
+
+# Profile forwarding needs the reviewed PUT /properties/:id/profile route in both private images.
+locals {
+  hotel_setup_profile_image_inventory = jsondecode(file("${path.module}/../deployment/hotel-setup-profile-images.json"))
 }

@@ -5,7 +5,18 @@ variable "enable_hotel_setup_property_credentials" {
   default     = false
 }
 
+# Actor-bound property_profile logins (VAY-965); no caller is admitted by this flag.
+variable "enable_hotel_setup_profile_credentials" {
+  description = "Allow the property task and protected bootstrap to use only property_profile native secrets"
+  type        = bool
+  default     = false
+}
+
 locals {
+  # Exact native prefixes per purpose: property always, logo and profile only when separately staged.
+  hotel_setup_property_native_secret_arns = concat([local.hotel_setup_property_secret_arn],
+    var.enable_hotel_setup_logo_storage ? [local.hotel_setup_logo_secret_arn] : [],
+  var.enable_hotel_setup_profile_credentials ? [local.hotel_setup_profile_secret_arn] : [])
   hotel_setup_property_secret_names = var.enable_hotel_setup_property_credentials ? {
     reader_database_url = "hotel-setup-command/prod/reader-database-url"
     internal_token      = "hotel-setup-command/prod/internal-token"
@@ -57,6 +68,6 @@ resource "aws_iam_role_policy" "hotel_setup_property_native_secrets" {
   name = "hotel-setup-property-native-secret-read"
   role = aws_iam_role.hotel_setup_property_task[0].id
   policy = templatefile("${path.module}/hotel_setup_secret_read_policy.json.tftpl", {
-    secret_arns = jsonencode(concat([local.hotel_setup_property_secret_arn], var.enable_hotel_setup_logo_storage ? [local.hotel_setup_logo_secret_arn] : []))
+    secret_arns = jsonencode(local.hotel_setup_property_native_secret_arns)
   })
 }

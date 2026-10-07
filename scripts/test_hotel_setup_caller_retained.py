@@ -40,6 +40,15 @@ class CallerRetainedTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             guard.check(current, plan)
 
+    def test_profile_caller_is_retained_once_installed_and_optional_before(self):
+        self.assertEqual(guard.PREFIXES[-1], "HOTEL_SETUP_PROFILE_COMMAND")
+        prefix = "HOTEL_SETUP_PROFILE_COMMAND"
+        for old, new in (("off", "off"), ("off", "hold"), ("off", "blocked"), ("blocked", "blocked"), ("enabled", "enabled")):
+            guard.check(*self.documents(old, new, prefix))
+        for old, new in (("enabled", "off"), ("enabled", "blocked"), ("blocked", "off"), ("hold", "off"), ("blocked", "enabled")):
+            with self.assertRaises(ValueError):
+                guard.check(*self.documents(old, new, prefix))
+
     def test_creation_caller_cannot_be_disabled(self):
         with self.assertRaises(ValueError):
             guard.check(*self.documents("enabled", "blocked", "HOTEL_SETUP_CREATION_COMMAND"))

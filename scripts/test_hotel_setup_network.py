@@ -16,7 +16,7 @@ def plan(enabled, service=None, property_network=False):
         path = Path(directory) / "infra"
         path.mkdir()
         if service is not None:
-            for name in ["hotel_setup_creation_bootstrap.tf", "hotel_setup_credentials.tf", "hotel_setup_property_credentials.tf", "hotel_setup_logo.tf", "hotel_setup_secret_read_policy.json.tftpl", "hotel_setup_service.tf", "hotel_setup_property_service.tf", "hotel_setup_container.json.tftpl"]:
+            for name in ["hotel_setup_creation_bootstrap.tf", "hotel_setup_credentials.tf", "hotel_setup_property_credentials.tf", "hotel_setup_logo.tf", "hotel_setup_secret_read_policy.json.tftpl", "hotel_setup_service.tf", "hotel_setup_property_service.tf", "hotel_setup_container.json.tftpl", *service.get("extra_files", [])]:
                 shutil.copy(ROOT / "infra" / name, path)
             for name in ("hotel_setup_property_service.tf", "hotel_setup_logo.tf"):
                 copied = path / name
@@ -83,6 +83,7 @@ output "property_environment" { value = local.hotel_setup_property_environment }
                 'hotel_setup_command_mode': service.get('mode', 'property_commands'),
                 'enable_hotel_setup_property_credentials': service.get('property_credentials', False),
                 'enable_hotel_setup_logo_storage': service.get('logo_storage', False),
+                'enable_hotel_setup_profile_credentials': service.get('profile_credentials', False),
                 'hotel_setup_logo_private_admission': service.get('logo_admission', 'blocked'),
                 'enable_hotel_setup_property_service_staging': service.get('property_enabled', False),
                 'hotel_setup_property_image_digests': service.get('property_digests', {'primary': '', 'rollback': ''}),

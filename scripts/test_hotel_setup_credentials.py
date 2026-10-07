@@ -11,7 +11,7 @@ SOURCE = ROOT / "infra/hotel_setup_credentials.tf"
 TEMPLATE = ROOT / "infra/hotel_setup_secret_read_policy.json.tftpl"
 
 
-def render(enabled, mode="property_commands", property_enabled=False, logo_enabled=False):
+def render(enabled, mode="property_commands", property_enabled=False, logo_enabled=False, profile_enabled=False):
     with tempfile.TemporaryDirectory() as directory:
         # Only locals/variables: no provider, backend, AWS access or state.
         text = SOURCE.read_text().split('resource "', 1)[0]
@@ -29,12 +29,13 @@ def render(enabled, mode="property_commands", property_enabled=False, logo_enabl
           names=local.hotel_setup_secret_names,
           property_names=local.hotel_setup_property_secret_names,
           logo_policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode(var.enable_hotel_setup_logo_storage ? [local.hotel_setup_logo_secret_arn] : [])})),
+          property_native=local.hotel_setup_property_native_secret_arns,
           trust=jsondecode(local.hotel_setup_role_trust),
           policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([local.hotel_setup_native_secret_arn])})),
           execution_policy=jsondecode(templatefile("hotel_setup_secret_read_policy.json.tftpl",{secret_arns=jsonencode([for name in values(local.hotel_setup_secret_names): "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${name}-AbCd12"])}))
         })'''.replace("\n", " ")
         result = subprocess.run(
-            ["terraform", "console", "-no-color", f"-var=enable_hotel_setup_credential_infrastructure={str(enabled).lower()}", f"-var=hotel_setup_command_mode={mode}", f"-var=enable_hotel_setup_property_credentials={str(property_enabled).lower()}", f"-var=enable_hotel_setup_logo_storage={str(logo_enabled).lower()}"],
+            ["terraform", "console", "-no-color", f"-var=enable_hotel_setup_credential_infrastructure={str(enabled).lower()}", f"-var=hotel_setup_command_mode={mode}", f"-var=enable_hotel_setup_property_credentials={str(property_enabled).lower()}", f"-var=enable_hotel_setup_logo_storage={str(logo_enabled).lower()}", f"-var=enable_hotel_setup_profile_credentials={str(profile_enabled).lower()}"],
             input=expression + "\n", text=True, capture_output=True, cwd=directory, check=True, timeout=30)
         return json.loads(json.loads(result.stdout.strip()))
 
@@ -103,7 +104,8 @@ locals {
     def test_property_bootstrap_is_operational_and_native_prefix_only(self):
         source = (ROOT / 'infra/hotel_setup_property_bootstrap.tf').read_text()
         self.assertIn('var.enable_hotel_setup_property_credentials ? 1 : 0', source)
-        self.assertIn('Resource = concat([local.hotel_setup_property_secret_arn], var.enable_hotel_setup_logo_storage ? [local.hotel_setup_logo_secret_arn] : [])', source)
+        # The bootstrap role and the property task read exactly the same native prefixes.
+        self.assertIn('Resource = local.hotel_setup_property_native_secret_arns', source)
         for forbidden in ('aws_ecs_', 'aws_secretsmanager_secret.hotel_setup', 'reader_database_url', 'internal_token', 'ssm:', 'kms:', 'PassRole'):
             self.assertNotIn(forbidden, source)
         for name in ('hotel_setup_service.tf', 'hotel_setup_property_service.tf', 'ecs.tf'):
@@ -145,6 +147,34 @@ locals {
         self.assertIn('name = "HOTEL_SETUP_LOGO_COMMAND_ADMISSION", value = var.hotel_setup_logo_private_admission', task)
         self.assertIn('default = "blocked"', source)
 
+    def test_profile_credentials_are_exact_separate_and_default_off(self):
+        prefix = "arn:aws:secretsmanager:eu-west-1:269416271598:secret:hotel-setup-command/prod/property/"
+        property_pattern, logo_pattern, profile_pattern = (prefix + f"vayada_next_hotel_setup_{kind}_*" for kind in ("property", "logo", "profile"))
+        self.assertEqual(render(True, "property_creation", True)["property_native"], [property_pattern])
+        self.assertEqual(render(True, "property_creation", True, logo_enabled=True)["property_native"], [property_pattern, logo_pattern])
+        self.assertEqual(render(True, "property_creation", True, profile_enabled=True)["property_native"], [property_pattern, profile_pattern])
+        both = render(True, "property_creation", True, logo_enabled=True, profile_enabled=True)["property_native"]
+        self.assertEqual(both, [property_pattern, logo_pattern, profile_pattern])
+        self.assertTrue(fnmatch.fnmatchcase(prefix + "vayada_next_hotel_setup_profile_37f915790bff5732_072438f4e0a8-AbCd12", profile_pattern))
+        for name in ["vayada_next_hotel_setup_property_abc", "vayada_next_hotel_setup_logo_abc", "vayada_next_hotel_setup_org_abc",
+                     "vayada_next_hotel_setup_reader", "vayada_next_hotel_setup_profilex", "postgres", "reader-database-url", "internal-token"]:
+            self.assertFalse(fnmatch.fnmatchcase(prefix + name + "-AbCd12", profile_pattern), name)
+        for name in ["hotel-setup-command/prod/organization/vayada_next_hotel_setup_profile_abc",
+                     "hotel-setup-creation/prod/property/vayada_next_hotel_setup_profile_abc"]:
+            self.assertFalse(fnmatch.fnmatchcase("arn:aws:secretsmanager:eu-west-1:269416271598:secret:" + name + "-AbCd12", profile_pattern), name)
+        # Profile secrets never widen the creation, creation-reader or execution reads.
+        creation = render(True, "property_creation", True, logo_enabled=True, profile_enabled=True)
+        self.assertNotIn(profile_pattern, creation["policy"]["Statement"][0]["Resource"])
+        self.assertNotIn(profile_pattern, creation["bootstrap_policy"]["Statement"][0]["Resource"])
+        self.assertNotIn(profile_pattern, json.dumps(creation["execution_policy"]))
+        source = (ROOT / "infra/hotel_setup_property_credentials.tf").read_text()
+        variable = source.split('variable "enable_hotel_setup_profile_credentials"', 1)[1].split("}", 1)[0]
+        self.assertRegex(variable, r"default\s*=\s*false")
+        for name in ("hotel_setup_credentials.tf", "hotel_setup_property_credentials.tf", "hotel_setup_property_bootstrap.tf"):
+            text = (ROOT / "infra" / name).read_text()
+            self.assertNotIn("vayada_next_hotel_setup_*", text)
+            self.assertNotIn("prod/property/*", text)
+
     def test_unknown_mode_fails_closed(self):
         with self.assertRaises((subprocess.CalledProcessError, ValueError)):
             render(True, "unreviewed")
@@ -159,7 +189,8 @@ locals {
         source = (ROOT / "infra/hotel_setup_property_credentials.tf").read_text()
         self.assertIn('prevent_destroy = true', source)
         self.assertIn('var.hotel_setup_command_mode == "property_creation"', source)
-        self.assertIn('jsonencode(concat([local.hotel_setup_property_secret_arn], var.enable_hotel_setup_logo_storage ? [local.hotel_setup_logo_secret_arn] : []))', source)
+        self.assertIn('secret_arns = jsonencode(local.hotel_setup_property_native_secret_arns)', source)
+        self.assertEqual(source.count('local.hotel_setup_property_native_secret_arns'), 1)
         self.assertIn('jsonencode([for secret in aws_secretsmanager_secret.hotel_setup_property : secret.arn])', source)
         for forbidden in ['aws_secretsmanager_secret_version', 'aws_ecs_', 'ssm:', 'kms:', 'PassRole']:
             self.assertNotIn(forbidden, source)

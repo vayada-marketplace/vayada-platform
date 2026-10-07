@@ -3,7 +3,7 @@
 import json
 import sys
 
-PREFIXES = ("HOTEL_SETUP_CREATION_COMMAND", "HOTEL_SETUP_COMMAND", "HOTEL_SETUP_LOGO_COMMAND")
+PREFIXES = ("HOTEL_SETUP_CREATION_COMMAND", "HOTEL_SETUP_COMMAND", "HOTEL_SETUP_LOGO_COMMAND", "HOTEL_SETUP_PROFILE_COMMAND")
 
 def check(current, plan):
     containers = current["taskDefinition"]["containerDefinitions"]

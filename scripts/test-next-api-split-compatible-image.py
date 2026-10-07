@@ -18,7 +18,7 @@ VAY_1512_RELEASE = "e8105bdd75df3e92a0e5e9b5f7e5c85a005c9378"
 VAY_1512_DIGEST = "sha256:b292f28ece5f94c46e4b601fdb9d87068d564a2e798b2124764d5a8fc854dfbd"
 
 
-def run(service: str, repository: str, digest: str, tags: list[str], ongoing: bool | None = False, environment=None, secrets=None, caller_images=None, current_image=None):
+def run(service: str, repository: str, digest: str, tags: list[str], ongoing: bool | None = False, environment=None, secrets=None, caller_images=None, current_image=None, profile_images=None):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "image.json"
         path.write_text(json.dumps({"imageDetails": [{
@@ -33,6 +33,7 @@ def run(service: str, repository: str, digest: str, tags: list[str], ongoing: bo
                 shutil.copy(ROOT / "scripts" / name, scripts / name)
             Path(directory, "deployment/hotel-setup-caller-images.json").write_text(json.dumps(caller_images))
             shutil.copy(ROOT / "deployment/hotel-setup-logo-images.json", Path(directory, "deployment/hotel-setup-logo-images.json"))
+            Path(directory, "deployment/hotel-setup-profile-images.json").write_text(json.dumps(profile_images or {}))
             check = scripts / CHECK.name
         args = ["python3", str(check), service, repository, digest, str(path)]
         if ongoing is not None:
@@ -84,6 +85,39 @@ class CompatibleImageTest(unittest.TestCase):
             self.assertNotEqual(run("next-target-backend", "vayada-next-api", logo, [], environment=base+entries, caller_images=caller).returncode, 0)
         self.assertNotEqual(run("next-target-backend", "vayada-next-api", logo, [], environment=base, secrets=[{"name":marker["name"],"valueFrom":"fixture"}], caller_images=caller).returncode, 0)
         self.assertNotEqual(run("next-target-backend", "vayada-next-api", DIGEST, [], environment=base+pair, secrets=token, caller_images=caller).returncode, 0)
+
+    def test_profile_retains_complete_protocol_or_unchanged_initial_hold(self):
+        base = [{"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"}]
+        marker = {"name": "HOTEL_SETUP_PROFILE_COMMAND_ADMISSION", "value": "enabled"}
+        pair = [{"name": "HOTEL_SETUP_PROFILE_COMMAND_ORIGIN", "value": "https://hotel-setup-property-command.vayada.com"}]
+        token = [{"name": "HOTEL_SETUP_PROFILE_COMMAND_INTERNAL_TOKEN", "valueFrom": "fixture"}]
+        caller = {DIGEST: "a" * 40, VAY_846_DIGEST: "b" * 40}
+        proved = {VAY_846_DIGEST: "b" * 40}
+        for state in ("enabled", "blocked"):
+            for digest, accepted in ((DIGEST, False), (VAY_846_DIGEST, True)):
+                result = run("next-target-backend", "vayada-next-api", digest, [], environment=base + [{**marker, "value": state}] + pair,
+                             secrets=token, caller_images=caller, profile_images=proved)
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+        # A retained pair alone (token without admission) still requires the profile protocol.
+        self.assertNotEqual(run("next-target-backend", "vayada-next-api", DIGEST, [], environment=base, secrets=token,
+                                caller_images=caller, profile_images=proved).returncode, 0)
+        blocked = {**marker, "value": "blocked"}
+        image = "269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@" + DIGEST
+        result = run("next-target-backend", "vayada-next-api", DIGEST, [], environment=base + [blocked], caller_images=caller, current_image=image)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(run("next-target-backend", "vayada-next-api", DIGEST, [], environment=base + [blocked], caller_images=caller,
+                                current_image=image.replace(DIGEST, VAY_846_DIGEST)).returncode, 0)
+        for entries in ([marker, marker], [{**marker, "value": "allow"}]):
+            self.assertNotEqual(run("next-target-backend", "vayada-next-api", VAY_846_DIGEST, [], environment=base + entries,
+                                    caller_images=caller, profile_images=proved).returncode, 0)
+        self.assertNotEqual(run("next-target-backend", "vayada-next-api", VAY_846_DIGEST, [], environment=base,
+                                secrets=[{"name": marker["name"], "valueFrom": "fixture"}], caller_images=caller, profile_images=proved).returncode, 0)
+        # The logo protocol does not satisfy profile, and profile does not satisfy logo.
+        logo = [{"name": "HOTEL_SETUP_LOGO_COMMAND_ADMISSION", "value": "enabled"},
+                {"name": "HOTEL_SETUP_LOGO_COMMAND_ORIGIN", "value": "https://hotel-setup-property-command.vayada.com"}]
+        self.assertNotEqual(run("next-target-backend", "vayada-next-api", VAY_846_DIGEST, [], environment=base + logo,
+                                caller_images=caller, profile_images=proved).returncode, 0)
+        self.assertEqual(json.loads((ROOT / "deployment/hotel-setup-profile-images.json").read_text()), {})
 
     def test_accepts_reviewed_next_api_digest(self) -> None:
         reviewed = dict(
