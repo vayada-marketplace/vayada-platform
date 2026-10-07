@@ -108,12 +108,15 @@ CREATE TABLE hotel_catalog.organization_setup_track_intents (
 CREATE TABLE identity.product_entitlements (
   id uuid DEFAULT gen_random_uuid(), organization_id uuid, product text, entitlement_key text,
   status text, starts_at timestamptz, expires_at timestamptz, metadata jsonb, updated_at timestamptz,
-  resource_product text
+  resource_product text, resource_type text, resource_id text,
+  UNIQUE (organization_id, product, entitlement_key, resource_id)
 );
 CREATE TABLE identity.organization_resource_links (
   id uuid DEFAULT gen_random_uuid(), organization_id uuid, product text, resource_type text,
-  resource_id text, relationship text, status text
+  resource_id text, relationship text, status text, updated_at timestamptz
 );
+INSERT INTO identity.organization_resource_links (organization_id, product, resource_type, resource_id, relationship, status)
+  VALUES ('00000000-0000-4000-8000-00000000aa01', 'marketplace', 'marketplace_offer', 'offer-1', 'operator', 'active');
 CREATE TABLE finance.billing_entitlements (id uuid DEFAULT gen_random_uuid(), billing_status text);
 CREATE TABLE booking.booking_settings (property_id uuid PRIMARY KEY, published boolean DEFAULT false);
 CREATE TABLE marketplace.marketplace_hotel_profiles (
@@ -1220,6 +1223,23 @@ runtime_psql "SELECT nextval('booking.fixture_sequence')" >/dev/null
 expect_runtime_denied "UPDATE identity.organizations SET name = 'changed' WHERE id = '00000000-0000-4000-8000-00000000aa01'"
 expect_runtime_denied "UPDATE identity.organizations SET id = id WHERE id = '00000000-0000-4000-8000-00000000aa01'"
 runtime_psql "UPDATE identity.organizations SET created_at = created_at WHERE id = '00000000-0000-4000-8000-00000000aa01'" >/dev/null
+# Product-link identity writes the ordinary API really makes (extended matrix, product posture only).
+runtime_psql "INSERT INTO identity.product_entitlements (organization_id, product, entitlement_key, status, resource_product, resource_type, resource_id, starts_at, expires_at, metadata)
+  VALUES ('00000000-0000-4000-8000-00000000aa01', 'pms', 'module:financials', 'active', 'pms', 'pms_property', 'prop-1', now(), NULL, '{}'::jsonb)
+  ON CONFLICT (organization_id, product, entitlement_key, resource_id) DO UPDATE
+  SET status = EXCLUDED.status, starts_at = EXCLUDED.starts_at, expires_at = EXCLUDED.expires_at, metadata = EXCLUDED.metadata, updated_at = now()" >/dev/null
+runtime_psql "INSERT INTO identity.product_entitlements (organization_id, product, entitlement_key, status, resource_product, resource_type, resource_id, starts_at, expires_at, metadata)
+  VALUES ('00000000-0000-4000-8000-00000000aa01', 'pms', 'module:financials', 'suspended', 'pms', 'pms_property', 'prop-1', NULL, NULL, '{\"x\":1}'::jsonb)
+  ON CONFLICT (organization_id, product, entitlement_key, resource_id) DO UPDATE
+  SET status = EXCLUDED.status, starts_at = EXCLUDED.starts_at, expires_at = EXCLUDED.expires_at, metadata = EXCLUDED.metadata, updated_at = now()" >/dev/null
+[[ "$(owner_psql "SELECT status FROM identity.product_entitlements WHERE resource_id = 'prop-1'")" == suspended ]]
+runtime_psql "UPDATE identity.organization_resource_links SET status = 'archived', updated_at = now()
+  WHERE organization_id = '00000000-0000-4000-8000-00000000aa01' AND product = 'marketplace' AND resource_type = 'marketplace_offer' AND resource_id = 'offer-1'" >/dev/null
+[[ "$(owner_psql "SELECT status FROM identity.organization_resource_links WHERE resource_id = 'offer-1'")" == archived ]]
+expect_runtime_denied "UPDATE identity.product_entitlements SET entitlement_key = entitlement_key WHERE resource_id = 'prop-1'"
+expect_runtime_denied "UPDATE identity.organization_resource_links SET resource_id = resource_id WHERE resource_id = 'offer-1'"
+expect_runtime_denied "DELETE FROM identity.product_entitlements WHERE resource_id = 'prop-1'"
+expect_runtime_denied "DELETE FROM identity.organization_resource_links WHERE resource_id = 'offer-1'"
 [[ "$(owner_psql "SELECT name FROM identity.organizations WHERE id = '00000000-0000-4000-8000-00000000aa01'")" == fixture ]]
 expect_runtime_denied "INSERT INTO identity.users(id) VALUES ('00000000-0000-4000-8000-000000000104')"
 expect_runtime_denied "INSERT INTO platform.hotel_setup_creation_scopes(database_login) VALUES ('x')"
@@ -1246,6 +1266,7 @@ runtime_psql "SELECT owner_user_ids FROM platform.legacy_owner_bootstrap_receipt
 run_grant legacy_owner owner 1 revoke_product_dml | grep -F '"grant":"revoke_product_dml"' >/dev/null
 expect_runtime_denied "INSERT INTO hotel_catalog.property_setup_step_drafts(id) VALUES ('00000000-0000-4000-8000-000000000108')"
 expect_runtime_denied "SELECT name FROM identity.organizations FOR SHARE"
+[[ "$(owner_psql "SELECT has_column_privilege('vayada_next_api_runtime','identity.product_entitlements','resource_type','INSERT') OR has_column_privilege('vayada_next_api_runtime','identity.organization_resource_links','status','UPDATE')")" == f ]]
 runtime_psql "INSERT INTO booking.guest_bookings(id) VALUES ('00000000-0000-4000-8000-000000000109')" >/dev/null
 runtime_psql "SELECT count(*) FROM hotel_catalog.property_setup_step_drafts" >/dev/null
 [[ "$(owner_psql "SELECT count(*) FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
