@@ -276,7 +276,7 @@ run_grant() {
   local grant_file="grant.mjs"
   [[ "${grant_scope}" == "folio_command" ]] && grant_file="folio-grant.mjs"
   [[ "${grant_scope}" == "hotel_setup_tracks" ]] && grant_file="setup-grant.mjs"
-  [[ "${grant_scope}" == "product_dml" || "${grant_scope}" == "revoke_product_dml" ]] && grant_file="product-dml-grant.mjs"
+  [[ "${grant_scope}" == *product_dml ]] && grant_file="product-dml-grant.mjs"
   docker run --rm \
     --network "${network}" \
     --volume "${node_modules_container}:/work" \
