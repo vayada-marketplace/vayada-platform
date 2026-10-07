@@ -51,7 +51,7 @@ const catalogSnapshot=async()=>(await setup.query(`SELECT md5(json_build_object(
  'schemas',(SELECT json_agg(r ORDER BY oid) FROM pg_namespace r),
  'relations',(SELECT json_agg(r ORDER BY oid) FROM pg_class r),
  'functions',(SELECT json_agg(r ORDER BY oid) FROM pg_proc r))::text) AS hash`)).rows[0].hash;
-let uncertain=false,selfGrant=false,denyLock=false,edgeMode='stock',imageBytes=null;
+let uncertain=false,selfGrant=false,denyLock=false,edgeMode='stock',imageBytes=null,imagePredecessor=null;
 async function run(){
  const catalogBefore=await catalogSnapshot(),globalBefore=await globalSnapshot();
  let receipt,exit;
@@ -76,6 +76,7 @@ async function run(){
  }
  const context=vm.createContext({URL,process:{env:{HOTEL_SETUP_PROPERTY_ADMIN_DATABASE_URL:'postgresql://vayada_admin:synthetic@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require',VAYADA_DB_RDS_CA_BUNDLE:ca??'test-ca'},set exitCode(v){exit=v;}},console:{log:v=>receipt=JSON.parse(v),error:v=>receipt=JSON.parse(v)}});
  const imageFile=path=>{const name=path.split('/').at(-1);assert.equal(path,`/app/packages/backend-migration/migrations/${name}`);
+  if(imagePredecessor&&name.startsWith(imagePredecessor+'_'))return Buffer.from('-- different predecessor bytes\n');
   return imageBytes&&name.startsWith('0470_')?imageBytes:readFileSync(`${migrationDir}/${name}`);};
  const modules={pg:{default:{Client}},'node:crypto':{createHash},'node:fs':{readFileSync:imageFile}};
  const module=new vm.SourceTextModule(readFileSync(new URL('./stage-hotel-setup-profile-migration-scope.mjs',import.meta.url),'utf8'),{context});
@@ -86,8 +87,9 @@ async function run(){
 }
 const absent=async()=>assert.equal((await setup.query(`SELECT count(*)::int AS count FROM pg_catalog.pg_roles WHERE rolname='${ROLE}'`)).rows[0].count,0);
 const rejects=async(stage)=>{const result=await run();assert.equal(result.exit,1);assert.equal(result.receipt.code,'hotel_setup_scope_staging_unavailable');if(stage)assert.equal(result.receipt.stage,stage);await absent();};
-// The image must carry the exact reviewed 0470 bytes.
+// The image must carry the exact reviewed 0470 bytes and the applied 0466-0469 bytes.
 imageBytes=Buffer.from('-- different 0470 bytes\n');await rejects('configuration');imageBytes=null;
+imagePredecessor='0468';await rejects('ledger');imagePredecessor=null;
 // The production migration owner must be unable to create roles (otherwise 0470 needs no pre-stage).
 await setup.query('ALTER ROLE vayada_target_prod_user CREATEROLE');await rejects('owner');await setup.query('ALTER ROLE vayada_target_prod_user NOCREATEROLE');
 // Every logo-family predecessor must be exactly applied in production.
@@ -109,9 +111,10 @@ for(const [values,params] of [
  ["('0470','hotel_setup_profile_edit_scope','failed','production','wrong','permission denied to create role')",[]],
  ["('0470','hotel_setup_profile_edit_scope','failed','production',$1,'syntax error')",[hash('0470_hotel_setup_profile_edit_scope.sql')]],
  ["('0470','hotel_setup_profile_edit_scope','applied','production',$1,NULL)",[hash('0470_hotel_setup_profile_edit_scope.sql')]],
- ["('0471','hotel_setup_profile_read_models','applied','production','unexpected',NULL)",[]]]){
+ ["('0471','hotel_setup_profile_read_models','applied','production','unexpected',NULL)",[]],
+ ["('04695','unexpected_between','applied','production','unexpected',NULL)",[]]]){
  await setup.query(`INSERT INTO platform.schema_migrations(version,name,status,environment,checksum_sha256,failure_reason)VALUES${values}`,params);
- await rejects('ledger');await setup.query("DELETE FROM platform.schema_migrations WHERE version>='0470'");
+ await rejects('ledger');await setup.query("DELETE FROM platform.schema_migrations WHERE version>'0469'");
 }
 denyLock=true;const denied=await run();denyLock=false;
 assert.equal(denied.exit,1);assert.equal(denied.receipt.stage,'lock');assert.equal(denied.receipt.sqlstate,'22P02');assert.equal(denied.receipt.parentPosture,null);

@@ -19,8 +19,9 @@ mutation creates the absent fixed parent, as the logo parent did.
   by its own reviewed inventory change. Images built before application PR #2898
   do not contain 0470 and fail closed.
 - All public callers explicitly blocked: creation, property and logo exactly
-  `blocked`, and the profile caller either absent (before its first release) or
-  exactly `blocked`. No admission marker may come from secrets.
+  `blocked`, and the profile caller either absent (no admission, origin or token:
+  before its first release) or exactly `blocked`. No admission marker may come from
+  secrets.
 - Both private services (`vayada-hotel-setup-service`,
   `vayada-hotel-setup-property-service`) stopped, with no running or draining tasks.
 - An active incompatible-frontend coordinated hold that captures the exact stable
@@ -39,14 +40,16 @@ are injected; the task has no AWS role.
   with neither CREATEROLE nor superuser.
 - 0466–0469 are exactly applied in production (canonical names, pinned checksums,
   no failed or foreign rows). 0470 may be absent, or contain only exact
-  `permission denied to create role` failures of the pinned bytes. Any 0471+, applied,
-  unknown or mismatching history fails closed.
+  `permission denied to create role` failures of the pinned bytes. Any other row after
+  0469 (including 0471+ or an applied 0470) fails closed.
 - The parent does not already exist (no adoption). After `CREATE ROLE`, no login,
   inheritance, elevated attributes, role settings or outgoing memberships. Incoming
   memberships are none (RDS) or exactly `vayada_admin` with ADMIN=true,
   INHERIT=false, SET=false and a superuser grantor (stock PostgreSQL 16/17).
 - No business grant is added. A lost COMMIT acknowledgement reports
-  `hotel_setup_scope_commit_inspection_required`; inspect, never retry blindly.
+  `hotel_setup_scope_commit_inspection_required`; inspect, never retry blindly. A
+  rerun fails closed at `parent_absent`; there is no profile-specific inspection mode
+  yet, so inspect the parent's attributes and memberships read-only before deciding.
 
 The wrapper accepts only the exact receipt
 `{status:PASS, migration:0470, scopeRole:vayada_next_hotel_setup_profile_scope, ...,
