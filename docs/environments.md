@@ -816,13 +816,23 @@ not owned by the migration owner, when an identity lock table has no
 `created_at` column, or when the protected list is still writable or readable
 after the grant.
 Re-running it is a no-op. Run it again after any migration that adds a
-protected-class table; the preflight names the relation. The reviewed code and
-the CA travel in the disposable task definition, not in the run-task override.
+protected-class table; the preflight names the relation. Before committing it
+also runs the preflight's global posture checks (no TRUNCATE/REFERENCES/
+TRIGGER/MAINTAIN anywhere, no default privileges for the login from any other
+role or schema, no SECURITY DEFINER EXECUTE, no owned objects, no role
+memberships, PUBLIC grants included), so pre-existing drift is never committed
+together with the grant. The reviewed code and the CA travel in the disposable
+task definition, not in the run-task override; the plain `preflight` mode uses
+the same path (verified read-only against production on 2026-10-07).
 
 The runtime preflight (`scripts/target-database-runtime-preflight.mjs`, run by
 every `tf-apply`) detects the posture from the migration owner's default
 privileges in the seven product schemas. With none it asserts the legacy
-allowlist exactly as before; with all seven it asserts the product DML posture:
+allowlist as before, with one deliberate tightening that applies to both
+postures: the no-read list, the name patterns and `vayada_migration_evidence`
+are unreadable (`pms.inventory_coverage_validation_queue` was only exempt from
+the required reads before); production passed this read-only on 2026-10-07.
+With all seven it asserts the product DML posture:
 every non-protected product relation has `SELECT, INSERT, UPDATE, DELETE`
 (`runtime_product_dml_missing`), the protected list and name patterns are not
 writable (`runtime_protected_relation_write_forbidden`) or readable

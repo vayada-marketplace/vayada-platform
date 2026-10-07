@@ -30,6 +30,7 @@ const noWrite = [
   "finance.expense_generation_dispatches", "pms.channex_room_availability_attempts",
   "pms.channex_room_availability_receipts", "pms.channex_room_availability_reconciliation_attestations",
   "pms.channex_ari_schedule_sources", "pms.channel_sync_status",
+  "booking.affiliate_referral_production_preflight_revocations",
 ];
 const noWritePatterns = [
   "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|hotel_setup_|identity_migration_)",
@@ -40,6 +41,7 @@ const appendOnly = [
   "platform.product_audit_events", "platform.domain_events", "booking.addon_revenue_evidence",
   "pms.channex_offer_ari_receipts", "pms.channex_offer_create_receipts", "pms.channex_offer_target_versions",
   "finance.commission_rate_changes", "distribution.external_api_usage_events",
+  "finance.affiliate_percentage_policy_approvals",
 ];
 const noDelete = ["hotel_catalog.properties"];
 const identityLockOnly = [
@@ -71,6 +73,8 @@ const productIdentityColumns = {
 };
 // Legacy allowlist posture (before the product DML grant). Removed by a follow-up once production
 // has switched; until then plain preflight accepts both postures so tf-apply never breaks.
+// One deliberate tightening applies to both postures: the no-read list, name patterns and the
+// evidence schema are unreadable (pms.inventory_coverage_validation_queue was only read-exempt before).
 const legacyRequiredRelations = {
   "booking.guest_bookings": ["SELECT", "INSERT", "UPDATE", "DELETE"],
   "finance.payments": ["SELECT", "INSERT", "UPDATE"],
