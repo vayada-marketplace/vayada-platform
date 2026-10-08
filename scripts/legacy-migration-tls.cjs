@@ -23,8 +23,10 @@ function pinned(config) {
   } catch {
     throw new Error('database_url_not_pinned');
   }
-  if (!settings.hosts.includes(url.hostname)) throw new Error('database_host_not_pinned');
+  if (!settings.hosts.includes(url.hostname) || (url.port || '5432') !== '5432') throw new Error('database_host_not_pinned');
   for (const key of [...url.searchParams.keys()]) if (SSL_PARAMETERS.has(key.toLowerCase())) url.searchParams.delete(key);
+  // pg lets query parameters such as host, port, user or dbname override the URL, so only a label may remain.
+  if ([...url.searchParams.keys()].some((key) => key !== 'application_name')) throw new Error('database_url_not_pinned');
   return { ...options, connectionString: url.toString(), ssl: { ca, rejectUnauthorized: true, servername: url.hostname } };
 }
 

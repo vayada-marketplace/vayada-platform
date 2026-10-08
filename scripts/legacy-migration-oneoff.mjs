@@ -14,6 +14,8 @@ import { gunzipSync } from 'node:zlib';
 
 const CLI = '/app/packages/backend-migration/dist/cli';
 const CA_SHA256 = 'f5c5f92ae025987c76dc49bdb1ace8556fdf332b4788d719a923bc274779d869';
+// SHA-256 of scripts/legacy-migration-tls.cjs; a mismatched checkout is refused.
+const TLS_PRELOAD_SHA256 = '4393f823953295d3830917389be8bed9732cc4653ac9e4b8fb9de8f12b92eb29';
 const TARGET = { host: 'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com', database: 'vayada_target_prod', user: 'vayada_target_prod_user' };
 // The sources are the attested restore of the frozen legacy databases, never production legacy.
 const SOURCE_DATABASES = { AUTH: 'vayada_auth_db', BOOKING: 'vayada_booking_db', MARKETPLACE: 'postgres', PMS: 'vayada_pms_db' };
@@ -59,7 +61,7 @@ if (args.some((arg) => arg.startsWith('@') && !Object.hasOwn(files, arg.slice(1)
 const ca = process.env.VAYADA_DB_RDS_CA_BUNDLE ?? '';
 if (createHash('sha256').update(ca).digest('hex') !== CA_SHA256) refuse('rds_ca_invalid');
 const preload = process.env.LEGACY_MIGRATION_TLS_PRELOAD ?? '';
-if (!preload.includes('PinnedClient') || !preload.includes('PinnedPool')) refuse('tls_preload_invalid');
+if (createHash('sha256').update(preload).digest('hex') !== TLS_PRELOAD_SHA256) refuse('tls_preload_invalid');
 const pins = { TARGET_DATABASE_URL: TARGET };
 if (kind === 'source') {
   const host = process.env.LEGACY_MIGRATION_SOURCE_HOST ?? '';
@@ -90,7 +92,10 @@ writeFileSync(preloadFile, preload, { mode: 0o600 });
 const env = { ...process.env };
 delete env.LEGACY_MIGRATION_TLS_PRELOAD;
 for (const [variable, url] of Object.entries(urls)) {
-  url.search = ''; // TLS comes only from the preload's explicit object
+  // The preload replaces these with its explicit TLS object; they only guard a client it did not patch.
+  url.search = '';
+  url.searchParams.set('sslmode', 'verify-full');
+  url.searchParams.set('sslrootcert', caFile);
   env[variable] = url.toString();
 }
 env.LEGACY_MIGRATION_TLS = JSON.stringify({ ca: caFile, cliDir: CLI, hosts: [...new Set(Object.values(urls).map((url) => url.hostname))] });
