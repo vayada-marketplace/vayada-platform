@@ -48,10 +48,62 @@ Financials export runner:
 
 Later changes to the runner, such as a new image pin, follow the same path.
 
+## Before the first dispatch
+
+1. Re-pin `deployment/legacy-migration-runner.json` to the rehearsed go-day
+   image in a reviewed PR, then install it as above. The CLI refuses to run if
+   the image's `APPLICATION_RELEASE` differs from `--application-release`.
+2. Create the SecureStrings `/vayada/prod/legacy-migration-source-{auth,booking,marketplace,pms}-url`
+   for the restored, attested legacy source (runbook M1). Until they exist,
+   source tasks cannot start.
+3. Let the next-api security group reach that restore. Tasks use the network
+   configuration of `vayada-next-api-service`.
+4. Commit the run file (below) in a reviewed PR.
+
+## Run file: `deployment/legacy-migration-runs/<run-id>.json`
+
+```json
+{
+  "runId": "vay1360-<24 hex>",
+  "sourceRunId": "vay1351-<24 hex>",
+  "args": {
+    "target:cutover:dry-run": ["--source-run-id", "vay1351-<24 hex>", "--manifest", "@manifest", "…"]
+  },
+  "files": { "manifest": { "version": 1, "…": "…" } }
+}
+```
+
+- **`args`** lists the CLI flags for each command. Leave out `--run-id`,
+  `--confirmation` and `--report`: the launcher adds them, and the CLI refuses
+  duplicates.
+- **`@name`** points to an entry in `files`. The task writes it as a 0600 JSON
+  file and passes its path.
+- **No secrets.** Database URLs come only from SSM.
+- **Size limit.** All inputs, after gzip, must fit the 8192-byte ECS override
+  limit. Larger reports need another input path, which is a follow-up.
+- **Resuming after `AWAITING_SMOKE`** means adding `--resume` and
+  `--smoke-report @smoke-report` in a reviewed update.
+
 ## Dispatch
 
-The protected `workflow_dispatch` workflow and its launcher come in the next,
-stacked change. Until then nothing in this repository can start the runner.
+Use the workflow **VAY-1362 legacy migration runner**. It is `workflow_dispatch`
+only, runs on `main` only, needs approval on `platform-mutations-v2`, and shares
+the `production-ecs-mutations` queue. Its inputs are `command`, `image_digest`
+(which must equal the pin), `run_id` and `confirmation`:
+
+| Command | Confirmation |
+|---|---|
+| `target:migration-status` | `MIGRATION_STATUS:<run>` |
+| `target:source:extract` | `SOURCE_EXTRACT:<run>:<source-run>` |
+| `target:cutover:dry-run` | `CUTOVER_DRY_RUN:<run>:<source-run>` (the CLI checks it again) |
+| `target:cutover` | `PRODUCTION_CUTOVER:<run>:<source-run>` (the CLI checks it again) |
+| `target:cutover:abort` | `ABORT_CUTOVER:<run>` (the CLI checks it again) |
+
+- **Output.** The CLI output goes to the log group and the job log.
+- **Exit code.** The job exits with the CLI's code: `0` done, `2` NO-GO,
+  `3` review, `4` awaiting smoke.
+- **Never re-run blindly.** After a failure or a 150-minute timeout, check the
+  task and `target:migration-status` first.
 
 ## Limits
 

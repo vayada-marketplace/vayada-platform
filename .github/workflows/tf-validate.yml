@@ -184,8 +184,10 @@ on:
       - "scripts/test-legacy-pms-freeze.mjs"
       - "docs/legacy-pms-freeze.md"
       - "scripts/legacy-migration-runner.mjs"
+      - "scripts/run-legacy-migration-runner.sh"
       - "scripts/test-legacy-migration-runner.mjs"
       - "docs/legacy-migration-runner.md"
+      - ".github/workflows/legacy-migration-runner.yml"
       - "scripts/test-vay2042-media-endpoint.mjs"
       - ".github/workflows/vay2042-target-bootstrap.yml"
       - "scripts/check-vay2017-rehearsal-isolation.sh"
@@ -363,6 +365,7 @@ jobs:
           node --test scripts/test-vay2042-target-runner.mjs
           node --test scripts/test-vay2042-media-infra.mjs
           node --test scripts/test-legacy-migration-runner.mjs
+          bash -n scripts/run-legacy-migration-runner.sh
           node --test scripts/test-vay2042-media-endpoint.mjs
           bash -n scripts/run-vay2017-rehearsal-metadata.sh
           bash -n scripts/run-vay2017-metadata-reader-bootstrap.sh

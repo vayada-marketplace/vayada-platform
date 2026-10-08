@@ -1,0 +1,56 @@
+name: VAY-1362 legacy migration runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "Allow-listed backend-migration command"
+        type: choice
+        required: true
+        options:
+          - target:migration-status
+          - target:source:extract
+          - target:cutover:dry-run
+          - target:cutover
+          - target:cutover:abort
+      image_digest:
+        description: "Pinned runner image digest (deployment/legacy-migration-runner.json)"
+        required: true
+      run_id:
+        description: "Cutover run ID with a reviewed file in deployment/legacy-migration-runs/"
+        required: true
+      confirmation:
+        description: "Exact confirmation for this command and run (docs/legacy-migration-runner.md)"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+
+jobs:
+  run:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-legacy-migration-runner
+          role-duration-seconds: 14400
+          aws-region: eu-west-1
+      # Never re-run automatically. A failed or timed-out run is inspected first.
+      - name: Run one allow-listed migration command
+        env:
+          COMMAND: ${{ inputs.command }}
+          DIGEST: ${{ inputs.image_digest }}
+          RUN_ID: ${{ inputs.run_id }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: bash scripts/run-legacy-migration-runner.sh "$COMMAND" "$DIGEST" "$RUN_ID" "$CONFIRMATION"
