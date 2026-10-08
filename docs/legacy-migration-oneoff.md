@@ -69,9 +69,15 @@ Use it on its own only for a standalone extraction, and check that its report's
        account, never the production `vayada-database`) and `sourceUser`, with
        the expected database names.
 
-     It rewrites every URL to `sslmode=verify-full` with that CA, so the
-     certificate and hostname are verified. A URL that does not match is
-     refused (exit 64).
+     A URL that does not match is refused (exit 64). The URLs are then passed
+     on without SSL parameters. The CLI starts with `node --require
+     scripts/legacy-migration-tls.cjs`, which wraps `pg.Client` and `pg.Pool`
+     before the CLI imports pg. Every client and pool gets the explicit TLS
+     object `{ ca: <pinned RDS CA>, rejectUnauthorized: true, servername:
+     <host> }`, which verifies the certificate and hostname, and any host that
+     is not pinned is refused. This is the same object the app's
+     historical-binding preflight uses. A proof against the real pg 8.21 (as
+     imported by the CLIs) is in the evidence folder.
 4. **It runs the task once** on the `vayada-target-database-runtime-preflight`
    cluster, with next-api's network. Arguments and inputs travel inside the
    definition (up to about 60 KB), not as overrides (8 KB). It writes a task

@@ -19,8 +19,9 @@ const blob = (files) => gzipSync(JSON.stringify(files)).toString('base64');
 const CA = readFileSync(new URL('../rehearsal/rds-ca-rsa2048-g1.pem', import.meta.url), 'utf8');
 const PROD_HOST = 'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com';
 const RESTORE_HOST = 'vay1362-legacy-restore.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com';
+const TLS_PRELOAD = readFileSync(new URL('./legacy-migration-tls.cjs', import.meta.url), 'utf8');
 const DB_ENV = {
-  VAYADA_DB_RDS_CA_BUNDLE: CA,
+  VAYADA_DB_RDS_CA_BUNDLE: CA, LEGACY_MIGRATION_TLS_PRELOAD: TLS_PRELOAD,
   TARGET_DATABASE_URL: `postgresql://vayada_target_prod_user:pw@${PROD_HOST}:5432/vayada_target_prod?sslmode=require`,
   LEGACY_MIGRATION_SOURCE_HOST: RESTORE_HOST, LEGACY_MIGRATION_SOURCE_USER: 'vay1362_source_reader',
   ...Object.fromEntries([['AUTH', 'vayada_auth_db'], ['BOOKING', 'vayada_booking_db'], ['MARKETPLACE', 'postgres'], ['PMS', 'vayada_pms_db']]
@@ -50,6 +51,7 @@ test('the dispatcher refuses anything outside the allow-list or with malformed i
     ['target', { LEGACY_MIGRATION_COMMAND: 'target:cutover:abort', LEGACY_MIGRATION_ARGS: '[]', ...DB_ENV, TARGET_DATABASE_URL: 'postgresql://vayada_target_prod_user:pw@other.example.com:5432/vayada_target_prod' }, 'database_url_not_pinned'],
     ['target', { LEGACY_MIGRATION_COMMAND: 'target:cutover:abort', LEGACY_MIGRATION_ARGS: '[]', ...DB_ENV, TARGET_DATABASE_URL: `postgresql://vayada_admin:pw@${PROD_HOST}:5432/vayada_target_prod` }, 'database_url_not_pinned'],
     ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '[]', ...DB_ENV, LEGACY_MIGRATION_SOURCE_HOST: PROD_HOST }, 'source_pin_invalid'],
+    ['target', { LEGACY_MIGRATION_COMMAND: 'target:cutover:abort', LEGACY_MIGRATION_ARGS: '[]', ...DB_ENV, LEGACY_MIGRATION_TLS_PRELOAD: '' }, 'tls_preload_invalid'],
     ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '[]', ...DB_ENV, PMS_SOURCE_DATABASE_URL: `postgresql://vay1362_source_reader:pw@${RESTORE_HOST}:5432/vayada_booking_db` }, 'database_url_not_pinned'],
   ]) {
     const result = dispatch(kind, env);
@@ -63,7 +65,7 @@ test('the dispatcher runs the mapped dist CLI with the reviewed files and keeps 
   try {
     // Stub spawnSync in the child only: print what would run and the files it would read.
     writeFileSync(join(dir, 'stub.cjs'), `const cp = require('node:child_process'); const fs = require('node:fs');
-cp.spawnSync = (file, argv, options) => { console.log(JSON.stringify({ argv, env: Object.fromEntries(Object.entries(options.env).filter(([k]) => k.endsWith('DATABASE_URL'))), files: argv.filter((a) => a.endsWith('.json') && fs.existsSync(a)).map((a) => JSON.parse(fs.readFileSync(a, 'utf8'))) })); return { status: 7 }; };
+cp.spawnSync = (file, argv, options) => { console.log(JSON.stringify({ argv, env: Object.fromEntries(Object.entries(options.env).filter(([k]) => k.endsWith('DATABASE_URL') || k.startsWith('LEGACY_MIGRATION_TLS'))), files: argv.filter((a) => a.endsWith('.json') && fs.existsSync(a)).map((a) => JSON.parse(fs.readFileSync(a, 'utf8'))) })); return { status: 7 }; };
 require('node:module').syncBuiltinESMExports();`);
     const result = dispatch('source', {
       ...DB_ENV,
@@ -75,14 +77,20 @@ require('node:module').syncBuiltinESMExports();`);
     const [start, run] = result.stdout.trim().split('\n').map((line) => JSON.parse(line));
     assert.deepEqual(start, { status: 'START', command: 'target:cutover', flags: ['--manifest', '--operator'] });
     assert.doesNotMatch(JSON.stringify(start), /operator-name/);
-    assert.deepEqual(run.argv.filter((a) => !a.endsWith('.json')), ['/app/packages/backend-migration/dist/cli/cutover.js', 'cutover', '--manifest', '--operator', 'operator-name']);
+    const [requireFlag, preloadFile, ...cliArgv] = run.argv;
+    assert.equal(requireFlag, '--require');
+    assert.equal(readFileSync(preloadFile, 'utf8'), TLS_PRELOAD);
+    assert.deepEqual(cliArgv.filter((a) => !a.endsWith('.json')), ['/app/packages/backend-migration/dist/cli/cutover.js', 'cutover', '--manifest', '--operator', 'operator-name']);
     assert.deepEqual(run.files, [{ version: 1 }]);
-    const caFile = join(run.argv[3], '..', 'rds-ca.pem');
-    assert.equal(readFileSync(caFile, 'utf8'), CA);
-    assert.equal(run.env.TARGET_DATABASE_URL, `postgresql://vayada_target_prod_user:pw@${PROD_HOST}:5432/vayada_target_prod?sslmode=verify-full&sslrootcert=${encodeURIComponent(caFile)}`);
-    assert.equal(run.env.PMS_SOURCE_DATABASE_URL, `postgresql://vay1362_source_reader:p%40ss@${RESTORE_HOST}/vayada_pms_db?sslmode=verify-full&sslrootcert=${encodeURIComponent(caFile)}`);
-    assert.equal(Object.keys(run.env).length, 5);
-    rmSync(join(run.argv[3], '..'), { recursive: true, force: true });
+    const tls = JSON.parse(run.env.LEGACY_MIGRATION_TLS);
+    assert.deepEqual(tls, { ca: join(preloadFile, '..', 'rds-ca.pem'), cliDir: '/app/packages/backend-migration/dist/cli', hosts: [PROD_HOST, RESTORE_HOST] });
+    assert.equal(readFileSync(tls.ca, 'utf8'), CA);
+    // URLs carry no SSL parameters: TLS comes only from the preload's explicit object.
+    assert.equal(run.env.TARGET_DATABASE_URL, `postgresql://vayada_target_prod_user:pw@${PROD_HOST}:5432/vayada_target_prod`);
+    assert.equal(run.env.PMS_SOURCE_DATABASE_URL, `postgresql://vay1362_source_reader:p%40ss@${RESTORE_HOST}/vayada_pms_db`);
+    assert.equal(run.env.LEGACY_MIGRATION_TLS_PRELOAD, undefined);
+    assert.equal(Object.keys(run.env).length, 6);
+    rmSync(join(preloadFile, '..'), { recursive: true, force: true });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -93,7 +101,7 @@ test('the script checks every input before AWS and runs exactly one pinned one-o
   try {
     mkdirSync(join(root, 'scripts'));
     mkdirSync(join(root, 'rehearsal'));
-    for (const name of ['legacy-migration-oneoff.sh', 'legacy-migration-oneoff.mjs', 'next-api-split-compatible-images.txt'])
+    for (const name of ['legacy-migration-oneoff.sh', 'legacy-migration-oneoff.mjs', 'legacy-migration-tls.cjs', 'next-api-split-compatible-images.txt'])
       copyFileSync(new URL(`./${name}`, import.meta.url), join(root, 'scripts', name));
     copyFileSync(new URL('../rehearsal/rds-ca-rsa2048-g1.pem', import.meta.url), join(root, 'rehearsal/rds-ca-rsa2048-g1.pem'));
     const evidence = join(root, 'evidence');
@@ -235,9 +243,47 @@ esac
     assert.equal(target.family, 'vayada-legacy-migration-oneoff-target');
     assert.equal(target.taskRoleArn, undefined);
     assert.deepEqual(target.containerDefinitions[0].secrets.map((s) => s.name), ['TARGET_DATABASE_URL']);
-    assert.deepEqual(Object.keys(env(target)).sort(), ['AWS_REGION', 'LEGACY_MIGRATION_ARGS', 'LEGACY_MIGRATION_COMMAND', 'LEGACY_MIGRATION_FILES', 'VAYADA_DB_RDS_CA_BUNDLE']);
+    assert.deepEqual(Object.keys(env(target)).sort(), ['AWS_REGION', 'LEGACY_MIGRATION_ARGS', 'LEGACY_MIGRATION_COMMAND', 'LEGACY_MIGRATION_FILES', 'LEGACY_MIGRATION_TLS_PRELOAD', 'VAYADA_DB_RDS_CA_BUNDLE']);
+    assert.equal(env(target).LEGACY_MIGRATION_TLS_PRELOAD, TLS_PRELOAD);
     assert.deepEqual(JSON.parse(env(target).LEGACY_MIGRATION_ARGS), ['--operator', 'op', '--run-id', RUN, '--confirmation', `ABORT_CUTOVER:${RUN}`, '--report', 'json']);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the TLS preload gives every pg Client and Pool the explicit pinned TLS object', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'legacy-oneoff-tls-'));
+  try {
+    // A stand-in pg with the same export shape (writable Client and Pool) and an ESM CLI that uses both import styles.
+    mkdirSync(join(dir, 'node_modules/pg'), { recursive: true });
+    mkdirSync(join(dir, 'cli'));
+    writeFileSync(join(dir, 'node_modules/pg/index.js'), `class Client { constructor(config) { this.config = config; } }
+class Pool { constructor(options) { this.options = options; } }
+module.exports = { Client, Pool };`);
+    writeFileSync(join(dir, 'cli/consumer.mjs'), `import pg from 'pg';
+import { Client, Pool } from 'pg';
+const url = process.env.TEST_URL;
+const seen = [new pg.Client({ connectionString: url }).config, new Client({ connectionString: url }).config,
+  new pg.Pool({ connectionString: url, max: 2 }).options, new Pool({ connectionString: url }).options];
+let refused = 'accepted';
+try { new pg.Client({ connectionString: 'postgresql://u:p@other.example.com:5432/db' }); } catch (error) { refused = error.message; }
+console.log(JSON.stringify({ seen, refused }));`);
+    writeFileSync(join(dir, 'ca.pem'), CA);
+    const run = (tls) => spawnSync(process.execPath, ['--require', new URL('./legacy-migration-tls.cjs', import.meta.url).pathname, join(dir, 'cli/consumer.mjs')], {
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH, TEST_URL: `postgresql://u:p%40ss@${PROD_HOST}:5432/vayada_target_prod?sslmode=require&uselibpqcompat=true&application_name=cutover`, ...tls },
+    });
+    const result = run({ LEGACY_MIGRATION_TLS: JSON.stringify({ ca: join(dir, 'ca.pem'), cliDir: join(dir, 'cli'), hosts: [PROD_HOST] }) });
+    assert.equal(result.status, 0, result.stderr);
+    const { seen, refused } = JSON.parse(result.stdout);
+    for (const config of seen) {
+      assert.equal(config.connectionString, `postgresql://u:p%40ss@${PROD_HOST}:5432/vayada_target_prod?application_name=cutover`);
+      assert.deepEqual(config.ssl, { ca: CA, rejectUnauthorized: true, servername: PROD_HOST });
+    }
+    assert.equal(seen[2].max, 2);
+    assert.equal(refused, 'database_host_not_pinned');
+    assert.notEqual(run({}).status, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
