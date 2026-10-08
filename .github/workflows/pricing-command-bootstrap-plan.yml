@@ -84,10 +84,7 @@ jobs:
           TF_VAR_legacy_booking_api_desired_count: ${{ secrets.TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT || '1' }}
           TF_VAR_legacy_marketplace_api_desired_count: ${{ secrets.TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT || '1' }}
           TF_VAR_legacy_pms_api_desired_count: ${{ secrets.TF_VAR_LEGACY_PMS_API_DESIRED_COUNT || '1' }}
-          TF_VAR_enable_staging_pms_runtime: ${{ secrets.TF_VAR_ENABLE_STAGING_PMS_RUNTIME || 'false' }}
-          TF_VAR_staging_pms_database_url: ${{ secrets.TF_VAR_STAGING_PMS_DATABASE_URL }}
-          TF_VAR_staging_pms_auth_database_url: ${{ secrets.TF_VAR_STAGING_PMS_AUTH_DATABASE_URL }}
-          TF_VAR_staging_pms_booking_engine_database_url: ${{ secrets.TF_VAR_STAGING_PMS_BOOKING_ENGINE_DATABASE_URL }}
+          TF_VAR_enable_staging_pms_runtime: "false" # VAY-794 C1 rehearsal accepted; staging PMS retired
           TF_VAR_target_database_url: ${{ secrets.TF_VAR_TARGET_DATABASE_URL }}
           TF_VAR_workos_api_key: ${{ secrets.TF_VAR_WORKOS_API_KEY }}
           TF_VAR_workos_webhook_secret: ${{ secrets.TF_VAR_WORKOS_WEBHOOK_SECRET }}
