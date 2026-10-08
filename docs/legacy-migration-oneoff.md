@@ -41,7 +41,8 @@ Use it on its own only for a standalone extraction, and check that its report's
    - the confirmation is exact;
    - every argument is a string, and the inputs are named JSON documents.
 2. **Before starting anything:** it clears inherited AWS credentials and the
-   overrides `AWS_ENDPOINT_URL*`, `AWS_CONFIG_FILE` and `AWS_CA_BUNDLE`, and
+   overrides `AWS_ENDPOINT_URL*`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`
+   and `AWS_CA_BUNDLE`, and
    requires the `vayada` profile to resolve to account `269416271598`. It refuses if a
    one-off migration task is still running.
 3. **It registers one disposable task definition.** The family is

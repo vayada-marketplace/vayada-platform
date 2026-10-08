@@ -117,7 +117,7 @@ test('the script checks every input before AWS and runs exactly one pinned one-o
     mkdirSync(join(root, 'bin'));
     writeFileSync(join(root, 'bin/aws'), `#!/usr/bin/env bash
 [[ "$1 $2 $3 $4" == "--profile vayada --region eu-west-1" ]] || { echo "unexpected aws options: $*" >&2; exit 9; }
-[[ -z "\${AWS_ENDPOINT_URL:-}\${AWS_ENDPOINT_URL_ECS:-}\${AWS_CA_BUNDLE:-}\${AWS_CONFIG_FILE:-}" ]] || { echo "AWS overrides leaked" >&2; exit 9; }
+[[ -z "\${AWS_ENDPOINT_URL:-}\${AWS_ENDPOINT_URL_ECS:-}\${AWS_CA_BUNDLE:-}\${AWS_CONFIG_FILE:-}\${AWS_SHARED_CREDENTIALS_FILE:-}" ]] || { echo "AWS overrides leaked" >&2; exit 9; }
 shift 4
 echo "$1 $2" >> "${root}/aws.log"
 args=("$@"); for ((i = 0; i < \${#args[@]}; i++)); do
@@ -142,7 +142,7 @@ esac
       rmSync(join(root, 'aws.log'), { force: true });
       rmSync(join(root, 'definition.json'), { force: true });
       return spawnSync('bash', [script, ...args], { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, AWS_PROFILE: 'other',
-        AWS_ENDPOINT_URL: 'http://127.0.0.1:1', AWS_ENDPOINT_URL_ECS: 'http://127.0.0.1:1', AWS_CA_BUNDLE: '/tmp/x.pem', AWS_CONFIG_FILE: '/tmp/x', ...env } });
+        AWS_ENDPOINT_URL: 'http://127.0.0.1:1', AWS_ENDPOINT_URL_ECS: 'http://127.0.0.1:1', AWS_CA_BUNDLE: '/tmp/x.pem', AWS_CONFIG_FILE: '/tmp/x', AWS_SHARED_CREDENTIALS_FILE: '/tmp/y', ...env } });
     };
     const awsCalls = () => (existsSync(join(root, 'aws.log')) ? readFileSync(join(root, 'aws.log'), 'utf8') : '');
     const definition = () => JSON.parse(readFileSync(join(root, 'definition.json'), 'utf8'));
