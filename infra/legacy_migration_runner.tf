@@ -17,7 +17,8 @@ locals {
   legacy_migration_runner_kinds = {
     # migration-status and abort read or mark only the target run ledger.
     target = { secrets = { TARGET_DATABASE_URL = local.legacy_migration_target_url }, environment = [] }
-    # extract, dry-run and cutover also read the frozen sources and import media.
+    # extract and cutover also read the frozen sources and import media. The cutover
+    # dry-run needs a preprod target and stays out of this production runner.
     source = {
       secrets = merge({ TARGET_DATABASE_URL = local.legacy_migration_target_url }, local.legacy_migration_source_urls)
       environment = [
@@ -172,7 +173,7 @@ resource "aws_iam_role_policy" "legacy_migration_runner_controller" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["ecs:DescribeServices", "ecs:DescribeTaskDefinition", "ecs:DescribeTasks"]
+        Action   = ["ecs:DescribeServices", "ecs:DescribeTaskDefinition", "ecs:DescribeTasks", "ecs:ListTasks"]
         Resource = "*"
       },
       {
@@ -220,7 +221,7 @@ resource "aws_iam_policy" "legacy_migration_runner_refresh" {
       },
       {
         Effect   = "Deny"
-        Action   = ["ecs:RegisterTaskDefinition", "ecs:RunTask", "ecs:StartTask", "ecs:DeleteTaskDefinitions"]
+        Action   = ["ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition", "ecs:RunTask", "ecs:StartTask", "ecs:DeleteTaskDefinitions"]
         Resource = "${local.legacy_migration_runner_family_arn}:*"
       },
       {
@@ -238,6 +239,16 @@ resource "aws_iam_policy" "legacy_migration_runner_refresh" {
         Effect   = "Deny"
         Action   = "iam:PassRole"
         Resource = [aws_iam_role.legacy_migration_runner_execution.arn, aws_iam_role.legacy_migration_runner_task.arn]
+      },
+      {
+        Effect   = "Deny"
+        Action   = ["logs:DeleteLogGroup", "logs:PutRetentionPolicy"]
+        Resource = [aws_cloudwatch_log_group.legacy_migration_runner.arn, "${aws_cloudwatch_log_group.legacy_migration_runner.arn}:*"]
+      },
+      {
+        Effect   = "Deny"
+        Action   = ["ssm:PutParameter", "ssm:DeleteParameter"]
+        Resource = [for parameter in values(local.legacy_migration_source_urls) : "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${parameter}"]
       },
     ]
   })
