@@ -40,8 +40,9 @@ Use it on its own only for a standalone extraction, and check that its report's
    - the run file has the `vay1360` run ID, the `vay1351` source run ID and the image pair, and that pair (`sourceSha imageDigest`) is listed in `scripts/next-api-split-compatible-images.txt`;
    - the confirmation is exact;
    - every argument is a string, and the inputs are named JSON documents.
-2. **Before starting anything:** it clears inherited AWS credentials and requires
-   the `vayada` profile to resolve to account `269416271598`. It refuses if a
+2. **Before starting anything:** it clears inherited AWS credentials and the
+   overrides `AWS_ENDPOINT_URL*`, `AWS_CONFIG_FILE` and `AWS_CA_BUNDLE`, and
+   requires the `vayada` profile to resolve to account `269416271598`. It refuses if a
    one-off migration task is still running.
 3. **It registers one disposable task definition.** The family is
    `vayada-legacy-migration-oneoff-target` or `-source`. That is never the
@@ -58,6 +59,18 @@ Use it on its own only for a standalone extraction, and check that its report's
      - Source tasks also get `/vayada/prod/legacy-migration-source-{auth,booking,marketplace,pms}-url`.
    - **Media settings:** copied from the running next-api task (bucket and
      CDN), plus the legacy media bucket allow-list.
+   - **Database pins and TLS:** the pinned RDS CA (`rehearsal/rds-ca-rsa2048-g1.pem`,
+     SHA-256 `f5c5f92a…`, checked by the script and again in the task). Before
+     the CLI starts, the dispatcher checks every database URL:
+     - the target must be host `vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com`,
+       port 5432, `vayada_target_prod`, user `vayada_target_prod_user`;
+     - the sources must be the run file's `sourceHost` (an RDS host in this
+       account, never the production `vayada-database`) and `sourceUser`, with
+       the expected database names.
+
+     It rewrites every URL to `sslmode=verify-full` with that CA, so the
+     certificate and hostname are verified. A URL that does not match is
+     refused (exit 64).
 4. **It runs the task once** on the `vayada-target-database-runtime-preflight`
    cluster, with next-api's network. Arguments and inputs travel inside the
    definition (up to about 60 KB), not as overrides (8 KB). It writes a task
@@ -82,6 +95,8 @@ and `target:migration-status` before doing anything else.
   "sourceRunId": "vay1351-<24 hex>",
   "sourceSha": "<40 hex>",
   "imageDigest": "sha256:<64 hex>",
+  "sourceHost": "<restore>.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com",
+  "sourceUser": "<restricted reader login>",
   "args": { "target:cutover": ["--source-run-id", "vay1351-<24 hex>", "--manifest", "@manifest", "…"] },
   "files": { "manifest": { "version": 1, "…": "…" } }
 }
@@ -96,7 +111,8 @@ and `target:migration-status` before doing anything else.
 
 ## Before go-day
 
-1. Create the four source SecureStrings for the attested go-day restore.
+1. Create the four source SecureStrings for the attested go-day restore, all on
+   the restore host and the reader login named in the run file.
 2. Let next-api's security group reach that restore.
 3. In the rehearsal, confirm two things:
    - `ecsTaskExecutionRole` can read those parameters;
@@ -112,39 +128,54 @@ EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh read
 EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts <counts.sql> <target-check.sql> READONLY_COUNTS:<plan sha256>
 ```
 
-A read-only snapshot for go-day planning. It covers:
-- the legacy PMS/Booking blocks in `readonly-counts.sql`;
-- the 6c pre-deploy check (`6c/predeploy-readonly-check.sql`) on the production
-  target;
-- Stripe subscription counts.
+A read-only snapshot for go-day planning. It covers the legacy PMS and Booking
+blocks in `readonly-counts.sql`, and the 6c pre-deploy check
+(`6c/predeploy-readonly-check.sql`) on the production target. There is no
+Stripe part: Flamur read the two subscriptions directly.
 
 The SQL files are kept in the evidence folder rather than the repository,
 because they name candidate hotels. They are still embedded in the disposable
-task definition, which is deleted afterwards, and are recorded by CloudTrail.
+task definitions, which are deleted afterwards, and are recorded by CloudTrail.
 Nothing runs before the plan is reviewed and Flamur's go names the plan SHA-256.
+
+**Do not run during deploys.** pms-api and next-api run migrations when they
+start. The script refuses unless both services run exactly one task in one
+completed deployment.
 
 | Coordinator check | How it is met |
 |---|---|
-| Owner-checked pattern | **Image:** the digest of the single running `vayada-pms-backend` task, never a tag. The service must be settled (one task, one completed deployment); the plan names that task. **Embedded in the disposable definition:** the code (`python -I -c`), both SQL files and the RDS CA bundle (`rehearsal/rds-ca-rsa2048-g1.pem`, SHA-256 `f5c5f92a…`, checked by the script and again in the task). **Secrets:** exactly four reviewed SSM names: `/vayada/prod/db-pms-url`, `/vayada/prod/db-booking-url`, `/vayada/prod/stripe-secret-key`, `/vayada/prod/target-database-url`. **Connections:** host `vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com`, port 5432, and the database (`vayada_pms_db`, `vayada_booking_db`, `vayada_target_prod`) are pinned per secret. TLS is verified against that CA, including the hostname (sslmode `verify-full`). |
-| Read-only, aggregates only | **Transaction:** every statement runs inside `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`, with a 60 s statement timeout and a 2 s lock timeout. **Legacy blocks:** must contain an aggregate and must not build values from many rows (`*_agg`, JSON builders, `*_to_xml`). They may return at most 50 rows. Whether a `GROUP BY` key is personal data is up to the reviewed SQL. **Target checks:** each 6c `SELECT` (the file's own `BEGIN`/`ROLLBACK` are dropped) runs as `SELECT count(*) AS rows_found FROM (…)` and must return exactly that one value, so no target row is printed. Balanced parentheses and the ban on comments stop a statement from breaking out of the wrapper. The expected answer is 0. **Stripe:** counts per status, in total and for fixed-plan subscriptions; no IDs, emails or amounts. The task gets the full platform key, because SSM holds no restricted read-only key. The code only calls `Subscription.list`. **Errors:** only a code or the exception type is printed. |
-| Least privilege, no new IAM | No task role. The execution role is the existing `ecsTaskExecutionRole`, the role the legacy services already use. Logs go to the existing `/ecs/vayada-pms-backend` group (prefix `legacy-readonly-counts`). Nothing goes through Terraform. The definition is deregistered and deleted afterwards. |
-| Dry-run / plan mode | `readonly-counts-plan` makes only read-only AWS calls. It prints every statement exactly as it will run, the image, roles, secrets and log group, both SQL SHA-256s and the plan SHA-256, and saves all of it to `readonly-counts-plan.txt`. The run rebuilds the definition and refuses if its SHA-256 differs from the one in the go (a new image, SQL, code or CA). |
-| Only SELECT | Each block or check must be a single `SELECT`/`WITH`. The script refuses write keywords (`INSERT`, `UPDATE`, `DELETE`, `MERGE`, DDL, `COPY`, `CALL`, `DO`, `LOCK`, `SELECT … INTO`, `FOR UPDATE/SHARE`, …) and functions that act even inside a read-only transaction: any `pg_*(…)` call, `dblink`, `nextval`/`setval`, `set_config`, `txid_*`, `*xact_id`, large-object functions and `*_to_xml`. It also refuses comments, quoted identifiers and `U&` escapes, which could hide a keyword. This is checked locally before any AWS call and again in the task. |
+| Owner-checked pattern | **Image:** the digest of the single running `vayada-pms-backend` task, named in the plan, never a tag. **Embedded in each disposable definition:** the code (`python -I -c`), that task's SQL and the RDS CA bundle (`rehearsal/rds-ca-rsa2048-g1.pem`, SHA-256 `f5c5f92a…`, checked by the script and again in the task). **One task per database, each holding only its own secret**, with these pins: |
+| | PMS: `/vayada/prod/db-pms-url`, which must be `vayada_pms_user` @ `vayada_pms_db`. |
+| | Booking: `/vayada/prod/db-booking-url`, which must be `vayada_booking_user` @ `vayada_booking_db`. |
+| | Target: `/vayada/prod/target-database-url`, which must be `vayada_target_prod_user` @ `vayada_target_prod`. |
+| | **Every connection:** host `vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com` and port 5432 are pinned too. TLS is verified against that CA, including the hostname (verify-full). |
+| Read-only, aggregates only | **Transaction:** every statement runs inside `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`, with a 15 s statement timeout and a 1 s lock timeout. **Printed legacy blocks:** the top-level SELECT list may hold only `count(…)` (optionally with `FILTER (WHERE …)`), `max(<*_at or *_date column>)` with an optional cast, and the reviewed label columns (`label`, `stripe_billing_status`, `billing_active_plan`, optionally inside `coalesce(…, '<text>')`). `GROUP BY` may use only positions and those labels. At most 50 rows. **Target checks:** each 6c `SELECT` (the file's own `BEGIN`/`ROLLBACK` are dropped) runs as `SELECT count(*) AS rows_found FROM (…)` and must return exactly that one value, so no target row is printed. **Errors:** only a code or the exception type is printed. |
+| Least privilege, no new IAM | No task role. The execution role is the existing `ecsTaskExecutionRole`. Logs go to the existing `/ecs/vayada-pms-backend` group. No Terraform. All definitions are deregistered and deleted afterwards. |
+| Dry-run / plan mode | `readonly-counts-plan` makes only read-only AWS calls. It prints every statement exactly as it will run, with its database and user, and each task's image, role, secret and log group. It also prints the network, the cluster, the code and SQL SHA-256s and the plan SHA-256, and saves all of it to `readonly-counts-plan.txt`. The plan SHA covers all definitions, the network configuration, the cluster and the code SHA. The run refuses unless the go names it. |
+| Only SELECT | One `SELECT`/`WITH` per block or check. **Only allow-listed functions may be called:** printed blocks `count`, `max`, `coalesce`; counted 6c checks `count`, `array_agg`. Every other function is refused, including schema-qualified calls and calls disguised as CTE names. Also refused: write keywords, row locks, `SELECT … INTO`, comments, quoted identifiers, `U&`, `$` (dollar quotes and parameters) and `E'…'` strings. String concatenation (`\|\|`) is refused in printed blocks. Checked locally (`python3 -I`) before any AWS call and again in the task. |
+
+**Why concatenation is still allowed in the counted 6c checks:** the reviewed 6c
+query itself uses `array_agg(source_system || '.' || source_table)`, so a
+blanket ban would reject it. None of the allow-listed functions can execute a
+string, and those checks print only a count.
 
 **Why the target login is the migration login:** row-level security on
 `hotel_catalog.properties` and `platform.jobs` could hide rows from the ordinary
 runtime login and produce a false zero. The read-only transaction and the
-refusals above keep that login from writing. The database user is not pinned,
-only the host, port and database are.
+refusals above keep that login from writing.
 
-**Results:** `readonly-counts-result.md` (legacy blocks and Stripe) and
-`predeploy-readonly-check-result.md` (6c), both 0600. The task log is kept as
-`readonly-counts-task-<UTC time>.log`.
+**Results:** `readonly-counts-result.md` (legacy PMS and Booking) and
+`predeploy-readonly-check-result.md` (6c), both 0600. Each task's log is kept as
+`readonly-counts-<kind>-<UTC time>.log`.
 
-The result files are written only when the task exits 0 and printed both
-sections and the final `COUNTS_COMPLETE` line. Otherwise only the raw log is
-kept and the run fails. `watch <task-arn>` applies the same rule. Existing
-results are never overwritten.
+The tasks run one after another. Results are written only when every task exits
+0 and ends with its `COUNTS_COMPLETE` line; the first failure stops the run, and
+only raw logs are kept. Existing results are never overwritten. If the run is
+interrupted, `watch <task-arn>` saves that task's raw log; start a new run for
+the results, with a new go.
+
+**A non-zero 6c count returns no IDs.** Explaining the hits needs a second,
+separately reviewed query that is allowed to return them, with its own go.
 
 ## The practice run (`target:cutover:dry-run`) and the go-day window
 

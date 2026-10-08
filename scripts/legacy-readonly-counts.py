@@ -1,20 +1,18 @@
-"""VAY-1362: read-only counts for go-day planning.
+"""VAY-1362: read-only counts for go-day planning, one database per disposable task.
 
-Runs once in a disposable one-off task (`scripts/legacy-migration-oneoff.sh readonly-counts`):
-legacy PMS/Booking aggregate blocks, the 6c pre-deploy check on the production target, and
-Stripe subscription counts on the platform account.
+Runs as `python -I -c` in a one-off task (`scripts/legacy-migration-oneoff.sh readonly-counts`),
+once per database kind (COUNTS_KIND = PMS, BOOKING or TARGET). Each task holds only that
+database's secret:
+- PMS and BOOKING run the printed aggregate blocks of the reviewed counts file;
+- TARGET runs the reviewed 6c pre-deploy check on the production target, each SELECT wrapped as
+  SELECT count(*), so no target row is ever printed.
 
-- Every database is pinned (RDS host, port 5432, database name) and reached over TLS that is
-  verified against the pinned RDS CA bundle embedded in the task definition.
-- Every statement is one reviewed SELECT, run inside BEGIN TRANSACTION READ ONLY ... ROLLBACK.
-  Anything that is not a plain read is refused before a connection opens.
-- Legacy blocks must aggregate and may return at most 50 rows. Each target check is wrapped
-  as SELECT count(*), so no target row is ever printed.
-- Stripe output is a count per status (all, and fixed-plan only): no IDs, emails or amounts.
-The Markdown output is split by the operator script into the two result files.
+Every connection is pinned (RDS host, port 5432, database and user) and uses TLS verified against
+the pinned RDS CA. Every statement runs inside BEGIN TRANSACTION READ ONLY ... ROLLBACK and must be
+one plain SELECT: only allow-listed functions, no comments, no $ or E'' strings, no quoted
+identifiers. Printed blocks may select only allow-listed aggregates and reviewed label columns.
 """
 import asyncio
-import collections
 import hashlib
 import os
 import re
@@ -25,53 +23,140 @@ from urllib.parse import unquote, urlsplit
 HOST = "vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com"
 PORT = 5432
 CA_SHA256 = "f5c5f92ae025987c76dc49bdb1ace8556fdf332b4788d719a923bc274779d869"
-# Database kind -> (secret variable, pinned database name).
+# Kind -> (secret variable, pinned database, pinned user).
 DATABASES = {
-    "PMS": ("DATABASE_URL", "vayada_pms_db"),
-    "BOOKING": ("BOOKING_ENGINE_DATABASE_URL", "vayada_booking_db"),
-    "TARGET": ("TARGET_DATABASE_URL", "vayada_target_prod"),
+    "PMS": ("DATABASE_URL", "vayada_pms_db", "vayada_pms_user"),
+    "BOOKING": ("BOOKING_ENGINE_DATABASE_URL", "vayada_booking_db", "vayada_booking_user"),
+    "TARGET": ("TARGET_DATABASE_URL", "vayada_target_prod", "vayada_target_prod_user"),
 }
 HEADER = re.compile(r"^-- \((\d+)\) LEGACY (PMS|BOOKING) database: (.+)$", re.M)
-STATUSES = ("active", "past_due", "trialing", "incomplete", "unpaid", "canceled")
 MAX_ROWS = 50
-TARGET_MARKER = "<!-- predeploy-readonly-check -->"
 COMPLETE = "COUNTS_COMPLETE"
-# Write keywords, row locks, any pg_* function call, transaction-id and large-object functions,
-# dynamic SQL through XML, and identifier tricks that could hide a keyword.
-NOT_A_READ = re.compile(
-    r"(?i)\b(insert|update|delete|merge|truncate|alter|create|drop|grant|revoke|copy|call|do|lock|"
-    r"vacuum|analyze|cluster|reindex|refresh|comment|import|listen|notify|prepare|execute|into|share|"
-    r"dblink\w*|set_config|nextval|setval|txid_\w+|\w*xact_id|\w*_to_xml|lo_\w+|lo(read|write|creat|import|export|unlink))\b"
-    r"|\bpg_\w+\s*\(|u&|\"|/\*|\*/|--"
+# Only the functions the reviewed files use. Printed blocks and the counted 6c checks differ.
+PRINTED_FUNCTIONS = {"count", "max", "coalesce"}
+COUNTED_FUNCTIONS = {"count", "array_agg"}
+# Keywords that a parenthesis may follow without being a function call.
+PAREN_KEYWORDS = {"as", "in", "values", "exists", "filter", "from", "join", "on", "where", "and", "or", "not", "select"}
+# Labels a printed block may group by and print: reviewed, non-personal columns.
+LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan)"
+WRITES = re.compile(
+    r"(?i)\b(insert|update|delete|merge|truncate|alter|create|drop|grant|revoke|copy|call|do|lock|vacuum|analyze|"
+    r"cluster|reindex|refresh|comment|import|listen|notify|prepare|execute|into|share|returning)\b"
 )
-AGGREGATE = re.compile(r"(?i)\b(count|sum|min|max|avg|bool_or|bool_and)\s*\(")
-# Printed legacy blocks may not build values out of many rows' contents.
-LEAKS_ROWS = re.compile(r"(?i)\b(\w*_agg|xmlagg|\w*to_json\w*|json\w*_build\w*|\w*_to_xml)\s*\(")
 
 
-def balanced(statement):
-    """Parentheses balance outside string literals, so a statement cannot close a wrapper."""
-    depth, quoted = 0, False
+def blank_strings(statement):
+    """Same-length copy with string literal contents blanked, so positions still match."""
+    out, quoted = [], False
     for character in statement:
         if character == "'":
             quoted = not quoted
-        elif not quoted and character in "()":
-            depth += 1 if character == "(" else -1
+            out.append(character)
+        else:
+            out.append(" " if quoted else character)
+    if quoted:
+        raise ValueError("unterminated_string")
+    return "".join(out)
+
+
+def depth_zero(text):
+    """Character positions at parenthesis depth 0; refuses unbalanced text."""
+    depth, positions = 0, []
+    for index, character in enumerate(text):
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
             if depth < 0:
-                return False
-    return depth == 0 and not quoted
+                raise ValueError("unbalanced_parentheses")
+        elif depth == 0:
+            positions.append(index)
+    if depth != 0:
+        raise ValueError("unbalanced_parentheses")
+    return set(positions)
 
 
-def only_select(statement, name):
-    if ";" in statement or not re.match(r"(?i)(select|with)\b", statement):
+def only_select(statement, name, functions):
+    """One plain SELECT/WITH that can only read and calls only allow-listed functions."""
+    try:
+        bare = blank_strings(statement)
+        depth_zero(bare)
+    except ValueError:
+        raise ValueError(f"{name}_not_one_select") from None
+    if ";" in bare or not re.match(r"(?i)(select|with)\b", statement):
         raise ValueError(f"{name}_not_one_select")
-    if NOT_A_READ.search(statement) or not balanced(statement):
+    if WRITES.search(bare) or re.search(r'(?i)--|/\*|\*/|"|\$|u&|(?<![a-z0-9_])e\'', statement):
         raise ValueError(f"{name}_not_read_only")
+    if "||" in bare and functions is PRINTED_FUNCTIONS:
+        raise ValueError(f"{name}_concatenates")
+    ctes = {match.start(1) for match in re.finditer(r"(?i)(?:\bwith|,)\s*([a-z_]\w*)\s*\([^()]*\)\s*as\s*\(", bare)}
+    for match in re.finditer(r"([A-Za-z_]\w*)\s*\(", bare):
+        called = match.group(1).lower()
+        if match.start(1) in ctes or called in PAREN_KEYWORDS:
+            continue
+        if called not in functions or (match.start(1) > 0 and bare[match.start(1) - 1] == "."):
+            raise ValueError(f"{name}_calls_{called}"[:60] if re.fullmatch(r"[a-z0-9_]+", called) else f"{name}_calls_function")
     return statement
 
 
+def top_level(statement, bare, keyword_pattern, start=0):
+    zero = depth_zero(bare)
+    return [m for m in re.finditer(keyword_pattern, bare[start:], re.I) if m.start() + start in zero]
+
+
+def split_top(original, bare):
+    zero, parts, last = depth_zero(bare), [], 0
+    for index, character in enumerate(bare):
+        if character == "," and index in zero:
+            parts.append(original[last:index])
+            last = index + 1
+    return [part.strip() for part in parts + [original[last:]]]
+
+
+def aggregate_or_label(item):
+    item = re.sub(r"(?is)\s+as\s+[a-z_]\w*$", "", item.strip())
+    if re.fullmatch(LABELS, item, re.I) or re.fullmatch(rf"(?is)coalesce\(\s*{LABELS}\s*,\s*'[^']*'\s*\)", item):
+        return "label"
+    call = re.match(r"(?i)(count|max)\s*\(", item)
+    if not call:
+        return None
+    depth = 0
+    for index in range(call.end() - 1, len(item)):
+        depth += {"(": 1, ")": -1}.get(item[index], 0)
+        if depth == 0:
+            break
+    argument, rest = item[call.end():index], item[index + 1:]
+    if call.group(1).lower() == "max" and not re.fullmatch(r"(?i)\s*(?:[a-z_]\w*\.)?\w*(_at|_date)\s*", argument):
+        return None  # max may only summarise a time column, never print a text value
+    return "aggregate" if re.fullmatch(r"(?is)\s*(filter\s*\(\s*where\b.*\))?\s*(::\s*[a-z_]+)?\s*", rest) else None
+
+
+def printed_shape(statement, name):
+    """The top-level SELECT list holds only aggregates and reviewed labels; GROUP BY only labels."""
+    bare = blank_strings(statement)
+    selects = top_level(statement, bare, r"\bselect\b")
+    if not selects:
+        raise ValueError(f"{name}_not_aggregate")
+    begin = selects[-1].end()
+    froms = top_level(statement, bare, r"\bfrom\b", begin)
+    end = begin + froms[0].start() if froms else len(statement)
+    kinds = [aggregate_or_label(item) for item in split_top(statement[begin:end], bare[begin:end])]
+    if None in kinds or "aggregate" not in kinds:
+        raise ValueError(f"{name}_not_aggregate")
+    groups = top_level(statement, bare, r"\bgroup\s+by\b", end)
+    if groups:
+        start = end + groups[0].end()
+        tail = top_level(statement, bare, r"\b(order\s+by|having|limit)\b", start)
+        stop = start + tail[0].start() if tail else len(statement)
+        for item in split_top(statement[start:stop], bare[start:stop]):
+            if not re.fullmatch(rf"(?is)\d+|{LABELS}|coalesce\(\s*{LABELS}\s*,\s*'[^']*'\s*\)", item):
+                raise ValueError(f"{name}_groups_by_unreviewed_column")
+    elif "label" in kinds:
+        raise ValueError(f"{name}_not_aggregate")
+
+
 def legacy_blocks(sql):
-    """Blocks headed `-- (N) LEGACY PMS|BOOKING database: title`, one aggregate SELECT each."""
+    """Blocks headed `-- (N) LEGACY PMS|BOOKING database: title`, one printed aggregate each."""
     headers = list(HEADER.finditer(sql))
     if not headers:
         raise ValueError("no_legacy_blocks")
@@ -79,9 +164,9 @@ def legacy_blocks(sql):
     for index, header in enumerate(headers):
         end = headers[index + 1].start() if index + 1 < len(headers) else len(sql)
         lines = [line for line in sql[header.end():end].splitlines() if not line.lstrip().startswith("--")]
-        statement = only_select("\n".join(lines).strip().removesuffix(";").rstrip(), f"block_{header.group(1)}")
-        if not AGGREGATE.search(statement) or LEAKS_ROWS.search(statement):
-            raise ValueError(f"block_{header.group(1)}_not_aggregate")
+        name = f"block_{header.group(1)}"
+        statement = only_select("\n".join(lines).strip().removesuffix(";").rstrip(), name, PRINTED_FUNCTIONS)
+        printed_shape(statement, name)
         parsed.append((header.group(1), header.group(2), header.group(3).strip(), statement))
     return parsed
 
@@ -102,10 +187,10 @@ def target_checks(sql):
             current = []
             if re.fullmatch(r"(?i)(begin|start transaction)( transaction)?( read only)?|rollback", statement):
                 continue
-            only_select(statement, f"check_{len(checks) + 1}")
-            title = " ".join(comments)[:200] or f"check {len(checks) + 1}"
-            checks.append((str(len(checks) + 1), title,
-                           f"SELECT count(*) AS rows_found FROM (\n{statement}\n) AS check_rows"))
+            number = str(len(checks) + 1)
+            only_select(statement, f"check_{number}", COUNTED_FUNCTIONS)
+            title = " ".join(comments)[:200] or f"check {number}"
+            checks.append((number, title, f"SELECT count(*) AS rows_found FROM (\n{statement}\n) AS check_rows"))
             comments = []
     if current or not checks:
         raise ValueError("target_checks_invalid")
@@ -120,13 +205,12 @@ def tls_context():
 
 
 def pinned(kind):
-    variable, database = DATABASES[kind]
+    variable, database, user = DATABASES[kind]
     url = urlsplit(os.environ[variable])
     if (url.scheme not in ("postgres", "postgresql") or url.hostname != HOST or (url.port or PORT) != PORT
-            or url.path != f"/{database}" or not url.username or not url.password):
+            or url.path != f"/{database}" or unquote(url.username or "") != user or not url.password):
         raise ValueError(f"{kind.lower()}_database_not_pinned")
-    return {"host": HOST, "port": PORT, "database": database,
-            "user": unquote(url.username), "password": unquote(url.password)}
+    return {"host": HOST, "port": PORT, "database": database, "user": user, "password": unquote(url.password)}
 
 
 def cell(value):
@@ -140,8 +224,8 @@ async def read_only(kind, statement, context):
     try:
         await connection.execute("BEGIN TRANSACTION READ ONLY")
         try:
-            await connection.execute("SET LOCAL statement_timeout = '60s'")
-            await connection.execute("SET LOCAL lock_timeout = '2s'")
+            await connection.execute("SET LOCAL statement_timeout = '15s'")
+            await connection.execute("SET LOCAL lock_timeout = '1s'")
             records = await connection.fetch(statement)
         finally:
             await connection.execute("ROLLBACK")
@@ -151,27 +235,6 @@ async def read_only(kind, statement, context):
         raise ValueError("too_many_rows")
     columns = list(records[0].keys()) if records else []
     return columns, [[cell(value) for value in record.values()] for record in records]
-
-
-def field(value, key):
-    try:
-        return value[key]
-    except (KeyError, TypeError):
-        return None
-
-
-def stripe_counts():
-    """Count platform-account subscriptions per status: all, and legacy fixed-plan only."""
-    import stripe
-
-    stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
-    counts = {"all": collections.Counter(), "fixed_plan": collections.Counter()}
-    for subscription in stripe.Subscription.list(status="all", limit=100).auto_paging_iter():
-        status = subscription["status"] if subscription["status"] in STATUSES else "other"
-        counts["all"][status] += 1
-        if field(field(subscription, "metadata"), "vayada_payment_kind") == "fixed_plan":
-            counts["fixed_plan"][status] += 1
-    return [(status, counts["all"][status], counts["fixed_plan"][status]) for status in (*STATUSES, "other")]
 
 
 def table(columns, rows):
@@ -185,41 +248,48 @@ def table(columns, rows):
 
 
 def main():
-    # Every input is checked before the first connection.
-    legacy = legacy_blocks(os.environ["COUNTS_SQL"])
-    checks = target_checks(os.environ["TARGET_CHECK_SQL"])
+    kind = os.environ["COUNTS_KIND"]
+    if kind not in DATABASES:
+        raise ValueError("kind_invalid")
+    # Every input is checked before the connection opens.
+    if kind == "TARGET":
+        work = [(number, title, statement) for number, title, statement in target_checks(os.environ["TARGET_CHECK_SQL"])]
+    else:
+        work = [(number, title, statement) for number, block_kind, title, statement in legacy_blocks(os.environ["COUNTS_SQL"])
+                if block_kind == kind]
     context = tls_context()
-    for kind in DATABASES:
-        pinned(kind)
-    print("# VAY-1362 read-only counts")
-    for number, kind, title, statement in legacy:
-        print(f"## Block {number}: legacy {kind} ({DATABASES[kind][1]}), {title}")
-        table(*asyncio.run(read_only(kind, statement, context)))
-    print("## Stripe platform account: subscriptions per status")
-    table(["status", "all", "fixed_plan"], stripe_counts())
-    print(TARGET_MARKER)
-    print(f"# VAY-1362-6C pre-deploy check: production target ({DATABASES['TARGET'][1]}), counts only")
-    for number, title, statement in checks:
-        columns, rows = asyncio.run(read_only("TARGET", statement, context))
-        if columns != ["rows_found"] or len(rows) != 1:
-            raise ValueError("target_check_not_one_count")
-        print(f"## Check {number}: {title}")
+    pinned(kind)
+    _, database, _ = DATABASES[kind]
+    for number, title, statement in work:
+        columns, rows = asyncio.run(read_only(kind, statement, context))
+        if kind == "TARGET":
+            if columns != ["rows_found"] or len(rows) != 1:
+                raise ValueError("target_check_not_one_count")
+            print(f"## Check {number} ({database}): {title}")
+        else:
+            print(f"## Block {number}: legacy {kind} ({database}), {title}")
         table(columns, rows)
-    print(f"{COMPLETE} blocks={len(legacy)} checks={len(checks)}")
+    print(f"{COMPLETE} kind={kind} statements={len(work)}")
 
 
 def plan(counts_path, target_path):
     with open(counts_path, encoding="utf-8") as counts, open(target_path, encoding="utf-8") as target:
         legacy, checks = legacy_blocks(counts.read()), target_checks(target.read())
     for number, kind, title, statement in legacy:
-        print(f"Block {number} on {DATABASES[kind][1]} ({DATABASES[kind][0]}): {title}\n{statement}\n")
+        variable, database, user = DATABASES[kind]
+        print(f"Block {number} on {database} as {user} ({variable}): {title}\n{statement}\n")
+    variable, database, user = DATABASES["TARGET"]
     for number, title, statement in checks:
-        print(f"Check {number} on {DATABASES['TARGET'][1]} (TARGET_DATABASE_URL): {title}\n{statement}\n")
+        print(f"Check {number} on {database} as {user} ({variable}): {title}\n{statement}\n")
 
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--plan"] and len(sys.argv) == 4:
         plan(sys.argv[2], sys.argv[3])
+        sys.exit(0)
+    if sys.argv[1:2] == ["--kinds"] and len(sys.argv) == 3:
+        with open(sys.argv[2], encoding="utf-8") as handle:
+            print(" ".join(sorted({kind for _, kind, _, _ in legacy_blocks(handle.read())}, key=list(DATABASES).index)))
         sys.exit(0)
     try:
         main()
