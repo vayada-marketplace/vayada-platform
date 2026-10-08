@@ -112,7 +112,5 @@ resource "aws_ecr_lifecycle_policy" "repos" {
 
   repository = each.value.name
 
-  policy = jsonencode({
-    rules = startswith(each.key, "vayada-next-") ? local.ecr_next_lifecycle_rules : local.ecr_legacy_lifecycle_rules
-  })
+  policy = startswith(each.key, "vayada-next-") ? jsonencode({ rules = local.ecr_next_lifecycle_rules }) : jsonencode({ rules = local.ecr_legacy_lifecycle_rules })
 }
