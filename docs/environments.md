@@ -214,10 +214,11 @@ The Landing service is excluded — App Runner polls ECR for `:latest` and deplo
 
 ECS services use `lifecycle { ignore_changes = [task_definition] }` in Terraform, so `terraform apply` never rolls back in-flight CI deploys.
 When Terraform registers newer task definitions for `vayada-next-api`,
-`vayada-booking-frontend`, `vayada-booking-admin`, or the frozen staging PMS
-runtime, `tf-apply.yml` rolls the corresponding service forward. Production
-services retain their current container image; staging PMS uses its
-Terraform-owned `latest` image reference.
+`vayada-pms-backend`, `vayada-booking-frontend`, `vayada-booking-admin`, or the
+frozen staging PMS runtime, `tf-apply.yml` rolls the corresponding service
+forward. Production services retain their current container image; staging PMS
+uses its Terraform-owned `latest` image reference. The production legacy PMS
+freeze switches use this path; see [Production legacy PMS freeze](legacy-pms-freeze.md).
 
 `next-api.vayada.com` is the TypeScript validation hostname. It is served by
 `vayada-next-api-service` and reads production-owned target runtime secrets
