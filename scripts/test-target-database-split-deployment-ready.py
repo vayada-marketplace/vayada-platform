@@ -15,6 +15,7 @@ FINANCE_EXPENSE = "/vayada/prod/target-database-finance-expense-worker-url"
 FINANCE_EXPENSE_PROPERTY_ID = "65f6b2fc-c783-4963-9d6b-a85f82319769"
 FINANCE_EXPORT = "/vayada/prod/target-database-finance-export-worker-url"
 FINANCE_EXPORT_PROPERTY_ID = "65f6b2fc-c783-4963-9d6b-a85f82319769"
+CHANNEX_WORKER = "/vayada/prod/target-database-channex-management-worker-url"
 RELEASE = "8c2cdef397522740c9fe7803efc2ed36d637bac5"
 REPOSITORY = "269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api"
 DIGEST = "sha256:b097e04a61d5bd3b5910bbf856f13849bddd7b66c5883a4e2e160e311737bfca"
@@ -218,6 +219,29 @@ class DeploymentReadinessTest(unittest.TestCase):
                 self.assertNotEqual(run(
                     f"{REPOSITORY}@{DIGEST}", secrets, environment=environment,
                 ).returncode, 0)
+
+    def test_accepts_only_the_dedicated_connection_only_channex_worker(self) -> None:
+        base = {"TARGET_DATABASE_URL": RUNTIME, "AUTH_DATABASE_URL": IDENTITY, "TARGET_DATABASE_MIGRATION_URL": OWNER}
+        paused = [{"name": f"PMS_CHANNEX_{name}_MODE", "value": "observe_only"}
+                  for name in ("PROVISIONING", "ARI_SYNC", "BOOKING_SYNC", "MARKUPS", "MESSAGING")]
+        def environment(worker: str, connection: str, extra: list[dict[str, str]] | None = None):
+            return [{"name": "PMS_CHANNEX_WORKER_ENABLED", "value": worker},
+                    {"name": "PMS_CHANNEX_CONNECTION_MODE", "value": connection}, *(extra or paused)]
+        mapped = {**base, "PMS_CHANNEX_MANAGEMENT_DATABASE_URL": CHANNEX_WORKER}
+        arn = {**base, "PMS_CHANNEX_MANAGEMENT_DATABASE_URL": "arn:aws:ssm:eu-west-1:269416271598:parameter" + CHANNEX_WORKER}
+        image = f"{REPOSITORY}@{DIGEST}"
+        for secrets, env in ((mapped, environment("false", "observe_only")), (arn, environment("true", "mutating"))):
+            result = run(image, secrets, environment=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        for secrets, env in (
+            ({**base, "PMS_CHANNEX_MANAGEMENT_DATABASE_URL": OWNER}, environment("false", "observe_only")),
+            ({**base, "PMS_CHANNEX_MANAGEMENT_DATABASE_URL": RUNTIME}, environment("true", "mutating")),
+            (base, environment("true", "mutating")),
+            (mapped, environment("true", "observe_only")),
+            (mapped, environment("true", "mutating", [{**paused[1], "value": "mutating"}, *paused[:1], *paused[2:]])),
+            (mapped, environment("on", "mutating")),
+        ):
+            self.assertNotEqual(run(image, secrets, environment=env).returncode, 0, (secrets, env))
 
     def test_accepts_exact_finance_export_worker_mapping_and_scope(self) -> None:
         result = run(
