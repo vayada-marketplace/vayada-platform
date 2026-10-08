@@ -7,6 +7,8 @@ set -euo pipefail
 usage() {
   echo "Usage: legacy-migration-oneoff.sh <command> <run-file.json> <run-file-sha256> <confirmation>" >&2
   echo "       legacy-migration-oneoff.sh watch <task-arn>" >&2
+  echo "       legacy-migration-oneoff.sh readonly-counts-plan <counts.sql> <target-check.sql>" >&2
+  echo "       legacy-migration-oneoff.sh readonly-counts <counts.sql> <target-check.sql> READONLY_COUNTS:<plan sha256>" >&2
   exit 2
 }
 [[ "$#" -ge 2 ]] || usage
@@ -109,6 +111,118 @@ if [[ "$command" == watch ]]; then
   require_profile
   follow_task "${evidence}/task-${BASH_REMATCH[1]}.json"
   exit "$task_exit_code"
+fi
+
+# Read-only counts: plan first, then run with the plan's SHA-256. One disposable task per
+# database (legacy PMS, legacy Booking, production target), each holding only that database's
+# secret, on the running pms-backend image digest with the pinned RDS CA. Not during deploys:
+# pms-api and next-api run migrations when they start. See docs/legacy-migration-oneoff.md.
+settled() {
+  aws_ ecs describe-services --cluster vayada-backend-cluster --services "$1" --query 'services[0]' --output json |
+    jq -e '.desiredCount == 1 and .runningCount == 1 and (.deployments | length) == 1 and .deployments[0].rolloutState == "COMPLETED"' >/dev/null || {
+    echo "$1 must run exactly one task in one completed deployment; do not run during deploys." >&2; exit 1;
+  }
+}
+# Prints "<task-arn> <digest>" of the single running pms-backend task.
+pms_image() {
+  local tasks digest
+  settled vayada-pms-backend-service
+  tasks="$(aws_ ecs list-tasks --cluster vayada-backend-cluster --service-name vayada-pms-backend-service --desired-status RUNNING --output json)"
+  [[ "$(jq '.taskArns | length' <<<"$tasks")" == 1 ]] || { echo "pms-backend must run exactly one task." >&2; exit 1; }
+  digest="$(aws_ ecs describe-tasks --cluster vayada-backend-cluster --tasks "$(jq -r '.taskArns[0]' <<<"$tasks")" \
+    --query "tasks[0].containers[?name=='vayada-pms-backend'].imageDigest | [0]" --output text)"
+  [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Could not resolve the running pms-backend image digest." >&2; exit 1; }
+  echo "$(jq -r '.taskArns[0]' <<<"$tasks") ${digest}"
+}
+# One definition for one database kind: only that kind's secret and input.
+counts_definition() {
+  jq -cnS --arg kind "$1" --rawfile counts "$2" --rawfile target "$3" --arg digest "$4" \
+    --rawfile code "$root/scripts/legacy-readonly-counts.py" --rawfile ca "$root/rehearsal/rds-ca-rsa2048-g1.pem" \
+    --arg account "$account" --arg region "$region" '
+    {PMS: {secret: "DATABASE_URL", parameter: "db-pms-url", input: "COUNTS_SQL", value: $counts},
+     BOOKING: {secret: "BOOKING_ENGINE_DATABASE_URL", parameter: "db-booking-url", input: "COUNTS_SQL", value: $counts},
+     TARGET: {secret: "TARGET_DATABASE_URL", parameter: "target-database-url", input: "TARGET_CHECK_SQL", value: $target}}[$kind] as $k
+    | {family: "vayada-legacy-readonly-counts-\($kind | ascii_downcase)", networkMode: "awsvpc", requiresCompatibilities: ["FARGATE"],
+       cpu: "256", memory: "512", executionRoleArn: "arn:aws:iam::\($account):role/ecsTaskExecutionRole",
+       containerDefinitions: [{name: "vayada-legacy-readonly-counts", essential: true,
+         image: "\($account).dkr.ecr.\($region).amazonaws.com/vayada-pms-backend@\($digest)",
+         entryPoint: ["python", "-I", "-c"], command: [$code],
+         environment: [{name: "COUNTS_KIND", value: $kind}, {name: $k.input, value: $k.value}, {name: "VAYADA_DB_RDS_CA_BUNDLE", value: $ca}],
+         secrets: [{name: $k.secret, valueFrom: "arn:aws:ssm:\($region):\($account):parameter/vayada/prod/\($k.parameter)"}],
+         logConfiguration: {logDriver: "awslogs", options: {"awslogs-group": "/ecs/vayada-pms-backend",
+           "awslogs-region": $region, "awslogs-stream-prefix": "legacy-readonly-counts"}}}]}'
+}
+if [[ "$command" == readonly-counts-plan || "$command" == readonly-counts ]]; then
+  [[ ( "$command" == readonly-counts-plan && "$#" -eq 3 ) || ( "$command" == readonly-counts && "$#" -eq 4 ) ]] || usage
+  [[ -f "$2" && -f "$3" ]] || { echo "Both SQL files must exist." >&2; exit 2; }
+  [[ "$(shasum -a 256 "$root/rehearsal/rds-ca-rsa2048-g1.pem" | cut -d' ' -f1)" == "$ca_sha256" ]] || { echo "The pinned RDS CA bundle changed." >&2; exit 2; }
+  statements="$(python3 -I "$root/scripts/legacy-readonly-counts.py" --plan "$2" "$3")" || {
+    echo "Only single read-only SELECTs with allow-listed functions are accepted." >&2; exit 2;
+  }
+  kinds="$(python3 -I "$root/scripts/legacy-readonly-counts.py" --kinds "$2") TARGET"
+  results="readonly-counts-result.md predeploy-readonly-check-result.md"
+  if [[ "$command" == readonly-counts ]]; then
+    [[ "$4" =~ ^READONLY_COUNTS:[0-9a-f]{64}$ ]] || { echo "Confirmation must be READONLY_COUNTS:<plan sha256>." >&2; exit 2; }
+    for result in $results; do
+      [[ ! -e "${evidence}/${result}" ]] || { echo "${result} already exists; move it first." >&2; exit 2; }
+    done
+  fi
+  require_profile
+  settled vayada-next-api-service
+  image="$(pms_image)"
+  network="$(aws_ ecs describe-services --cluster vayada-backend-cluster --services vayada-pms-backend-service \
+    --query 'services[0].networkConfiguration' --output json)"
+  definitions="[]"
+  for kind in $kinds; do
+    definitions="$(jq -c --argjson definition "$(counts_definition "$kind" "$2" "$3" "${image#* }")" '. + [$definition]' <<<"$definitions")"
+  done
+  # The plan binds every definition (image, code, SQL, CA, secret, log group), the network and the cluster.
+  plan="$(jq -cnS --argjson definitions "$definitions" --argjson network "$network" --arg cluster "$cluster" \
+    --arg code "$(shasum -a 256 "$root/scripts/legacy-readonly-counts.py" | cut -d' ' -f1)" \
+    '{cluster: $cluster, codeSha256: $code, definitions: $definitions, network: $network}')"
+  plan_sha256="$(printf '%s' "$plan" | shasum -a 256 | cut -d' ' -f1)"
+  if [[ "$command" == readonly-counts-plan ]]; then
+    { echo "$statements"
+      echo "Image from the running task: ${image% *}"
+      jq -r '"Cluster: \(.cluster)", "Network: \(.network | tostring)", "Code sha256: \(.codeSha256)",
+        (.definitions[] | .containerDefinitions[0] as $c | "Task \(.family): image \($c.image), execution role \(.executionRoleArn),"
+          + " no task role, secret \($c.secrets[0].name) <- \($c.secrets[0].valueFrom | split(":parameter") | last),"
+          + " environment \([$c.environment[].name] | join(", ")), log group \($c.logConfiguration.options["awslogs-group"])")' <<<"$plan"
+      echo "Counts SQL sha256: $(shasum -a 256 "$2" | cut -d' ' -f1)"
+      echo "Target check SQL sha256: $(shasum -a 256 "$3" | cut -d' ' -f1)"
+      echo "Plan sha256: ${plan_sha256}"
+      echo "Run after the go: readonly-counts $2 $3 READONLY_COUNTS:${plan_sha256}"
+    } | tee "${evidence}/readonly-counts-plan.txt"
+    exit 0
+  fi
+  [[ "$4" == "READONLY_COUNTS:${plan_sha256}" ]] || { echo "The plan changed since the go (image, SQL, code, CA or network). Re-plan." >&2; exit 2; }
+  for kind in $kinds; do
+    family="vayada-legacy-readonly-counts-$(tr '[:upper:]' '[:lower:]' <<<"$kind")"
+    [[ "$(aws_ ecs list-tasks --cluster "$cluster" --family "$family" --query 'length(taskArns)' --output text)" == 0 ]] || {
+      echo "A counts task is still running." >&2; exit 1;
+    }
+  done
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  index=0
+  for kind in $kinds; do
+    log="${evidence}/readonly-counts-$(tr '[:upper:]' '[:lower:]' <<<"$kind")-${stamp}.log"
+    run_oneoff "$(jq -c ".[$index]" <<<"$definitions")" "$network" "$log"
+    # Results are written only when every task exited 0 and completed its own kind.
+    [[ "$task_exit_code" == 0 ]] && [[ "$(tail -n 1 "$log")" == "COUNTS_COMPLETE kind=${kind} "* ]] || {
+      echo "The ${kind} counts did not complete; no result files written. Raw log: ${log}" >&2; exit 1;
+    }
+    index=$((index + 1))
+  done
+  { echo "# VAY-1362 read-only counts (legacy PMS and Booking)"
+    for kind in $kinds; do
+      [[ "$kind" == TARGET ]] || grep -v '^COUNTS_COMPLETE ' "${evidence}/readonly-counts-$(tr '[:upper:]' '[:lower:]' <<<"$kind")-${stamp}.log"
+    done
+  } > "${evidence}/readonly-counts-result.md"
+  { echo "# VAY-1362-6C pre-deploy check: production target, counts only"
+    grep -v '^COUNTS_COMPLETE ' "${evidence}/readonly-counts-target-${stamp}.log"
+  } > "${evidence}/predeploy-readonly-check-result.md"
+  echo "Saved readonly-counts-result.md and predeploy-readonly-check-result.md"
+  exit 0
 fi
 
 [[ "$#" -eq 4 ]] || usage

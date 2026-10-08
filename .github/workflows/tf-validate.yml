@@ -185,6 +185,9 @@ on:
       - "scripts/legacy-migration-oneoff.mjs"
       - "scripts/test-legacy-migration-oneoff.mjs"
       - "docs/legacy-migration-oneoff.md"
+      - "scripts/legacy-readonly-counts.py"
+      - "scripts/legacy-predeploy-readonly-check.sql"
+      - "scripts/test_legacy_readonly_counts.py"
       - "scripts/test-vay2042-media-endpoint.mjs"
       - ".github/workflows/vay2042-target-bootstrap.yml"
       - "scripts/check-vay2017-rehearsal-isolation.sh"
@@ -363,6 +366,7 @@ jobs:
           node --test scripts/test-vay2042-media-infra.mjs
           node --test scripts/test-legacy-migration-oneoff.mjs
           bash -n scripts/legacy-migration-oneoff.sh
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/test_legacy_readonly_counts.py -v
           node --test scripts/test-vay2042-media-endpoint.mjs
           bash -n scripts/run-vay2017-rehearsal-metadata.sh
           bash -n scripts/run-vay2017-metadata-reader-bootstrap.sh
