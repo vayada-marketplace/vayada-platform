@@ -356,8 +356,10 @@ DML mode described in "Target database runtime role: product DML grant
 
 The hotel setup relations `platform.hotel_setup_creation_scopes`,
 `platform.hotel_setup_linked_properties`, and
-`hotel_catalog.hotel_setup_effective_creation_scopes` are intentionally private
-to the dedicated hotel setup authority. Do **not** grant the ordinary API
+`hotel_catalog.hotel_setup_effective_creation_scopes` were private to the
+dedicated hotel setup authority, which VAY-2056 retired (see "Hotel setup native
+services retired" below). They stay on the protected list until the application
+migration of decommission step 6 drops them. Do **not** grant the ordinary API
 runtime any reads or writes on them to satisfy deployment checks. Preflight
 excludes them from required reads and rejects effective table/column reads
 (including PUBLIC or inherited grants), as well as writes. Migration 0436
@@ -773,6 +775,56 @@ needs the setup-track column matrix on `identity.product_entitlements` and
 DML grant below (`--grant-runtime-product-dml`); the former
 `--grant-hotel-setup-tracks` mode is retired. Never replace this runtime
 connection with migration-owner credentials.
+
+### Hotel setup native services retired (VAY-2056)
+
+The public API runs hotel creation, hotel-detail edits, launch settings, the first
+pricing currency, Feature Hub Financials and the hotel logo on
+`vayada_next_api_runtime` (design: application repo
+`engineering/hotel-setup-ordinary-login.md`). Decommission steps 4 and 5 removed
+everything that served the former private services:
+
+- **Caller wiring (step 4).** The next-API task definition carries no
+  `HOTEL_SETUP_CREATION_COMMAND_*`, `HOTEL_SETUP_COMMAND_*`,
+  `HOTEL_SETUP_LOGO_COMMAND_*` or `HOTEL_SETUP_PROFILE_COMMAND_*` admission, origin
+  or token, runs on `ecsTaskExecutionRole` and attaches only the shared ECS tasks
+  security group.
+- **Infrastructure (step 5).** No `vayada-hotel-setup-service` or
+  `vayada-hotel-setup-property-service`, internal ALB, target groups, private Route
+  53 zones (`hotel-setup-command.vayada.com`, `hotel-setup-property-command.vayada.com`),
+  caller/ALB/task security groups or their RDS rules, `/ecs/vayada-hotel-setup*`
+  log groups, staged `hotel-setup-creation/prod/*` and `hotel-setup-command/prod/*`
+  reader/token secrets, hotel-setup IAM roles (execution, task, bootstrap, logo
+  cleanup, `vayada-github-actions-hotel-setup-online`,
+  `vayada-next-api-setup-caller-execution`) or the `vayada-hotel-setup-platform-deploy`
+  policy. The platform plan role no longer reads hotel-setup secret metadata. The
+  destroy needed an authorized operator apply: the platform deploy role cannot
+  delete IAM roles, Secrets Manager secrets or ECS services.
+- **Tooling (step 5).** The 16 `hotel-setup-*.yml` workflows, the hotel-setup runner
+  modes of `scripts/run-target-database-runtime-preflight.sh`, their scripts and
+  tests, and the `deployment/hotel-setup-*.json` image inventories are gone. The
+  former runbooks live under `docs/historical/hotel-setup/`.
+
+What remains on purpose:
+
+- `scripts/assert-hotel-setup-caller-retained.py` still runs in tf-apply. With no
+  wiring on the serving task it passes; it refuses a plan that would drop an
+  `enabled` admission.
+- `scripts/assert-next-api-split-compatible-image.py` (API deploys and coordinated
+  releases) refuses any task definition that still carries hotel-setup caller
+  wiring, so an image-only rollback to a pre-VAY-2056 task definition is no longer
+  possible.
+- The runtime preflight and product DML grant keep `platform.hotel_setup_*` and
+  `hotel_catalog.hotel_setup_*` on the protected list. The per-hotel native logins,
+  scope roles, scope tables, policies, triggers and functions stay in the database
+  until the decommission step 6 application migration (role drops need
+  `vayada_admin`).
+- Operator follow-up outside Terraform: schedule deletion (with a recovery window,
+  never `--force-delete-without-recovery`) of the per-login secrets the bootstrap
+  workflows created under `hotel-setup-command/prod/organization/` and
+  `hotel-setup-command/prod/property/`; optionally deregister the retained
+  `vayada-hotel-setup-*` task definition revisions (`skip_destroy`); delete the
+  `hotel-setup-automatic-provisioning` GitHub environment.
 
 ### Target database runtime role: product DML grant (VAY-2054)
 
