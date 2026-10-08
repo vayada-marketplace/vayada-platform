@@ -131,6 +131,65 @@ and `target:migration-status` before doing anything else.
      `public/media/` and `private/media/` in the platform media bucket.
 4. Pin the rehearsed image: its `APPLICATION_RELEASE` must equal `--application-release`.
 
+## Read-only counts (`readonly-counts`)
+
+```bash
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts-plan <counts.sql> scripts/legacy-predeploy-readonly-check.sql
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts <counts.sql> scripts/legacy-predeploy-readonly-check.sql READONLY_COUNTS:<plan sha256>
+```
+
+A read-only snapshot for go-day planning. It covers two inputs:
+- the legacy PMS and Booking blocks in `readonly-counts.sql`;
+- the 6c pre-deploy check on the production target, run from the counted copy
+  `scripts/legacy-predeploy-readonly-check.sql`.
+
+There is no Stripe part: Flamur read the two subscriptions directly.
+
+The counted copy differs from the 6c owner's reference query in one place: the
+per-property column is `count(*)` instead of an aggregate that concatenated two
+columns. The check therefore needs no string concatenation, and the count it
+reports is the same.
+
+`readonly-counts.sql` stays in the evidence folder rather than the repository,
+because it names candidate hotels. Both inputs are still embedded in the
+disposable task definitions, which are deleted afterwards, and are recorded by
+CloudTrail.
+Nothing runs before the plan is reviewed and Flamur's go names the plan SHA-256.
+
+**Do not run during deploys.** pms-api and next-api run migrations when they
+start. The script refuses unless both services run exactly one task in one
+completed deployment.
+
+| Coordinator check | How it is met |
+|---|---|
+| Owner-checked pattern | **Image:** the digest of the single running `vayada-pms-backend` task, named in the plan, never a tag. **Embedded in each disposable definition:** the code (`python -I -c`), that task's SQL and the RDS CA bundle (`rehearsal/rds-ca-rsa2048-g1.pem`, SHA-256 `f5c5f92a…`, checked by the script and again in the task). **One task per database, each holding only its own secret**, with these pins: |
+| | PMS: `/vayada/prod/db-pms-url`, which must be `vayada_pms_user` @ `vayada_pms_db`. |
+| | Booking: `/vayada/prod/db-booking-url`, which must be `vayada_booking_user` @ `vayada_booking_db`. |
+| | Target: `/vayada/prod/target-database-url`, which must be `vayada_target_prod_user` @ `vayada_target_prod`. |
+| | **Every connection:** host `vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com` and port 5432 are pinned too. TLS is verified against that CA, including the hostname (verify-full). |
+| Read-only, aggregates only | **Transaction:** every statement runs inside `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`, with a 15 s statement timeout and a 1 s lock timeout. **Printed legacy blocks:** the top-level SELECT list may hold only `count(…)` (optionally with `FILTER (WHERE …)`), `max(<*_at or *_date column>)` cast to `date` or `timestamp`, and the reviewed label columns (`label`, `stripe_billing_status`, `billing_active_plan`, optionally inside `coalesce(…, '<text>')`). `GROUP BY` may use only positions and those labels. Top-level `UNION`, `INTERSECT` and `EXCEPT` are refused, so every printed row comes from the checked list. At most 50 rows. **Target checks:** each 6c `SELECT` (the file's own `BEGIN`/`ROLLBACK` are dropped) runs as `SELECT count(*) AS rows_found FROM (…)` and must return exactly that one value, so no target row is printed. **Errors:** only a code or the exception type is printed. |
+| Least privilege, no new IAM | No task role. The execution role is the existing `ecsTaskExecutionRole`. Logs go to the existing `/ecs/vayada-pms-backend` group. No Terraform. All definitions are deregistered and deleted afterwards. |
+| Dry-run / plan mode | `readonly-counts-plan` makes only read-only AWS calls. It prints every statement exactly as it will run, with its database and user, and each task's image, role, secret and log group. It also prints the network, the cluster, the code and SQL SHA-256s and the plan SHA-256, and saves all of it to `readonly-counts-plan.txt`. The plan SHA covers all definitions, the network configuration, the cluster and the code SHA. The run refuses unless the go names it. |
+| Only SELECT | One `SELECT`/`WITH` per block or check. **Only allow-listed functions may be called:** printed blocks `count`, `max`, `coalesce`; counted 6c checks `count` only. Every other function is refused, including schema-qualified calls and calls disguised as CTE names. Also refused: write keywords, row locks, `SELECT … INTO`, comments, quoted identifiers, `U&`, `$` (dollar quotes and parameters) and `E'…'` strings. String concatenation (`\|\|`) is refused everywhere, with no exception. Checked locally (`python3 -I`) before any AWS call and again in the task. |
+
+**Why the target login is the migration login:** row-level security on
+`hotel_catalog.properties` and `platform.jobs` could hide rows from the ordinary
+runtime login and produce a false zero. The read-only transaction and the
+refusals above keep that login from writing.
+
+**Results:** `readonly-counts-result.md` (legacy PMS and Booking) and
+`predeploy-readonly-check-result.md` (6c), both 0600. Each task's log is kept as
+`readonly-counts-<kind>-<UTC time>.log`.
+
+The tasks run one after another. Results are written only when every task exits
+0 and ends with its `COUNTS_COMPLETE` line; the first failure stops the run, and
+only raw logs are kept. Existing results are never overwritten. If the run is
+interrupted, `watch <task-arn>` saves that task's raw log; start a new run for
+the results, with a new go.
+
+**A non-zero 6c count returns no IDs.** Explaining the hits needs a second,
+separately reviewed query that is allowed to return them, with its own go.
+
 ## The practice run (`target:cutover:dry-run`) and the go-day window
 
 This script does not run the dry run. The CLI accepts it only as
@@ -164,4 +223,5 @@ That adds roughly 1.5–2.5 hours: the copy restore, a second migration run,
 smoke and approval. It moves the window from about 3.5–4.5 hours to about
 5–7 hours, so OTA closeouts are needed.
 
-Tests: `node --test scripts/test-legacy-migration-oneoff.mjs`.
+Tests: `node --test scripts/test-legacy-migration-oneoff.mjs` and
+`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/test_legacy_readonly_counts.py`.
