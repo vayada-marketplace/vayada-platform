@@ -50,9 +50,14 @@ follow_task() {
     echo "Task still running: ${task_arn}. Do not rerun the step; re-attach with: watch ${task_arn}" >&2; exit 1;
   }
   : > "$log_file"
+  local attempts=0
   while :; do
     page="$(aws_ logs get-log-events --log-group-name "$log_group" --log-stream-name "$log_stream" \
-      --start-from-head ${token:+--next-token "$token"} --output json)" || { echo "Task logs are unavailable." >&2; break; }
+      --start-from-head ${token:+--next-token "$token"} --output json)" || {
+      attempts=$((attempts + 1))
+      (( attempts < 5 )) && { sleep 5; continue; }
+      echo "Task logs are unavailable; the saved log is incomplete. Re-attach with: watch ${task_arn}" >&2; break;
+    }
     jq -r '.events[].message' <<<"$page" | tee -a "$log_file"
     next="$(jq -r '.nextForwardToken' <<<"$page")"
     [[ -n "$next" && "$next" != "$token" ]] || break
@@ -92,24 +97,52 @@ run_oneoff() {
   follow_task "$record"
 }
 
+# Writes the two counts results only when the task exited 0 and printed both sections and the
+# completion line; otherwise keeps only the raw log and fails.
+split_counts_results() {
+  local log="$1"
+  if [[ "$task_exit_code" != 0 ]] || ! grep -qx '<!-- predeploy-readonly-check -->' "$log" || ! tail -n 1 "$log" | grep -q '^COUNTS_COMPLETE '; then
+    echo "The counts did not complete; no result files written. Raw log: ${log}" >&2
+    task_exit_code=1
+    return 0
+  fi
+  for result in readonly-counts-result.md predeploy-readonly-check-result.md; do
+    [[ ! -e "${evidence}/${result}" ]] || { echo "${result} already exists; raw log kept at ${log}" >&2; task_exit_code=1; return 0; }
+  done
+  awk -v counts="${evidence}/readonly-counts-result.md" -v target="${evidence}/predeploy-readonly-check-result.md" '
+    $0 == "<!-- predeploy-readonly-check -->" { found = 1; next } /^COUNTS_COMPLETE / { next } { print > (found ? target : counts) }' "$log"
+  echo "Saved readonly-counts-result.md and predeploy-readonly-check-result.md"
+}
+
 if [[ "$command" == watch ]]; then
   [[ "$#" -eq 2 && "$2" =~ ^arn:aws:ecs:${region}:${account}:task/${cluster}/([0-9a-f]{32})$ ]] || usage
   [[ -f "${evidence}/task-${BASH_REMATCH[1]}.json" ]] || { echo "No task record in the evidence folder." >&2; exit 2; }
   require_profile
   follow_task "${evidence}/task-${BASH_REMATCH[1]}.json"
+  [[ "$(jq -r .logFile "${evidence}/task-${BASH_REMATCH[1]}.json")" != */readonly-counts-task-*.log ]] || \
+    split_counts_results "$(jq -r .logFile "${evidence}/task-${BASH_REMATCH[1]}.json")"
   exit "$task_exit_code"
 fi
 
 # Read-only counts (plan first, then run with the plan's SHA-256): one disposable task on the
 # running legacy pms-backend image digest, with only the four reviewed secrets and the pinned RDS
 # CA, runs scripts/legacy-readonly-counts.py. See docs/legacy-migration-oneoff.md.
-counts_definition() {
-  local service_task digest
-  service_task="$(aws_ ecs list-tasks --cluster vayada-backend-cluster --service-name vayada-pms-backend-service \
-    --desired-status RUNNING --query 'taskArns[0]' --output text)"
-  digest="$(aws_ ecs describe-tasks --cluster vayada-backend-cluster --tasks "$service_task" \
+# Prints "<task-arn> <digest>" of the single running pms-backend task of a settled service.
+pms_image() {
+  local tasks digest
+  aws_ ecs describe-services --cluster vayada-backend-cluster --services vayada-pms-backend-service --query 'services[0]' --output json |
+    jq -e '.desiredCount == 1 and .runningCount == 1 and (.deployments | length) == 1 and .deployments[0].rolloutState == "COMPLETED"' >/dev/null || {
+    echo "pms-backend must run exactly one task in one completed deployment." >&2; exit 1;
+  }
+  tasks="$(aws_ ecs list-tasks --cluster vayada-backend-cluster --service-name vayada-pms-backend-service --desired-status RUNNING --output json)"
+  [[ "$(jq '.taskArns | length' <<<"$tasks")" == 1 ]] || { echo "pms-backend must run exactly one task." >&2; exit 1; }
+  digest="$(aws_ ecs describe-tasks --cluster vayada-backend-cluster --tasks "$(jq -r '.taskArns[0]' <<<"$tasks")" \
     --query "tasks[0].containers[?name=='vayada-pms-backend'].imageDigest | [0]" --output text)"
   [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Could not resolve the running pms-backend image digest." >&2; exit 1; }
+  echo "$(jq -r '.taskArns[0]' <<<"$tasks") ${digest}"
+}
+counts_definition() {
+  local digest="$3"
   jq -cnS --rawfile code "$root/scripts/legacy-readonly-counts.py" --rawfile counts "$1" --rawfile target "$2" \
     --rawfile ca "$root/rehearsal/rds-ca-rsa2048-g1.pem" --arg digest "$digest" --arg account "$account" --arg region "$region" '
     def ssm($name): "arn:aws:ssm:\($region):\($account):parameter/vayada/prod/\($name)";
@@ -117,7 +150,7 @@ counts_definition() {
      cpu: "256", memory: "512", executionRoleArn: "arn:aws:iam::\($account):role/ecsTaskExecutionRole",
      containerDefinitions: [{name: "vayada-legacy-readonly-counts", essential: true,
        image: "\($account).dkr.ecr.\($region).amazonaws.com/vayada-pms-backend@\($digest)",
-       entryPoint: ["python", "-c"], command: [$code],
+       entryPoint: ["python", "-I", "-c"], command: [$code],
        environment: [{name: "COUNTS_SQL", value: $counts}, {name: "TARGET_CHECK_SQL", value: $target},
          {name: "VAYADA_DB_RDS_CA_BUNDLE", value: $ca}],
        secrets: [{name: "DATABASE_URL", valueFrom: ssm("db-pms-url")},
@@ -141,10 +174,12 @@ if [[ "$command" == readonly-counts-plan || "$command" == readonly-counts ]]; th
     done
   fi
   require_profile
-  definition="$(counts_definition "$2" "$3")"
+  image="$(pms_image)"
+  definition="$(counts_definition "$2" "$3" "${image#* }")"
   plan_sha256="$(printf '%s' "$definition" | shasum -a 256 | cut -d' ' -f1)"
   if [[ "$command" == readonly-counts-plan ]]; then
     { echo "$statements"
+      echo "Image from the running task: ${image% *}"
       jq -r '.containerDefinitions[0] as $c | "Image: \($c.image)", "Execution role: \(.executionRoleArn)", "Task role: none",
         "Secrets: \([$c.secrets[] | "\(.name) <- \(.valueFrom | split(":parameter") | last)"] | join(", "))",
         "Environment: \([$c.environment[].name] | join(", "))", "Log group: \($c.logConfiguration.options["awslogs-group"])"' <<<"$definition"
@@ -161,11 +196,9 @@ if [[ "$command" == readonly-counts-plan || "$command" == readonly-counts ]]; th
   }
   network="$(aws_ ecs describe-services --cluster vayada-backend-cluster --services vayada-pms-backend-service \
     --query 'services[0].networkConfiguration' --output json)"
-  run_oneoff "$definition" "$network" "${evidence}/readonly-counts-task.log"
-  # Everything before the marker is the counts result, everything after it the 6c target check.
-  awk -v counts="${evidence}/readonly-counts-result.md" -v target="${evidence}/predeploy-readonly-check-result.md" '
-    $0 == "<!-- predeploy-readonly-check -->" { found = 1; next } { print > (found ? target : counts) }' "${evidence}/readonly-counts-task.log"
-  echo "Saved readonly-counts-result.md and predeploy-readonly-check-result.md"
+  log="${evidence}/readonly-counts-task-$(date -u +%Y%m%dT%H%M%SZ).log"
+  run_oneoff "$definition" "$network" "$log"
+  split_counts_results "$log"
   exit "$task_exit_code"
 fi
 

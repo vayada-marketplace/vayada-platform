@@ -35,20 +35,37 @@ HEADER = re.compile(r"^-- \((\d+)\) LEGACY (PMS|BOOKING) database: (.+)$", re.M)
 STATUSES = ("active", "past_due", "trialing", "incomplete", "unpaid", "canceled")
 MAX_ROWS = 50
 TARGET_MARKER = "<!-- predeploy-readonly-check -->"
-# Write keywords, row locks and functions that act even inside a read-only transaction.
+COMPLETE = "COUNTS_COMPLETE"
+# Write keywords, row locks, any pg_* function call, transaction-id and large-object functions,
+# dynamic SQL through XML, and identifier tricks that could hide a keyword.
 NOT_A_READ = re.compile(
     r"(?i)\b(insert|update|delete|merge|truncate|alter|create|drop|grant|revoke|copy|call|do|lock|"
     r"vacuum|analyze|cluster|reindex|refresh|comment|import|listen|notify|prepare|execute|into|share|"
-    r"pg_terminate_backend|pg_cancel_backend|pg_sleep\w*|pg_advisory\w*|dblink\w*|lo_\w+|pg_read_\w+|"
-    r"pg_ls_\w+|pg_stat_reset\w*|set_config|nextval|setval|pg_notify)\b"
+    r"dblink\w*|set_config|nextval|setval|txid_\w+|\w*xact_id|\w*_to_xml|lo_\w+|lo(read|write|creat|import|export|unlink))\b"
+    r"|\bpg_\w+\s*\(|u&|\"|/\*|\*/|--"
 )
 AGGREGATE = re.compile(r"(?i)\b(count|sum|min|max|avg|bool_or|bool_and)\s*\(")
+# Printed legacy blocks may not build values out of many rows' contents.
+LEAKS_ROWS = re.compile(r"(?i)\b(\w*_agg|xmlagg|\w*to_json\w*|json\w*_build\w*|\w*_to_xml)\s*\(")
+
+
+def balanced(statement):
+    """Parentheses balance outside string literals, so a statement cannot close a wrapper."""
+    depth, quoted = 0, False
+    for character in statement:
+        if character == "'":
+            quoted = not quoted
+        elif not quoted and character in "()":
+            depth += 1 if character == "(" else -1
+            if depth < 0:
+                return False
+    return depth == 0 and not quoted
 
 
 def only_select(statement, name):
     if ";" in statement or not re.match(r"(?i)(select|with)\b", statement):
         raise ValueError(f"{name}_not_one_select")
-    if NOT_A_READ.search(statement):
+    if NOT_A_READ.search(statement) or not balanced(statement):
         raise ValueError(f"{name}_not_read_only")
     return statement
 
@@ -63,7 +80,7 @@ def legacy_blocks(sql):
         end = headers[index + 1].start() if index + 1 < len(headers) else len(sql)
         lines = [line for line in sql[header.end():end].splitlines() if not line.lstrip().startswith("--")]
         statement = only_select("\n".join(lines).strip().removesuffix(";").rstrip(), f"block_{header.group(1)}")
-        if not AGGREGATE.search(statement):
+        if not AGGREGATE.search(statement) or LEAKS_ROWS.search(statement):
             raise ValueError(f"block_{header.group(1)}_not_aggregate")
         parsed.append((header.group(1), header.group(2), header.group(3).strip(), statement))
     return parsed
@@ -183,8 +200,12 @@ def main():
     print(TARGET_MARKER)
     print(f"# VAY-1362-6C pre-deploy check: production target ({DATABASES['TARGET'][1]}), counts only")
     for number, title, statement in checks:
+        columns, rows = asyncio.run(read_only("TARGET", statement, context))
+        if columns != ["rows_found"] or len(rows) != 1:
+            raise ValueError("target_check_not_one_count")
         print(f"## Check {number}: {title}")
-        table(*asyncio.run(read_only("TARGET", statement, context)))
+        table(columns, rows)
+    print(f"{COMPLETE} blocks={len(legacy)} checks={len(checks)}")
 
 
 def plan(counts_path, target_path):

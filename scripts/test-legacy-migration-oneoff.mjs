@@ -233,18 +233,24 @@ args=("$@"); for ((i = 0; i < \${#args[@]}; i++)); do
 done
 case "$1 $2" in
   "sts get-caller-identity") echo 269416271598 ;;
-  "ecs list-tasks") [[ "$*" == *--service-name* ]] && echo arn:aws:ecs:eu-west-1:269416271598:task/vayada-backend-cluster/1111 || echo 0 ;;
-  "ecs describe-services") echo '{"awsvpcConfiguration":{"subnets":["subnet-2"]}}' ;;
+  "ecs list-tasks") [[ "$*" == *--service-name* ]] && echo '{"taskArns":["arn:aws:ecs:eu-west-1:269416271598:task/vayada-backend-cluster/1111"]}' || echo 0 ;;
+  "ecs describe-services")
+    if [[ "$*" == *networkConfiguration* ]]; then echo '{"awsvpcConfiguration":{"subnets":["subnet-2"]}}'
+    else cat "${root}/service.json"; fi ;;
   "ecs describe-tasks")
     if [[ "$*" == *imageDigest* ]]; then echo ${digest}
     elif [[ "$*" == *lastStatus* ]]; then echo STOPPED
     else echo '{"containers":[{"exitCode":0}]}'; fi ;;
   "ecs register-task-definition") echo arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-legacy-readonly-counts:1 ;;
   "ecs run-task") echo '{"tasks":[{"taskArn":"arn:aws:ecs:eu-west-1:269416271598:task/vayada-target-database-runtime-preflight/0123456789abcdef0123456789abcdef"}]}' ;;
-  "logs get-log-events") [[ "$*" == *next-token* ]] && echo '{"events":[],"nextForwardToken":"f/1"}' || echo '{"events":[{"message":"# counts"},{"message":"| active | 2 | 1 |"},{"message":"<!-- predeploy-readonly-check -->"},{"message":"# target"},{"message":"| 0 |"}],"nextForwardToken":"f/1"}' ;;
+  "logs get-log-events") [[ "$*" == *next-token* ]] && echo '{"events":[],"nextForwardToken":"f/1"}' || echo '{"events":[{"message":"# counts"},{"message":"| active | 2 | 1 |"},{"message":"<!-- predeploy-readonly-check -->"},{"message":"# target"},{"message":"| 0 |"}'"$(cat "${root}/complete")"'],"nextForwardToken":"f/1"}' ;;
 esac
 `);
     chmodSync(join(root, 'bin/aws'), 0o755);
+    writeFileSync(join(root, 'complete'), ',{"message":"COUNTS_COMPLETE blocks=2 checks=1"}');
+    const service = (running) => writeFileSync(join(root, 'service.json'),
+      JSON.stringify({ desiredCount: 1, runningCount: running, deployments: [{ rolloutState: 'COMPLETED' }] }));
+    service(2);
     const run = (...args) => {
       rmSync(join(root, 'aws.log'), { force: true });
       return spawnSync('bash', [join(root, 'scripts/legacy-migration-oneoff.sh'), ...args],
@@ -256,11 +262,16 @@ esac
     assert.equal(run('readonly-counts-plan', join(root, 'bad.sql'), target).status, 2);
     assert.equal(awsCalls(), '');
 
+    const unstable = run('readonly-counts-plan', counts, target);
+    assert.equal(unstable.status, 1);
+    assert.match(unstable.stderr, /exactly one task/);
+    service(1);
     const planned = run('readonly-counts-plan', counts, target);
     assert.equal(planned.status, 0, planned.stderr);
     assert.doesNotMatch(awsCalls(), /register|run-task/);
     const planSha = planned.stdout.match(/^Plan sha256: ([0-9a-f]{64})$/m)[1];
     assert.match(planned.stdout, /SELECT count\(\*\) AS rows_found FROM \(\nSELECT job\.id FROM platform\.jobs job\n\) AS check_rows/);
+    assert.match(planned.stdout, /^Image from the running task: arn:aws:ecs:eu-west-1:269416271598:task\/vayada-backend-cluster\/1111$/m);
     assert.match(planned.stdout, new RegExp(`Image: 269416271598\\.dkr\\.ecr\\.eu-west-1\\.amazonaws\\.com/vayada-pms-backend@${digest}`));
     assert.match(planned.stdout, /Secrets: DATABASE_URL <- \/vayada\/prod\/db-pms-url, BOOKING_ENGINE_DATABASE_URL <- \/vayada\/prod\/db-booking-url, STRIPE_SECRET_KEY <- \/vayada\/prod\/stripe-secret-key, TARGET_DATABASE_URL <- \/vayada\/prod\/target-database-url/);
     assert.equal(readFileSync(join(evidence, 'readonly-counts-plan.txt'), 'utf8'), planned.stdout);
@@ -271,6 +282,12 @@ esac
     assert.match(stale.stderr, /plan changed/);
     assert.doesNotMatch(awsCalls(), /register/);
 
+    writeFileSync(join(root, 'complete'), '');
+    const incomplete = run('readonly-counts', counts, target, `READONLY_COUNTS:${planSha}`);
+    assert.equal(incomplete.status, 1);
+    assert.match(incomplete.stderr, /did not complete; no result files written/);
+    assert.equal(existsSync(join(evidence, 'readonly-counts-result.md')), false);
+    writeFileSync(join(root, 'complete'), ',{"message":"COUNTS_COMPLETE blocks=2 checks=1"}');
     const result = run('readonly-counts', counts, target, `READONLY_COUNTS:${planSha}`);
     assert.equal(result.status, 0, result.stderr);
     const definition = JSON.parse(readFileSync(join(root, 'definition.json'), 'utf8'));
@@ -279,7 +296,7 @@ esac
     assert.equal(definition.taskRoleArn, undefined);
     const [container] = definition.containerDefinitions;
     assert.equal(container.image, `269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-pms-backend@${digest}`);
-    assert.deepEqual([...container.entryPoint, ...container.command], ['python', '-c', readFileSync(new URL('./legacy-readonly-counts.py', import.meta.url), 'utf8')]);
+    assert.deepEqual([...container.entryPoint, ...container.command], ['python', '-I', '-c', readFileSync(new URL('./legacy-readonly-counts.py', import.meta.url), 'utf8')]);
     assert.deepEqual(Object.fromEntries(container.environment.map((e) => [e.name, e.value])), {
       COUNTS_SQL: readFileSync(counts, 'utf8'), TARGET_CHECK_SQL: readFileSync(target, 'utf8'),
       VAYADA_DB_RDS_CA_BUNDLE: readFileSync(new URL('../rehearsal/rds-ca-rsa2048-g1.pem', import.meta.url), 'utf8'),

@@ -106,6 +106,12 @@ class ReadonlyCountsTest(unittest.TestCase):
                     "-- (1) LEGACY PMS database: x\nSELECT count(*), pg_terminate_backend(pid) FROM pg_stat_activity;",
                     "-- (1) LEGACY BOOKING database: x\nSELECT count(*) FROM dblink('x', 'y') AS t(a int);",
                     "-- (1) LEGACY PMS database: x\nSELECT email FROM users;",
+                    "-- (1) LEGACY PMS database: x\nSELECT count(*), string_agg(email, ',') FROM users;",
+                    "-- (1) LEGACY PMS database: x\nSELECT count(*), max(table_to_xml('users', true, true, '')) FROM t;",
+                    "-- (1) LEGACY PMS database: x\nSELECT count(*), pg_try_advisory_lock(1) FROM t;",
+                    "-- (1) LEGACY PMS database: x\nSELECT count(*), txid_current() FROM t;",
+                    "-- (1) LEGACY PMS database: x\nSELECT count(*) FROM t /* hidden;",
+                    "-- (1) LEGACY PMS database: x\nSELECT count(*) FROM \"users\";",
                     "SELECT count(*) FROM bookings;"):
             with self.assertRaises(ValueError, msg=bad):
                 module.legacy_blocks(bad)
@@ -117,7 +123,9 @@ class ReadonlyCountsTest(unittest.TestCase):
         for _, _, statement in checks:
             self.assertTrue(statement.startswith("SELECT count(*) AS rows_found FROM (\nSELECT "))
             self.assertTrue(statement.endswith("\n) AS check_rows"))
-        for bad in ("BEGIN READ ONLY;\nDELETE FROM platform.jobs;\nROLLBACK;", "BEGIN;\nROLLBACK;", "SELECT 1"):
+        breakout = "SELECT 1) AS a UNION ALL SELECT length(email)::bigint FROM (SELECT email FROM users;"
+        for bad in ("BEGIN READ ONLY;\nDELETE FROM platform.jobs;\nROLLBACK;", "BEGIN;\nROLLBACK;", "SELECT 1", breakout,
+                    "SELECT id FROM t -- trailing\n;"):
             with self.assertRaises(ValueError, msg=bad):
                 module.target_checks(bad)
 
@@ -152,6 +160,15 @@ class ReadonlyCountsTest(unittest.TestCase):
         self.assertEqual(target.count("| rows_found |"), 2)
         self.assertIn("| 1 |", target)
         self.assertNotIn("sub_secret", output)
+        self.assertEqual(output.splitlines()[-1], "COUNTS_COMPLETE blocks=3 checks=2")
+
+    def test_a_target_check_must_return_one_count(self):
+        results = [[Record(bookings=4)], [Record(status="active", hotels=2)], [Record(billing_active_plan=None, hotels=9)],
+                   [Record(rows_found=0), Record(rows_found=1)]]
+        module, modules, *_ = load([], results, [])
+        output, error = run(module, modules)
+        self.assertEqual(str(error), "target_check_not_one_count")
+        self.assertNotIn("COUNTS_COMPLETE", output)
 
     def test_unpinned_database_or_ca_is_refused_before_connecting(self):
         for overrides, code in (({"DATABASE_URL": "postgresql://u:p@other-host:5432/vayada_pms_db"}, "pms_database_not_pinned"),
