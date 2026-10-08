@@ -87,8 +87,7 @@ resource "aws_ecs_task_definition" "hotel_setup" {
 resource "aws_ecs_service" "hotel_setup" {
   # Activation and rollback select the serving task/count through the reviewed release.
   lifecycle {
-    prevent_destroy = true
-    ignore_changes  = [desired_count, task_definition]
+    ignore_changes = [desired_count, task_definition]
   }
   count = var.enable_hotel_setup_service_staging ? 1 : 0
 

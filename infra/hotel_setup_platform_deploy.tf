@@ -85,12 +85,10 @@ resource "aws_iam_policy" "hotel_setup_platform_deploy" {
   count  = local.hotel_setup_platform_deploy_enabled ? 1 : 0
   name   = "vayada-hotel-setup-platform-deploy"
   policy = data.aws_iam_policy_document.hotel_setup_platform_deploy.json
-  lifecycle { prevent_destroy = true }
 }
 
 resource "aws_iam_role_policy_attachment" "hotel_setup_platform_deploy" {
   count      = local.hotel_setup_platform_deploy_enabled ? 1 : 0
   role       = aws_iam_role.github_actions_platform_deploy.name
   policy_arn = aws_iam_policy.hotel_setup_platform_deploy[0].arn
-  lifecycle { prevent_destroy = true }
 }

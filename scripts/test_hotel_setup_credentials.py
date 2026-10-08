@@ -48,7 +48,7 @@ class HotelSetupCredentialsTests(unittest.TestCase):
         source = SOURCE.read_text()
         self.assertRegex(source, r'default\s*=\s*false')
         self.assertEqual(source.count('count = var.enable_hotel_setup_credential_infrastructure ? 1 : 0'), 4)
-        self.assertIn('prevent_destroy = true', source)
+        self.assertNotIn('prevent_destroy', source)  # VAY-2056 step 5 retires these secrets
         self.assertIn('jsonencode([for secret in aws_secretsmanager_secret.hotel_setup : secret.arn])', source)
         for forbidden in ['aws_secretsmanager_secret_version', 'aws_ecs_', 'resource "aws_iam_role_policy_attachment"', 'ssm:', 'kms:', 'PassRole']:
             self.assertNotIn(forbidden, source)
@@ -187,7 +187,7 @@ locals {
             "internal_token": "hotel-setup-command/prod/internal-token"})
         self.assertFalse(set(separate["names"].values()) & set(separate["property_names"].values()))
         source = (ROOT / "infra/hotel_setup_property_credentials.tf").read_text()
-        self.assertIn('prevent_destroy = true', source)
+        self.assertNotIn('prevent_destroy', source)  # VAY-2056 step 5 retires these secrets
         self.assertIn('var.hotel_setup_command_mode == "property_creation"', source)
         self.assertIn('secret_arns = jsonencode(local.hotel_setup_property_native_secret_arns)', source)
         self.assertEqual(source.count('local.hotel_setup_property_native_secret_arns'), 1)

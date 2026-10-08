@@ -29,8 +29,8 @@ resource "aws_secretsmanager_secret" "hotel_setup_property" {
 
   name        = each.value
   description = "Private property_commands setup ${each.key}; no value managed by Terraform"
+  # VAY-2056 step 5: destroy schedules deletion with the stored recovery window; never force-delete.
   lifecycle {
-    prevent_destroy = true
     precondition {
       condition     = !var.enable_hotel_setup_credential_infrastructure || var.hotel_setup_command_mode == "property_creation"
       error_message = "Separate property credentials require the original credential identities to be off or reserved for property_creation."

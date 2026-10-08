@@ -115,7 +115,6 @@ resource "aws_ecs_service" "hotel_setup_property" {
     container_port   = 8011
   }
   lifecycle {
-    prevent_destroy = true
     # The reviewed normal-CI release owns activation and immutable task selection.
     ignore_changes = [desired_count, task_definition]
   }

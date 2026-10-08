@@ -177,7 +177,7 @@ class HotelSetupServiceTests(unittest.TestCase):
         self.assertNotEqual(proof['primary']['digest'], proof['rollback']['digest'])
         self.assertEqual(proof['verification']['postgresVersions'], [16, 17])
         source = (ROOT / 'infra/hotel_setup_property_service.tf').read_text()
-        self.assertIn('prevent_destroy = true', source)
+        self.assertNotIn('prevent_destroy', source)  # VAY-2056 step 5 retires this service
         self.assertIn('ignore_changes = [desired_count, task_definition]', source)
 
         # Both independently configured services can coexist without changing modes.
@@ -187,7 +187,7 @@ class HotelSetupServiceTests(unittest.TestCase):
         self.assertEqual(len([r for r in resources if r.startswith('aws_ecs_service.')]), 2)
         self.assertTrue(all(v['desired_count'] == 0 for r, v in resources.items() if r.startswith('aws_ecs_service.')))
 
-    def test_property_restage_preserves_serving_task_count_and_rejects_removal(self):
+    def test_property_restage_preserves_serving_task_count_and_allows_retirement(self):
         selected = {'mode': 'property_creation', 'property_enabled': True,
                     'property_credentials': True, 'existing_service': 'property',
                     'property_digests': {'primary': DIGEST, 'rollback': ROLLBACK},
@@ -197,10 +197,10 @@ class HotelSetupServiceTests(unittest.TestCase):
                        if r['address'] == 'aws_ecs_service.hotel_setup_property[0]')
         self.assertEqual(service['desired_count'], 1)
         self.assertTrue(service['task_definition'].endswith(':77'))
-        with self.assertRaisesRegex(AssertionError, 'cannot be destroyed'):
-            plan(True, service={**selected, 'remove_service': True}, property_network=True)
+        # VAY-2056 step 5: prevent_destroy is removed so the retired service can be destroyed.
+        plan(True, service={**selected, 'remove_service': True}, property_network=True)
 
-    def test_creation_restage_preserves_serving_task_count_and_rejects_removal(self):
+    def test_creation_restage_preserves_serving_task_count_and_allows_retirement(self):
         selected = {'mode': 'property_creation', 'enabled': True, 'credentials': True,
                     'existing_service': 'creation',
                     'digests': {'primary': DIGEST, 'rollback': ROLLBACK},
@@ -210,8 +210,8 @@ class HotelSetupServiceTests(unittest.TestCase):
                        if r['address'] == 'aws_ecs_service.hotel_setup[0]')
         self.assertEqual(service['desired_count'], 1)
         self.assertTrue(service['task_definition'].endswith(':77'))
-        with self.assertRaisesRegex(AssertionError, 'cannot be destroyed'):
-            plan(True, service={**selected, 'remove_service': True})
+        # VAY-2056 step 5: prevent_destroy is removed so the retired service can be destroyed.
+        plan(True, service={**selected, 'remove_service': True})
 
     def test_exact_container_and_verified_rds_trust(self):
         values = {

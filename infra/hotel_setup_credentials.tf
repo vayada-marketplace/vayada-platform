@@ -48,9 +48,7 @@ resource "aws_secretsmanager_secret" "hotel_setup" {
 
   name        = each.value
   description = "Private ${var.hotel_setup_command_mode} setup ${each.key}; no value managed by Terraform"
-  lifecycle {
-    prevent_destroy = true
-  }
+  # VAY-2056 step 5: destroy schedules deletion with the stored recovery window; never force-delete.
 }
 
 resource "aws_iam_role" "hotel_setup_execution" {
