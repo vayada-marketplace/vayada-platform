@@ -413,6 +413,28 @@ esac
     const again = run('readonly-counts', counts, target, `READONLY_COUNTS:${planSha}`);
     assert.equal(again.status, 2);
     assert.match(again.stderr, /already exists/);
+
+    // "none" instead of the 6c file: only the legacy task runs, and only the counts result is written.
+    const evidenceOnly = join(root, 'evidence-only');
+    mkdirSync(evidenceOnly, { mode: 0o700 });
+    const runOnly = (...args) => {
+      writeFileSync(join(root, 'definitions.jsonl'), '');
+      return spawnSync('bash', [join(root, 'scripts/legacy-migration-oneoff.sh'), ...args],
+        { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, EVIDENCE_DIR: evidenceOnly } });
+    };
+    const pmsOnly = join(root, 'pms-only.sql');
+    writeFileSync(pmsOnly, '-- (1) LEGACY PMS database: per hotel\nSELECT h.name, count(*) AS n FROM hotels h GROUP BY 1;\n');
+    const onlyPlan = runOnly('readonly-counts-plan', pmsOnly, 'none');
+    assert.equal(onlyPlan.status, 0, onlyPlan.stderr);
+    assert.equal(onlyPlan.stdout.match(/^Task /gm).length, 1);
+    assert.match(onlyPlan.stdout, /^Target check SQL sha256: none$/m);
+    const onlySha = onlyPlan.stdout.match(/^Plan sha256: ([0-9a-f]{64})$/m)[1];
+    assert.notEqual(onlySha, planSha);
+    const onlyRun = runOnly('readonly-counts', pmsOnly, 'none', `READONLY_COUNTS:${onlySha}`);
+    assert.equal(onlyRun.status, 0, onlyRun.stderr);
+    assert.deepEqual(readFileSync(join(root, 'definitions.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line).family), ['vayada-legacy-readonly-counts-pms']);
+    assert.equal(readFileSync(join(evidenceOnly, 'readonly-counts-result.md'), 'utf8'), '# VAY-1362 read-only counts (legacy PMS and Booking)\n## PMS section\n');
+    assert.equal(existsSync(join(evidenceOnly, 'predeploy-readonly-check-result.md')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -134,6 +134,35 @@ class ReadonlyCountsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.legacy_blocks("SELECT count(*) FROM bookings;")
 
+    def test_hotel_identity_labels_only_from_the_top_level_hotels_table(self):
+        module, *_ = load([], [])
+        header = "-- (1) LEGACY PMS database: x\n"
+        for good in ("SELECT h.id, h.name, h.slug, count(*), max(b.check_out)::date FROM hotels h JOIN bookings b ON b.hotel_id = h.id "
+                     "WHERE h.id NOT IN ('00000000-0000-4000-8000-000000000001') GROUP BY h.id, h.name, h.slug HAVING count(*) > 0 ORDER BY 4 DESC",
+                     "SELECT hotels.name, count(*) FROM hotels GROUP BY 1"):
+            module.legacy_blocks(header + good + ";")
+        for bad in ("SELECT u.name, count(*) FROM users u GROUP BY 1",
+                    "SELECT h.name, count(*) FROM users h GROUP BY 1",
+                    "SELECT h.email, count(*) FROM hotels h GROUP BY 1",
+                    "SELECT name, count(*) FROM hotels GROUP BY 1",
+                    "SELECT h.name, count(*) FROM hotels h JOIN users u ON u.id = h.owner_id GROUP BY 1, u.email",
+                    "SELECT h.name, count(*) FROM users h WHERE EXISTS (SELECT 1 FROM hotels h) GROUP BY 1",
+                    "WITH hotels AS (SELECT email AS name FROM users) SELECT hotels.name, count(*) FROM hotels GROUP BY 1",
+                    "SELECT h.name, count(*), max(b.check_out) FROM hotels h JOIN bookings b ON b.hotel_id = h.id GROUP BY 1",
+                    "SELECT h.name, count(*), max(b.guest_name)::date FROM hotels h JOIN bookings b ON b.hotel_id = h.id GROUP BY 1"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.legacy_blocks(header + bad + ";")
+
+    def test_plan_without_target_checks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            counts = Path(directory, "counts.sql")
+            counts.write_text("-- (1) LEGACY PMS database: per hotel.\nSELECT h.name, count(*) FROM hotels h GROUP BY 1;\n")
+            result = subprocess.run([sys.executable, "-I", str(SCRIPT), "--plan", str(counts), "none"], capture_output=True, text=True,
+                                    env={"PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith("Block 1 on vayada_pms_db as vayada_pms_user (DATABASE_URL): per hotel."))
+        self.assertNotIn("Check ", result.stdout)
+
     def test_target_checks_drop_the_file_transaction_and_count_only(self):
         module, *_ = load([], [])
         checks = module.target_checks(TARGET_SQL)
