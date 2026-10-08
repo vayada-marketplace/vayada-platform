@@ -121,7 +121,7 @@ class CompatibleImageTest(unittest.TestCase):
         self.assertEqual(json.loads((ROOT / "deployment/hotel-setup-profile-images.json").read_text()),
                          {"sha256:1c5ddf7c26ad738ce55dc360f17e67ed5cbf46a1a8e09505c71b88a59a463a75": "3e78a281a28930d3023de18385c90411a6006625",
                           "sha256:eacd03ed0c836b1d1e77e1b8fdb0ba5bb3a178b218700a627f6552534f60c846": "480602efd31b71e7997be1c5aae2c23930be3933",
-                          "sha256:VAY2056_DIGEST_PENDING": "VAY2056_SOURCE_PENDING"})
+                          "sha256:6d82282ea8ef2dfba3a184e4b4af15f63ed252016379a1eaea133d62ce955c39": "46a34760a7137256a0d8dfd20954c9634899f684"})
 
     def test_accepts_reviewed_next_api_digest(self) -> None:
         reviewed = dict(
