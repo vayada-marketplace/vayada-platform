@@ -98,11 +98,8 @@ on:
       - "scripts/vay2017-source-snapshot-import.mjs"
       - "scripts/vay2017-source-snapshot-extract.mjs"
       - "scripts/target-database-runtime-preflight.mjs"
-      - ".github/workflows/runtime-affiliate-read-repair.yml"
       - "scripts/financials-activation-readiness.mjs"
-      - "scripts/grant-target-database-product-audit-insert.mjs"
-      - "scripts/grant-target-database-folio-command.mjs"
-      - "scripts/grant-target-database-hotel-setup-tracks.mjs"
+      - "scripts/grant-target-database-runtime-product-dml.mjs"
       - "scripts/finance-expense-worker-database.mjs"
       - "scripts/finance-export-worker-database.mjs"
       - "scripts/grant-target-database-identity-runtime.mjs"
@@ -313,9 +310,7 @@ jobs:
           node --check scripts/vay2017-source-snapshot-extract.mjs
           node --check scripts/target-database-runtime-preflight.mjs
           node --check scripts/financials-activation-readiness.mjs
-          node --check scripts/grant-target-database-product-audit-insert.mjs
-          node --check scripts/grant-target-database-folio-command.mjs
-          node --check scripts/grant-target-database-hotel-setup-tracks.mjs
+          node --check scripts/grant-target-database-runtime-product-dml.mjs
           node --check scripts/finance-expense-worker-database.mjs
           node --check scripts/finance-export-worker-database.mjs
           node --check scripts/grant-target-database-identity-runtime.mjs

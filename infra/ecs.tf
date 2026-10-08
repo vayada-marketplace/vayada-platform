@@ -306,9 +306,10 @@ locals {
         { name = "CHANNEX_API_BASE_URL", value = "https://app.channex.io" },
         { name = "AIRBNB_IMPORT_ENABLED", value = "true" },
         { name = "AIRBNB_IMPORT_CALLBACK_ORIGIN", value = "https://next-marketplace.vayada.com" },
-        # Management credentials are scoped to the staging canary, not this API.
-        { name = "PMS_CHANNEX_WORKER_ENABLED", value = "false" },
-        { name = "PMS_CHANNEX_CONNECTION_MODE", value = "observe_only" },
+        # VAY-2055: only the connection (enable) capability may run here, with the
+        # dedicated worker credential; every other durable capability stays paused.
+        { name = "PMS_CHANNEX_WORKER_ENABLED", value = tostring(var.channex_connection_worker_enabled) },
+        { name = "PMS_CHANNEX_CONNECTION_MODE", value = var.channex_connection_worker_enabled ? "mutating" : "observe_only" },
         { name = "PMS_CHANNEX_PROVISIONING_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_ARI_SYNC_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_BOOKING_SYNC_MODE", value = "observe_only" },
@@ -374,6 +375,8 @@ locals {
         { name = "FINANCE_EXPENSE_WORKER_DATABASE_URL", valueFrom = "/vayada/prod/target-database-finance-expense-worker-url" },
         ] : [], (var.finance_export_worker_secret_mapped || var.finance_export_worker_enabled) ? [
         { name = "FINANCE_EXPORT_WORKER_DATABASE_URL", valueFrom = "/vayada/prod/target-database-finance-export-worker-url" },
+        ] : [], (var.channex_connection_worker_secret_mapped || var.channex_connection_worker_enabled) ? [
+        { name = "PMS_CHANNEX_MANAGEMENT_DATABASE_URL", valueFrom = "/vayada/prod/target-database-channex-management-worker-url" },
         ] : [], local.resend_receipts_enabled ? [
         { name = "RESEND_WEBHOOK_SECRET", valueFrom = "/vayada/prod/resend-webhook-secret" },
       ] : [])
@@ -589,6 +592,11 @@ resource "aws_ecs_task_definition" "services" {
     precondition {
       condition     = each.key != "next-target-backend" || trimspace(var.channex_webhook_secret) != ""
       error_message = "Next review intake requires a non-empty CHANNEX_WEBHOOK_SECRET."
+    }
+
+    precondition {
+      condition     = each.key != "next-target-backend" || !var.channex_connection_worker_enabled || var.channex_connection_worker_secret_mapped
+      error_message = "Channex connection processing requires the dedicated worker secret to be mapped and preflighted first."
     }
 
     precondition {

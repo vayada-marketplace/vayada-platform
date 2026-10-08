@@ -16,6 +16,9 @@ FINANCE_EXPENSE_PROPERTY_ID = "65f6b2fc-c783-4963-9d6b-a85f82319769"
 FINANCE_EXPORT_PARAMETER = "/vayada/prod/target-database-finance-export-worker-url"
 FINANCE_EXPORT_PROPERTY_ID = "65f6b2fc-c783-4963-9d6b-a85f82319769"
 FINANCE_EXPORT_ID = "f3429f38-b462-4453-b7f1-d901fc86ebfa"
+CHANNEX_WORKER_PARAMETER = "/vayada/prod/target-database-channex-management-worker-url"
+# VAY-2055: the worker may only run the connection capability on the public API.
+CHANNEX_PAUSED_CAPABILITIES = ("PROVISIONING", "ARI_SYNC", "BOOKING_SYNC", "MARKUPS", "MESSAGING")
 PARAMETER_ARN = re.compile(
     r"^arn:aws:ssm:eu-west-1:269416271598:parameter(?P<name>/vayada/prod/[^/]+)$"
 )
@@ -124,6 +127,7 @@ def main() -> None:
     reviewed_database_secrets = protected_names | {
         "FINANCE_EXPENSE_WORKER_DATABASE_URL",
         "FINANCE_EXPORT_WORKER_DATABASE_URL",
+        "PMS_CHANNEX_MANAGEMENT_DATABASE_URL",
     }
     for name, value in secrets.items():
         normalized_name = name.strip().lower()
@@ -139,6 +143,20 @@ def main() -> None:
         )
         if database_like and name not in reviewed_database_secrets:
             fail("unreviewed database secret mapping is forbidden")
+    channex_secret_present = "PMS_CHANNEX_MANAGEMENT_DATABASE_URL" in secrets
+    if channex_secret_present and secrets["PMS_CHANNEX_MANAGEMENT_DATABASE_URL"] != CHANNEX_WORKER_PARAMETER:
+        fail("Channex worker database secret must map only its dedicated parameter")
+    channex_worker = environment.get("PMS_CHANNEX_WORKER_ENABLED")
+    if channex_worker not in {None, "false", "true"}:
+        fail("Channex worker enablement state is unexpected")
+    if channex_worker == "true":
+        if not channex_secret_present:
+            fail("enabled Channex worker lacks its dedicated database secret")
+        if environment.get("PMS_CHANNEX_CONNECTION_MODE") != "mutating" or any(
+            environment.get(f"PMS_CHANNEX_{name}_MODE") != "observe_only"
+            for name in CHANNEX_PAUSED_CAPABILITIES
+        ):
+            fail("enabled Channex worker must be connection-only")
     expense_secret_present = "FINANCE_EXPENSE_WORKER_DATABASE_URL" in secrets
     expense_value = secrets.get("FINANCE_EXPENSE_WORKER_DATABASE_URL")
     expense_enabled = environment.get("FINANCE_EXPENSE_WORKER_ENABLED")

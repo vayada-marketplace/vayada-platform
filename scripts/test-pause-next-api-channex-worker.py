@@ -89,7 +89,46 @@ class PauseWorkerTest(unittest.TestCase):
     def test_terraform_matches_deployment_pause(self):
         terraform=(ROOT/"infra/ecs.tf").read_text()
         for key,value in pause.PAUSED_ENV.items():
+            if key in pause.CONNECTION_ENV:continue
             self.assertIn(f'{{ name = "{key}", value = "{value}" }}',terraform)
+        # VAY-2055: only the worker flag and connection mode follow the reviewed variables.
+        self.assertIn('{ name = "PMS_CHANNEX_WORKER_ENABLED", value = tostring(var.channex_connection_worker_enabled) }',terraform)
+        self.assertIn('{ name = "PMS_CHANNEX_CONNECTION_MODE", value = var.channex_connection_worker_enabled ? "mutating" : "observe_only" }',terraform)
+        self.assertIn('(var.channex_connection_worker_secret_mapped || var.channex_connection_worker_enabled) ? [\n        { name = "PMS_CHANNEX_MANAGEMENT_DATABASE_URL", valueFrom = "/vayada/prod/target-database-channex-management-worker-url" },',terraform)
+        self.assertIn('!var.channex_connection_worker_enabled || var.channex_connection_worker_secret_mapped',terraform)
+
+    def connection_fixture(self,secret=pause.WORKER_SECRET_PARAMETER):
+        task=fixture()
+        container=task["containerDefinitions"][0]
+        container["environment"]+=[{"name":"PMS_CHANNEX_WORKER_ENABLED","value":"true"}]
+        if secret:container["secrets"].append({"name":pause.WORKER_SECRET_NAME,"valueFrom":secret})
+        return task
+
+    def test_declared_connection_scope_is_preserved_and_everything_else_stays_paused(self):
+        for secret in (pause.WORKER_SECRET_PARAMETER,"arn:aws:ssm:eu-west-1:269416271598:parameter"+pause.WORKER_SECRET_PARAMETER):
+            task=self.connection_fixture(secret)
+            task["containerDefinitions"][0]["environment"].append({"name":"PMS_CHANNEX_ARI_SYNC_MODE","value":"mutating"})
+            env={e["name"]:e["value"] for e in pause.pause_worker(task)["containerDefinitions"][0]["environment"]}
+            self.assertEqual(env,{"PMS_CHANNEX_REVIEWS_MODE":"mutating",**pause.PAUSED_ENV,**pause.CONNECTION_ENV})
+            self.assertEqual(pause.pause_worker(task),pause.pause_worker(pause.pause_worker(task)))
+
+    def test_mapped_secret_alone_or_partial_declaration_stays_paused(self):
+        for mutate in (lambda c:c["environment"].remove({"name":"PMS_CHANNEX_WORKER_ENABLED","value":"true"}),
+                       lambda c:c["environment"].remove({"name":"PMS_CHANNEX_CONNECTION_MODE","value":"mutating"})):
+            task=self.connection_fixture();mutate(task["containerDefinitions"][0])
+            env={e["name"]:e["value"] for e in pause.pause_worker(task)["containerDefinitions"][0]["environment"]}
+            self.assertEqual(env,{"PMS_CHANNEX_REVIEWS_MODE":"mutating",**pause.PAUSED_ENV})
+
+    def test_connection_scope_without_or_with_wrong_secret_is_paused_or_rejected(self):
+        env={e["name"]:e["value"] for e in pause.pause_worker(self.connection_fixture(None))["containerDefinitions"][0]["environment"]}
+        self.assertEqual(env,{"PMS_CHANNEX_REVIEWS_MODE":"mutating",**pause.PAUSED_ENV})
+        for secret in ("/vayada/prod/target-database-runtime-url","/vayada/prod/target-database-url"):
+            with self.assertRaises(ValueError):pause.pause_worker(self.connection_fixture(secret))
+        task=self.connection_fixture();task["containerDefinitions"][0]["secrets"].append({"name":pause.WORKER_SECRET_NAME,"valueFrom":pause.WORKER_SECRET_PARAMETER})
+        with self.assertRaises(ValueError):pause.pause_worker(task)
+        task=self.connection_fixture();task["containerDefinitions"][0]["environment"].append({"name":"PMS_CHANNEX_WORKER_ENABLED","value":"false"})
+        env={e["name"]:e["value"] for e in pause.pause_worker(task)["containerDefinitions"][0]["environment"]}
+        self.assertEqual(env,{"PMS_CHANNEX_REVIEWS_MODE":"mutating",**pause.PAUSED_ENV})
 
 
 if __name__ == "__main__":unittest.main()

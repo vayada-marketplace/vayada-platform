@@ -85,7 +85,17 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
 
     def test_protected_runner_uses_explicit_image_and_only_worker_secret(self):
         runner = (ROOT / "scripts/run-target-database-runtime-preflight.sh").read_text()
-        self.assertIn('--provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker)', runner)
+        self.assertIn('--provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker|--grant-channex-connection-worker|--preflight-channex-connection-worker)', runner)
+        # VAY-2055: the connection scope takes only the image digest and admits the operation, not a property.
+        self.assertIn('channex_scope="connection"', runner)
+        self.assertIn('"$2" =~ ^sha256:[a-f0-9]{64}$', runner)
+        self.assertIn('{name:"VAYADA_DB_CHANNEX_SCOPE",value:$channex_scope}', runner)
+        worker_code = (ROOT / 'scripts/channex-management-worker-database.mjs').read_text()
+        self.assertIn('process.env.VAYADA_DB_CHANNEX_SCOPE === "connection"', worker_code)
+        self.assertIn('connection ? propertyId !== undefined :', worker_code)
+        self.assertIn('{connectionScope:true}', worker_code)
+        self.assertIn("INSERT INTO platform.channex_management_worker_operations(operation_type) VALUES('enable')", worker_code)
+        self.assertIn('channex_worker_operation_scope_mismatch', worker_code)
         self.assertIn('provision_scope="channex_management"', runner)
         self.assertIn('secret_name="PMS_CHANNEX_MANAGEMENT_DATABASE_URL"', runner)
         self.assertIn('"$3" =~ ^sha256:[a-f0-9]{64}$', runner)
