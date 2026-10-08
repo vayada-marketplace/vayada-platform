@@ -14,3 +14,6 @@ infra/.terraform.tfstate.lock.info
 infra/crash.log
 infra/override.tf
 infra/override.tf.json
+
+# Python
+__pycache__/
