@@ -2,8 +2,9 @@
 
 The legacy migration runs once. Its production steps are started by
 `scripts/legacy-migration-oneoff.sh` from the operator's machine, with the
-`vayada` AWS profile. Each step needs Flamur's explicit go first. No Terraform,
-no new IAM roles and no GitHub workflow are involved.
+`vayada` AWS profile. Each step needs Flamur's explicit go first, naming the
+command and the run file's SHA-256. No Terraform, no new IAM roles and no
+GitHub workflow are involved.
 
 ## Commands
 
@@ -11,17 +12,31 @@ no new IAM roles and no GitHub workflow are involved.
 |---|---|---|
 | `target:migration-status` | target DB only | `MIGRATION_STATUS:<run>` |
 | `target:cutover:abort` | target DB only | `ABORT_CUTOVER:<run>` (the CLI checks it again) |
-| `target:source:extract` | target DB, 4 source DBs, media | `SOURCE_EXTRACT:<run>:<source-run>` |
+| `target:source:extract` | target DB, 4 source DBs, media (unused) | `SOURCE_EXTRACT:<run>:<source-run>` |
 | `target:cutover` | target DB, 4 source DBs, media | `PRODUCTION_CUTOVER:<run>:<source-run>` (the CLI checks it again) |
 
 ```bash
-EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh <command> <run-file.json> <confirmation>
+EVIDENCE_DIR=<0700 evidence folder> caffeinate -i bash scripts/legacy-migration-oneoff.sh <command> <run-file.json> <run-file-sha256> <confirmation>
+EVIDENCE_DIR=<0700 evidence folder> caffeinate -i bash scripts/legacy-migration-oneoff.sh watch <task-arn>
 ```
+
+A cutover can take an hour. Run the script as a background command; Claude's
+foreground commands stop after 10 minutes. If the script dies anyway (lost
+network, sleep, a killed shell), the task keeps running. **Never rerun the
+step:** `watch <task-arn>` re-attaches from the task record in the evidence
+folder, saves the log and returns the exit code.
+
+`target:cutover` runs the source extraction itself. Do not run
+`target:source:extract` before it; that would only repeat the extraction.
+Use it on its own only for a standalone extraction, and check that its report's
+`runId` equals the run file's `sourceRunId`.
 
 ## What one call does
 
 1. **Before any AWS call, it checks the inputs:**
+   - `EVIDENCE_DIR` is a 0700 folder;
    - the command is on the allow-list;
+   - the run file's SHA-256 equals the approved one;
    - the run file has the `vay1360` run ID, the `vay1351` source run ID and the image pair, and that pair (`sourceSha imageDigest`) is listed in `scripts/next-api-split-compatible-images.txt`;
    - the confirmation is exact;
    - every argument is a string, and the inputs are named JSON documents.
@@ -45,10 +60,12 @@ EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh <com
      CDN), plus the legacy media bucket allow-list.
 4. **It runs the task once** on the `vayada-target-database-runtime-preflight`
    cluster, with next-api's network. Arguments and inputs travel inside the
-   definition (up to about 60 KB), not as overrides (8 KB).
-5. **It waits and keeps the evidence.** It waits up to 4 hours, saves the task
-   log to `EVIDENCE_DIR` (0600), and deregisters the definition. It exits with
-   the CLI code:
+   definition (up to about 60 KB), not as overrides (8 KB). It writes a task
+   record (`task-<id>.json`) to the evidence folder.
+5. **It waits and keeps the evidence.** It waits up to 4 hours and rides out
+   short AWS errors. It saves the task log to `EVIDENCE_DIR` (0600), then
+   deregisters and deletes the definition. A running task is never affected,
+   though CloudTrail still records the request. It exits with the CLI code:
    - `0`: done
    - `4`: awaiting smoke
    - `1`: failed, including a parity NO-GO (`PARITY_NOT_GO`)
@@ -71,6 +88,8 @@ and `target:migration-status` before doing anything else.
 ```
 
 - **Arguments:** leave out `--run-id`, `--confirmation` and `--report`. The script adds them, and the CLI refuses duplicates.
+  - Every command used needs an `args` entry. For `target:migration-status`, `[]` is enough.
+  - `target:cutover:abort` needs `--operator`.
 - **`@name`** refers to an entry in `files`.
 - **Never put secrets here:** database URLs come only from SSM.
 - **To resume after `AWAITING_SMOKE`,** add `--resume` and `--smoke-report @smoke-report`.
@@ -89,28 +108,35 @@ and `target:migration-status` before doing anything else.
 ## Read-only counts (`readonly-counts`)
 
 ```bash
-EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts <counts.sql> READONLY_COUNTS
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts <counts.sql> READONLY_COUNTS:<sha256 of counts.sql>
 ```
 
 This is a read-only snapshot of legacy numbers, for planning. It also runs only
-after Flamur's go. The SQL file stays in the evidence folder, because it names
-the candidate hotels. The script prints its SHA-256 before running.
+after Flamur's go, and that go names the SQL file's SHA-256. The SQL file stays
+in the evidence folder because it names the candidate hotels. It still reaches
+the disposable task definition, which is deleted afterwards, and CloudTrail.
 
 - **Input check.** Locally, `scripts/legacy-readonly-counts.py --check` accepts
-  only blocks headed `-- (N) LEGACY PMS|BOOKING database: <title>`, each with a
-  single `SELECT`/`WITH` statement.
+  only blocks headed `-- (N) LEGACY PMS|BOOKING database: <title>`, each with one
+  `SELECT`/`WITH` statement. It rejects functions that act even inside a
+  read-only transaction, such as `pg_terminate_backend` and `dblink`. **Whether
+  the rows are aggregates is up to the reviewed SQL.** The tool only caps the
+  output at 50 rows per block.
 - **The task.** The one-off family `vayada-legacy-readonly-counts` copies the
   running `vayada-pms-backend` task: the same image and execution role, with no
-  task role. It keeps only three of its secrets: `DATABASE_URL` (PMS),
-  `BOOKING_ENGINE_DATABASE_URL` (Booking) and `STRIPE_SECRET_KEY`. It is not the
-  `vayada-pms-backend` family, so `tf-apply` never rolls the service onto it.
-- **Each SQL block** runs inside `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`, with
-  a 60-second statement timeout, and may return at most 50 aggregate rows.
+  task role, and an explicit `python -c` entrypoint. It keeps only three of its
+  secrets: `DATABASE_URL` (PMS), `BOOKING_ENGINE_DATABASE_URL` (Booking) and
+  `STRIPE_SECRET_KEY`. It is not the `vayada-pms-backend` family, so `tf-apply`
+  never rolls the service onto it.
+- **Each SQL block** runs inside `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`,
+  with a 60-second statement timeout and a 2-second lock timeout.
 - **Stripe** (platform account): one paged `subscriptions.list(status=all)`,
-  reported only as a count per status (`active`, `past_due`, `trialing`,
-  `incomplete`, `unpaid`, `canceled`, `other`). No IDs, emails or amounts.
-- **The Markdown output** is saved as `readonly-counts-result.md` (0600) in the
-  evidence folder.
+  reported as a count per status (`active`, `past_due`, `trialing`,
+  `incomplete`, `unpaid`, `canceled`, `other`), in total and for fixed-plan
+  subscriptions (`metadata.vayada_payment_kind = fixed_plan`). No IDs, emails or
+  amounts. Errors print only a code or the exception type.
+- **The Markdown output** is saved as `readonly-counts-result.md` (0600). An
+  existing result is never overwritten.
 
 ## The practice run (`target:cutover:dry-run`) and the go-day window
 
@@ -134,14 +160,16 @@ match the production run on:
 Earlier dry runs are rehearsals; they cannot approve production. The go-day
 order becomes:
 
-1. Freeze and snapshot.
+1. Freeze and snapshot. Write the freeze proof only after the freeze switches
+   are confirmed: the CLI checks the proof, not that writes really stopped.
 2. Restore the snapshots plus a copy of the live target, in isolation.
 3. `target:cutover:dry-run` on the copy, then smoke on the copy.
 4. The approval report.
-5. The production `target:source:extract`, then `target:cutover`.
+5. The production `target:cutover`, which also runs the extraction.
 
 That adds roughly 1.5–2.5 hours: the copy restore, a second migration run,
 smoke and approval. It moves the window from about 3.5–4.5 hours to about
 5–7 hours, so OTA closeouts are needed.
 
-Tests: `node --test scripts/test-legacy-migration-oneoff.mjs`.
+Tests: `node --test scripts/test-legacy-migration-oneoff.mjs` and
+`python3 -m unittest scripts/test_legacy_readonly_counts.py`.
