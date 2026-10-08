@@ -117,7 +117,18 @@ class ReadonlyCountsTest(unittest.TestCase):
                     "SELECT email, count(*) FROM users GROUP BY email",
                     "SELECT count(*) FROM users GROUP BY email",
                     "SELECT label, count(*) FROM t",
-                    "SELECT id FROM users"):
+                    "SELECT id FROM users",
+                    "SELECT max(created_at) FROM t",
+                    "SELECT max(email_at)::text FROM users",
+                    "SELECT label, count(*) FROM t GROUP BY 1 UNION SELECT email, 1 FROM users",
+                    "SELECT count(*) FROM t UNION ALL SELECT count(*) FROM u",
+                    "SELECT count(*) OVER (PARTITION BY email) FROM users",
+                    "SELECT count(*), (SELECT email FROM users LIMIT 1) FROM t",
+                    "SELECT coalesce(label, (SELECT email FROM users LIMIT 1)), count(*) FROM t GROUP BY 1",
+                    "SELECT count(*) FROM t, LATERAL (SELECT email FROM users) u",
+                    "SELECT count(*) FILTER (WHERE pg_sleep(1) IS NULL) FROM t",
+                    "SELECT count(*), ARRAY[email] FROM users",
+                    "SELECT count(*), current_user FROM t"):
             with self.assertRaises(ValueError, msg=bad):
                 module.legacy_blocks(header + bad + ";")
         with self.assertRaises(ValueError):

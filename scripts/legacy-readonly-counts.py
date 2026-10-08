@@ -126,14 +126,19 @@ def aggregate_or_label(item):
         if depth == 0:
             break
     argument, rest = item[call.end():index], item[index + 1:]
-    if call.group(1).lower() == "max" and not re.fullmatch(r"(?i)\s*(?:[a-z_]\w*\.)?\w*(_at|_date)\s*", argument):
-        return None  # max may only summarise a time column, never print a text value
+    if call.group(1).lower() == "max":
+        # max may only summarise a time column, cast to a date or timestamp, so no text value can print.
+        if not re.fullmatch(r"(?i)\s*(?:[a-z_]\w*\.)?\w*(_at|_date)\s*", argument):
+            return None
+        return "aggregate" if re.fullmatch(r"(?i)\s*::\s*(date|timestamp|timestamptz)\s*", rest) else None
     return "aggregate" if re.fullmatch(r"(?is)\s*(filter\s*\(\s*where\b.*\))?\s*(::\s*[a-z_]+)?\s*", rest) else None
 
 
 def printed_shape(statement, name):
     """The top-level SELECT list holds only aggregates and reviewed labels; GROUP BY only labels."""
     bare = blank_strings(statement)
+    if top_level(statement, bare, r"\b(union|intersect|except)\b"):
+        raise ValueError(f"{name}_combines_selects")  # every printed row must come from the checked SELECT list
     selects = top_level(statement, bare, r"\bselect\b")
     if not selects:
         raise ValueError(f"{name}_not_aggregate")
