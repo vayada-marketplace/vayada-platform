@@ -73,6 +73,18 @@ bootstrap, without requiring an unpublished token. `enabled` injects the fixed
 private origin and exact token reference; `blocked` retains that pair with the
 hold. After activation, rollback uses `blocked`, never `off` or `hold`.
 
+**Retirement (VAY-2056 decommission step 4).** Once the public API runs hotel
+setup on its ordinary login, every caller is set to `off`. tf-apply's caller
+guard (`scripts/assert-hotel-setup-caller-retained.py`) then accepts dropping a
+caller's admission, origin and token together, but only when the serving task
+already carries that caller `blocked` (step 1, `hotel-setup-release.yml
+state=blocked`); it still refuses removing an `enabled` admission, partial
+removal, a repointed token and secret-sourced admission. The API task returns to
+`ecsTaskExecutionRole` and leaves the caller security group. The
+`vayada-next-api-setup-caller-execution` role, its policies and the caller group
+stay in place, unchanged and unattached, because the platform deploy role cannot
+change or delete that role; step 5 removes them in an authorized operator apply.
+
 Configured callers use a dedicated public execution identity with the existing
 ECS execution managed policy, the public task's existing exact SSM references
 and only the configured internal-token container reads. No setup native or
