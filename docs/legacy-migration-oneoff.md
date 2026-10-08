@@ -40,8 +40,9 @@ Use it on its own only for a standalone extraction, and check that its report's
    - the run file has the `vay1360` run ID, the `vay1351` source run ID and the image pair, and that pair (`sourceSha imageDigest`) is listed in `scripts/next-api-split-compatible-images.txt`;
    - the confirmation is exact;
    - every argument is a string, and the inputs are named JSON documents.
-2. **Before starting anything:** it clears inherited AWS credentials and requires
-   the `vayada` profile to resolve to account `269416271598`. It refuses if a
+2. **Before starting anything:** it clears inherited AWS credentials and the
+   overrides `AWS_ENDPOINT_URL*`, `AWS_CONFIG_FILE` and `AWS_CA_BUNDLE`, and
+   requires the `vayada` profile to resolve to account `269416271598`. It refuses if a
    one-off migration task is still running.
 3. **It registers one disposable task definition.** The family is
    `vayada-legacy-migration-oneoff-target` or `-source`. That is never the
@@ -58,6 +59,18 @@ Use it on its own only for a standalone extraction, and check that its report's
      - Source tasks also get `/vayada/prod/legacy-migration-source-{auth,booking,marketplace,pms}-url`.
    - **Media settings:** copied from the running next-api task (bucket and
      CDN), plus the legacy media bucket allow-list.
+   - **Database pins and TLS:** the pinned RDS CA (`rehearsal/rds-ca-rsa2048-g1.pem`,
+     SHA-256 `f5c5f92a…`, checked by the script and again in the task). Before
+     the CLI starts, the dispatcher checks every database URL:
+     - the target must be host `vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com`,
+       port 5432, `vayada_target_prod`, user `vayada_target_prod_user`;
+     - the sources must be the run file's `sourceHost` (an RDS host in this
+       account, never the production `vayada-database`) and `sourceUser`, with
+       the expected database names.
+
+     It rewrites every URL to `sslmode=verify-full` with that CA, so the
+     certificate and hostname are verified. A URL that does not match is
+     refused (exit 64).
 4. **It runs the task once** on the `vayada-target-database-runtime-preflight`
    cluster, with next-api's network. Arguments and inputs travel inside the
    definition (up to about 60 KB), not as overrides (8 KB). It writes a task
@@ -82,6 +95,8 @@ and `target:migration-status` before doing anything else.
   "sourceRunId": "vay1351-<24 hex>",
   "sourceSha": "<40 hex>",
   "imageDigest": "sha256:<64 hex>",
+  "sourceHost": "<restore>.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com",
+  "sourceUser": "<restricted reader login>",
   "args": { "target:cutover": ["--source-run-id", "vay1351-<24 hex>", "--manifest", "@manifest", "…"] },
   "files": { "manifest": { "version": 1, "…": "…" } }
 }
@@ -96,7 +111,8 @@ and `target:migration-status` before doing anything else.
 
 ## Before go-day
 
-1. Create the four source SecureStrings for the attested go-day restore.
+1. Create the four source SecureStrings for the attested go-day restore, all on
+   the restore host and the reader login named in the run file.
 2. Let next-api's security group reach that restore.
 3. In the rehearsal, confirm two things:
    - `ecsTaskExecutionRole` can read those parameters;

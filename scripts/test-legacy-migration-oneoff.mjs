@@ -16,6 +16,16 @@ const [SOURCE_SHA, DIGEST] = readFileSync(new URL('./next-api-split-compatible-i
 const commandKinds = Object.fromEntries([...dispatcher.matchAll(/'(target:[a-z:-]+)': \['(target|source)'/g)].map((m) => [m[1], m[2]]));
 const dispatch = (kind, env, preload = []) => spawnSync(process.execPath, [...preload, dispatcherPath, kind], { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
 const blob = (files) => gzipSync(JSON.stringify(files)).toString('base64');
+const CA = readFileSync(new URL('../rehearsal/rds-ca-rsa2048-g1.pem', import.meta.url), 'utf8');
+const PROD_HOST = 'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com';
+const RESTORE_HOST = 'vay1362-legacy-restore.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com';
+const DB_ENV = {
+  VAYADA_DB_RDS_CA_BUNDLE: CA,
+  TARGET_DATABASE_URL: `postgresql://vayada_target_prod_user:pw@${PROD_HOST}:5432/vayada_target_prod?sslmode=require`,
+  LEGACY_MIGRATION_SOURCE_HOST: RESTORE_HOST, LEGACY_MIGRATION_SOURCE_USER: 'vay1362_source_reader',
+  ...Object.fromEntries([['AUTH', 'vayada_auth_db'], ['BOOKING', 'vayada_booking_db'], ['MARKETPLACE', 'postgres'], ['PMS', 'vayada_pms_db']]
+    .map(([name, db]) => [`${name}_SOURCE_DATABASE_URL`, `postgresql://vay1362_source_reader:p%40ss@${RESTORE_HOST}/${db}`])),
+};
 
 test('dispatcher and script share the four-command production allow-list', () => {
   assert.deepEqual(commandKinds, {
@@ -36,6 +46,11 @@ test('the dispatcher refuses anything outside the allow-list or with malformed i
     ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '[]', LEGACY_MIGRATION_FILES: blob({ '../x': {} }) }, 'files_invalid'],
     ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '[]', LEGACY_MIGRATION_FILES: 'e30=' }, 'files_invalid'],
     ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '["@manifest"]' }, 'file_missing'],
+    ['target', { LEGACY_MIGRATION_COMMAND: 'target:cutover:abort', LEGACY_MIGRATION_ARGS: '[]', ...DB_ENV, VAYADA_DB_RDS_CA_BUNDLE: `${CA}\n` }, 'rds_ca_invalid'],
+    ['target', { LEGACY_MIGRATION_COMMAND: 'target:cutover:abort', LEGACY_MIGRATION_ARGS: '[]', ...DB_ENV, TARGET_DATABASE_URL: 'postgresql://vayada_target_prod_user:pw@other.example.com:5432/vayada_target_prod' }, 'database_url_not_pinned'],
+    ['target', { LEGACY_MIGRATION_COMMAND: 'target:cutover:abort', LEGACY_MIGRATION_ARGS: '[]', ...DB_ENV, TARGET_DATABASE_URL: `postgresql://vayada_admin:pw@${PROD_HOST}:5432/vayada_target_prod` }, 'database_url_not_pinned'],
+    ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '[]', ...DB_ENV, LEGACY_MIGRATION_SOURCE_HOST: PROD_HOST }, 'source_pin_invalid'],
+    ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '[]', ...DB_ENV, PMS_SOURCE_DATABASE_URL: `postgresql://vay1362_source_reader:pw@${RESTORE_HOST}:5432/vayada_booking_db` }, 'database_url_not_pinned'],
   ]) {
     const result = dispatch(kind, env);
     assert.equal(result.status, 64, JSON.stringify(env));
@@ -48,9 +63,10 @@ test('the dispatcher runs the mapped dist CLI with the reviewed files and keeps 
   try {
     // Stub spawnSync in the child only: print what would run and the files it would read.
     writeFileSync(join(dir, 'stub.cjs'), `const cp = require('node:child_process'); const fs = require('node:fs');
-cp.spawnSync = (file, argv) => { console.log(JSON.stringify({ argv, files: argv.filter((a) => a.endsWith('.json') && fs.existsSync(a)).map((a) => JSON.parse(fs.readFileSync(a, 'utf8'))) })); return { status: 7 }; };
+cp.spawnSync = (file, argv, options) => { console.log(JSON.stringify({ argv, env: Object.fromEntries(Object.entries(options.env).filter(([k]) => k.endsWith('DATABASE_URL'))), files: argv.filter((a) => a.endsWith('.json') && fs.existsSync(a)).map((a) => JSON.parse(fs.readFileSync(a, 'utf8'))) })); return { status: 7 }; };
 require('node:module').syncBuiltinESMExports();`);
     const result = dispatch('source', {
+      ...DB_ENV,
       LEGACY_MIGRATION_COMMAND: 'target:cutover',
       LEGACY_MIGRATION_ARGS: JSON.stringify(['--manifest', '@manifest', '--operator', 'operator-name']),
       LEGACY_MIGRATION_FILES: blob({ manifest: { version: 1 } }),
@@ -61,6 +77,11 @@ require('node:module').syncBuiltinESMExports();`);
     assert.doesNotMatch(JSON.stringify(start), /operator-name/);
     assert.deepEqual(run.argv.filter((a) => !a.endsWith('.json')), ['/app/packages/backend-migration/dist/cli/cutover.js', 'cutover', '--manifest', '--operator', 'operator-name']);
     assert.deepEqual(run.files, [{ version: 1 }]);
+    const caFile = join(run.argv[3], '..', 'rds-ca.pem');
+    assert.equal(readFileSync(caFile, 'utf8'), CA);
+    assert.equal(run.env.TARGET_DATABASE_URL, `postgresql://vayada_target_prod_user:pw@${PROD_HOST}:5432/vayada_target_prod?sslmode=verify-full&sslrootcert=${encodeURIComponent(caFile)}`);
+    assert.equal(run.env.PMS_SOURCE_DATABASE_URL, `postgresql://vay1362_source_reader:p%40ss@${RESTORE_HOST}/vayada_pms_db?sslmode=verify-full&sslrootcert=${encodeURIComponent(caFile)}`);
+    assert.equal(Object.keys(run.env).length, 5);
     rmSync(join(run.argv[3], '..'), { recursive: true, force: true });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -71,8 +92,10 @@ test('the script checks every input before AWS and runs exactly one pinned one-o
   const root = mkdtempSync(join(tmpdir(), 'legacy-oneoff-script-'));
   try {
     mkdirSync(join(root, 'scripts'));
+    mkdirSync(join(root, 'rehearsal'));
     for (const name of ['legacy-migration-oneoff.sh', 'legacy-migration-oneoff.mjs', 'next-api-split-compatible-images.txt'])
       copyFileSync(new URL(`./${name}`, import.meta.url), join(root, 'scripts', name));
+    copyFileSync(new URL('../rehearsal/rds-ca-rsa2048-g1.pem', import.meta.url), join(root, 'rehearsal/rds-ca-rsa2048-g1.pem'));
     const evidence = join(root, 'evidence');
     mkdirSync(evidence, { mode: 0o700 });
     const manifest = { version: 1, environment: 'preprod' };
@@ -80,6 +103,7 @@ test('the script checks every input before AWS and runs exactly one pinned one-o
     const writeRun = (overrides = {}) => {
       writeFileSync(runFile, JSON.stringify({
         runId: RUN, sourceRunId: SOURCE_RUN, sourceSha: SOURCE_SHA, imageDigest: DIGEST, files: { manifest },
+        sourceHost: RESTORE_HOST, sourceUser: 'vay1362_source_reader',
         args: { 'target:cutover': ['--source-run-id', SOURCE_RUN, '--manifest', '@manifest'], 'target:cutover:abort': ['--operator', 'op'] },
         ...overrides,
       }));
@@ -93,6 +117,7 @@ test('the script checks every input before AWS and runs exactly one pinned one-o
     mkdirSync(join(root, 'bin'));
     writeFileSync(join(root, 'bin/aws'), `#!/usr/bin/env bash
 [[ "$1 $2 $3 $4" == "--profile vayada --region eu-west-1" ]] || { echo "unexpected aws options: $*" >&2; exit 9; }
+[[ -z "\${AWS_ENDPOINT_URL:-}\${AWS_ENDPOINT_URL_ECS:-}\${AWS_CA_BUNDLE:-}\${AWS_CONFIG_FILE:-}" ]] || { echo "AWS overrides leaked" >&2; exit 9; }
 shift 4
 echo "$1 $2" >> "${root}/aws.log"
 args=("$@"); for ((i = 0; i < \${#args[@]}; i++)); do
@@ -116,7 +141,8 @@ esac
     const run = (args, env = { EVIDENCE_DIR: evidence }) => {
       rmSync(join(root, 'aws.log'), { force: true });
       rmSync(join(root, 'definition.json'), { force: true });
-      return spawnSync('bash', [script, ...args], { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, AWS_PROFILE: 'other', ...env } });
+      return spawnSync('bash', [script, ...args], { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, AWS_PROFILE: 'other',
+        AWS_ENDPOINT_URL: 'http://127.0.0.1:1', AWS_ENDPOINT_URL_ECS: 'http://127.0.0.1:1', AWS_CA_BUNDLE: '/tmp/x.pem', AWS_CONFIG_FILE: '/tmp/x', ...env } });
     };
     const awsCalls = () => (existsSync(join(root, 'aws.log')) ? readFileSync(join(root, 'aws.log'), 'utf8') : '');
     const definition = () => JSON.parse(readFileSync(join(root, 'definition.json'), 'utf8'));
@@ -140,6 +166,10 @@ esac
     }
     const badImage = writeRun({ imageDigest: `sha256:${'0'.repeat(64)}` });
     assert.match(run([cutover[0], runFile, badImage, cutover[3]]).stderr, /reviewed pair/);
+    for (const overrides of [{ sourceHost: PROD_HOST }, { sourceHost: undefined }, { sourceUser: 'Bad-User' }]) {
+      const sha = writeRun(overrides);
+      assert.match(run([cutover[0], runFile, sha, cutover[3]]).stderr, /sourceHost/);
+    }
     assert.equal(awsCalls(), '');
     writeRun();
 
@@ -184,6 +214,9 @@ esac
     assert.equal(sourceEnv.PLATFORM_MEDIA_BUCKET, 'vayada-media-production');
     assert.equal(sourceEnv.LEGACY_MEDIA_BUCKET_ALLOWLIST, 'vayada-uploads-prod,vayada-creator-marketplace-images');
     assert.equal(sourceEnv.PORT, undefined);
+    assert.equal(sourceEnv.VAYADA_DB_RDS_CA_BUNDLE, CA);
+    assert.equal(sourceEnv.LEGACY_MIGRATION_SOURCE_HOST, RESTORE_HOST);
+    assert.equal(sourceEnv.LEGACY_MIGRATION_SOURCE_USER, 'vay1362_source_reader');
     const record = JSON.parse(readFileSync(join(evidence, 'task-0123456789abcdef0123456789abcdef.json'), 'utf8'));
     assert.deepEqual(Object.keys(record).sort(), ['logFile', 'logGroup', 'logStream', 'taskArn']);
     assert.equal(record.logStream, 'legacy-migration-oneoff/vayada-legacy-migration-oneoff/0123456789abcdef0123456789abcdef');
@@ -202,7 +235,7 @@ esac
     assert.equal(target.family, 'vayada-legacy-migration-oneoff-target');
     assert.equal(target.taskRoleArn, undefined);
     assert.deepEqual(target.containerDefinitions[0].secrets.map((s) => s.name), ['TARGET_DATABASE_URL']);
-    assert.deepEqual(Object.keys(env(target)).sort(), ['AWS_REGION', 'LEGACY_MIGRATION_ARGS', 'LEGACY_MIGRATION_COMMAND', 'LEGACY_MIGRATION_FILES']);
+    assert.deepEqual(Object.keys(env(target)).sort(), ['AWS_REGION', 'LEGACY_MIGRATION_ARGS', 'LEGACY_MIGRATION_COMMAND', 'LEGACY_MIGRATION_FILES', 'VAYADA_DB_RDS_CA_BUNDLE']);
     assert.deepEqual(JSON.parse(env(target).LEGACY_MIGRATION_ARGS), ['--operator', 'op', '--run-id', RUN, '--confirmation', `ABORT_CUTOVER:${RUN}`, '--report', 'json']);
   } finally {
     rmSync(root, { recursive: true, force: true });

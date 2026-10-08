@@ -19,12 +19,27 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 account="269416271598"
 region="eu-west-1"
 cluster="vayada-target-database-runtime-preflight"
+ca_sha256="f5c5f92ae025987c76dc49bdb1ace8556fdf332b4788d719a923bc274779d869"
 umask 077
 
 aws_() { aws --profile vayada --region "$region" "$@"; }
 
+# Every disposable definition registered by this run is deregistered and deleted on exit.
+# Deregistering never affects a running task.
+registered_definitions=""
+cleanup_definitions() {
+  local arn
+  for arn in $registered_definitions; do
+    aws --profile vayada --region "$region" ecs deregister-task-definition --task-definition "$arn" >/dev/null 2>&1 || true
+    aws --profile vayada --region "$region" ecs delete-task-definitions --task-definitions "$arn" >/dev/null 2>&1 || true
+  done
+}
+trap cleanup_definitions EXIT
+
 require_profile() {
-  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE
+  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE AWS_CONFIG_FILE AWS_CA_BUNDLE
+  local variable
+  for variable in $(env | sed -n 's/^\(AWS_ENDPOINT_URL[A-Z0-9_]*\)=.*/\1/p'); do unset "$variable"; done
   [[ "$(aws_ sts get-caller-identity --query Account --output text)" == "$account" ]] || {
     echo "The vayada profile must resolve to account ${account}." >&2; exit 1;
   }
@@ -63,18 +78,16 @@ follow_task() {
   exit_code="$(jq -r '.containers[0].exitCode // empty' <<<"$stopped")"
   [[ "$exit_code" =~ ^[0-9]+$ ]] || { echo "Task stopped without an exit code: $(jq -r '.stoppedReason // "unknown"' <<<"$stopped")" >&2; exit 1; }
   echo "Task exit code: ${exit_code}"
-  exit "$exit_code"
+  task_exit_code="$exit_code"
 }
 
 # Registers one disposable definition, runs it once, records the task in the evidence
-# folder, follows it, then deregisters and deletes the definition (never affects the
-# task). Call it last and never in an || or && list.
+# folder and follows it. Never call it in an || or && list.
 run_oneoff() {
   local definition="$1" network="$2" log_file="$3" registered started task_arn record
   [[ "$(printf '%s' "$definition" | wc -c | tr -d ' ')" -le 60000 ]] || { echo "The one-off task definition exceeds 60 KB." >&2; exit 2; }
   registered="$(aws_ ecs register-task-definition --cli-input-json "$definition" --query taskDefinition.taskDefinitionArn --output text)"
-  trap "aws --profile vayada --region $region ecs deregister-task-definition --task-definition '$registered' >/dev/null 2>&1 || true
-    aws --profile vayada --region $region ecs delete-task-definitions --task-definitions '$registered' >/dev/null 2>&1 || true" EXIT
+  registered_definitions="${registered_definitions} ${registered}"
   started="$(aws_ ecs run-task --cluster "$cluster" --task-definition "$registered" --launch-type FARGATE \
     --network-configuration "$network" --started-by vay1362-oneoff --output json)"
   task_arn="$(jq -r '.tasks[0].taskArn // empty' <<<"$started")"
@@ -95,6 +108,7 @@ if [[ "$command" == watch ]]; then
   [[ -f "${evidence}/task-${BASH_REMATCH[1]}.json" ]] || { echo "No task record in the evidence folder." >&2; exit 2; }
   require_profile
   follow_task "${evidence}/task-${BASH_REMATCH[1]}.json"
+  exit "$task_exit_code"
 fi
 
 [[ "$#" -eq 4 ]] || usage
@@ -118,6 +132,16 @@ pair="$(jq -er '"\(.sourceSha) \(.imageDigest)" | select(test("^[0-9a-f]{40} sha
 grep -Fxq -- "$pair" "$root/scripts/next-api-split-compatible-images.txt" || {
   echo "The image must be a reviewed pair in scripts/next-api-split-compatible-images.txt." >&2; exit 2;
 }
+[[ "$(shasum -a 256 "$root/rehearsal/rds-ca-rsa2048-g1.pem" | cut -d' ' -f1)" == "$ca_sha256" ]] || { echo "The pinned RDS CA bundle changed." >&2; exit 2; }
+# Source tasks read the attested restore of the frozen legacy databases, never production legacy.
+source_host="" source_user=""
+if [[ "$kind" == source ]]; then
+  source_host="$(jq -er '.sourceHost | select(type == "string" and test("^[a-z][a-z0-9-]{0,62}\\.c7eiqkoq4as4\\.eu-west-1\\.rds\\.amazonaws\\.com$"))' "$input")" &&
+    [[ "$source_host" != vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com ]] &&
+    source_user="$(jq -er '.sourceUser | select(type == "string" and test("^[a-z][a-z0-9_]{2,62}$"))' "$input")" || {
+    echo "Source commands need the restore's sourceHost and the reader sourceUser in the run file." >&2; exit 2;
+  }
+fi
 case "$command" in
   target:migration-status) expected="MIGRATION_STATUS:${run_id}" ;;
   target:source:extract) expected="SOURCE_EXTRACT:${run_id}:${source_run_id}" ;;
@@ -153,6 +177,7 @@ media="$(jq -c '[.containerDefinitions[] | select(.name == "vayada-next-api") | 
      {name: "LEGACY_MEDIA_BUCKET_ALLOWLIST", value: "vayada-uploads-prod,vayada-creator-marketplace-images"}]' <<<"$next_api")"
 [[ "$(jq length <<<"$media")" == 4 ]] || { echo "next-api does not expose the platform media settings." >&2; exit 1; }
 definition="$(jq -cn --arg kind "$kind" --arg command "$command" --arg args "$args" --arg files "$files" --argjson media "$media" \
+  --rawfile ca "$root/rehearsal/rds-ca-rsa2048-g1.pem" --arg source_host "$source_host" --arg source_user "$source_user" \
   --arg image "${account}.dkr.ecr.${region}.amazonaws.com/vayada-next-api@${pair#* }" --arg account "$account" --arg region "$region" \
   --rawfile code "$root/scripts/legacy-migration-oneoff.mjs" '
   def ssm($name): "arn:aws:ssm:\($region):\($account):parameter/vayada/prod/\($name)";
@@ -161,8 +186,10 @@ definition="$(jq -cn --arg kind "$kind" --arg command "$command" --arg args "$ar
    containerDefinitions: [{name: "vayada-legacy-migration-oneoff", image: $image, essential: true,
      entryPoint: ["node", "--input-type=module", "--eval"], command: [$code, $kind],
      environment: ([{name: "AWS_REGION", value: $region}, {name: "LEGACY_MIGRATION_COMMAND", value: $command},
-       {name: "LEGACY_MIGRATION_ARGS", value: $args}, {name: "LEGACY_MIGRATION_FILES", value: $files}]
-       + (if $kind == "source" then $media else [] end)),
+       {name: "LEGACY_MIGRATION_ARGS", value: $args}, {name: "LEGACY_MIGRATION_FILES", value: $files},
+       {name: "VAYADA_DB_RDS_CA_BUNDLE", value: $ca}]
+       + (if $kind == "source" then $media + [{name: "LEGACY_MIGRATION_SOURCE_HOST", value: $source_host},
+           {name: "LEGACY_MIGRATION_SOURCE_USER", value: $source_user}] else [] end)),
      secrets: ([{name: "TARGET_DATABASE_URL", valueFrom: ssm("target-database-url")}]
        + (if $kind == "source" then [("auth", "booking", "marketplace", "pms")
            | {name: "\(ascii_upcase)_SOURCE_DATABASE_URL", valueFrom: ssm("legacy-migration-source-\(.)-url")}] else [] end)),
@@ -171,3 +198,4 @@ definition="$(jq -cn --arg kind "$kind" --arg command "$command" --arg args "$ar
   + (if $kind == "source" then {taskRoleArn: "arn:aws:iam::\($account):role/vayada-next-api-media-task-role"} else {} end)')"
 run_oneoff "$definition" "$(jq -c .networkConfiguration <<<"$service")" \
   "${evidence}/oneoff-${command//:/-}-${run_id}-$(date -u +%Y%m%dT%H%M%SZ).log"
+exit "$task_exit_code"
