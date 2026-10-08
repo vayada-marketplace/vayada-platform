@@ -20,49 +20,6 @@ on:
       - ".github/workflows/pricing-command-bootstrap-plan.yml"
       - "scripts/assert-hotel-setup-caller-retained.py"
       - "scripts/test_hotel_setup_caller_retained.py"
-      - "scripts/test_hotel_setup_release.py"
-      - "scripts/test_hotel_setup_online_readiness.py"
-      - "scripts/assert-hotel-setup-online-readiness.py"
-      - "scripts/run-hotel-setup-online.py"
-      - "scripts/run-hotel-setup-approved-readiness.py"
-      - "scripts/test_hotel_setup_approved_readiness.py"
-      - "scripts/diagnose-hotel-setup-approved-readiness.mjs"
-      - "scripts/test-hotel-setup-approved-readiness-diagnostic.mjs"
-      - ".github/workflows/hotel-setup-approved-readiness.yml"
-      - "docs/hotel-setup-approved-readiness.md"
-      - "scripts/test_hotel_setup_online_runner.py"
-      - "scripts/test_hotel_setup_online_workflow.py"
-      - ".github/workflows/hotel-setup-online.yml"
-      - "deployment/hotel-setup-online-images.json"
-      - "scripts/release-hotel-setup.py"
-      - "scripts/run-hotel-setup-property-bootstrap.mjs"
-      - "scripts/audit-hotel-setup-owner.mjs"
-      - "scripts/audit-hotel-setup-readiness-migrations.mjs"
-      - "scripts/inspect-hotel-setup-logo-migration.mjs"
-      - "scripts/recover-hotel-setup-logo-staged-role.mjs"
-      - "scripts/test_hotel_setup_logo_staged_recovery_native.mjs"
-      - ".github/workflows/hotel-setup-logo-staged-recovery.yml"
-      - "scripts/hotel-setup-logo-reader-cutover.mjs"
-      - "scripts/test_hotel_setup_logo_reader_cutover_native.mjs"
-      - ".github/workflows/hotel-setup-logo-reader-repair.yml"
-      - "scripts/test_hotel_setup_logo_inspection_native.mjs"
-      - "scripts/stage-hotel-setup-logo-migration-scope.mjs"
-      - "scripts/test_hotel_setup_logo_parent_native.mjs"
-      - "scripts/stage-hotel-setup-profile-migration-scope.mjs"
-      - "scripts/test_hotel_setup_profile_parent_native.mjs"
-      - ".github/workflows/hotel-setup-migration-scope.yml"
-      - "scripts/test-hotel-setup-readiness-migrations.mjs"
-      - ".github/workflows/hotel-setup-migration-audit.yml"
-      - "docs/hotel-setup-readiness-migration-audit.md"
-      - ".github/workflows/hotel-setup-release.yml"
-      - "scripts/test_hotel_setup_creation_runner.py"
-      - "scripts/provision-hotel-setup-creation-login.mjs"
-      - "scripts/test-hotel-setup-creation-bootstrap.mjs"
-      - ".github/workflows/hotel-setup-creation-bootstrap.yml"
-      - ".github/workflows/hotel-setup-property-reader-bootstrap.yml"
-      - ".github/workflows/hotel-setup-property-bootstrap.yml"
-      - ".github/workflows/hotel-setup-owner-audit.yml"
-      - "docs/hotel-setup-private-service.md"
       - "scripts/test_pricing_infrastructure_opt_in.py"
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
@@ -83,13 +40,6 @@ on:
       - "scripts/pause-next-api-channex-worker.py"
       - "scripts/test-pause-next-api-channex-worker.py"
       - "scripts/run-target-database-runtime-preflight.sh"
-      - "scripts/*hotel-setup-reader-rls-permissions*"
-      - "scripts/hotel-setup-reader-rls-native-preflight.mjs"
-      - ".github/workflows/hotel-setup-reader-rls-repair.yml"
-      - "scripts/*hotel-setup-legacy-helper-inspection*"
-      - "scripts/hotel-setup-approved-legacy-helper-repair.mjs"
-      - ".github/workflows/hotel-setup-approved-legacy-helper-repair.yml"
-      - ".github/workflows/hotel-setup-legacy-helper-inspection.yml"
       - "scripts/vay2017-source-snapshot-import.mjs"
       - "scripts/vay2017-source-snapshot-extract.mjs"
       - "scripts/target-database-runtime-preflight.mjs"
@@ -99,7 +49,6 @@ on:
       - "scripts/finance-export-worker-database.mjs"
       - "scripts/grant-target-database-identity-runtime.mjs"
       - "scripts/provision-target-database-identity-runtime.mjs"
-      - "scripts/provision-hotel-setup-scope-role.mjs"
       - "scripts/inspect-target-database-cluster-acl.mjs"
       - "scripts/harden-target-database-cluster-acl.mjs"
       - "scripts/test-target-database-cluster-acl.sh"
@@ -210,10 +159,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Verify hardened setup reader helper repair
-        run: bash scripts/test-hotel-setup-reader-rls-permissions.sh "${{ matrix.postgres }}"
-      - name: Verify fixed read-only legacy organization helper proof
-        run: bash scripts/test-hotel-setup-legacy-helper-inspection.sh "${{ matrix.postgres }}"
       - name: Verify scoped identity grants and denials
         run: bash scripts/test-target-database-identity-runtime-grant.sh "${{ matrix.postgres }}"
 
@@ -302,7 +247,6 @@ jobs:
           python3 scripts/test-target-database-credential-split.py
           python3 scripts/test-target-database-split-deployment-ready.py
           bash -n scripts/run-target-database-runtime-preflight.sh
-          node --check scripts/hotel-setup-approved-legacy-helper-repair.mjs
           node --check scripts/vay2017-source-snapshot-import.mjs
           node --check scripts/vay2017-source-snapshot-extract.mjs
           node --check scripts/target-database-runtime-preflight.mjs
@@ -312,7 +256,6 @@ jobs:
           node --check scripts/finance-export-worker-database.mjs
           node --check scripts/grant-target-database-identity-runtime.mjs
           node --check scripts/provision-target-database-identity-runtime.mjs
-          node --check scripts/provision-hotel-setup-scope-role.mjs
           node --check scripts/inspect-target-database-cluster-acl.mjs
           node --check scripts/harden-target-database-cluster-acl.mjs
           python3 -m unittest scripts/test_restore_rds_admin_from_ssm.py
@@ -322,20 +265,6 @@ jobs:
           python3 scripts/test-target-database-identity-secret.py
           python3 scripts/test-target-database-runtime-preflight.py
           python3 scripts/test-target-database-runtime-runner.py
-          node --experimental-vm-modules scripts/test-hotel-setup-readiness-migrations.mjs
-          node --check scripts/inspect-hotel-setup-logo-migration.mjs
-          node --check scripts/recover-hotel-setup-logo-staged-role.mjs
-          node --check scripts/test_hotel_setup_logo_staged_recovery_native.mjs
-          node --check scripts/hotel-setup-logo-reader-cutover.mjs
-          node --check scripts/test_hotel_setup_logo_reader_cutover_native.mjs
-          node --check scripts/test_hotel_setup_logo_inspection_native.mjs
-          node --check scripts/stage-hotel-setup-logo-migration-scope.mjs
-          node --check scripts/test_hotel_setup_logo_parent_native.mjs
-          node --check scripts/stage-hotel-setup-profile-migration-scope.mjs
-          node --check scripts/test_hotel_setup_profile_parent_native.mjs
-          python3 scripts/test_hotel_setup_creation_runner.py
-          node --check scripts/provision-hotel-setup-creation-login.mjs
-          node --check scripts/test-hotel-setup-creation-bootstrap.mjs
           python3 scripts/test-channex-worker-database.py
           python3 scripts/test-pause-next-api-channex-worker.py
           python3 scripts/test-next-api-split-compatible-image.py
@@ -375,14 +304,11 @@ jobs:
         run: terraform init -backend=false
         working-directory: infra
 
-      - name: Verify hotel setup credential isolation (offline)
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/test_hotel_setup_approved_readiness.py scripts/test_hotel_setup_release.py scripts/test_hotel_setup_online_readiness.py scripts/test_hotel_setup_online_runner.py scripts/test_hotel_setup_online_workflow.py scripts/test_hotel_setup_caller_retained.py -v
+      - name: Verify the retired hotel setup caller guard
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/test_hotel_setup_caller_retained.py -v
 
       - name: Prove pricing infrastructure opt-in with native offline plans
         run: python3 -m unittest scripts/test_pricing_infrastructure_opt_in.py -v
-
-      - name: Verify approved readiness diagnostic redaction
-        run: node scripts/test-hotel-setup-approved-readiness-diagnostic.mjs
 
       - name: Terraform validate
         run: terraform validate

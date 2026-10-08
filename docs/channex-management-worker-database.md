@@ -69,7 +69,10 @@ worker can insert exactly one active enable claim and one connected connection
 row per hotel and can never retarget, release or disconnect an existing binding.
 
 Rollout, in this order, each step reviewed and approved separately
-(instructions, not evidence). Migration 0473 also changes policies that the
+(instructions, not evidence). After VAY-2056 the hotel-setup services, their image
+inventories and `vayada-next-api-setup-caller-execution` no longer exist: the API
+task runs on `ecsTaskExecutionRole`, which already reads `/vayada/prod/*`, so the
+hotel-setup parts of steps 0 and 2 no longer apply. Migration 0473 also changes policies that the
 hotel-setup services attest, so the image that contains it must be admitted to
 the hotel-setup inventories and deployed to those services together with the
 next API; the next API runs the migration at startup.

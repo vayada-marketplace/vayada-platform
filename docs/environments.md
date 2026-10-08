@@ -357,8 +357,10 @@ DML mode described in "Target database runtime role: product DML grant
 
 The hotel setup relations `platform.hotel_setup_creation_scopes`,
 `platform.hotel_setup_linked_properties`, and
-`hotel_catalog.hotel_setup_effective_creation_scopes` are intentionally private
-to the dedicated hotel setup authority. Do **not** grant the ordinary API
+`hotel_catalog.hotel_setup_effective_creation_scopes` were private to the
+dedicated hotel setup authority, which VAY-2056 retired (see "Hotel setup native
+services retired" below). They stay on the protected list until the application
+migration of decommission step 6 drops them. Do **not** grant the ordinary API
 runtime any reads or writes on them to satisfy deployment checks. Preflight
 excludes them from required reads and rejects effective table/column reads
 (including PUBLIC or inherited grants), as well as writes. Migration 0436
@@ -778,6 +780,56 @@ DML grant below (`--grant-runtime-product-dml`); the former
 `--grant-hotel-setup-tracks` mode is retired. Never replace this runtime
 connection with migration-owner credentials.
 
+### Hotel setup native services retired (VAY-2056)
+
+The public API runs hotel creation, hotel-detail edits, launch settings, the first
+pricing currency, Feature Hub Financials and the hotel logo on
+`vayada_next_api_runtime` (design: application repo
+`engineering/hotel-setup-ordinary-login.md`). Decommission steps 4 and 5 removed
+everything that served the former private services:
+
+- **Caller wiring (step 4).** The next-API task definition carries no
+  `HOTEL_SETUP_CREATION_COMMAND_*`, `HOTEL_SETUP_COMMAND_*`,
+  `HOTEL_SETUP_LOGO_COMMAND_*` or `HOTEL_SETUP_PROFILE_COMMAND_*` admission, origin
+  or token, runs on `ecsTaskExecutionRole` and attaches only the shared ECS tasks
+  security group.
+- **Infrastructure (step 5).** No `vayada-hotel-setup-service` or
+  `vayada-hotel-setup-property-service`, internal ALB, target groups, private Route
+  53 zones (`hotel-setup-command.vayada.com`, `hotel-setup-property-command.vayada.com`),
+  caller/ALB/task security groups or their RDS rules, `/ecs/vayada-hotel-setup*`
+  log groups, staged `hotel-setup-creation/prod/*` and `hotel-setup-command/prod/*`
+  reader/token secrets, hotel-setup IAM roles (execution, task, bootstrap, logo
+  cleanup, `vayada-github-actions-hotel-setup-online`,
+  `vayada-next-api-setup-caller-execution`) or the `vayada-hotel-setup-platform-deploy`
+  policy. The platform plan role no longer reads hotel-setup secret metadata. The
+  destroy needed an authorized operator apply: the platform deploy role cannot
+  delete IAM roles, Secrets Manager secrets or ECS services.
+- **Tooling (step 5).** The 16 `hotel-setup-*.yml` workflows, the hotel-setup runner
+  modes of `scripts/run-target-database-runtime-preflight.sh`, their scripts and
+  tests, and the `deployment/hotel-setup-*.json` image inventories are gone. The
+  former runbooks live under `docs/historical/hotel-setup/`.
+
+What remains on purpose:
+
+- `scripts/assert-hotel-setup-caller-retained.py` still runs in tf-apply. With no
+  wiring on the serving task it passes; it refuses a plan that would drop an
+  `enabled` admission.
+- `scripts/assert-next-api-split-compatible-image.py` (API deploys and coordinated
+  releases) refuses any task definition that still carries hotel-setup caller
+  wiring, so an image-only rollback to a pre-VAY-2056 task definition is no longer
+  possible.
+- The runtime preflight and product DML grant keep `platform.hotel_setup_*` and
+  `hotel_catalog.hotel_setup_*` on the protected list. The per-hotel native logins,
+  scope roles, scope tables, policies, triggers and functions stay in the database
+  until the decommission step 6 application migration (role drops need
+  `vayada_admin`).
+- Operator follow-up outside Terraform: schedule deletion (with a recovery window,
+  never `--force-delete-without-recovery`) of the per-login secrets the bootstrap
+  workflows created under `hotel-setup-command/prod/organization/` and
+  `hotel-setup-command/prod/property/`; optionally deregister the retained
+  `vayada-hotel-setup-*` task definition revisions (`skip_destroy`); delete the
+  `hotel-setup-automatic-provisioning` GitHub environment.
+
 ### Target database runtime role: product DML grant (VAY-2054)
 
 The ordinary API login `vayada_next_api_runtime` receives ordinary DML on the
@@ -905,32 +957,17 @@ protected workflow.
 - **Admission variables are inert and no longer a kill switch.** The new image does
   not read `HOTEL_SETUP_CREATION_COMMAND_*`, `HOTEL_SETUP_COMMAND_*`,
   `HOTEL_SETUP_PROFILE_COMMAND_*` or `HOTEL_SETUP_LOGO_COMMAND_*`. They stay
-  installed until the caller wiring is retired (the retention assertion
-  `scripts/assert-hotel-setup-caller-retained.py` is unchanged by this release);
-  `hotel-setup-release.yml state=blocked` has no effect on the new image. Stopping
-  these operations means rolling the API image back.
+  removed when the caller wiring was retired (decommission step 4); the deploy guard
+  now refuses them. Stopping these operations means rolling the API image back.
 - **Owner-off markers and row rewrites.** A Feature Hub Owner-off marker counts only
   while it equals the entitlement row's `xmin`. Anything that rewrites rows or
   changes `xmin` (`pg_repack`, `VACUUM FULL`/`CLUSTER`, a logical-replication
   blue/green switchover, dump and restore) cancels every Owner-off marker; affected
   Owners then see Financials as not re-enableable, and an operator re-enables it on
   request.
-- **Rollback window.** `vayada-hotel-setup-service` and
-  `vayada-hotel-setup-property-service` keep running idle on the images re-released
-  with VAY-2055 (migration 0473) until they are stopped right after acceptance.
-  Rolling the API image back forwards to them again (once stopped: redeploy the
-  previous API image, then `hotel-setup-release.yml state=start` for both services
-  and `state=enabled` for the four callers), but only while every object their
-  preflights pin is unchanged: any later migration
-  that changes a native-pinned policy, trigger, function, view or constraint ends the
-  image-only rollback window unless the native images are re-released with it.
-- **Decommission (right after acceptance, separate PRs, in order):** add the new
-  API image digest to `hotel-setup-caller-images.json`, `hotel-setup-logo-images.json`
-  and `hotel-setup-profile-images.json` (the release script refuses `state=blocked`
-  for an image it does not list), block the public callers (`hotel-setup-release.yml`,
-  `state=blocked` for logo, profile, property and creation), stop both private
-  services (`state=stop`), remove the native code paths from the app, retire the caller
-  wiring (`hotel_setup_public_caller = off` and relax the retention assertion), retire
-  the private infrastructure, workflows, runner modes and image inventories, then an
-  app migration drops the per-hotel logins, scope roles, scope tables and the
-  hotel-setup policies, triggers and functions (role drops need `vayada_admin`).
+- **Decommissioned.** The callers were blocked and both private services stopped right
+  after acceptance (2026-10-08); the caller wiring, the private infrastructure, the
+  `hotel-setup-*` workflows, runner modes and image inventories are retired (see
+  "Hotel setup native services retired (VAY-2056)"). There is no native rollback any
+  more. The app migration that drops the per-hotel logins' database objects, and the
+  `vayada_admin` role drops around it, follow as decommission step 6.
