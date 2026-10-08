@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - "infra/**"
+      # Terraform reads these into the legacy migration runner task definitions.
+      - "deployment/legacy-migration-runner.json"
+      - "scripts/legacy-migration-runner.mjs"
       - ".github/workflows/tf-plan.yml"
       - ".github/workflows/tf-apply.yml"
       - "scripts/assert-terraform-protected-resources.sh"

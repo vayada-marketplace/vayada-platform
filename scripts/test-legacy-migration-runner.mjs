@@ -4,28 +4,37 @@ import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const tf = read('infra/legacy_migration_runner.tf');
-const workflow = read('.github/workflows/legacy-migration-runner.yml');
-const launcher = read('scripts/run-legacy-migration-runner.sh');
 const dispatcherPath = new URL('../scripts/legacy-migration-runner.mjs', import.meta.url).pathname;
 const dispatcher = readFileSync(dispatcherPath, 'utf8');
-const pin = JSON.parse(read('deployment/legacy-migration-runner.json'));
+const workflow = read('.github/workflows/legacy-migration-runner.yml');
+const launcher = read('scripts/run-legacy-migration-runner.sh');
 const RUN = 'vay1360-0123456789abcdef01234567';
 const SOURCE_RUN = 'vay1351-0123456789abcdef01234567';
+const CI = { GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REPOSITORY: 'vayada-marketplace/vayada-platform', GITHUB_RUN_ID: '1' };
+const pin = JSON.parse(read('deployment/legacy-migration-runner.json'));
 
 const commandKinds = Object.fromEntries([...dispatcher.matchAll(/'(target:[a-z:-]+)': \['(target|source)'/g)].map((m) => [m[1], m[2]]));
 
-test('the allow-list is the same in the workflow, launcher, dispatcher and doc', () => {
-  const allowed = ['target:migration-status', 'target:source:extract', 'target:cutover:dry-run', 'target:cutover', 'target:cutover:abort'];
-  assert.deepEqual(Object.keys(commandKinds).sort(), [...allowed].sort());
-  assert.deepEqual([...workflow.matchAll(/^ {10}- (target:\S+)$/gm)].map((m) => m[1]), allowed);
-  for (const [kind, line] of [['target', 'target:migration-status|target:cutover:abort'], ['source', 'target:source:extract|target:cutover:dry-run|target:cutover']]) {
-    assert.ok(launcher.includes(`${line}) kind="${kind}"`));
-    for (const command of line.split('|')) assert.equal(commandKinds[command], kind);
+test('the dispatcher allow-list is exactly the four production commands', () => {
+  assert.deepEqual(commandKinds, {
+    'target:migration-status': 'target', 'target:cutover:abort': 'target',
+    'target:source:extract': 'source', 'target:cutover': 'source',
+  });
+});
+
+test('the workflow, launcher and doc carry the same allow-list', () => {
+  const allowed = Object.keys(commandKinds);
+  assert.deepEqual([...workflow.matchAll(/^ {10}- (target:\S+)$/gm)].map((m) => m[1]).sort(), [...allowed].sort());
+  for (const kind of ['target', 'source']) {
+    const line = allowed.filter((command) => commandKinds[command] === kind).join('|');
+    assert.ok(launcher.includes(`${line}) kind="${kind}"`), line);
   }
   for (const command of allowed) assert.match(read('docs/legacy-migration-runner.md'), new RegExp(`\\| \`${command}\` \\|`));
+  assert.doesNotMatch(workflow + launcher, /dry-run/);
 });
 
 test('the workflow is manual, main-only, approval-gated and never interpolates inputs into shell', () => {
@@ -57,11 +66,13 @@ test('Terraform adds only new runner resources with least privilege', () => {
   assert.match(tf, /"token\.actions\.githubusercontent\.com:sub" = local\.platform_mutation_subject/);
   assert.match(tf, /Action {4}= "ecs:RunTask"\n\s+Resource {2}= "\$\{local\.legacy_migration_runner_family_arn\}:\*"\n\s+Condition = \{ ArnEquals = \{ "ecs:cluster" = aws_ecs_cluster\.legacy_migration_runner\.arn \} \}/);
   assert.match(tf, /command {5}= \["node", "--input-type=module", "--eval", local\.legacy_migration_runner_code, each\.key\]/);
-  assert.equal([...tf.matchAll(/Effect {3,4}= "Deny"/g)].length, 4);
+  assert.equal([...tf.matchAll(/Effect {3,4}= "Deny"/g)].length, 6);
+  assert.match(tf, /"ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition", "ecs:RunTask"/);
   assert.doesNotMatch(tf, /"s3:\*"|"ecs:\*"|"iam:\*"|ssm:GetParametersByPath|Action\s+= "\*"/);
 });
 
-const dispatch = (kind, env) => spawnSync(process.execPath, [dispatcherPath, kind], { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
+const dispatch = (kind, env, preload = []) => spawnSync(process.execPath, [...preload, dispatcherPath, kind], { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
+const blob = (files) => gzipSync(JSON.stringify(files)).toString('base64');
 
 test('the dispatcher refuses anything outside the allow-list or with malformed inputs', () => {
   for (const [kind, env, code] of [
@@ -71,8 +82,10 @@ test('the dispatcher refuses anything outside the allow-list or with malformed i
     ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover:abort', LEGACY_MIGRATION_ARGS: '[]' }, 'command_not_allowed_for_task'],
     ['target', { LEGACY_MIGRATION_COMMAND: 'target:cutover:abort', LEGACY_MIGRATION_ARGS: '{}' }, 'arguments_invalid'],
     ['target', { LEGACY_MIGRATION_COMMAND: 'target:cutover:abort', LEGACY_MIGRATION_ARGS: '["a\\nb"]' }, 'arguments_invalid'],
-    ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '[]', LEGACY_MIGRATION_FILES: '{"../x":"e30="}' }, 'files_invalid'],
-    ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '[]', LEGACY_MIGRATION_FILES: '{"manifest":"e30="}' }, 'files_invalid'],
+    ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover:dry-run', LEGACY_MIGRATION_ARGS: '[]' }, 'command_not_allowed'],
+    ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '[]', LEGACY_MIGRATION_FILES: blob({ '../x': {} }) }, 'files_invalid'],
+    ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '[]', LEGACY_MIGRATION_FILES: 'e30=' }, 'files_invalid'],
+    ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '[]', LEGACY_MIGRATION_FILES: blob([]) }, 'files_invalid'],
     ['source', { LEGACY_MIGRATION_COMMAND: 'target:cutover', LEGACY_MIGRATION_ARGS: '["@manifest"]' }, 'file_missing'],
   ]) {
     const result = dispatch(kind, env);
@@ -81,16 +94,39 @@ test('the dispatcher refuses anything outside the allow-list or with malformed i
   }
 });
 
+test('the dispatcher runs the mapped dist CLI with the reviewed files and keeps its exit code', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'legacy-migration-dispatch-test-'));
+  try {
+    // Stub spawnSync in the child only: print what would run and the files it would read.
+    writeFileSync(join(dir, 'stub.cjs'), `const cp = require('node:child_process'); const fs = require('node:fs');
+cp.spawnSync = (file, argv) => { console.log(JSON.stringify({ argv, files: argv.filter((a) => a.startsWith('/') && fs.existsSync(a) && a.endsWith('.json')).map((a) => JSON.parse(fs.readFileSync(a, 'utf8'))) })); return { status: 7 }; };
+require('node:module').syncBuiltinESMExports();`);
+    const result = dispatch('source', {
+      LEGACY_MIGRATION_COMMAND: 'target:cutover',
+      LEGACY_MIGRATION_ARGS: JSON.stringify(['--manifest', '@manifest', '--operator', 'operator-name']),
+      LEGACY_MIGRATION_FILES: blob({ manifest: { version: 1 } }),
+    }, ['--require', join(dir, 'stub.cjs')]);
+    assert.equal(result.status, 7, result.stderr);
+    const [start, run] = result.stdout.trim().split('\n').map((line) => JSON.parse(line));
+    assert.deepEqual(start, { status: 'START', command: 'target:cutover', flags: ['--manifest', '--operator'] });
+    assert.doesNotMatch(result.stdout.split('\n')[0], /operator-name/);
+    assert.deepEqual(run.argv.filter((a) => !a.endsWith('.json')), ['/app/packages/backend-migration/dist/cli/cutover.js', 'cutover', '--manifest', '--operator', 'operator-name']);
+    assert.deepEqual(run.files, [{ version: 1 }]);
+    rmSync(join(run.argv[3], '..'), { recursive: true, force: true });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the launcher refuses before any AWS call outside the reviewed workflow inputs', () => {
   const run = (args, env = {}) => spawnSync('bash', [new URL('../scripts/run-legacy-migration-runner.sh', import.meta.url).pathname, ...args],
     { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
-  const ci = { GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REPOSITORY: 'vayada-marketplace/vayada-platform' };
   const ok = ['target:migration-status', pin.image_digest, RUN, `MIGRATION_STATUS:${RUN}`];
   assert.equal(run(ok).status, 2);
-  assert.match(run(['target:parity', ...ok.slice(1)], ci).stderr, /allow-list/);
-  assert.match(run([ok[0], `sha256:${'0'.repeat(64)}`, ...ok.slice(2)], ci).stderr, /pinned runner image/);
-  assert.match(run([ok[0], ok[1], 'vay1360-x', ok[3]], ci).stderr, /vay1360/);
-  assert.match(run(ok, ci).stderr, /No reviewed run file/);
+  assert.match(run(['target:cutover:dry-run', ...ok.slice(1)], CI).stderr, /allow-list/);
+  assert.match(run([ok[0], `sha256:${'0'.repeat(64)}`, ...ok.slice(2)], CI).stderr, /pinned runner image/);
+  assert.match(run([ok[0], ok[1], 'vay1360-x', ok[3]], CI).stderr, /vay1360/);
+  assert.match(run(ok, CI).stderr, /No reviewed run file/);
 });
 
 test('launcher and dispatcher together run exactly the reviewed CLI call', () => {
@@ -101,55 +137,73 @@ test('launcher and dispatcher together run exactly the reviewed CLI call', () =>
       copyFileSync(new URL(`../${path}`, import.meta.url), join(root, path));
     }
     mkdirSync(join(root, 'deployment/legacy-migration-runs'));
-    const manifest = { version: 1, environment: 'preprod' };
-    writeFileSync(join(root, `deployment/legacy-migration-runs/${RUN}.json`), JSON.stringify({
-      runId: RUN, sourceRunId: SOURCE_RUN,
-      args: { 'target:cutover:dry-run': ['--source-run-id', SOURCE_RUN, '--manifest', '@manifest'] },
-      files: { manifest },
+    const runFile = (files) => writeFileSync(join(root, `deployment/legacy-migration-runs/${RUN}.json`), JSON.stringify({
+      runId: RUN, sourceRunId: SOURCE_RUN, files,
+      args: { 'target:cutover': ['--source-run-id', SOURCE_RUN, '--manifest', '@manifest'], 'target:cutover:abort': ['--operator', 'op'] },
     }));
+    const manifest = { version: 1, environment: 'preprod' };
     const image = `269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@${pin.image_digest}`;
-    const definition = (overrides) => JSON.stringify({ status: 'ACTIVE', taskDefinitionArn: 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-legacy-migration-runner-source:1',
-      containerDefinitions: [{ name: 'vayada-legacy-migration-runner', image, command: ['node', '--input-type=module', '--eval', dispatcher, 'source'], ...overrides }] });
+    const definitions = (overrides = {}) => {
+      for (const kind of ['target', 'source']) writeFileSync(join(root, `vayada-legacy-migration-runner-${kind}.json`), JSON.stringify({
+        status: 'ACTIVE', taskDefinitionArn: `arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-legacy-migration-runner-${kind}:1`,
+        containerDefinitions: [{ name: 'vayada-legacy-migration-runner', image, command: ['node', '--input-type=module', '--eval', dispatcher, kind], ...overrides }],
+      }));
+    };
     mkdirSync(join(root, 'bin'));
     writeFileSync(join(root, 'bin/aws'), `#!/usr/bin/env bash
 echo "$1 $2" >> "${root}/aws.log"
-args=("$@"); for ((i = 0; i < \${#args[@]}; i++)); do [[ "\${args[i]}" == --overrides ]] && printf '%s' "\${args[i+1]}" > "${root}/overrides.json"; done
+args=("$@"); for ((i = 0; i < \${#args[@]}; i++)); do
+  [[ "\${args[i]}" == --overrides ]] && printf '%s' "\${args[i+1]}" > "${root}/overrides.json"
+  [[ "\${args[i]}" == --task-definition && "$2" == describe-task-definition ]] && cat "${root}/\${args[i+1]}.json"
+done
 case "$1 $2" in
-  "ecs describe-task-definition") cat "${root}/definition.json" ;;
+  "ecs list-tasks") cat "${root}/running" ;;
   "ecs describe-services") echo '{"awsvpcConfiguration":{"subnets":["subnet-1"]}}' ;;
-  "ecs run-task") echo arn:aws:ecs:eu-west-1:269416271598:task/vayada-legacy-migration-runner/0123456789abcdef0123456789abcdef ;;
-  "ecs describe-tasks") [[ "$*" == *exitCode* ]] && echo 4 || echo STOPPED ;;
-  "logs get-log-events") echo '["report"]' ;;
+  "ecs run-task") echo '{"tasks":[{"taskArn":"arn:aws:ecs:eu-west-1:269416271598:task/vayada-legacy-migration-runner/0123456789abcdef0123456789abcdef"}],"failures":[]}' ;;
+  "ecs describe-tasks") [[ "$*" == *lastStatus* ]] && echo STOPPED || echo '{"containers":[{"exitCode":4}]}' ;;
+  "logs get-log-events") [[ "$*" == *next-token* ]] && echo '{"events":[],"nextForwardToken":"f/1"}' || echo '{"events":[{"message":"report"}],"nextForwardToken":"f/1"}' ;;
 esac
 `);
     chmodSync(join(root, 'bin/aws'), 0o755);
-    const launch = () => spawnSync('bash', [join(root, 'scripts/run-legacy-migration-runner.sh'), 'target:cutover:dry-run', pin.image_digest, RUN, `CUTOVER_DRY_RUN:${RUN}:${SOURCE_RUN}`], {
-      encoding: 'utf8',
-      env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REPOSITORY: 'vayada-marketplace/vayada-platform', GITHUB_RUN_ID: '1' },
-    });
+    const launch = (command, confirmation) => {
+      rmSync(join(root, 'aws.log'), { force: true });
+      return spawnSync('bash', [join(root, 'scripts/run-legacy-migration-runner.sh'), command, pin.image_digest, RUN, confirmation],
+        { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, ...CI } });
+    };
+    const awsCalls = () => readFileSync(join(root, 'aws.log'), 'utf8');
+    const cutover = ['target:cutover', `PRODUCTION_CUTOVER:${RUN}:${SOURCE_RUN}`];
+    writeFileSync(join(root, 'running'), '0');
 
-    assert.match(spawnSync('bash', [join(root, 'scripts/run-legacy-migration-runner.sh'), 'target:cutover:dry-run', pin.image_digest, RUN, `CUTOVER_DRY_RUN:${RUN}:vay1351-wrong`],
-      { encoding: 'utf8', env: { PATH: process.env.PATH, GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REPOSITORY: 'vayada-marketplace/vayada-platform' } }).stderr,
-    /Confirmation must be exactly CUTOVER_DRY_RUN:/);
+    runFile({ manifest });
+    assert.match(launch(cutover[0], `PRODUCTION_CUTOVER:${RUN}:vay1351-wrong`).stderr, /Confirmation must be exactly PRODUCTION_CUTOVER:/);
+    definitions({ image: `${image.slice(0, -1)}0` });
+    assert.equal(launch(...cutover).status, 1);
+    assert.doesNotMatch(awsCalls(), /run-task/);
+    definitions();
+    writeFileSync(join(root, 'running'), '1');
+    assert.match(launch(...cutover).stderr, /already running/);
+    assert.doesNotMatch(awsCalls(), /run-task/);
+    writeFileSync(join(root, 'running'), '0');
+    runFile({ manifest, report: { blob: Array.from({ length: 4000 }, (_, i) => i.toString(36)).join('') } });
+    assert.match(launch(...cutover).stderr, /8192-byte/);
+    runFile({ manifest });
 
-    writeFileSync(join(root, 'definition.json'), definition({ image: `${image.slice(0, -1)}0` }));
-    assert.equal(launch().status, 1);
-    assert.doesNotMatch(readFileSync(join(root, 'aws.log'), 'utf8'), /run-task/);
-
-    writeFileSync(join(root, 'definition.json'), definition({}));
-    const launched = launch();
+    const launched = launch(...cutover);
     assert.equal(launched.status, 4, launched.stderr);
+    assert.match(launched.stdout, /^report$/m);
     assert.match(launched.stdout, /Task exit code: 4/);
     const environment = Object.fromEntries(JSON.parse(readFileSync(join(root, 'overrides.json'), 'utf8')).containerOverrides[0].environment.map((e) => [e.name, e.value]));
     assert.deepEqual(JSON.parse(environment.LEGACY_MIGRATION_ARGS), ['--source-run-id', SOURCE_RUN, '--manifest', '@manifest', '--run-id', RUN,
-      '--confirmation', `CUTOVER_DRY_RUN:${RUN}:${SOURCE_RUN}`, '--report', 'json']);
+      '--confirmation', `PRODUCTION_CUTOVER:${RUN}:${SOURCE_RUN}`, '--report', 'json']);
+    assert.deepEqual(JSON.parse(gunzipSync(Buffer.from(environment.LEGACY_MIGRATION_FILES, 'base64'))), { manifest });
+    const refused = dispatch('target', environment);
+    assert.deepEqual(JSON.parse(refused.stderr), { status: 'REFUSED', code: 'command_not_allowed_for_task' });
 
-    const result = dispatch('source', environment);
-    const start = JSON.parse(result.stdout.split('\n')[0]);
-    assert.equal(start.command, 'target:cutover:dry-run');
-    assert.deepEqual(JSON.parse(readFileSync(start.argv[3], 'utf8')), manifest);
-    rmSync(join(start.argv[3], '..'), { recursive: true, force: true });
-    assert.match(result.stderr, /\/app\/packages\/backend-migration\/dist\/cli\/cutover\.js/);
+    assert.equal(launch('target:cutover:abort', `ABORT_CUTOVER:${RUN}`).status, 4);
+    assert.match(awsCalls(), /describe-task-definition/);
+    const abort = JSON.parse(readFileSync(join(root, 'overrides.json'), 'utf8')).containerOverrides[0].environment;
+    assert.deepEqual(JSON.parse(abort.find((e) => e.name === 'LEGACY_MIGRATION_ARGS').value),
+      ['--operator', 'op', '--run-id', RUN, '--confirmation', `ABORT_CUTOVER:${RUN}`, '--report', 'json']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

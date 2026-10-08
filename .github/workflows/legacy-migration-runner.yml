@@ -10,7 +10,6 @@ on:
         options:
           - target:migration-status
           - target:source:extract
-          - target:cutover:dry-run
           - target:cutover
           - target:cutover:abort
       image_digest:

@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - "infra/**"
+      # Terraform reads these into the legacy migration runner task definitions.
+      - "deployment/legacy-migration-runner.json"
+      - "scripts/legacy-migration-runner.mjs"
       - "scripts/roll-forward-auth-gateways.sh"
       - "scripts/smoke-auth-gateway.sh"
       - "scripts/assert-terraform-protected-resources.sh"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # VAY-1362: launch one allow-listed legacy migration CLI as a one-off ECS task.
-# Every check below runs before the first AWS call. See docs/legacy-migration-runner.md.
+# Every input check below runs before the first AWS call. See docs/legacy-migration-runner.md.
 set -euo pipefail
 
 [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main && "${GITHUB_EVENT_NAME:-}" == workflow_dispatch &&
@@ -14,7 +14,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 case "$command" in
   target:migration-status|target:cutover:abort) kind="target" ;;
-  target:source:extract|target:cutover:dry-run|target:cutover) kind="source" ;;
+  target:source:extract|target:cutover) kind="source" ;;
   *) echo "Command is not on the allow-list." >&2; exit 2 ;;
 esac
 [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ && "$digest" == "$(jq -r .image_digest "$root/deployment/legacy-migration-runner.json")" ]] || {
@@ -29,7 +29,6 @@ source_run_id="$(jq -er --arg run "$run_id" 'select(.runId == $run) | .sourceRun
 case "$command" in
   target:migration-status) expected="MIGRATION_STATUS:${run_id}" ;;
   target:source:extract) expected="SOURCE_EXTRACT:${run_id}:${source_run_id}" ;;
-  target:cutover:dry-run) expected="CUTOVER_DRY_RUN:${run_id}:${source_run_id}" ;;
   target:cutover) expected="PRODUCTION_CUTOVER:${run_id}:${source_run_id}" ;;
   target:cutover:abort) expected="ABORT_CUTOVER:${run_id}" ;;
 esac
@@ -44,13 +43,10 @@ args="$(jq -ce --arg command "$command" --arg run "$run_id" --arg confirmation "
     else . + ["--run-id", $run, "--confirmation", $confirmation, "--report", "json"] end' "$run_file")" || {
   echo "Run file has no reviewed string arguments for ${command}." >&2; exit 2;
 }
-files='{}'
-while IFS= read -r name; do
-  [[ -n "$name" ]] || continue
-  [[ "$name" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || { echo "Invalid run file input name." >&2; exit 2; }
-  encoded="$(jq -c --arg name "$name" '.files[$name]' "$run_file" | gzip -n -9 | base64 | tr -d '\n')"
-  files="$(jq -c --arg name "$name" --arg value "$encoded" '. + {($name): $value}' <<<"$files")"
-done < <(jq -r '.files // {} | keys[]' "$run_file")
+jq -e '(.files // {}) | type == "object" and all(keys[]; test("^[a-z][a-z0-9-]{0,31}$"))' "$run_file" >/dev/null || {
+  echo "Run file inputs must be an object of named JSON documents." >&2; exit 2;
+}
+files="$(jq -c '.files // {}' "$run_file" | gzip -n -9 | base64 | tr -d '\n')"
 overrides="$(jq -cn --arg name "$container" --arg command "$command" --arg args "$args" --arg files "$files" '
   {containerOverrides: [{name: $name, environment: [
     {name: "LEGACY_MIGRATION_COMMAND", value: $command},
@@ -65,25 +61,39 @@ jq -e --arg image "$image" --arg kind "$kind" --arg name "$container" --rawfile 
   .status == "ACTIVE" and (.containerDefinitions | length) == 1 and .containerDefinitions[0].name == $name and
   .containerDefinitions[0].image == $image and .containerDefinitions[0].command == ["node", "--input-type=module", "--eval", $code, $kind]
 ' <<<"$definition" >/dev/null || { echo "Registered ${container}-${kind} does not match the pinned image and dispatcher." >&2; exit 1; }
+running="$(aws ecs list-tasks --cluster "$cluster" --region "$region" --query 'length(taskArns)' --output text)"
+[[ "$running" == 0 ]] || { echo "A runner task is already running. Inspect it before starting another." >&2; exit 1; }
 network="$(aws ecs describe-services --cluster vayada-backend-cluster --services vayada-next-api-service --region "$region" \
   --query 'services[0].networkConfiguration' --output json)"
-task_arn="$(aws ecs run-task --cluster "$cluster" --task-definition "$(jq -r .taskDefinitionArn <<<"$definition")" --launch-type FARGATE \
-  --network-configuration "$network" --overrides "$overrides" --started-by "github-${GITHUB_RUN_ID:-manual}" --region "$region" \
-  --query 'tasks[0].taskArn' --output text)"
-[[ "$task_arn" =~ ^arn:aws:ecs:${region}:269416271598:task/${cluster}/[0-9a-f]{32}$ ]] || { echo "ECS did not start the task." >&2; exit 1; }
+started="$(aws ecs run-task --cluster "$cluster" --task-definition "$(jq -r .taskDefinitionArn <<<"$definition")" --launch-type FARGATE \
+  --network-configuration "$network" --overrides "$overrides" --started-by "github-${GITHUB_RUN_ID:-manual}" --region "$region" --output json)"
+task_arn="$(jq -r '.tasks[0].taskArn // empty' <<<"$started")"
+[[ "$task_arn" =~ ^arn:aws:ecs:${region}:269416271598:task/${cluster}/[0-9a-f]{32}$ ]] || {
+  echo "ECS did not start the task: $(jq -c '.failures' <<<"$started")" >&2; exit 1;
+}
 echo "Started ${task_arn}"
 
 # A cutover can take about an hour. Never stop or rerun it from here: on timeout,
 # inspect the task and the run ledger (target:migration-status) first.
-for ((poll = 0; poll < 900; poll++)); do
+deadline=$((SECONDS + 9000))
+state=""
+while (( SECONDS < deadline )); do
   state="$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task_arn" --region "$region" --query 'tasks[0].lastStatus' --output text)"
   [[ "$state" == STOPPED ]] && break
   sleep 10
 done
 [[ "$state" == STOPPED ]] || { echo "Task is still running after 150 minutes: ${task_arn}. Do not rerun; inspect it first." >&2; exit 1; }
-aws logs get-log-events --log-group-name "/ecs/${container}" --log-stream-name "ecs/${container}/${task_arn##*/}" \
-  --start-from-head --region "$region" --query 'events[].message' --output json | jq -r '.[]' || echo "Task logs are unavailable." >&2
-exit_code="$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task_arn" --region "$region" --query 'tasks[0].containers[0].exitCode' --output text)"
-[[ "$exit_code" =~ ^[0-9]+$ ]] || { echo "Task stopped without an exit code." >&2; exit 1; }
+token=""
+while :; do
+  page="$(aws logs get-log-events --log-group-name "/ecs/${container}" --log-stream-name "ecs/${container}/${task_arn##*/}" \
+    --start-from-head ${token:+--next-token "$token"} --region "$region" --output json)" || { echo "Task logs are unavailable." >&2; break; }
+  jq -r '.events[].message' <<<"$page"
+  next="$(jq -r '.nextForwardToken' <<<"$page")"
+  [[ -n "$next" && "$next" != "$token" ]] || break
+  token="$next"
+done
+stopped="$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task_arn" --region "$region" --query 'tasks[0]' --output json)"
+exit_code="$(jq -r '.containers[0].exitCode // empty' <<<"$stopped")"
+[[ "$exit_code" =~ ^[0-9]+$ ]] || { echo "Task stopped without an exit code: $(jq -r '.stoppedReason // "unknown"' <<<"$stopped")" >&2; exit 1; }
 echo "Task exit code: ${exit_code}"
 exit "$exit_code"
