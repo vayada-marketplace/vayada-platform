@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Ordinary infrastructure apply must retain activated private caller wiring."""
+"""Ordinary infrastructure apply must retain activated private caller wiring.
+
+VAY-2056 step 4 is the one exception: a caller that the protected release has
+blocked may be retired completely (admission, origin and token together).
+"""
 import json
 import sys
 
@@ -30,6 +34,11 @@ def check(current, plan):
         admission, origin, token = prefix + "_ADMISSION", prefix + "_ORIGIN", prefix + "_INTERNAL_TOKEN"
         if admission in old_secrets or admission in new_secrets:
             raise ValueError("Secret admission marker forbidden")
+        if not {admission, origin, token} & (new_env.keys() | new_secrets.keys()):
+            # Retired caller (VAY-2056): never drop an enabled admission; block it through the protected release first.
+            if old_env.get(admission) == "enabled":
+                raise ValueError("Enabled setup admission must be blocked through the protected release before retirement")
+            continue
         if admission in old_env and admission not in new_env:
             raise ValueError("Installed setup admission cannot be removed")
         if old_env.get(admission) in ("enabled", "blocked") and new_env.get(admission) != old_env[admission]:
@@ -43,4 +52,4 @@ if __name__ == "__main__":
         check(json.load(open(sys.argv[1])), json.load(open(sys.argv[2])))
     except (ValueError, KeyError, TypeError, OSError) as error:
         sys.exit(f"Setup caller plan rejected: {error}")
-    print("Installed setup caller retained")
+    print("Installed setup caller retained or retired after blocking")
