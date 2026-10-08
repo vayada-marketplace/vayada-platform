@@ -433,7 +433,10 @@ SSM parameters are referenced by ARN in ECS task definitions — containers read
 ### Frozen staging PMS runtime
 
 Terraform can create a dedicated staging PMS backend runtime for the
-legacy scheduler-freeze proof. It is disabled by default and is controlled by:
+legacy scheduler-freeze proof. It was retired after VAY-794 acceptance: the
+plan and apply workflows now pass `TF_VAR_enable_staging_pms_runtime: "false"`,
+so re-enabling it needs a reviewed workflow change. It is disabled by default
+and is controlled by:
 
 ```hcl
 enable_staging_pms_runtime              = true
