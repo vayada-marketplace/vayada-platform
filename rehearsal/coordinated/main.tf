@@ -183,7 +183,8 @@ resource "aws_ecs_service" "fixture" {
   cluster         = aws_ecs_cluster.fixture.id
   task_definition = aws_ecs_task_definition.fixture[each.key].arn
   launch_type     = "FARGATE"
-  desired_count   = 1
+  # Parked after VAY-2029 acceptance; set back to 1 through a reviewed plan to rehearse again.
+  desired_count = 0
   network_configuration {
     subnets          = [aws_subnet.fixture.id]
     security_groups  = [aws_security_group.fixture.id]

@@ -61,6 +61,12 @@ An apply starts six billed tasks and public addresses. After the rehearsal,
 produce a separately reviewed shutdown plan; preserve logs, images and runtime
 control evidence until acceptance. There is no automated resource destruction.
 
+VAY-2029 was accepted on 2026-09-26. The six services are now parked at
+`desired_count = 0`, which stops the billed tasks and their public addresses.
+The network, images, logs and roles are kept. The runner and scenarios require
+one steady task per service, so set the count back to 1 through a reviewed plan
+before rehearsing again.
+
 ## Private preflight runner
 
 `runner.py` defaults to read-only inspection. It checks the six exact service

@@ -22,7 +22,35 @@ def render(creation="off", property="off", logo="off", profile="off"):
         return json.loads(json.loads(result.stdout.strip()))
 
 
+def retained_execution(creation="off", property="off", logo="off", profile="off", tokens=True):
+    with tempfile.TemporaryDirectory() as directory:
+        source = SOURCE.read_text().split('resource "', 1)[0]
+        source = source.replace('aws_secretsmanager_secret.hotel_setup_property', 'var.property_secrets').replace('aws_secretsmanager_secret.hotel_setup', 'var.creation_secrets')
+        default = '{internal_token={arn="%s"}}'
+        source += '\nvariable "creation_secrets" { default = %s }\n' % (default % 'creation-token-arn' if tokens else '{}')
+        source += '\nvariable "property_secrets" { default = %s }\n' % (default % 'property-token-arn' if tokens else '{}')
+        Path(directory, "main.tf").write_text(source)
+        result = subprocess.run(['terraform', 'console', '-no-color', '-var=hotel_setup_public_caller='+json.dumps({'creation':creation,'property':property,'logo':logo,'profile':profile})],
+            input='jsonencode({retained=local.hotel_setup_public_execution_retained,tokens=local.hotel_setup_public_execution_tokens})\n',
+            cwd=directory, text=True, capture_output=True, check=True, timeout=30)
+        return json.loads(json.loads(result.stdout.strip()))
+
+
 class PublicCallerTest(unittest.TestCase):
+    def test_retired_callers_keep_the_execution_identity_unchanged(self):
+        # The platform deploy role may not change or delete this role (VAY-2056 step 5 removes it).
+        self.assertEqual(retained_execution(), {'retained': True, 'tokens': ['creation-token-arn', 'property-token-arn']})
+        self.assertEqual(retained_execution(tokens=False), {'retained': False, 'tokens': []})
+        self.assertEqual(retained_execution('enabled', 'enabled', 'enabled', 'enabled')['tokens'],
+                         sorted({item['valueFrom'] for item in render('enabled', 'enabled', 'enabled', 'enabled')['secrets']}))
+        source = SOURCE.read_text()
+        self.assertEqual(source.count('count = local.hotel_setup_public_execution_retained ? 1 : 0'), 2)
+        self.assertEqual(source.count('count      = local.hotel_setup_public_execution_retained ? 1 : 0'), 1)
+        self.assertIn('Resource = length(local.hotel_setup_caller_configured) > 0 ? distinct([for secret in local.hotel_setup_caller_secrets : secret.valueFrom]) : local.hotel_setup_public_execution_tokens', source)
+        ecs = (ROOT / 'infra/ecs.tf').read_text()
+        self.assertIn('each.key == "next-target-backend" && length(local.hotel_setup_caller_configured) > 0 ? "arn:aws:iam::${var.aws_account_id}:role/${aws_iam_role.hotel_setup_public_execution[0].name}"', ecs)
+        self.assertIn('each.key == "next-target-backend" && length(local.hotel_setup_caller_configured) > 0 ? [aws_security_group.hotel_setup["caller"].id] : []', ecs)
+
     def test_default_off_and_hold_never_inject_tokens(self):
         self.assertEqual(render(), {'environment':[], 'secrets':[]})
         hold = render('hold', 'hold')
@@ -69,10 +97,10 @@ class PublicCallerTest(unittest.TestCase):
                                       'HOTEL_SETUP_PROFILE_COMMAND_ADMISSION':'blocked'})
         with self.assertRaises((subprocess.CalledProcessError, ValueError)): render(profile='unknown')
 
-    def test_checked_in_profile_caller_retains_the_released_admission(self):
-        # VAY-965: profile was released enabled through hotel-setup-release.yml; ordinary apply must retain it.
+    def test_checked_in_callers_are_retired(self):
+        # VAY-2056 step 4: the ordinary-login API reads no caller wiring; every caller is off.
         tfvars = (ROOT / 'infra/hotel_setup_staging.auto.tfvars').read_text()
-        self.assertIn('hotel_setup_public_caller = { creation = "enabled", property = "enabled", logo = "enabled", profile = "enabled" }', tfvars)
+        self.assertIn('hotel_setup_public_caller = { creation = "off", property = "off", logo = "off", profile = "off" }', tfvars)
         self.assertIn('enable_hotel_setup_profile_credentials = true', tfvars)
         self.assertIn('enable_hotel_setup_logo_storage    = true', tfvars)
         self.assertIn('hotel_setup_logo_private_admission = "enabled"', tfvars)
