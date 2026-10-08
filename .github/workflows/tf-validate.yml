@@ -188,6 +188,7 @@ on:
       - "scripts/test-legacy-migration-oneoff.mjs"
       - "docs/legacy-migration-oneoff.md"
       - "scripts/legacy-readonly-counts.py"
+      - "scripts/legacy-predeploy-readonly-check.sql"
       - "scripts/test_legacy_readonly_counts.py"
       - "scripts/test-vay2042-media-endpoint.mjs"
       - ".github/workflows/vay2042-target-bootstrap.yml"

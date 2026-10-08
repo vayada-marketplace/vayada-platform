@@ -125,18 +125,26 @@ and `target:migration-status` before doing anything else.
 ## Read-only counts (`readonly-counts`)
 
 ```bash
-EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts-plan <counts.sql> <target-check.sql>
-EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts <counts.sql> <target-check.sql> READONLY_COUNTS:<plan sha256>
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts-plan <counts.sql> scripts/legacy-predeploy-readonly-check.sql
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts <counts.sql> scripts/legacy-predeploy-readonly-check.sql READONLY_COUNTS:<plan sha256>
 ```
 
-A read-only snapshot for go-day planning. It covers the legacy PMS and Booking
-blocks in `readonly-counts.sql`, and the 6c pre-deploy check
-(`6c/predeploy-readonly-check.sql`) on the production target. There is no
-Stripe part: Flamur read the two subscriptions directly.
+A read-only snapshot for go-day planning. It covers two inputs:
+- the legacy PMS and Booking blocks in `readonly-counts.sql`;
+- the 6c pre-deploy check on the production target, run from the counted copy
+  `scripts/legacy-predeploy-readonly-check.sql`.
 
-The SQL files are kept in the evidence folder rather than the repository,
-because they name candidate hotels. They are still embedded in the disposable
-task definitions, which are deleted afterwards, and are recorded by CloudTrail.
+There is no Stripe part: Flamur read the two subscriptions directly.
+
+The counted copy differs from the 6c owner's reference query in one place: the
+per-property column is `count(*)` instead of an aggregate that concatenated two
+columns. The check therefore needs no string concatenation, and the count it
+reports is the same.
+
+`readonly-counts.sql` stays in the evidence folder rather than the repository,
+because it names candidate hotels. Both inputs are still embedded in the
+disposable task definitions, which are deleted afterwards, and are recorded by
+CloudTrail.
 Nothing runs before the plan is reviewed and Flamur's go names the plan SHA-256.
 
 **Do not run during deploys.** pms-api and next-api run migrations when they
@@ -153,12 +161,7 @@ completed deployment.
 | Read-only, aggregates only | **Transaction:** every statement runs inside `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`, with a 15 s statement timeout and a 1 s lock timeout. **Printed legacy blocks:** the top-level SELECT list may hold only `count(…)` (optionally with `FILTER (WHERE …)`), `max(<*_at or *_date column>)` cast to `date` or `timestamp`, and the reviewed label columns (`label`, `stripe_billing_status`, `billing_active_plan`, optionally inside `coalesce(…, '<text>')`). `GROUP BY` may use only positions and those labels. Top-level `UNION`, `INTERSECT` and `EXCEPT` are refused, so every printed row comes from the checked list. At most 50 rows. **Target checks:** each 6c `SELECT` (the file's own `BEGIN`/`ROLLBACK` are dropped) runs as `SELECT count(*) AS rows_found FROM (…)` and must return exactly that one value, so no target row is printed. **Errors:** only a code or the exception type is printed. |
 | Least privilege, no new IAM | No task role. The execution role is the existing `ecsTaskExecutionRole`. Logs go to the existing `/ecs/vayada-pms-backend` group. No Terraform. All definitions are deregistered and deleted afterwards. |
 | Dry-run / plan mode | `readonly-counts-plan` makes only read-only AWS calls. It prints every statement exactly as it will run, with its database and user, and each task's image, role, secret and log group. It also prints the network, the cluster, the code and SQL SHA-256s and the plan SHA-256, and saves all of it to `readonly-counts-plan.txt`. The plan SHA covers all definitions, the network configuration, the cluster and the code SHA. The run refuses unless the go names it. |
-| Only SELECT | One `SELECT`/`WITH` per block or check. **Only allow-listed functions may be called:** printed blocks `count`, `max`, `coalesce`; counted 6c checks `count`, `array_agg`. Every other function is refused, including schema-qualified calls and calls disguised as CTE names. Also refused: write keywords, row locks, `SELECT … INTO`, comments, quoted identifiers, `U&`, `$` (dollar quotes and parameters) and `E'…'` strings. String concatenation (`\|\|`) is refused in printed blocks. Checked locally (`python3 -I`) before any AWS call and again in the task. |
-
-**Why concatenation is still allowed in the counted 6c checks:** the reviewed 6c
-query itself uses `array_agg(source_system || '.' || source_table)`, so a
-blanket ban would reject it. None of the allow-listed functions can execute a
-string, and those checks print only a count.
+| Only SELECT | One `SELECT`/`WITH` per block or check. **Only allow-listed functions may be called:** printed blocks `count`, `max`, `coalesce`; counted 6c checks `count` only. Every other function is refused, including schema-qualified calls and calls disguised as CTE names. Also refused: write keywords, row locks, `SELECT … INTO`, comments, quoted identifiers, `U&`, `$` (dollar quotes and parameters) and `E'…'` strings. String concatenation (`\|\|`) is refused everywhere, with no exception. Checked locally (`python3 -I`) before any AWS call and again in the task. |
 
 **Why the target login is the migration login:** row-level security on
 `hotel_catalog.properties` and `platform.jobs` could hide rows from the ordinary

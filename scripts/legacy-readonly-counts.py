@@ -9,8 +9,9 @@ database's secret:
 
 Every connection is pinned (RDS host, port 5432, database and user) and uses TLS verified against
 the pinned RDS CA. Every statement runs inside BEGIN TRANSACTION READ ONLY ... ROLLBACK and must be
-one plain SELECT: only allow-listed functions, no comments, no $ or E'' strings, no quoted
-identifiers. Printed blocks may select only allow-listed aggregates and reviewed label columns.
+one plain SELECT: only allow-listed functions, no string concatenation, no comments, no $ or E''
+strings, no quoted identifiers. Printed blocks may select only allow-listed aggregates and reviewed
+label columns.
 """
 import asyncio
 import hashlib
@@ -34,7 +35,7 @@ MAX_ROWS = 50
 COMPLETE = "COUNTS_COMPLETE"
 # Only the functions the reviewed files use. Printed blocks and the counted 6c checks differ.
 PRINTED_FUNCTIONS = {"count", "max", "coalesce"}
-COUNTED_FUNCTIONS = {"count", "array_agg"}
+COUNTED_FUNCTIONS = {"count"}
 # Keywords that a parenthesis may follow without being a function call.
 PAREN_KEYWORDS = {"as", "in", "values", "exists", "filter", "from", "join", "on", "where", "and", "or", "not", "select"}
 # Labels a printed block may group by and print: reviewed, non-personal columns.
@@ -87,7 +88,7 @@ def only_select(statement, name, functions):
         raise ValueError(f"{name}_not_one_select")
     if WRITES.search(bare) or re.search(r'(?i)--|/\*|\*/|"|\$|u&|(?<![a-z0-9_])e\'', statement):
         raise ValueError(f"{name}_not_read_only")
-    if "||" in bare and functions is PRINTED_FUNCTIONS:
+    if "||" in bare:
         raise ValueError(f"{name}_concatenates")
     ctes = {match.start(1) for match in re.finditer(r"(?i)(?:\bwith|,)\s*([a-z_]\w*)\s*\([^()]*\)\s*as\s*\(", bare)}
     for match in re.finditer(r"([A-Za-z_]\w*)\s*\(", bare):
@@ -181,6 +182,9 @@ def target_checks(sql):
     checks, comments, current = [], [], []
     for line in sql.splitlines():
         stripped = line.strip()
+        if not stripped and not current:
+            comments = []  # a blank line ends a comment block, so a file header is not a check title
+            continue
         if stripped.startswith("--"):
             if not current:
                 comments.append(stripped.lstrip("-").strip())

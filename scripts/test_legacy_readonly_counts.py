@@ -34,7 +34,7 @@ SELECT billing_active_plan, count(*) AS hotels FROM booking_hotels GROUP BY 1 OR
 TARGET_SQL = """-- Pre-deploy check header.
 -- Properties without a claim.
 BEGIN READ ONLY;
-SELECT property.id, array_agg(DISTINCT link.source_system || '.' || link.source_table) AS links
+SELECT property.id, count(*) AS links
 FROM hotel_catalog.properties property JOIN hotel_catalog.property_source_links link ON link.property_id = property.id
 WHERE NOT EXISTS (SELECT 1 FROM pms.channel_binding_claims claim WHERE claim.property_id = property.id)
 GROUP BY property.id;
@@ -144,9 +144,22 @@ class ReadonlyCountsTest(unittest.TestCase):
         for bad in ("BEGIN READ ONLY;\nDELETE FROM platform.jobs;\nROLLBACK;", "BEGIN;\nROLLBACK;", "SELECT 1",
                     "SELECT 1) AS a UNION ALL SELECT length(email)::bigint FROM (SELECT email FROM users;",
                     "SELECT pg_terminate_backend(1);", "SELECT ts_rewrite('a', 'b');", "SELECT x FROM t WHERE y = $1;",
-                    "SELECT id FROM t -- trailing\n;"):
+                    "SELECT id FROM t -- trailing\n;",
+                    "SELECT property.id, array_agg(DISTINCT link.source_system || '.' || link.source_table) FROM t GROUP BY 1;",
+                    "SELECT id FROM t WHERE a || b = 'x';",
+                    "SELECT id, array_agg(x) FROM t GROUP BY 1;"):
             with self.assertRaises(ValueError, msg=bad):
                 module.target_checks(bad)
+
+    def test_the_repository_copy_of_the_6c_check_is_counted_and_concatenation_free(self):
+        module, *_ = load([], [])
+        sql = (SCRIPT.parent / "legacy-predeploy-readonly-check.sql").read_text()
+        self.assertNotIn("||", sql)
+        self.assertNotIn("array_agg", sql)
+        checks = module.target_checks(sql)
+        self.assertEqual([number for number, _, _ in checks], ["1", "2"])
+        self.assertTrue(checks[0][1].startswith("Properties the new guard would refuse"))
+        self.assertTrue(checks[1][1].startswith("Channex enable jobs queued before the guard"))
 
     def test_each_kind_reads_only_its_pinned_database_over_verified_tls(self):
         for kind, results, database, user, fetches in (
