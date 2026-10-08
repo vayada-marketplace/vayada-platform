@@ -291,7 +291,8 @@ media="$(jq -c '[.containerDefinitions[] | select(.name == "vayada-next-api") | 
      {name: "LEGACY_MEDIA_BUCKET_ALLOWLIST", value: "vayada-uploads-prod,vayada-creator-marketplace-images"}]' <<<"$next_api")"
 [[ "$(jq length <<<"$media")" == 4 ]] || { echo "next-api does not expose the platform media settings." >&2; exit 1; }
 definition="$(jq -cn --arg kind "$kind" --arg command "$command" --arg args "$args" --arg files "$files" --argjson media "$media" \
-  --rawfile ca "$root/rehearsal/rds-ca-rsa2048-g1.pem" --arg source_host "$source_host" --arg source_user "$source_user" \
+  --rawfile ca "$root/rehearsal/rds-ca-rsa2048-g1.pem" --rawfile tls "$root/scripts/legacy-migration-tls.cjs" \
+  --arg source_host "$source_host" --arg source_user "$source_user" \
   --arg image "${account}.dkr.ecr.${region}.amazonaws.com/vayada-next-api@${pair#* }" --arg account "$account" --arg region "$region" \
   --rawfile code "$root/scripts/legacy-migration-oneoff.mjs" '
   def ssm($name): "arn:aws:ssm:\($region):\($account):parameter/vayada/prod/\($name)";
@@ -301,7 +302,7 @@ definition="$(jq -cn --arg kind "$kind" --arg command "$command" --arg args "$ar
      entryPoint: ["node", "--input-type=module", "--eval"], command: [$code, $kind],
      environment: ([{name: "AWS_REGION", value: $region}, {name: "LEGACY_MIGRATION_COMMAND", value: $command},
        {name: "LEGACY_MIGRATION_ARGS", value: $args}, {name: "LEGACY_MIGRATION_FILES", value: $files},
-       {name: "VAYADA_DB_RDS_CA_BUNDLE", value: $ca}]
+       {name: "VAYADA_DB_RDS_CA_BUNDLE", value: $ca}, {name: "LEGACY_MIGRATION_TLS_PRELOAD", value: $tls}]
        + (if $kind == "source" then $media + [{name: "LEGACY_MIGRATION_SOURCE_HOST", value: $source_host},
            {name: "LEGACY_MIGRATION_SOURCE_USER", value: $source_user}] else [] end)),
      secrets: ([{name: "TARGET_DATABASE_URL", valueFrom: ssm("target-database-url")}]

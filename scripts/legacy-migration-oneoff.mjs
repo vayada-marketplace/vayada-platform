@@ -2,8 +2,9 @@
 // scripts/legacy-migration-oneoff.sh embeds this file as the command of a one-off task
 // definition, together with LEGACY_MIGRATION_COMMAND, LEGACY_MIGRATION_ARGS and LEGACY_MIGRATION_FILES.
 // target:cutover:dry-run is not here: it needs a preprod target, never production.
-// Every database URL is pinned (host, port, database, user) and rewritten to verify-full
-// against the pinned RDS CA, which the definition carries as VAYADA_DB_RDS_CA_BUNDLE.
+// Every database URL is pinned (host, port, database, user). The CLI runs with the
+// LEGACY_MIGRATION_TLS_PRELOAD module (scripts/legacy-migration-tls.cjs), which gives every pg
+// Client and Pool an explicit TLS object with the pinned RDS CA (VAYADA_DB_RDS_CA_BUNDLE).
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -57,6 +58,8 @@ if (args.some((arg) => arg.startsWith('@') && !Object.hasOwn(files, arg.slice(1)
 
 const ca = process.env.VAYADA_DB_RDS_CA_BUNDLE ?? '';
 if (createHash('sha256').update(ca).digest('hex') !== CA_SHA256) refuse('rds_ca_invalid');
+const preload = process.env.LEGACY_MIGRATION_TLS_PRELOAD ?? '';
+if (!preload.includes('PinnedClient') || !preload.includes('PinnedPool')) refuse('tls_preload_invalid');
 const pins = { TARGET_DATABASE_URL: TARGET };
 if (kind === 'source') {
   const host = process.env.LEGACY_MIGRATION_SOURCE_HOST ?? '';
@@ -81,14 +84,16 @@ for (const [variable, pin] of Object.entries(pins)) {
 
 const directory = mkdtempSync(join(tmpdir(), 'legacy-migration-'));
 const caFile = join(directory, 'rds-ca.pem');
+const preloadFile = join(directory, 'legacy-migration-tls.cjs');
 writeFileSync(caFile, ca, { mode: 0o600 });
+writeFileSync(preloadFile, preload, { mode: 0o600 });
 const env = { ...process.env };
+delete env.LEGACY_MIGRATION_TLS_PRELOAD;
 for (const [variable, url] of Object.entries(urls)) {
-  url.search = '';
-  url.searchParams.set('sslmode', 'verify-full');
-  url.searchParams.set('sslrootcert', caFile);
+  url.search = ''; // TLS comes only from the preload's explicit object
   env[variable] = url.toString();
 }
+env.LEGACY_MIGRATION_TLS = JSON.stringify({ ca: caFile, cliDir: CLI, hosts: [...new Set(Object.values(urls).map((url) => url.hostname))] });
 const paths = {};
 for (const [name, value] of Object.entries(files)) {
   paths[name] = join(directory, `${name}.json`);
@@ -98,6 +103,6 @@ const argv = args.map((arg) => (arg.startsWith('@') ? paths[arg.slice(1)] : arg)
 
 // Flag names only: values such as the operator stay out of the logs.
 console.log(JSON.stringify({ status: 'START', command, flags: args.filter((arg) => arg.startsWith('--')) }));
-const result = spawnSync(process.execPath, [join(CLI, script), ...subcommand, ...argv], { stdio: 'inherit', env });
+const result = spawnSync(process.execPath, ['--require', preloadFile, join(CLI, script), ...subcommand, ...argv], { stdio: 'inherit', env });
 // Keep the CLI exit code: 0 done, 4 awaiting smoke, 1 failed (including PARITY_NOT_GO).
 process.exit(result.status ?? 1);

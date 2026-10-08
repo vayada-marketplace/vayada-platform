@@ -183,6 +183,7 @@ on:
       - "scripts/test-vay2042-media-infra.mjs"
       - "scripts/legacy-migration-oneoff.sh"
       - "scripts/legacy-migration-oneoff.mjs"
+      - "scripts/legacy-migration-tls.cjs"
       - "scripts/test-legacy-migration-oneoff.mjs"
       - "docs/legacy-migration-oneoff.md"
       - "scripts/legacy-readonly-counts.py"
