@@ -282,7 +282,6 @@ class IdentityTests(unittest.TestCase):
 }
 variable "aws_account_id" { default = "269416271598" }
 variable "aws_region" { default = "eu-west-1" }
-locals { hotel_setup_plan_metadata_statements = [] }
 resource "aws_iam_role" "github_actions_platform_deploy" {
   name = "offline-deploy-role"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [] })

@@ -42,7 +42,7 @@ locals {
   platform_plan_policy = jsonencode(merge(local.platform_plan_policy_document, {
     Statement = concat([for statement in local.platform_plan_policy_document.Statement : statement
       if statement.Sid != "ExactKeyMetadata" || length(statement.Resource) > 0
-    ], local.pricing_command_metadata_statements, local.hotel_setup_plan_metadata_statements)
+    ], local.pricing_command_metadata_statements)
   }))
 }
 
