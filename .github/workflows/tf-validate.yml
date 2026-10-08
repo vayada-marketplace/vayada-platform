@@ -52,6 +52,9 @@ on:
       - "scripts/inspect-target-database-cluster-acl.mjs"
       - "scripts/harden-target-database-cluster-acl.mjs"
       - "scripts/test-target-database-cluster-acl.sh"
+      - "scripts/retire-hotel-setup-database-roles.mjs"
+      - "scripts/test-retire-hotel-setup-database-roles.sh"
+      - ".github/workflows/retire-hotel-setup-database-roles.yml"
       - "scripts/restore-rds-admin-from-ssm.py"
       - "scripts/test_restore_rds_admin_from_ssm.py"
       - "scripts/inspect-target-database-identity-role.mjs"
@@ -174,6 +177,20 @@ jobs:
       - name: Verify sibling database isolation
         run: bash scripts/test-target-database-cluster-acl.sh "${{ matrix.postgres }}"
 
+  hotel-setup-role-retirement:
+    name: Hotel setup role retirement (PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        postgres: ["16", "17"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Disable, then drop, the retired hotel setup roles as vayada_admin
+        run: bash scripts/test-retire-hotel-setup-database-roles.sh "${{ matrix.postgres }}"
+
   target-database-runtime-preflight:
     name: Runtime database preflight (PostgreSQL ${{ matrix.postgres }})
     runs-on: ubuntu-latest
@@ -256,10 +273,12 @@ jobs:
           node --check scripts/provision-target-database-identity-runtime.mjs
           node --check scripts/inspect-target-database-cluster-acl.mjs
           node --check scripts/harden-target-database-cluster-acl.mjs
+          node --check scripts/retire-hotel-setup-database-roles.mjs
           python3 -m unittest scripts/test_restore_rds_admin_from_ssm.py
           node --check scripts/inspect-target-database-identity-role.mjs
           bash -n scripts/test-target-database-identity-runtime-grant.sh
           bash -n scripts/test-target-database-cluster-acl.sh
+          bash -n scripts/test-retire-hotel-setup-database-roles.sh
           python3 scripts/test-target-database-identity-secret.py
           python3 scripts/test-target-database-runtime-preflight.py
           python3 scripts/test-target-database-runtime-runner.py
