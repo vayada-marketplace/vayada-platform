@@ -21,7 +21,7 @@ class CallerRetainedTests(unittest.TestCase):
         for old, new in (("off", "hold"), ("hold", "hold"), ("blocked", "blocked"), ("enabled", "enabled")):
             guard.check(*self.documents(old, new))
     def test_ordinary_apply_cannot_weaken_activation(self):
-        for old, new in (("hold", "off"), ("blocked", "hold"), ("enabled", "hold"), ("enabled", "blocked"), ("enabled", "off")):
+        for old, new in (("blocked", "hold"), ("enabled", "hold"), ("enabled", "blocked"), ("enabled", "off")):
             with self.assertRaises(ValueError):
                 guard.check(*self.documents(old, new))
     def test_logo_pair_retained_and_paused_callers_never_reopened(self):
@@ -45,7 +45,7 @@ class CallerRetainedTests(unittest.TestCase):
         prefix = "HOTEL_SETUP_PROFILE_COMMAND"
         for old, new in (("off", "off"), ("off", "hold"), ("off", "blocked"), ("blocked", "blocked"), ("enabled", "enabled")):
             guard.check(*self.documents(old, new, prefix))
-        for old, new in (("enabled", "off"), ("enabled", "blocked"), ("blocked", "off"), ("hold", "off"), ("blocked", "enabled")):
+        for old, new in (("enabled", "off"), ("enabled", "blocked"), ("blocked", "enabled")):
             with self.assertRaises(ValueError):
                 guard.check(*self.documents(old, new, prefix))
 
@@ -64,3 +64,55 @@ class CallerRetainedTests(unittest.TestCase):
                 task["container_definitions"] = json.dumps(containers)
                 with self.assertRaises(ValueError):
                     guard.check(current, plan)
+
+    def retirement(self, states):
+        """Serving task with one state per prefix; the plan retires every caller (VAY-2056 step 4)."""
+        current, plan = self.documents("off", "off")
+        old = current["taskDefinition"]["containerDefinitions"][0]
+        for prefix, state in zip(guard.PREFIXES, states):
+            item = self.documents(state, "off", prefix)[0]["taskDefinition"]["containerDefinitions"][0]
+            old["environment"] += item["environment"]
+            old["secrets"] += item["secrets"]
+        old["environment"].append({"name": "PMS_CHANNEX_WORKER_ENABLED", "value": "true"})
+        task = plan["planned_values"]["root_module"]["resources"][0]["values"]
+        task["container_definitions"] = json.dumps([{"environment": [{"name": "PMS_CHANNEX_WORKER_ENABLED", "value": "true"}], "secrets": []}])
+        return current, plan
+
+    def test_blocked_callers_may_be_retired_completely(self):
+        guard.check(*self.retirement(("blocked",) * 4))
+        # Profile was installed last; a never-released or held caller retires the same way.
+        guard.check(*self.retirement(("blocked", "blocked", "blocked", "off")))
+        guard.check(*self.retirement(("blocked", "blocked", "hold", "hold")))
+        for prefix in guard.PREFIXES:
+            for old in ("blocked", "hold", "off"):
+                guard.check(*self.documents(old, "off", prefix))
+
+    def test_enabled_caller_is_never_retired_by_ordinary_apply(self):
+        for index in range(len(guard.PREFIXES)):
+            states = ["blocked"] * 4
+            states[index] = "enabled"
+            with self.assertRaises(ValueError):
+                guard.check(*self.retirement(states))
+
+    def test_retirement_drops_admission_origin_and_token_together(self):
+        for prefix in guard.PREFIXES:
+            admission, origin, token = prefix + "_ADMISSION", prefix + "_ORIGIN", prefix + "_INTERNAL_TOKEN"
+            for keep_env, keep_secrets in (([admission], []), ([origin], []), ([], [token]), ([admission, origin], []), ([origin], [token])):
+                current, plan = self.documents("blocked", "blocked", prefix)
+                task = plan["planned_values"]["root_module"]["resources"][0]["values"]
+                containers = json.loads(task["container_definitions"])
+                containers[0]["environment"] = [e for e in containers[0]["environment"] if e["name"] in keep_env]
+                containers[0]["secrets"] = [e for e in containers[0]["secrets"] if e["name"] in keep_secrets]
+                task["container_definitions"] = json.dumps(containers)
+                with self.subTest(prefix=prefix, env=keep_env, secrets=keep_secrets), self.assertRaises(ValueError):
+                    guard.check(current, plan)
+
+    def test_retired_names_in_the_wrong_field_are_not_retirement(self):
+        for prefix in guard.PREFIXES:
+            current, plan = self.documents("blocked", "off", prefix)
+            task = plan["planned_values"]["root_module"]["resources"][0]["values"]
+            containers = json.loads(task["container_definitions"])
+            containers[0]["environment"].append({"name": prefix + "_INTERNAL_TOKEN", "value": "arn:exact-token"})
+            task["container_definitions"] = json.dumps(containers)
+            with self.assertRaises(ValueError):
+                guard.check(current, plan)
