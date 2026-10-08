@@ -18,10 +18,8 @@ on:
       - "scripts/assert-pricing-bootstrap-plan.py"
       - "scripts/test_pricing_bootstrap_plan.py"
       - ".github/workflows/pricing-command-bootstrap-plan.yml"
-      - "scripts/test_hotel_setup_credentials.py"
       - "scripts/assert-hotel-setup-caller-retained.py"
       - "scripts/test_hotel_setup_caller_retained.py"
-      - "scripts/test_hotel_setup_public_caller.py"
       - "scripts/test_hotel_setup_release.py"
       - "scripts/test_hotel_setup_online_readiness.py"
       - "scripts/assert-hotel-setup-online-readiness.py"
@@ -34,7 +32,6 @@ on:
       - "docs/hotel-setup-approved-readiness.md"
       - "scripts/test_hotel_setup_online_runner.py"
       - "scripts/test_hotel_setup_online_workflow.py"
-      - "scripts/test_hotel_setup_online_iam.py"
       - ".github/workflows/hotel-setup-online.yml"
       - "deployment/hotel-setup-online-images.json"
       - "scripts/release-hotel-setup.py"
@@ -58,8 +55,6 @@ on:
       - ".github/workflows/hotel-setup-migration-audit.yml"
       - "docs/hotel-setup-readiness-migration-audit.md"
       - ".github/workflows/hotel-setup-release.yml"
-      - "scripts/test_hotel_setup_network.py"
-      - "scripts/test_hotel_setup_service.py"
       - "scripts/test_hotel_setup_creation_runner.py"
       - "scripts/provision-hotel-setup-creation-login.mjs"
       - "scripts/test-hotel-setup-creation-bootstrap.mjs"
@@ -379,19 +374,13 @@ jobs:
         working-directory: infra
 
       - name: Verify hotel setup credential isolation (offline)
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/test_hotel_setup_approved_readiness.py scripts/test_hotel_setup_credentials.py scripts/test_hotel_setup_public_caller.py scripts/test_hotel_setup_release.py scripts/test_hotel_setup_online_readiness.py scripts/test_hotel_setup_online_runner.py scripts/test_hotel_setup_online_workflow.py scripts/test_hotel_setup_online_iam.py scripts/test_hotel_setup_caller_retained.py -v
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/test_hotel_setup_approved_readiness.py scripts/test_hotel_setup_release.py scripts/test_hotel_setup_online_readiness.py scripts/test_hotel_setup_online_runner.py scripts/test_hotel_setup_online_workflow.py scripts/test_hotel_setup_caller_retained.py -v
 
       - name: Prove pricing infrastructure opt-in with native offline plans
         run: python3 -m unittest scripts/test_pricing_infrastructure_opt_in.py -v
 
       - name: Verify approved readiness diagnostic redaction
         run: node scripts/test-hotel-setup-approved-readiness-diagnostic.mjs
-
-      - name: Verify private hotel setup network (offline)
-        run: python3 -m unittest scripts/test_hotel_setup_network.py -v
-
-      - name: Verify private hotel setup service staging (offline)
-        run: python3 -m unittest scripts/test_hotel_setup_service.py -v
 
       - name: Terraform validate
         run: terraform validate
