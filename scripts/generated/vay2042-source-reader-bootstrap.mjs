@@ -174,7 +174,9 @@ SELECT
     WHERE ${applicationSchema} AND p.prosecdef AND p.prokind IN ('f','p')
       AND has_function_privilege(r.oid, p.oid, 'EXECUTE')) AS definer_privileges,
   EXISTS (SELECT 1 FROM unnest($2::text[]) expected(name)
-    WHERE NOT has_table_privilege(r.oid, expected.name, 'SELECT')) AS missing_read
+    LEFT JOIN (pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace)
+      ON n.nspname || '.' || c.relname = expected.name
+    WHERE c.oid IS NULL OR NOT has_table_privilege(r.oid, c.oid, 'SELECT')) AS missing_read
 FROM pg_roles r WHERE r.rolname = $1`;
 async function verifyPrivileges(client, tables) {
   const result = await client.query(privilegeSql, [reader, tables]);

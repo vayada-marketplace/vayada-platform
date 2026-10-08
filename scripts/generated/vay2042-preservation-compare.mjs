@@ -287,7 +287,9 @@ SELECT
     WHERE ${applicationSchema} AND p.prosecdef AND p.prokind IN ('f','p')
       AND has_function_privilege(r.oid, p.oid, 'EXECUTE')) AS definer_privileges,
   EXISTS (SELECT 1 FROM unnest($2::text[]) expected(name)
-    WHERE NOT has_table_privilege(r.oid, expected.name, 'SELECT')) AS missing_read
+    LEFT JOIN (pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace)
+      ON n.nspname || '.' || c.relname = expected.name
+    WHERE c.oid IS NULL OR NOT has_table_privilege(r.oid, c.oid, 'SELECT')) AS missing_read
 FROM pg_roles r WHERE r.rolname = $1`;
   }
 });
@@ -305,6 +307,8 @@ var snapshot = "vay2017-legacy-source-freeze-20260920";
 var sourceUser = "vay2042_source_reader_20260925";
 var caFingerprint = "6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86";
 var queryVersion = "source-preservation-jsonb-v1";
+var sourceProofSha256 = "acf9fb92b78057919ea92b947533fe458fdc1efc40d54db232e45b19933e0eda";
+var evidenceTable = "vayada_migration_evidence.database_attestations";
 var requireTrue2 = (condition, code) => {
   if (!condition) throw new Error(code);
 };
@@ -374,14 +378,29 @@ async function checkConnection(client, database, user) {
     "database_identity_invalid"
   );
 }
-async function checkInventory(client, expected) {
+async function checkInventory(client, expected, source = false) {
   const tables = (await client.query(`SELECT n.nspname || '.' || c.relname AS name
     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname <> 'information_schema' AND n.nspname <> 'vay2017_metadata'
       AND n.nspname !~ '^pg_' AND c.relkind IN ('r','p') ORDER BY 1`)).rows.map((row) => row.name);
-  requireTrue2(JSON.stringify(tables) === JSON.stringify(expected), "table_inventory_mismatch");
+  const bound = source && tables.includes(evidenceTable);
+  requireTrue2(JSON.stringify(tables) === JSON.stringify(
+    [...expected, ...bound ? [evidenceTable] : []].sort()
+  ), "table_inventory_mismatch");
+  if (bound) {
+    const rows = (await client.query(`SELECT attestation_key,attestation_value
+      FROM ${evidenceTable} ORDER BY attestation_key`)).rows;
+    requireTrue2(JSON.stringify(rows) === JSON.stringify([
+      { attestation_key: "vayada.cutover_freeze_proof_sha256", attestation_value: sourceProofSha256 },
+      {
+        attestation_key: "vayada.source_snapshot_identifier",
+        attestation_value: "arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-freeze-20260920"
+      }
+    ]), "source_attestation_mismatch");
+  }
+  return bound;
 }
-async function checkSourcePrivileges(client, expected) {
+async function checkSourcePrivileges(client, expected, bound) {
   const role = (await client.query(`SELECT rolname, rolcanlogin, rolconnlimit, rolsuper,
     rolcreatedb, rolcreaterole, rolinherit, rolreplication, rolbypassrls, rolvaliduntil
     FROM pg_roles WHERE rolname=$1`, [sourceUser])).rows;
@@ -397,7 +416,10 @@ async function checkSourcePrivileges(client, expected) {
     "source_privilege_mismatch"
   );
   const { privilegeSql: privilegeSql2 } = await Promise.resolve().then(() => (init_provision_vay2042_source_reader(), provision_vay2042_source_reader_exports));
-  const result = await client.query(privilegeSql2, [sourceUser, expected]);
+  const result = await client.query(privilegeSql2, [
+    sourceUser,
+    [...expected, ...bound ? [evidenceTable] : []]
+  ]);
   requireTrue2(
     result.rowCount === 1 && Object.entries(result.rows[0]).every(
       ([key, value]) => value === (key === "attributes")
@@ -429,8 +451,8 @@ async function compare({ connect }) {
     const current = await connect("source", database);
     try {
       await checkConnection(current, database, sourceUser);
-      await checkInventory(current, source.tables);
-      await checkSourcePrivileges(current, source.tables);
+      const bound = await checkInventory(current, source.tables, true);
+      await checkSourcePrivileges(current, source.tables, bound);
       for (const original of expected) {
         const restored = await checksumTable(current, original.table);
         requireTrue2(
@@ -512,7 +534,8 @@ if (process.env.VAY2042_COMPARE_MAIN === "1") {
       "table_inventory_mismatch",
       "row_invalid",
       "source_rows_mismatch",
-      "source_privilege_mismatch"
+      "source_privilege_mismatch",
+      "source_attestation_mismatch"
     ]);
     console.error(JSON.stringify({
       status: "FAIL",

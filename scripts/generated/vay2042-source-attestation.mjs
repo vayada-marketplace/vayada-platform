@@ -122,6 +122,28 @@ var vay2042_source_reader_default = {
   ]
 };
 
+// docs/vay2042-source-preservation-proof-20261001.json
+var vay2042_source_preservation_proof_20261001_default = {
+  version: 1,
+  purpose: "isolated-rehearsal-source-preservation-not-production-freeze",
+  snapshotArn: "arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-freeze-20260920",
+  sourceRestoreResourceId: "db-BB7GOFQ3BQTLTBG444I2Q75X6Y",
+  controlRestoreResourceId: "db-KWO2HSCRBXNV75OK7LNIBZN7TQ",
+  workflowRunId: 36847109009,
+  workflowCommit: "a91ba253108e97aa8f6b523ed01b9f499cb33679",
+  executionArn: "arn:aws:states:eu-west-1:269416271598:execution:vay2042-source-preservation-compare:compare-20261001T100757Z-36847109009",
+  taskArn: "arn:aws:ecs:eu-west-1:269416271598:task/vay2017-metadata-rehearsal/4cb7b09d642645df8e1eb7740e754693",
+  taskDefinitionArn: "arn:aws:ecs:eu-west-1:269416271598:task-definition/vay2042-source-preservation-compare:1",
+  imageDigest: "sha256:a6f1001b1713e5f86e52cf757b3e67c794ec936639273dc041cedc7b95ea7b3c",
+  reportLogTimestamp: "2026-10-01T10:08:30.999Z",
+  reportArtifactId: 11154281211,
+  reportFileSha256: "8ccc7f011968dc179f975ca0901ea7b21efd50d129124ea975cfbb35f72c3790",
+  canonicalEvidenceSha256: "985c14b0756937c147a04be3193f3592939a3188c867bb10a9005dbc922c0b6c",
+  databases: 4,
+  tables: 83,
+  rows: 51477
+};
+
 // scripts/launch-vay2042-source-reader.mjs
 import { randomUUID, X509Certificate } from "node:crypto";
 import { gunzipSync } from "node:zlib";
@@ -421,333 +443,166 @@ if (process.env.VAY2042_RUN_MAIN === "1") {
 
 // scripts/provision-vay2042-target.mjs
 var target = "vay2042_target_rehearsal_20260925";
-var writer = "vay2042_target_writer_20260925";
 var attestor = "vayada_migration_attestor";
 
-// scripts/vay2042-private-preflight.mjs
+// scripts/vay2042-source-attestation.mjs
+var proofSha256 = "acf9fb92b78057919ea92b947533fe458fdc1efc40d54db232e45b19933e0eda";
+var evidenceTable = "vayada_migration_evidence.database_attestations";
+var snapshot = vay2042_source_preservation_proof_20261001_default.snapshotArn;
 var requireTrue3 = (condition, code) => {
   if (!condition) throw new Error(code);
 };
-var initialExpiry = /* @__PURE__ */ new Map([
-  // The sole prior protected renewal (run 36282007889) set both roles to this expiry.
-  [reader, ["2026-09-28T00:17:57.465Z", "2026-09-28T00:17:57.465Z"]],
-  [writer, ["2026-09-28T00:17:57.465Z", "2026-09-28T00:17:57.465Z"]]
-]);
 var expectedDatabases = [...vay2042_source_reader_default.databases, target].sort();
-var sourceProofSha256 = "acf9fb92b78057919ea92b947533fe458fdc1efc40d54db232e45b19933e0eda";
-var sourceEvidenceTable = "vayada_migration_evidence.database_attestations";
-var expectedSettings = [
-  "default_transaction_read_only=on",
-  "idle_in_transaction_session_timeout=60s",
-  "statement_timeout=60s"
-].sort();
-var credentials = [
-  {
-    arn: "arn:aws:secretsmanager:eu-west-1:269416271598:secret:vay2042/source-reader/vay2017-metadata-rehearsal-isolated-20260923-20260925-4kTuiw",
-    name: "vay2042/source-reader/vay2017-metadata-rehearsal-isolated-20260923-20260925",
-    version: "91d7b931-e78e-419f-8a9f-b1aeb9c259ba"
-  },
-  {
-    arn: "arn:aws:secretsmanager:eu-west-1:269416271598:secret:vay2042/target-writer/vay2017-metadata-rehearsal-isolated-20260923-20260925-mfr57v",
-    name: "vay2042/target-writer/vay2017-metadata-rehearsal-isolated-20260923-20260925",
-    version: "220507a8-4ac8-4bab-bd57-221862dd2dcc"
-  }
-];
-function checkSecretMetadata(metadata, expected) {
-  const versions = metadata?.VersionIdsToStages ?? {};
-  requireTrue3(
-    metadata?.ARN === expected.arn && metadata?.Name === expected.name && !metadata.DeletedDate && Object.keys(versions).length === 1 && JSON.stringify(versions[expected.version]) === JSON.stringify(["AWSCURRENT"]),
-    "credential_version_changed"
-  );
-}
-function checkRole(row, name, now) {
-  const window = initialExpiry.get(name);
-  const expiry = new Date(row?.rolvaliduntil).getTime();
-  requireTrue3(
-    row?.rolname === name && row.rolcanlogin === true && row.rolconnlimit === 4 && [
-      row.rolsuper,
-      row.rolcreatedb,
-      row.rolcreaterole,
-      row.rolinherit,
-      row.rolreplication,
-      row.rolbypassrls
-    ].every((value) => value === false) && Number.isFinite(expiry) && expiry >= Date.parse(window[0]) && expiry <= Date.parse(window[1]) && expiry < now,
-    "role_identity_or_expiry_mismatch"
-  );
-}
-async function checkPrivileges(client, name, tables, ignored = []) {
-  const result = await client.query(privilegeSql, [name, tables]);
-  requireTrue3(
-    result.rowCount === 1 && Object.entries(result.rows[0]).every(
-      ([key, value]) => value === (key === "attributes" || ignored.includes(key))
-    ),
-    "role_privilege_mismatch"
-  );
-}
-async function checkOldDatabase(client, database) {
-  const source = vay2042_source_reader_default.sources.find((entry) => entry.database === database);
-  let sourceBound = false;
-  if (source) {
-    const schema = await client.query("SELECT 1 FROM pg_namespace WHERE nspname='vayada_migration_evidence'");
-    sourceBound = schema.rowCount === 1;
-    const tables = (await client.query(`SELECT n.nspname || '.' || c.relname AS name
-      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
-        AND c.relkind IN ('r','p') ORDER BY 1`)).rows.map((row) => row.name);
-    requireTrue3(
-      JSON.stringify(tables) === JSON.stringify(
-        [...source.tables, ...sourceBound ? [sourceEvidenceTable] : []].sort()
-      ),
-      "source_table_inventory_changed"
-    );
-    if (sourceBound) {
-      const owner = (await client.query(`SELECT n.nspowner=r.oid AND c.relowner=r.oid AS trusted
-        FROM pg_namespace n JOIN pg_class c ON c.relnamespace=n.oid
-        JOIN pg_roles r ON r.rolname=$1
-        WHERE n.nspname='vayada_migration_evidence' AND c.relname='database_attestations'`, [attestor])).rows[0];
-      await client.query("BEGIN READ ONLY");
-      let evidence;
-      try {
-        await client.query(`SET LOCAL ROLE "${attestor}"`);
-        evidence = (await client.query(`SELECT attestation_key,attestation_value
-          FROM ${sourceEvidenceTable} ORDER BY attestation_key`)).rows;
-      } finally {
-        await client.query("ROLLBACK");
-      }
-      requireTrue3(owner?.trusted === true && JSON.stringify(evidence) === JSON.stringify([
-        { attestation_key: "vayada.cutover_freeze_proof_sha256", attestation_value: sourceProofSha256 },
-        {
-          attestation_key: "vayada.source_snapshot_identifier",
-          attestation_value: "arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-freeze-20260920"
-        }
-      ]), "source_attestation_mismatch");
-    }
-  }
-  await checkPrivileges(
-    client,
-    reader,
-    [...source?.tables ?? [], ...sourceBound ? [sourceEvidenceTable] : []]
-  );
-  await checkPrivileges(client, writer, [], ["database_write"]);
-  const defaults = await client.query(`SELECT count(*)::int AS grants FROM pg_default_acl d,
-    LATERAL aclexplode(d.defaclacl) a
-    WHERE a.grantee = 0 OR a.grantee IN
-      (SELECT oid FROM pg_roles WHERE rolname = ANY($1::text[]))`, [[reader, writer]]);
-  requireTrue3(defaults.rows[0]?.grants === 0, "old_database_default_acl_mismatch");
-  const boundary = await client.query(`SELECT NOT has_database_privilege($1, current_database(), 'CREATE')
-    AND NOT has_database_privilege($1, current_database(), 'TEMP') AS writer_denied`, [writer]);
-  requireTrue3(boundary.rows[0]?.writer_denied === true, "old_database_writer_privilege_mismatch");
-  return source ? sourceBound : null;
-}
-async function checkTarget(client, admin = true) {
-  const schemas = (await client.query(`SELECT nspname AS name FROM pg_namespace
-    WHERE nspname <> 'information_schema' AND nspname !~ '^pg_' ORDER BY 1`)).rows.map((row) => row.name);
-  requireTrue3(
-    JSON.stringify(schemas) === JSON.stringify(["public", "vayada_migration_evidence"]),
-    "target_not_clean"
-  );
-  const relations = (await client.query(`SELECT n.nspname || '.' || c.relname AS name FROM pg_class c
-    JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_' ORDER BY 1`)).rows.map((row) => row.name);
-  requireTrue3(JSON.stringify(relations) === JSON.stringify([
-    "vayada_migration_evidence.database_attestations",
-    "vayada_migration_evidence.database_attestations_pkey"
-  ]), "target_not_clean");
-  const columns = (await client.query(`SELECT a.attname AS name, format_type(a.atttypid,a.atttypmod) AS type,
-    a.attnotnull AS required, pg_get_expr(d.adbin,d.adrelid) AS default_value
-    FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
-    JOIN pg_namespace n ON n.oid=c.relnamespace
-    LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-    WHERE n.nspname='vayada_migration_evidence' AND c.relname='database_attestations'
-      AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum`)).rows;
-  requireTrue3(JSON.stringify(columns) === JSON.stringify([
-    { name: "attestation_key", type: "text", required: true, default_value: null },
-    { name: "attestation_value", type: "text", required: true, default_value: null },
-    { name: "attested_at", type: "timestamp with time zone", required: true, default_value: "now()" }
-  ]), "target_evidence_shape_mismatch");
-  const constraints = (await client.query(`SELECT conname AS name, contype AS type,
-    conkey::text AS columns, convalidated AS valid, condeferrable AS deferrable
-    FROM pg_constraint x JOIN pg_class c ON c.oid=x.conrelid
-    JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname='vayada_migration_evidence' AND c.relname='database_attestations'`)).rows;
-  requireTrue3(JSON.stringify(constraints) === JSON.stringify([
-    { name: "database_attestations_pkey", type: "p", columns: "{1}", valid: true, deferrable: false }
-  ]), "target_evidence_shape_mismatch");
-  const objects = await client.query(`SELECT
-    (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-      WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_') AS routines,
-    (SELECT count(*)::int FROM pg_default_acl) AS defaults,
-    (SELECT count(*)::int FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace
-      WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
-        AND t.typtype IN ('b','d','e','r','m') AND t.typelem = 0) AS types,
-    (SELECT count(*)::int FROM pg_operator o JOIN pg_namespace n ON n.oid=o.oprnamespace
-      WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_') AS operators,
+var sourceDatabases = vay2042_source_reader_default.sources.map((source) => source.database);
+async function verifySource(client, source, bound) {
+  const hooks = (await client.query(`SELECT
     (SELECT count(*)::int FROM pg_event_trigger) AS event_triggers,
-    (SELECT count(*)::int FROM pg_trigger WHERE NOT tgisinternal) AS triggers,
-    (SELECT count(*)::int FROM pg_policy) AS policies,
-    (SELECT count(*)::int FROM pg_extension WHERE extname <> 'plpgsql') AS extensions`);
-  requireTrue3([
-    "routines",
-    "defaults",
-    "types",
-    "operators",
-    "event_triggers",
-    "triggers",
-    "policies",
-    "extensions"
-  ].every((key) => objects.rows[0]?.[key] === 0), "target_not_clean");
-  if (admin) {
-    const owner = await client.query(`SELECT
-    c.relowner = r.oid AND n.nspowner = r.oid AS owned_by_attestor,
-    NOT r.rolcanlogin AND NOT r.rolsuper AND NOT r.rolcreatedb AND NOT r.rolcreaterole
-      AND NOT r.rolinherit AND NOT r.rolreplication AND NOT r.rolbypassrls AS safe_role,
-    NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE member=r.oid OR
-      (roleid=r.oid AND inherit_option)) AS safe_membership,
-    pg_has_role(current_user, r.oid, 'SET') AS admin_can_set_role
-    FROM pg_roles r JOIN pg_namespace n ON n.nspname='vayada_migration_evidence'
-    JOIN pg_class c ON c.relnamespace=n.oid AND c.relname='database_attestations'
-    WHERE r.rolname=$1`, [attestor]);
-    requireTrue3(
-      owner.rowCount === 1 && Object.values(owner.rows[0]).every((value) => value === true),
-      "target_attestor_mismatch"
-    );
+    (SELECT count(*)::int FROM pg_default_acl d JOIN pg_roles r ON r.oid=d.defaclrole
+      WHERE r.rolname=$1) AS attestor_defaults`, [attestor])).rows[0];
+  requireTrue3(
+    hooks?.event_triggers === 0 && hooks.attestor_defaults === 0,
+    "source_ddl_hook_mismatch"
+  );
+  const relations = (await client.query(`SELECT n.nspname || '.' || c.relname AS name
+    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+      AND c.relkind IN ('r','p') ORDER BY 1`)).rows.map((row) => row.name);
+  requireTrue3(JSON.stringify(relations) === JSON.stringify(
+    [...source.tables, ...bound ? [evidenceTable] : []].sort()
+  ), "source_inventory_mismatch");
+  const settings = await client.query(`SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) setting
+    WHERE s.setdatabase=(SELECT oid FROM pg_database WHERE datname=current_database()) AND s.setrole=0
+      AND (setting LIKE 'vayada.source_snapshot_identifier=%'
+        OR setting LIKE 'vayada.cutover_freeze_proof_sha256=%')`);
+  requireTrue3(settings.rowCount === 0, "source_setting_conflict");
+  const evidence = await client.query(`SELECT n.nspowner=r.oid AS schema_owner,
+    c.relowner=r.oid AS table_owner, c.relkind='r' AND NOT c.relrowsecurity
+      AND NOT c.relforcerowsecurity AS table_shape
+    FROM pg_namespace n JOIN pg_class c ON c.relnamespace=n.oid
+    JOIN pg_roles r ON r.rolname=$1
+    WHERE n.nspname='vayada_migration_evidence' AND c.relname='database_attestations'`, [attestor]);
+  requireTrue3(evidence.rowCount === (bound ? 1 : 0), "source_evidence_state_mismatch");
+  if (bound) {
+    requireTrue3(Object.values(evidence.rows[0]).every((value) => value === true), "source_evidence_owner_mismatch");
     await client.query("BEGIN READ ONLY");
+    let rows;
+    try {
+      await client.query(`SET LOCAL ROLE "${attestor}"`);
+      rows = (await client.query(`SELECT attestation_key,attestation_value
+        FROM vayada_migration_evidence.database_attestations ORDER BY attestation_key`)).rows;
+    } finally {
+      await client.query("ROLLBACK");
+    }
+    requireTrue3(JSON.stringify(rows) === JSON.stringify([
+      { attestation_key: "vayada.cutover_freeze_proof_sha256", attestation_value: proofSha256 },
+      { attestation_key: "vayada.source_snapshot_identifier", attestation_value: snapshot }
+    ]), "source_evidence_value_mismatch");
+  } else {
+    const schema = await client.query("SELECT 1 FROM pg_namespace WHERE nspname='vayada_migration_evidence'");
+    requireTrue3(schema.rowCount === 0, "source_evidence_state_mismatch");
   }
-  try {
-    if (admin) await client.query(`SET LOCAL ROLE "${attestor}"`);
-    await checkPrivileges(client, reader, []);
-    await checkPrivileges(
-      client,
-      writer,
-      ["vayada_migration_evidence.database_attestations"],
-      ["database_write", "schema_write"]
-    );
-    const boundary = await client.query(`SELECT
-      NOT has_database_privilege($1, current_database(), 'CONNECT') AS source_denied,
-      has_database_privilege($2, current_database(), 'CONNECT')
-        AND has_database_privilege($2, current_database(), 'CREATE')
-        AND NOT has_database_privilege($2, current_database(), 'TEMP')
-        AND has_schema_privilege($2, 'vayada_migration_evidence', 'USAGE')
-        AND NOT has_schema_privilege($2, 'vayada_migration_evidence', 'CREATE')
-        AND has_schema_privilege($2, 'public', 'USAGE')
-        AND has_schema_privilege($2, 'public', 'CREATE')
-        AND has_table_privilege($2, 'vayada_migration_evidence.database_attestations', 'SELECT')
-        AND NOT has_table_privilege($2, 'vayada_migration_evidence.database_attestations',
-          'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS writer_boundary`, [reader, writer]);
-    requireTrue3(
-      boundary.rows[0]?.source_denied === true && boundary.rows[0]?.writer_boundary === true,
-      "target_privilege_mismatch"
-    );
-    const evidence = await client.query("SELECT count(*)::int AS rows FROM vayada_migration_evidence.database_attestations");
-    requireTrue3(evidence.rows[0]?.rows === 0, "target_not_clean");
-  } finally {
-    if (admin) await client.query("ROLLBACK");
-  }
+  const privileges = await client.query(privilegeSql, [
+    reader,
+    [...source.tables, ...bound ? [evidenceTable] : []]
+  ]);
+  requireTrue3(privileges.rowCount === 1 && Object.entries(privileges.rows[0]).every(
+    ([key, value]) => value === (key === "attributes")
+  ), "source_reader_privilege_mismatch");
 }
-async function runPreflight({ connect, checkCredentials = async () => {
-}, now = () => Date.now() }) {
+async function bindSourceAttestation({ connect, now = () => Date.now() }) {
   const control = await connect("postgres", "admin");
   let locked = false;
-  let committed = false;
-  let commitAttempted = false;
+  let committed = 0;
   try {
     locked = (await control.query("SELECT pg_try_advisory_lock(204220260925) AS locked")).rows[0]?.locked === true;
-    requireTrue3(locked, "preflight_busy");
+    requireTrue3(locked, "source_binding_busy");
     const databases = (await control.query(`SELECT datname FROM pg_database
       WHERE datallowconn AND NOT datistemplate AND datname <> 'rdsadmin' ORDER BY datname`)).rows.map((row) => row.datname);
     requireTrue3(JSON.stringify(databases) === JSON.stringify(expectedDatabases), "database_inventory_mismatch");
     const roles = (await control.query(`SELECT rolname,rolcanlogin,rolconnlimit,rolsuper,rolcreatedb,
-      rolcreaterole,rolinherit,rolreplication,rolbypassrls,rolvaliduntil
-      FROM pg_roles WHERE rolname = ANY($1::text[]) ORDER BY rolname`, [[reader, writer]])).rows;
-    requireTrue3(roles.length === 2, "role_identity_or_expiry_mismatch");
-    for (const name of [reader, writer]) checkRole(roles.find((role) => role.rolname === name), name, now());
-    const settings = (await control.query(`SELECT r.rolname,s.setdatabase = 0 AS global,s.setconfig FROM pg_db_role_setting s
-      JOIN pg_roles r ON r.oid=s.setrole WHERE r.rolname = ANY($1::text[])`, [[reader, writer]])).rows;
-    requireTrue3(
-      settings.length === 1 && settings[0].rolname === reader && settings[0].global === true && JSON.stringify([...settings[0].setconfig].sort()) === JSON.stringify(expectedSettings),
-      "role_settings_mismatch"
-    );
-    const sourceBindings = [];
-    for (const database of vay2042_source_reader_default.databases) {
-      const client = database === "postgres" ? control : await connect(database, "admin");
+      rolcreaterole,rolinherit,rolreplication,rolbypassrls,rolvaliduntil FROM pg_roles
+      WHERE rolname = ANY($1::text[])`, [[reader, attestor]])).rows;
+    const sourceRole = roles.find((role) => role.rolname === reader);
+    const evidenceRole = roles.find((role) => role.rolname === attestor);
+    requireTrue3(roles.length === 2 && sourceRole?.rolcanlogin === true && sourceRole.rolconnlimit === 4 && [
+      sourceRole.rolsuper,
+      sourceRole.rolcreatedb,
+      sourceRole.rolcreaterole,
+      sourceRole.rolinherit,
+      sourceRole.rolreplication,
+      sourceRole.rolbypassrls
+    ].every((value) => value === false) && new Date(sourceRole.rolvaliduntil).getTime() > now() + 72e5 && [
+      evidenceRole?.rolcanlogin,
+      evidenceRole?.rolsuper,
+      evidenceRole?.rolcreatedb,
+      evidenceRole?.rolcreaterole,
+      evidenceRole?.rolinherit,
+      evidenceRole?.rolreplication,
+      evidenceRole?.rolbypassrls
+    ].every((value) => value === false), "source_role_mismatch");
+    const membership = (await control.query(`SELECT NOT EXISTS (
+      SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid) AND
+      (SELECT count(*)=1 AND bool_and(m.member=(SELECT oid FROM pg_roles WHERE rolname=current_user)
+        AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option)
+       FROM pg_auth_members m WHERE m.roleid=r.oid) AS safe
+      FROM pg_roles r WHERE r.rolname=$1`, [attestor])).rows[0];
+    requireTrue3(membership?.safe === true, "source_attestor_mismatch");
+    for (const source of vay2042_source_reader_default.sources) {
+      const client = source.database === "postgres" ? control : await connect(source.database, "admin");
       try {
-        const sourceBound = await checkOldDatabase(client, database);
-        if (sourceBound !== null) sourceBindings.push(sourceBound);
+        await verifySource(client, source, false);
       } finally {
         if (client !== control) await client.end();
       }
     }
-    requireTrue3(
-      sourceBindings.length === 4 && sourceBindings.every((value) => value === sourceBindings[0]),
-      "source_attestation_mismatch"
-    );
-    const fresh = await connect(target, "admin");
-    try {
-      await checkTarget(fresh);
-    } finally {
-      await fresh.end();
-    }
-    await checkCredentials();
-    const expiry = new Date(now() + 864e5).toISOString();
-    await control.query("BEGIN");
-    try {
-      for (const name of [reader, writer]) {
-        const sql = (await control.query(
-          `SELECT format('ALTER ROLE %I VALID UNTIL %L', $1::text,$2::text) AS sql`,
-          [name, expiry]
-        )).rows[0].sql;
-        await control.query(sql);
-      }
-      commitAttempted = true;
-      await control.query("COMMIT");
-      committed = true;
-    } catch (error) {
-      await control.query("ROLLBACK").catch(() => {
-      });
-      throw error;
-    }
-    for (const { database } of vay2042_source_reader_default.sources) {
-      const client = await connect(database, "source");
+    for (const source of vay2042_source_reader_default.sources) {
+      const client = source.database === "postgres" ? control : await connect(source.database, "admin");
       try {
-        await client.query("BEGIN READ ONLY");
+        await client.query("BEGIN");
         try {
-          await checkPrivileges(
-            client,
-            reader,
-            [
-              ...vay2042_source_reader_default.sources.find((s) => s.database === database).tables,
-              ...sourceBindings[0] ? [sourceEvidenceTable] : []
-            ]
-          );
+          await client.query(`CREATE SCHEMA vayada_migration_evidence AUTHORIZATION "${attestor}"`);
+          await client.query(`SET LOCAL ROLE "${attestor}"`);
+          await client.query(`REVOKE ALL ON SCHEMA vayada_migration_evidence FROM PUBLIC;
+            CREATE TABLE ${evidenceTable} (
+              attestation_key text PRIMARY KEY, attestation_value text NOT NULL,
+              attested_at timestamptz NOT NULL DEFAULT now());
+            REVOKE ALL ON ${evidenceTable} FROM PUBLIC`);
+          await client.query(`INSERT INTO ${evidenceTable}(attestation_key,attestation_value)
+            VALUES ('vayada.source_snapshot_identifier',$1),
+              ('vayada.cutover_freeze_proof_sha256',$2)`, [snapshot, proofSha256]);
+          await client.query(`GRANT USAGE ON SCHEMA vayada_migration_evidence TO "${reader}";
+            GRANT SELECT ON ${evidenceTable} TO "${reader}"`);
+          await client.query("COMMIT");
+          committed += 1;
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => {
+          });
+          throw error;
+        }
+        await verifySource(client, source, true);
+        const sourceReader = await connect(source.database, "source");
+        try {
+          await sourceReader.query("BEGIN READ ONLY");
+          const rows = (await sourceReader.query(`SELECT attestation_key,attestation_value
+            FROM ${evidenceTable} ORDER BY attestation_key`)).rows;
+          requireTrue3(rows.length === 2 && rows[0].attestation_value === proofSha256 && rows[1].attestation_value === snapshot, "source_reader_readback_mismatch");
+          await sourceReader.query("COMMIT");
         } finally {
-          await client.query("ROLLBACK");
+          await sourceReader.end();
         }
       } finally {
-        await client.end();
+        if (client !== control) await client.end();
       }
-    }
-    const writerClient = await connect(target, "writer");
-    try {
-      await writerClient.query("BEGIN READ ONLY");
-      try {
-        await checkTarget(writerClient, false);
-      } finally {
-        await writerClient.query("ROLLBACK");
-      }
-    } finally {
-      await writerClient.end();
     }
     return {
       status: "OK",
-      stage: "complete",
-      scope: "isolated-catalog-preflight",
-      databases: 10,
+      scope: "isolated-source-attestation",
+      databases: 4,
       tables: 83,
-      bound: false,
-      expiresAt: expiry
+      proofSha256
     };
   } catch (error) {
-    if (committed || commitAttempted) throw new Error("renewal_committed_requires_inspection", { cause: error });
+    if (committed) throw new Error("source_binding_partial_requires_inspection", { cause: error });
     throw error;
   } finally {
     if (locked) await control.query("SELECT pg_advisory_unlock(204220260925)").catch(() => {
@@ -756,90 +611,41 @@ async function runPreflight({ connect, checkCredentials = async () => {
     });
   }
 }
-var stages2 = /* @__PURE__ */ new Set(["configuration", "database-connect", "preflight", "credential-version"]);
-var codes2 = /* @__PURE__ */ new Set([
-  "configuration_invalid",
-  "database_ca_invalid",
-  "database_endpoint_invalid",
-  "preflight_busy",
-  "credential_version_changed",
-  "database_inventory_mismatch",
-  "role_identity_or_expiry_mismatch",
-  "role_settings_mismatch",
-  "source_table_inventory_changed",
-  "role_privilege_mismatch",
-  "target_not_clean",
-  "old_database_default_acl_mismatch",
-  "old_database_writer_privilege_mismatch",
-  "target_evidence_shape_mismatch",
-  "source_attestation_mismatch",
-  "target_privilege_mismatch",
-  "target_attestor_mismatch",
-  "renewal_committed_requires_inspection",
-  "42501",
-  "28P01",
-  "3D000",
-  "25006",
-  "57P01",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "EPIPE",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "Connection terminated unexpectedly",
-  "Connection terminated",
-  "timeout expired",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "ETIMEDOUT",
-  "ERR_TLS_CERT_ALTNAME_INVALID"
-]);
-var classes2 = /* @__PURE__ */ new Set(["Error", "TypeError", "DatabaseError", "AggregateError"]);
-var safeCode = (error) => codes2.has(error?.code) ? error.code : codes2.has(error?.message) ? error.message : "UNKNOWN";
-var safeFailure2 = (stage, error) => ({
-  status: "FAIL",
-  stage: stages2.has(stage) ? stage : "preflight",
-  code: safeCode(error),
-  errorClass: classes2.has(error?.name) ? error.name : "Other",
-  ...error?.cause === void 0 ? {} : { cause: safeCode(error.cause) }
-});
-async function launch(env, { Client, SecretsManagerClient, DescribeSecretCommand }) {
+async function launch(env, { Client }) {
   let stage = "configuration";
   try {
     const { host, ca } = configuration(env);
     requireTrue3(
-      env.VAY2042_PRECHECK_MAIN === "1" && env.VAY2042_READER_SECRET_ARN === credentials[0].arn && env.VAY2042_SOURCE_USER === reader && env.VAY2042_SOURCE_PASSWORD && env.VAY2042_TARGET_USER === writer && env.VAY2042_TARGET_PASSWORD && env.VAY2042_TARGET_SECRET_ARN === credentials[1].arn,
+      env.VAY2042_BIND_SOURCE_MAIN === "1" && env.VAY2042_PROOF_SHA256 === proofSha256 && env.VAY2042_SOURCE_USER === reader && env.VAY2042_SOURCE_PASSWORD && vay2042_source_preservation_proof_20261001_default.workflowRunId === 36847109009 && vay2042_source_preservation_proof_20261001_default.snapshotArn.endsWith(vay2042_source_reader_default.sourceSnapshotId),
       "configuration_invalid"
     );
     stage = "database-connect";
     const connect = async (database, identity) => {
-      requireTrue3(
-        expectedDatabases.includes(database) && (identity === "admin" || identity === "source" && vay2042_source_reader_default.sources.some((s) => s.database === database) || identity === "writer" && database === target),
-        "configuration_invalid"
-      );
-      const credentials2 = identity === "admin" ? [env.VAY2042_DB_USER, env.VAY2042_DB_PASSWORD] : identity === "source" ? [env.VAY2042_SOURCE_USER, env.VAY2042_SOURCE_PASSWORD] : [env.VAY2042_TARGET_USER, env.VAY2042_TARGET_PASSWORD];
+      requireTrue3(sourceDatabases.includes(database) && ["admin", "source"].includes(identity), "configuration_invalid");
+      const user = identity === "admin" ? env.VAY2042_DB_USER : env.VAY2042_SOURCE_USER;
+      const password = identity === "admin" ? env.VAY2042_DB_PASSWORD : env.VAY2042_SOURCE_PASSWORD;
       const client = new Client({
         host,
         port: 5432,
         database,
-        user: credentials2[0],
-        password: credentials2[1],
+        user,
+        password,
         ssl: { ca, rejectUnauthorized: true, servername: host },
         connectionTimeoutMillis: 1e4,
         statement_timeout: 6e4,
-        application_name: "vay2042-private-preflight-v1"
+        application_name: "vay2042-source-attestation-v1"
       });
       client.on("error", () => {
       });
       try {
         await client.connect();
-        const result = await client.query(`SELECT current_database() AS database,session_user AS login,
-          host(inet_server_addr()) AS address,(SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()) AS ssl`);
+        const row = (await client.query(`SELECT current_database() AS database,session_user AS login,
+          host(inet_server_addr()) AS address,(SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()) AS ssl`)).rows[0];
         requireTrue3(
-          result.rows[0]?.database === database && result.rows[0]?.login === credentials2[0] && result.rows[0]?.ssl === true && /^10\.230\.0\.(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/.test(result.rows[0]?.address),
+          row?.database === database && row.login === user && row.ssl === true && /^10\.230\.0\.(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/.test(row.address),
           "database_endpoint_invalid"
         );
-        stage = "preflight";
+        stage = "source-binding";
         return client;
       } catch (error) {
         await client.end().catch(() => {
@@ -847,43 +653,46 @@ async function launch(env, { Client, SecretsManagerClient, DescribeSecretCommand
         throw error;
       }
     };
-    return await runPreflight({ connect, checkCredentials: async () => {
-      stage = "credential-version";
-      const secrets = new SecretsManagerClient({
-        region: "eu-west-1",
-        endpoint: "https://secretsmanager.eu-west-1.amazonaws.com"
-      });
-      try {
-        for (const expected of credentials) {
-          const metadata = await secrets.send(new DescribeSecretCommand({ SecretId: expected.arn }));
-          checkSecretMetadata(metadata, expected);
-        }
-      } finally {
-        secrets.destroy();
-      }
-      stage = "preflight";
-    } });
+    return await bindSourceAttestation({ connect });
   } catch (error) {
-    return safeFailure2(stage, error);
+    const codes2 = /* @__PURE__ */ new Set([
+      "configuration_invalid",
+      "database_endpoint_invalid",
+      "source_binding_busy",
+      "database_inventory_mismatch",
+      "source_role_mismatch",
+      "source_attestor_mismatch",
+      "source_inventory_mismatch",
+      "source_setting_conflict",
+      "source_ddl_hook_mismatch",
+      "source_evidence_state_mismatch",
+      "source_evidence_owner_mismatch",
+      "source_evidence_value_mismatch",
+      "source_reader_privilege_mismatch",
+      "source_reader_readback_mismatch",
+      "source_binding_partial_requires_inspection"
+    ]);
+    return {
+      status: "FAIL",
+      scope: "isolated-source-attestation",
+      stage,
+      code: codes2.has(error?.message) ? error.message : "binding_failed"
+    };
   }
 }
-if (process.env.VAY2042_PRECHECK_MAIN === "1") {
+if (process.env.VAY2042_BIND_SOURCE_MAIN === "1") {
   let result;
   try {
-    const [{ default: pg }, sdk] = await Promise.all([
-      import("pg"),
-      import("@aws-sdk/client-secrets-manager")
-    ]);
-    result = await launch(process.env, { Client: pg.Client, ...sdk });
-  } catch (error) {
-    result = safeFailure2("configuration", error);
+    result = await launch(process.env, { Client: (await import("pg")).default.Client });
+  } catch {
+    result = { status: "FAIL", scope: "isolated-source-attestation", code: "binding_failed" };
   }
   console.log(JSON.stringify(result));
   if (result.status !== "OK") process.exitCode = 1;
 }
 export {
-  checkRole,
-  checkSecretMetadata,
+  bindSourceAttestation,
+  evidenceTable,
   launch,
-  runPreflight
+  proofSha256
 };

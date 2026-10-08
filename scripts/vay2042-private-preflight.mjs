@@ -10,6 +10,8 @@ const initialExpiry = new Map([
   [writer, ['2026-09-28T00:17:57.465Z', '2026-09-28T00:17:57.465Z']],
 ]);
 const expectedDatabases = [...manifest.databases, target].sort();
+const sourceProofSha256 = 'acf9fb92b78057919ea92b947533fe458fdc1efc40d54db232e45b19933e0eda';
+const sourceEvidenceTable = 'vayada_migration_evidence.database_attestations';
 const expectedSettings = [
   'default_transaction_read_only=on',
   'idle_in_transaction_session_timeout=60s',
@@ -52,14 +54,38 @@ async function checkPrivileges(client, name, tables, ignored = []) {
 
 async function checkOldDatabase(client, database) {
   const source = manifest.sources.find((entry) => entry.database === database);
+  let sourceBound = false;
   if (source) {
+    const schema = await client.query("SELECT 1 FROM pg_namespace WHERE nspname='vayada_migration_evidence'");
+    sourceBound = schema.rowCount === 1;
     const tables = (await client.query(`SELECT n.nspname || '.' || c.relname AS name
       FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
       WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
         AND c.relkind IN ('r','p') ORDER BY 1`)).rows.map((row) => row.name);
-    requireTrue(JSON.stringify(tables) === JSON.stringify(source.tables), 'source_table_inventory_changed');
+    requireTrue(JSON.stringify(tables) === JSON.stringify(
+      [...source.tables, ...(sourceBound ? [sourceEvidenceTable] : [])].sort()),
+    'source_table_inventory_changed');
+    if (sourceBound) {
+      const owner = (await client.query(`SELECT n.nspowner=r.oid AND c.relowner=r.oid AS trusted
+        FROM pg_namespace n JOIN pg_class c ON c.relnamespace=n.oid
+        JOIN pg_roles r ON r.rolname=$1
+        WHERE n.nspname='vayada_migration_evidence' AND c.relname='database_attestations'`, [attestor])).rows[0];
+      await client.query('BEGIN READ ONLY');
+      let evidence;
+      try {
+        await client.query(`SET LOCAL ROLE "${attestor}"`);
+        evidence = (await client.query(`SELECT attestation_key,attestation_value
+          FROM ${sourceEvidenceTable} ORDER BY attestation_key`)).rows;
+      } finally { await client.query('ROLLBACK'); }
+      requireTrue(owner?.trusted === true && JSON.stringify(evidence) === JSON.stringify([
+        { attestation_key: 'vayada.cutover_freeze_proof_sha256', attestation_value: sourceProofSha256 },
+        { attestation_key: 'vayada.source_snapshot_identifier',
+          attestation_value: 'arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-freeze-20260920' },
+      ]), 'source_attestation_mismatch');
+    }
   }
-  await checkPrivileges(client, reader, source?.tables ?? []);
+  await checkPrivileges(client, reader,
+    [...(source?.tables ?? []), ...(sourceBound ? [sourceEvidenceTable] : [])]);
   await checkPrivileges(client, writer, [], ['database_write']);
   const defaults = await client.query(`SELECT count(*)::int AS grants FROM pg_default_acl d,
     LATERAL aclexplode(d.defaclacl) a
@@ -69,6 +95,7 @@ async function checkOldDatabase(client, database) {
   const boundary = await client.query(`SELECT NOT has_database_privilege($1, current_database(), 'CREATE')
     AND NOT has_database_privilege($1, current_database(), 'TEMP') AS writer_denied`, [writer]);
   requireTrue(boundary.rows[0]?.writer_denied === true, 'old_database_writer_privilege_mismatch');
+  return source ? sourceBound : null;
 }
 
 async function checkTarget(client, admin = true) {
@@ -179,11 +206,17 @@ export async function runPreflight({ connect, checkCredentials = async () => {},
     requireTrue(settings.length === 1 && settings[0].rolname === reader && settings[0].global === true &&
       JSON.stringify([...settings[0].setconfig].sort()) === JSON.stringify(expectedSettings),
     'role_settings_mismatch');
+    const sourceBindings = [];
     for (const database of manifest.databases) {
       const client = database === 'postgres' ? control : await connect(database, 'admin');
-      try { await checkOldDatabase(client, database); }
+      try {
+        const sourceBound = await checkOldDatabase(client, database);
+        if (sourceBound !== null) sourceBindings.push(sourceBound);
+      }
       finally { if (client !== control) await client.end(); }
     }
+    requireTrue(sourceBindings.length === 4 && sourceBindings.every((value) => value === sourceBindings[0]),
+      'source_attestation_mismatch');
     const fresh = await connect(target, 'admin');
     try { await checkTarget(fresh); }
     finally { await fresh.end(); }
@@ -204,7 +237,9 @@ export async function runPreflight({ connect, checkCredentials = async () => {},
       const client = await connect(database, 'source');
       try {
         await client.query('BEGIN READ ONLY');
-        try { await checkPrivileges(client, reader, manifest.sources.find((s) => s.database === database).tables); }
+        try { await checkPrivileges(client, reader,
+          [...manifest.sources.find((s) => s.database === database).tables,
+            ...(sourceBindings[0] ? [sourceEvidenceTable] : [])]); }
         finally { await client.query('ROLLBACK'); }
       } finally { await client.end(); }
     }
@@ -217,7 +252,7 @@ export async function runPreflight({ connect, checkCredentials = async () => {},
     return { status: 'OK', stage: 'complete', scope: 'isolated-catalog-preflight',
       databases: 10, tables: 83, bound: false, expiresAt: expiry };
   } catch (error) {
-    if (committed || commitAttempted) throw new Error('renewal_committed_requires_inspection');
+    if (committed || commitAttempted) throw new Error('renewal_committed_requires_inspection', { cause: error });
     throw error;
   } finally {
     if (locked) await control.query('SELECT pg_advisory_unlock(204220260925)').catch(() => {});
@@ -233,14 +268,18 @@ const codes = new Set([
   'source_table_inventory_changed', 'role_privilege_mismatch', 'target_not_clean',
   'old_database_default_acl_mismatch', 'old_database_writer_privilege_mismatch',
   'target_evidence_shape_mismatch',
+  'source_attestation_mismatch',
   'target_privilege_mismatch', 'target_attestor_mismatch', 'renewal_committed_requires_inspection',
-  '42501', '28P01', '3D000', '25006', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH',
+  '42501', '28P01', '3D000', '25006', '57P01',
+  'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH',
+  'Connection terminated unexpectedly', 'Connection terminated', 'timeout expired',
   'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'ERR_TLS_CERT_ALTNAME_INVALID',
 ]);
 const classes = new Set(['Error', 'TypeError', 'DatabaseError', 'AggregateError']);
+const safeCode = (error) => codes.has(error?.code) ? error.code : codes.has(error?.message) ? error.message : 'UNKNOWN';
 const safeFailure = (stage, error) => ({ status: 'FAIL', stage: stages.has(stage) ? stage : 'preflight',
-  code: codes.has(error?.code) ? error.code : codes.has(error?.message) ? error.message : 'UNKNOWN',
-  errorClass: classes.has(error?.name) ? error.name : 'Other' });
+  code: safeCode(error), errorClass: classes.has(error?.name) ? error.name : 'Other',
+  ...(error?.cause === undefined ? {} : { cause: safeCode(error.cause) }) });
 
 export async function launch(env, { Client, SecretsManagerClient, DescribeSecretCommand }) {
   let stage = 'configuration';

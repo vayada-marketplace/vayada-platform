@@ -65,6 +65,7 @@ function fakeDatabase({ drift = false, directFailure = false, oldWriterAccess = 
           manifest.sources.find((s) => s.database === database).tables.map((name) => ({ name })));
         if (sql.includes('AS writer_denied')) return rows([{ writer_denied: !oldWriterAccess }]);
         if (sql.includes('LATERAL aclexplode')) return rows([{ grants: defaultGrant ? 1 : 0 }]);
+        if (sql.startsWith("SELECT 1 FROM pg_namespace WHERE nspname='vayada_migration_evidence'")) return rows([]);
         if (sql.includes('SELECT nspname AS name FROM pg_namespace')) return rows([
           { name: 'public' }, { name: 'vayada_migration_evidence' },
         ]);
@@ -143,13 +144,13 @@ test('extra write access or attestor elevation refuses before any expiry write',
 
 test('failed direct login after commit is never reported as a safe retry', async () => {
   const fake = fakeDatabase({ directFailure: true });
-  await assert.rejects(runPreflight({ connect: fake.connect, now: () => now }),
-    /renewal_committed_requires_inspection/);
+  await assert.rejects(runPreflight({ connect: fake.connect, now: () => now }), (error) =>
+    error.message === 'renewal_committed_requires_inspection' && error.cause?.message === 'synthetic_login_denied');
   assert.equal(fake.calls.filter((call) => call[3]?.startsWith('ALTER ROLE ')).length, 2);
 });
 
 test('lost commit acknowledgement requires inspection, not a retry', async () => {
   const fake = fakeDatabase({ commitFailure: true });
-  await assert.rejects(runPreflight({ connect: fake.connect, now: () => now }),
-    /renewal_committed_requires_inspection/);
+  await assert.rejects(runPreflight({ connect: fake.connect, now: () => now }), (error) =>
+    error.message === 'renewal_committed_requires_inspection' && error.cause?.message === 'synthetic_lost_commit_ack');
 });

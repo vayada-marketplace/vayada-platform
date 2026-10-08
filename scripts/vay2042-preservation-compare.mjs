@@ -11,6 +11,8 @@ const snapshot = 'vay2017-legacy-source-freeze-20260920';
 const sourceUser = 'vay2042_source_reader_20260925';
 const caFingerprint = '6F:7E:01:B6:2A:F2:40:58:41:71:30:B2:1E:5F:B9:AD:9F:29:B2:9C:77:5C:51:07:B6:57:41:90:10:97:58:86';
 const queryVersion = 'source-preservation-jsonb-v1';
+const sourceProofSha256 = 'acf9fb92b78057919ea92b947533fe458fdc1efc40d54db232e45b19933e0eda';
+const evidenceTable = 'vayada_migration_evidence.database_attestations';
 const requireTrue = (condition, code) => { if (!condition) throw new Error(code); };
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const relation = (name) => {
@@ -82,16 +84,28 @@ async function checkConnection(client, database, user) {
   'database_identity_invalid');
 }
 
-async function checkInventory(client, expected) {
+async function checkInventory(client, expected, source = false) {
   const tables = (await client.query(`SELECT n.nspname || '.' || c.relname AS name
     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname <> 'information_schema' AND n.nspname <> 'vay2017_metadata'
       AND n.nspname !~ '^pg_' AND c.relkind IN ('r','p') ORDER BY 1`))
     .rows.map((row) => row.name);
-  requireTrue(JSON.stringify(tables) === JSON.stringify(expected), 'table_inventory_mismatch');
+  const bound = source && tables.includes(evidenceTable);
+  requireTrue(JSON.stringify(tables) === JSON.stringify(
+    [...expected, ...(bound ? [evidenceTable] : [])].sort()), 'table_inventory_mismatch');
+  if (bound) {
+    const rows = (await client.query(`SELECT attestation_key,attestation_value
+      FROM ${evidenceTable} ORDER BY attestation_key`)).rows;
+    requireTrue(JSON.stringify(rows) === JSON.stringify([
+      { attestation_key: 'vayada.cutover_freeze_proof_sha256', attestation_value: sourceProofSha256 },
+      { attestation_key: 'vayada.source_snapshot_identifier',
+        attestation_value: 'arn:aws:rds:eu-west-1:269416271598:snapshot:vay2017-legacy-source-freeze-20260920' },
+    ]), 'source_attestation_mismatch');
+  }
+  return bound;
 }
 
-async function checkSourcePrivileges(client, expected) {
+async function checkSourcePrivileges(client, expected, bound) {
   const role = (await client.query(`SELECT rolname, rolcanlogin, rolconnlimit, rolsuper,
     rolcreatedb, rolcreaterole, rolinherit, rolreplication, rolbypassrls, rolvaliduntil
     FROM pg_roles WHERE rolname=$1`, [sourceUser])).rows;
@@ -102,7 +116,8 @@ async function checkSourcePrivileges(client, expected) {
     new Date(role[0].rolvaliduntil).getTime() > Date.now() + 7_200_000,
   'source_privilege_mismatch');
   const { privilegeSql } = await import('./provision-vay2042-source-reader.mjs');
-  const result = await client.query(privilegeSql, [sourceUser, expected]);
+  const result = await client.query(privilegeSql, [sourceUser,
+    [...expected, ...(bound ? [evidenceTable] : [])]]);
   requireTrue(result.rowCount === 1 && Object.entries(result.rows[0]).every(
     ([key, value]) => value === (key === 'attributes')),
   'source_privilege_mismatch');
@@ -130,8 +145,8 @@ export async function compare({ connect }) {
     const current = await connect('source', database);
     try {
       await checkConnection(current, database, sourceUser);
-      await checkInventory(current, source.tables);
-      await checkSourcePrivileges(current, source.tables);
+      const bound = await checkInventory(current, source.tables, true);
+      await checkSourcePrivileges(current, source.tables, bound);
       for (const original of expected) {
         const restored = await checksumTable(current, original.table);
         requireTrue(original.count === restored.count && original.sha256 === restored.sha256,
@@ -177,7 +192,8 @@ if (process.env.VAY2042_COMPARE_MAIN === '1') {
   } catch (error) {
     const codes = new Set(['configuration_invalid', 'database_ca_invalid',
       'manifest_invalid', 'database_identity_invalid', 'table_inventory_mismatch',
-      'row_invalid', 'source_rows_mismatch', 'source_privilege_mismatch']);
+      'row_invalid', 'source_rows_mismatch', 'source_privilege_mismatch',
+      'source_attestation_mismatch']);
     console.error(JSON.stringify({ status: 'FAIL', scope: 'isolated-source-preservation',
       stage, code: codes.has(error?.message) ? error.message : 'comparison_failed' }));
     process.exitCode = 1;
