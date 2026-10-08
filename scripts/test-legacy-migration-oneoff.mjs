@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -76,13 +77,19 @@ test('the script checks every input before AWS and runs exactly one pinned one-o
     mkdirSync(evidence, { mode: 0o700 });
     const manifest = { version: 1, environment: 'preprod' };
     const runFile = join(root, 'run.json');
-    const writeRun = (overrides = {}) => writeFileSync(runFile, JSON.stringify({
-      runId: RUN, sourceRunId: SOURCE_RUN, sourceSha: SOURCE_SHA, imageDigest: DIGEST, files: { manifest },
-      args: { 'target:cutover': ['--source-run-id', SOURCE_RUN, '--manifest', '@manifest'], 'target:cutover:abort': ['--operator', 'op'] },
-      ...overrides,
-    }));
-    writeFileSync(join(root, 'account'), '269416271598');
-    writeFileSync(join(root, 'running'), '0');
+    const writeRun = (overrides = {}) => {
+      writeFileSync(runFile, JSON.stringify({
+        runId: RUN, sourceRunId: SOURCE_RUN, sourceSha: SOURCE_SHA, imageDigest: DIGEST, files: { manifest },
+        args: { 'target:cutover': ['--source-run-id', SOURCE_RUN, '--manifest', '@manifest'], 'target:cutover:abort': ['--operator', 'op'] },
+        ...overrides,
+      }));
+      return createHash('sha256').update(readFileSync(runFile)).digest('hex');
+    };
+    const state = (name, value) => writeFileSync(join(root, name), value);
+    state('account', '269416271598');
+    state('running', '0');
+    state('describe-fails', '0');
+    state('run-task', '{"tasks":[{"taskArn":"arn:aws:ecs:eu-west-1:269416271598:task/vayada-target-database-runtime-preflight/0123456789abcdef0123456789abcdef"}],"failures":[]}');
     mkdirSync(join(root, 'bin'));
     writeFileSync(join(root, 'bin/aws'), `#!/usr/bin/env bash
 [[ "$1 $2 $3 $4" == "--profile vayada --region eu-west-1" ]] || { echo "unexpected aws options: $*" >&2; exit 9; }
@@ -97,57 +104,73 @@ case "$1 $2" in
   "ecs describe-services") echo '{"taskDefinition":"arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:9","networkConfiguration":{"awsvpcConfiguration":{"subnets":["subnet-1"]}}}' ;;
   "ecs describe-task-definition") echo '{"containerDefinitions":[{"name":"vayada-next-api","environment":[{"name":"PLATFORM_MEDIA_BUCKET","value":"vayada-media-production"},{"name":"PLATFORM_MEDIA_CDN_BASE_URL","value":"https://images.vayada.com"},{"name":"PORT","value":"8003"}]}]}' ;;
   "ecs register-task-definition") echo arn:aws:ecs:eu-west-1:269416271598:task-definition/oneoff:1 ;;
-  "ecs run-task") echo '{"tasks":[{"taskArn":"arn:aws:ecs:eu-west-1:269416271598:task/vayada-target-database-runtime-preflight/0123456789abcdef0123456789abcdef"}],"failures":[]}' ;;
-  "ecs describe-tasks") [[ "$*" == *lastStatus* ]] && echo STOPPED || echo '{"containers":[{"exitCode":4}]}' ;;
+  "ecs run-task") cat "${root}/run-task" ;;
+  "ecs describe-tasks")
+    if [[ "$(cat "${root}/describe-fails")" != 0 ]]; then echo 0 > "${root}/describe-fails"; exit 255; fi
+    [[ "$*" == *lastStatus* ]] && echo STOPPED || echo '{"containers":[{"exitCode":4}]}' ;;
   "logs get-log-events") [[ "$*" == *next-token* ]] && echo '{"events":[],"nextForwardToken":"f/1"}' || echo '{"events":[{"message":"report"}],"nextForwardToken":"f/1"}' ;;
 esac
 `);
     chmodSync(join(root, 'bin/aws'), 0o755);
-    const run = (command, confirmation, env = { EVIDENCE_DIR: evidence }) => {
+    const script = join(root, 'scripts/legacy-migration-oneoff.sh');
+    const run = (args, env = { EVIDENCE_DIR: evidence }) => {
       rmSync(join(root, 'aws.log'), { force: true });
       rmSync(join(root, 'definition.json'), { force: true });
-      return spawnSync('bash', [join(root, 'scripts/legacy-migration-oneoff.sh'), command, runFile, confirmation],
-        { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, AWS_PROFILE: 'other', ...env } });
+      return spawnSync('bash', [script, ...args], { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, AWS_PROFILE: 'other', ...env } });
     };
-    const cutover = ['target:cutover', `PRODUCTION_CUTOVER:${RUN}:${SOURCE_RUN}`];
+    const awsCalls = () => (existsSync(join(root, 'aws.log')) ? readFileSync(join(root, 'aws.log'), 'utf8') : '');
     const definition = () => JSON.parse(readFileSync(join(root, 'definition.json'), 'utf8'));
     const env = (def) => Object.fromEntries(def.containerDefinitions[0].environment.map((e) => [e.name, e.value]));
+    const sha = writeRun();
+    const cutover = ['target:cutover', runFile, sha, `PRODUCTION_CUTOVER:${RUN}:${SOURCE_RUN}`];
 
-    writeRun();
+    const open = join(root, 'open');
+    mkdirSync(open, { mode: 0o755 });
     for (const [args, envOverride, message] of [
       [cutover, {}, /EVIDENCE_DIR/],
-      [['target:cutover:dry-run', cutover[1]], undefined, /allow-list/],
-      [[cutover[0], `PRODUCTION_CUTOVER:${RUN}:vay1351-wrong`], undefined, /Confirmation must be exactly PRODUCTION_CUTOVER:/],
+      [cutover, { EVIDENCE_DIR: open }, /0700/],
+      [['target:cutover:dry-run', ...cutover.slice(1)], undefined, /allow-list/],
+      [[cutover[0], runFile, '0'.repeat(64), cutover[3]], undefined, /SHA-256 differs/],
+      [[...cutover.slice(0, 3), `PRODUCTION_CUTOVER:${RUN}:vay1351-wrong`], undefined, /Confirmation must be exactly PRODUCTION_CUTOVER:/],
     ]) {
-      const result = run(...args, envOverride);
+      const result = run(args, envOverride);
       assert.equal(result.status, 2, result.stderr);
       assert.match(result.stderr, message);
-      assert.equal(existsSync(join(root, 'aws.log')), false);
+      assert.equal(awsCalls(), '');
     }
-    writeRun({ imageDigest: `sha256:${'0'.repeat(64)}` });
-    assert.match(run(...cutover).stderr, /reviewed pair/);
-    assert.equal(existsSync(join(root, 'aws.log')), false);
+    const badImage = writeRun({ imageDigest: `sha256:${'0'.repeat(64)}` });
+    assert.match(run([cutover[0], runFile, badImage, cutover[3]]).stderr, /reviewed pair/);
+    assert.equal(awsCalls(), '');
     writeRun();
 
-    writeFileSync(join(root, 'account'), '111111111111');
-    assert.equal(run(...cutover).status, 1);
-    assert.doesNotMatch(readFileSync(join(root, 'aws.log'), 'utf8'), /register/);
-    writeFileSync(join(root, 'account'), '269416271598');
-    writeFileSync(join(root, 'running'), '1');
-    assert.match(run(...cutover).stderr, /still running/);
-    assert.doesNotMatch(readFileSync(join(root, 'aws.log'), 'utf8'), /register/);
-    writeFileSync(join(root, 'running'), '0');
+    state('account', '111111111111');
+    assert.equal(run(cutover).status, 1);
+    assert.doesNotMatch(awsCalls(), /register/);
+    state('account', '269416271598');
+    state('running', '1');
+    assert.match(run(cutover).stderr, /still running/);
+    assert.doesNotMatch(awsCalls(), /register/);
+    state('running', '0');
+    state('run-task', '{"tasks":[],"failures":[{"reason":"RESOURCE:MEMORY"}]}');
+    const failed = run(cutover);
+    assert.equal(failed.status, 1);
+    assert.match(failed.stderr, /RESOURCE:MEMORY/);
+    assert.match(awsCalls(), /ecs deregister-task-definition\necs delete-task-definitions\n$/);
+    state('run-task', '{"tasks":[{"taskArn":"arn:aws:ecs:eu-west-1:269416271598:task/vayada-target-database-runtime-preflight/0123456789abcdef0123456789abcdef"}],"failures":[]}');
 
-    const launched = run(...cutover);
+    state('describe-fails', '1');
+    const launched = run(cutover);
     assert.equal(launched.status, 4, launched.stderr);
-    assert.match(readFileSync(join(root, 'aws.log'), 'utf8'), /ecs register-task-definition\necs run-task\n[\s\S]*ecs deregister-task-definition\n$/);
+    assert.match(launched.stderr, /AWS did not answer; retrying/);
+    assert.match(awsCalls(), /ecs register-task-definition\necs run-task\n[\s\S]*ecs deregister-task-definition\necs delete-task-definitions\n$/);
     const source = definition();
     assert.equal(source.family, 'vayada-legacy-migration-oneoff-source');
     assert.equal(source.executionRoleArn, 'arn:aws:iam::269416271598:role/ecsTaskExecutionRole');
     assert.equal(source.taskRoleArn, 'arn:aws:iam::269416271598:role/vayada-next-api-media-task-role');
-    assert.equal(source.containerDefinitions[0].image, `269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@${DIGEST}`);
-    assert.deepEqual(source.containerDefinitions[0].command, ['node', '--input-type=module', '--eval', dispatcher, 'source']);
-    assert.deepEqual(source.containerDefinitions[0].secrets.map((s) => `${s.name}=${s.valueFrom.split(':parameter')[1]}`), [
+    const [container] = source.containerDefinitions;
+    assert.equal(container.image, `269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@${DIGEST}`);
+    assert.deepEqual([...container.entryPoint, ...container.command], ['node', '--input-type=module', '--eval', dispatcher, 'source']);
+    assert.deepEqual(container.secrets.map((s) => `${s.name}=${s.valueFrom.split(':parameter')[1]}`), [
       'TARGET_DATABASE_URL=/vayada/prod/target-database-url',
       'AUTH_SOURCE_DATABASE_URL=/vayada/prod/legacy-migration-source-auth-url',
       'BOOKING_SOURCE_DATABASE_URL=/vayada/prod/legacy-migration-source-booking-url',
@@ -161,12 +184,20 @@ esac
     assert.equal(sourceEnv.PLATFORM_MEDIA_BUCKET, 'vayada-media-production');
     assert.equal(sourceEnv.LEGACY_MEDIA_BUCKET_ALLOWLIST, 'vayada-uploads-prod,vayada-creator-marketplace-images');
     assert.equal(sourceEnv.PORT, undefined);
-    const [log] = readdirSync(evidence);
-    assert.match(log, /^oneoff-target-cutover-vay1360-0123456789abcdef01234567-\d{8}T\d{6}Z\.log$/);
-    assert.equal(readFileSync(join(evidence, log), 'utf8'), 'report\n');
-    assert.equal(statSync(join(evidence, log)).mode & 0o777, 0o600);
+    const record = JSON.parse(readFileSync(join(evidence, 'task-0123456789abcdef0123456789abcdef.json'), 'utf8'));
+    assert.deepEqual(Object.keys(record).sort(), ['logFile', 'logGroup', 'logStream', 'taskArn']);
+    assert.equal(record.logStream, 'legacy-migration-oneoff/vayada-legacy-migration-oneoff/0123456789abcdef0123456789abcdef');
+    assert.match(record.logFile, /\/oneoff-target-cutover-vay1360-0123456789abcdef01234567-\d{8}T\d{6}Z\.log$/);
+    assert.equal(readFileSync(record.logFile, 'utf8'), 'report\n');
+    assert.equal(statSync(record.logFile).mode & 0o777, 0o600);
 
-    assert.equal(run('target:cutover:abort', `ABORT_CUTOVER:${RUN}`).status, 4);
+    rmSync(record.logFile);
+    const watched = run(['watch', record.taskArn]);
+    assert.equal(watched.status, 4, watched.stderr);
+    assert.doesNotMatch(awsCalls(), /register|run-task|deregister/);
+    assert.equal(readFileSync(record.logFile, 'utf8'), 'report\n');
+
+    assert.equal(run(['target:cutover:abort', runFile, writeRun(), `ABORT_CUTOVER:${RUN}`]).status, 4);
     const target = definition();
     assert.equal(target.family, 'vayada-legacy-migration-oneoff-target');
     assert.equal(target.taskRoleArn, undefined);
