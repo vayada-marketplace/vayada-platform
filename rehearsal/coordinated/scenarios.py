@@ -120,7 +120,7 @@ class ScenarioAws(release.Aws):
         tag = f"recovery-{self.published['runId']}-{self.published['runAttempt']}-{variant}"
         fixture.require(len(details) == 1 and details[0]["imageDigest"] == image["digest"] and tag in details[0].get("imageTags", []), "Unbound fixture digest/tag")
 
-    def verify_api_split_image(self, key, image_digest):
+    def verify_api_split_image(self, key, image_digest, task_definition=None):
         # Synthetic containers have no application migration launcher or attestations.
         self.verify_image(key, {"ecrRepository": f"vayada-recovery-{key}", "digest": image_digest})
 
