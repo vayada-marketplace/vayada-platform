@@ -876,3 +876,38 @@ revokes the schema-wide DML and default privileges, revokes `EXECUTE` on the
 two Channex helpers, and restores the legacy allowlist (table and column grants)
 so the legacy preflight posture passes again. It does not change application
 migrations.
+
+### Hotel setup on the ordinary API login (VAY-2056)
+
+From the VAY-2056 next-API release, the public API runs hotel creation, hotel-detail
+edits, launch settings, the first pricing currency, Feature Hub Financials and the
+hotel logo on `vayada_next_api_runtime` (design: app repo
+`engineering/hotel-setup-ordinary-login.md`). New hotels, co-Owners and ownership
+transfers need no per-hotel native login, Secrets Manager secret, bootstrap or
+protected workflow.
+
+- **No new grant and no `SECURITY DEFINER` exception.** Every hotel-setup definer
+  function derives its authority from its native login, so the Owner re-check runs
+  in application SQL inside each write transaction. The existing
+  `runtime_security_definer_execute_forbidden` check (both postures, and the grant
+  transaction's global posture check) is the exact list of definer functions the
+  role may execute: none. No `runtimeDefinerFunctions` list is added.
+- **Admission variables are inert and no longer a kill switch.** The new image does
+  not read `HOTEL_SETUP_CREATION_COMMAND_*`, `HOTEL_SETUP_COMMAND_*`,
+  `HOTEL_SETUP_PROFILE_COMMAND_*` or `HOTEL_SETUP_LOGO_COMMAND_*`. They stay
+  installed (`scripts/assert-hotel-setup-caller-retained.py` is unchanged);
+  `hotel-setup-release.yml state=blocked` has no effect on the new image. Stopping
+  these operations means rolling the API image back.
+- **Rollback window.** `vayada-hotel-setup-service` and
+  `vayada-hotel-setup-property-service` keep running idle on the images re-released
+  with VAY-2055 (migration 0473). Rolling the API image back forwards to them again,
+  but only while every object their preflights pin is unchanged: any later migration
+  that changes a native-pinned policy, trigger, function, view or constraint ends the
+  image-only rollback window unless the native images are re-released with it.
+- **Decommission (separate PRs after a 1–2 week observation window, in order):**
+  block the public callers (`hotel-setup-release.yml`, `state=blocked`), stop both
+  private services, remove the native code paths from the app, retire the caller
+  wiring (`hotel_setup_public_caller = off` and relax the retention assertion), retire
+  the private infrastructure, workflows, runner modes and image inventories, then an
+  app migration drops the per-hotel logins, scope roles, scope tables and the
+  hotel-setup policies, triggers and functions (role drops need `vayada_admin`).
