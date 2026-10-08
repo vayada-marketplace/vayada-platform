@@ -39,7 +39,7 @@ cleanup_definitions() {
 trap cleanup_definitions EXIT
 
 require_profile() {
-  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE AWS_CONFIG_FILE AWS_CA_BUNDLE
+  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE AWS_CONFIG_FILE AWS_SHARED_CREDENTIALS_FILE AWS_CA_BUNDLE
   local variable
   for variable in $(env | sed -n 's/^\(AWS_ENDPOINT_URL[A-Z0-9_]*\)=.*/\1/p'); do unset "$variable"; done
   [[ "$(aws_ sts get-caller-identity --query Account --output text)" == "$account" ]] || {
