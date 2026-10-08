@@ -86,6 +86,32 @@ and `target:migration-status` before doing anything else.
      `public/media/` and `private/media/` in the platform media bucket.
 4. Pin the rehearsed image: its `APPLICATION_RELEASE` must equal `--application-release`.
 
+## Read-only counts (`readonly-counts`)
+
+```bash
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts <counts.sql> READONLY_COUNTS
+```
+
+This is a read-only snapshot of legacy numbers, for planning. It also runs only
+after Flamur's go. The SQL file stays in the evidence folder, because it names
+the candidate hotels. The script prints its SHA-256 before running.
+
+- **Input check.** Locally, `scripts/legacy-readonly-counts.py --check` accepts
+  only blocks headed `-- (N) LEGACY PMS|BOOKING database: <title>`, each with a
+  single `SELECT`/`WITH` statement.
+- **The task.** The one-off family `vayada-legacy-readonly-counts` copies the
+  running `vayada-pms-backend` task: the same image and execution role, with no
+  task role. It keeps only three of its secrets: `DATABASE_URL` (PMS),
+  `BOOKING_ENGINE_DATABASE_URL` (Booking) and `STRIPE_SECRET_KEY`. It is not the
+  `vayada-pms-backend` family, so `tf-apply` never rolls the service onto it.
+- **Each SQL block** runs inside `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`, with
+  a 60-second statement timeout, and may return at most 50 aggregate rows.
+- **Stripe** (platform account): one paged `subscriptions.list(status=all)`,
+  reported only as a count per status (`active`, `past_due`, `trialing`,
+  `incomplete`, `unpaid`, `canceled`, `other`). No IDs, emails or amounts.
+- **The Markdown output** is saved as `readonly-counts-result.md` (0600) in the
+  evidence folder.
+
 ## The practice run (`target:cutover:dry-run`) and the go-day window
 
 This script does not run the dry run. The CLI accepts it only as

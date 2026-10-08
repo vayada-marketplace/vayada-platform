@@ -4,7 +4,11 @@
 # explicit go for that exact step. See docs/legacy-migration-oneoff.md.
 set -euo pipefail
 
-[[ "$#" -eq 3 ]] || { echo "Usage: legacy-migration-oneoff.sh <command> <run-file.json> <confirmation>" >&2; exit 2; }
+[[ "$#" -eq 3 ]] || {
+  echo "Usage: legacy-migration-oneoff.sh <command> <run-file.json> <confirmation>" >&2
+  echo "       legacy-migration-oneoff.sh readonly-counts <counts.sql> READONLY_COUNTS" >&2
+  exit 2
+}
 command="$1" input="$2" confirmation="$3"
 evidence="${EVIDENCE_DIR:-}"
 [[ -n "$evidence" && -d "$evidence" ]] || { echo "Set EVIDENCE_DIR to the run's evidence folder." >&2; exit 2; }
@@ -67,6 +71,32 @@ require_profile() {
     echo "The vayada profile must resolve to account ${account}." >&2; exit 1;
   }
 }
+
+# Read-only counts: one copy of the running legacy pms-backend task (same image, execution
+# role and only its PMS DB, Booking DB and Stripe secrets) runs scripts/legacy-readonly-counts.py.
+if [[ "$command" == readonly-counts ]]; then
+  [[ -f "$input" && "$confirmation" == READONLY_COUNTS ]] || { echo "Usage: readonly-counts <counts.sql> READONLY_COUNTS" >&2; exit 2; }
+  python3 "$root/scripts/legacy-readonly-counts.py" --check "$input" || { echo "The SQL file must hold single-SELECT blocks." >&2; exit 2; }
+  echo "SQL file sha256: $(shasum -a 256 "$input" | cut -d' ' -f1)"
+  require_profile
+  [[ "$(aws_ ecs list-tasks --cluster "$cluster" --family vayada-legacy-readonly-counts --query 'length(taskArns)' --output text)" == 0 ]] || {
+    echo "A counts task is still running." >&2; exit 1;
+  }
+  service="$(aws_ ecs describe-services --cluster vayada-backend-cluster --services vayada-pms-backend-service --query 'services[0]' --output json)"
+  definition="$(aws_ ecs describe-task-definition --task-definition "$(jq -r .taskDefinition <<<"$service")" --query taskDefinition --output json |
+    jq -c --rawfile code "$root/scripts/legacy-readonly-counts.py" --rawfile sql "$input" --arg region "$region" '
+    . as $pms | [$pms.containerDefinitions[] | select(.name == "vayada-pms-backend")] as $containers
+    | if ($containers | length) != 1 then error("pms-backend container missing") else $containers[0] end
+    | {family: "vayada-legacy-readonly-counts", networkMode: "awsvpc", requiresCompatibilities: ["FARGATE"],
+       cpu: "256", memory: "512", executionRoleArn: $pms.executionRoleArn,
+       containerDefinitions: [{name: "vayada-legacy-readonly-counts", image: .image, essential: true,
+         command: ["python", "-c", $code], environment: [{name: "COUNTS_SQL", value: $sql}],
+         secrets: [.secrets[] | select(.name == "DATABASE_URL" or .name == "BOOKING_ENGINE_DATABASE_URL" or .name == "STRIPE_SECRET_KEY")],
+         logConfiguration: {logDriver: "awslogs", options: {"awslogs-group": "/ecs/vayada-pms-backend",
+           "awslogs-region": $region, "awslogs-stream-prefix": "legacy-readonly-counts"}}}]}')"
+  [[ "$(jq '.containerDefinitions[0].secrets | length' <<<"$definition")" == 3 ]] || { echo "pms-backend lacks one of the three secrets." >&2; exit 1; }
+  run_oneoff "$definition" "$(jq -c .networkConfiguration <<<"$service")" /ecs/vayada-pms-backend "${evidence}/readonly-counts-result.md"
+fi
 
 case "$command" in
   target:migration-status|target:cutover:abort) kind="target" ;;
