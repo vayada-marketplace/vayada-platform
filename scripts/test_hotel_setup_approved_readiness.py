@@ -338,7 +338,7 @@ class ApprovedReadinessTest(unittest.TestCase):
                 'secretsmanager:', 'ecs update-service', 'HOTEL_SETUP_AUTOMATIC_MODE'):
             self.assertNotIn(forbidden, workflow)
         ci = (ROOT / '.github/workflows/tf-validate.yml').read_text()
-        self.assertIn('scripts/test_hotel_setup_approved_readiness.py scripts/test_hotel_setup_credentials.py', ci)
+        self.assertIn('scripts/test_hotel_setup_approved_readiness.py scripts/test_hotel_setup_release.py', ci)
 
     def test_operational_task_accepts_only_absent_or_empty_inference_overrides(self):
         for overrides in ({}, {'inferenceAcceleratorOverrides': []}, *[{'inferenceAcceleratorOverrides': value}
