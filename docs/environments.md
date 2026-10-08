@@ -780,8 +780,8 @@ The ordinary API login `vayada_next_api_runtime` receives ordinary DML on the
 product schemas (`hotel_catalog`, `booking`, `pms`, `marketplace`,
 `distribution`, `finance`, `platform`) plus default privileges for future
 tables, and is denied a short protected list (credential scope tables,
-migration ledger and evidence, worker allowlists, pricing authority, guarded
-affiliate evidence, worker-only Channex and Finance state). On `identity.*` it
+migration ledger and evidence, worker allowlists, guarded affiliate evidence,
+worker-only Channex and Finance state). On `identity.*` it
 only gains `UPDATE (created_at)` on the six tables the API row-locks (platform
 #240 precedent: PostgreSQL needs an `UPDATE` privilege on one column for
 `FOR SHARE`/`FOR UPDATE`); no authorization column becomes writable, and no
@@ -837,7 +837,11 @@ not owned by the migration owner, when an identity lock table has no
 `created_at` column, or when the protected list is still writable or readable
 after the grant.
 Re-running it is a no-op. Run it again after any migration that adds a
-protected-class table; the preflight names the relation. Before committing it
+protected-class table; the preflight names the relation. Run it again also
+after a change to the protected list or the narrowings in this script (VAY-2057
+released the pricing authority and quote tables): until then the preflight
+reports `runtime_product_dml_missing` for the released relations and the next
+`tf-apply` fails. Before committing it
 also runs the preflight's global posture checks (no TRUNCATE/REFERENCES/
 TRIGGER/MAINTAIN anywhere, no default privileges for the login from any other
 role or schema, no SECURITY DEFINER EXECUTE, no owned objects, no role
@@ -858,7 +862,9 @@ every non-protected product relation has `SELECT, INSERT, UPDATE, DELETE`
 (`runtime_product_dml_missing`), the protected list and name patterns are not
 writable (`runtime_protected_relation_write_forbidden`) or readable
 (`runtime_protected_relation_read_forbidden`), audit and domain events stay
-append-only and `hotel_catalog.properties` keeps no `DELETE`
+append-only, `hotel_catalog.properties` keeps no `DELETE`
+and the pricing authority keeps no `DELETE` on its heads and revisions and no
+`UPDATE`/`DELETE` on `booking.pricing_quotes`
 (`runtime_narrowed_relation_writable`), the six identity lock tables carry the
 `created_at` lock column (`runtime_identity_lock_column_missing`), identity
 writes stay within the extended product-link column matrix plus that lock column
