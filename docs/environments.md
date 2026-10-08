@@ -895,18 +895,31 @@ protected workflow.
 - **Admission variables are inert and no longer a kill switch.** The new image does
   not read `HOTEL_SETUP_CREATION_COMMAND_*`, `HOTEL_SETUP_COMMAND_*`,
   `HOTEL_SETUP_PROFILE_COMMAND_*` or `HOTEL_SETUP_LOGO_COMMAND_*`. They stay
-  installed (`scripts/assert-hotel-setup-caller-retained.py` is unchanged);
+  installed until the caller wiring is retired (the retention assertion
+  `scripts/assert-hotel-setup-caller-retained.py` is unchanged by this release);
   `hotel-setup-release.yml state=blocked` has no effect on the new image. Stopping
   these operations means rolling the API image back.
+- **Owner-off markers and row rewrites.** A Feature Hub Owner-off marker counts only
+  while it equals the entitlement row's `xmin`. Anything that rewrites rows or
+  changes `xmin` (`pg_repack`, `VACUUM FULL`/`CLUSTER`, a logical-replication
+  blue/green switchover, dump and restore) cancels every Owner-off marker; affected
+  Owners then see Financials as not re-enableable, and an operator re-enables it on
+  request.
 - **Rollback window.** `vayada-hotel-setup-service` and
   `vayada-hotel-setup-property-service` keep running idle on the images re-released
-  with VAY-2055 (migration 0473). Rolling the API image back forwards to them again,
-  but only while every object their preflights pin is unchanged: any later migration
+  with VAY-2055 (migration 0473) until they are stopped right after acceptance.
+  Rolling the API image back forwards to them again (once stopped: redeploy the
+  previous API image, then `hotel-setup-release.yml state=start` for both services
+  and `state=enabled` for the four callers), but only while every object their
+  preflights pin is unchanged: any later migration
   that changes a native-pinned policy, trigger, function, view or constraint ends the
   image-only rollback window unless the native images are re-released with it.
-- **Decommission (separate PRs after a 1–2 week observation window, in order):**
-  block the public callers (`hotel-setup-release.yml`, `state=blocked`), stop both
-  private services, remove the native code paths from the app, retire the caller
+- **Decommission (right after acceptance, separate PRs, in order):** add the new
+  API image digest to `hotel-setup-caller-images.json`, `hotel-setup-logo-images.json`
+  and `hotel-setup-profile-images.json` (the release script refuses `state=blocked`
+  for an image it does not list), block the public callers (`hotel-setup-release.yml`,
+  `state=blocked` for logo, profile, property and creation), stop both private
+  services (`state=stop`), remove the native code paths from the app, retire the caller
   wiring (`hotel_setup_public_caller = off` and relax the retention assertion), retire
   the private infrastructure, workflows, runner modes and image inventories, then an
   app migration drops the per-hotel logins, scope roles, scope tables and the
