@@ -181,6 +181,10 @@ on:
       - "scripts/run-vay2042-target-bootstrap.sh"
       - "scripts/test-vay2042-target-runner.mjs"
       - "scripts/test-vay2042-media-infra.mjs"
+      - "scripts/legacy-migration-oneoff.sh"
+      - "scripts/legacy-migration-oneoff.mjs"
+      - "scripts/test-legacy-migration-oneoff.mjs"
+      - "docs/legacy-migration-oneoff.md"
       - "scripts/test-vay2042-media-endpoint.mjs"
       - ".github/workflows/vay2042-target-bootstrap.yml"
       - "scripts/check-vay2017-rehearsal-isolation.sh"
@@ -357,6 +361,8 @@ jobs:
           node --test scripts/test-vay2042-source-reader-runner.mjs
           node --test scripts/test-vay2042-target-runner.mjs
           node --test scripts/test-vay2042-media-infra.mjs
+          node --test scripts/test-legacy-migration-oneoff.mjs
+          bash -n scripts/legacy-migration-oneoff.sh
           node --test scripts/test-vay2042-media-endpoint.mjs
           bash -n scripts/run-vay2017-rehearsal-metadata.sh
           bash -n scripts/run-vay2017-metadata-reader-bootstrap.sh
