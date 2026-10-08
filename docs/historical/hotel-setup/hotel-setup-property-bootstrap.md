@@ -1,0 +1,112 @@
+# Property setup credential bootstrap contract (VAY-1092 / VAY-965)
+
+> **Historical (retired by VAY-2056).** The private hotel-setup services, their caller wiring,
+> Terraform, workflows, runner modes and image inventories described here were removed in the
+> VAY-2056 decommission (steps 4 and 5). Commands and file paths below no longer exist on `main`;
+> see `docs/environments.md` ("Hotel setup native services retired") for the current state.
+
+Design for the missing operational property bootstrap. This document provisions
+nothing and does not authorize automatic provisioning during a product request.
+Reuse the reviewed creation bootstrap runner when its release slice is composed;
+keep its organization/reader purposes and identities separate. App reference:
+Save/credential preflight PR #2791, source
+`da0f57296325ce5149b9ff499bdef1c80f1b8a22`; a moved head needs renewed review.
+
+## Inputs and authority
+
+Accept an explicitly approved canonical property UUID, organization UUID, current
+actor UUID and one fixed operation: `launch_settings`, `currency`,
+`currency_ready` or `feature_hub`. Obtain the property UUID from committed creation
+or the existing setup status; never create a second property to repair credentials.
+Independently check the current database property/organization ownership and the
+operation's actor authorization. `launch_settings` uses setup permission and must
+not require PMS access from a Marketplace-only owner. Do not trust client-supplied
+login names, SQL, grant lists, secret references or an earlier authorization check.
+
+The operational runner alone receives its reviewed administrative credential and
+secret write permission. Neither the public API nor either private command service
+receives them. Its exact image, database endpoint, CA, grants and attached IAM are
+release inputs; no broad ordinary API grant is an alternative. This initial
+operational bootstrap requires the property command service to have zero desired,
+running and pending tasks, with caller admission blocked, through proof and
+publication. Do not run it alongside admitted commands; later automated or online
+provisioning needs its own reviewed readiness/admission contract.
+
+## One fresh identity per property and purpose
+
+1. Lock the canonical ownership/assignment through database staging. Reject any
+   existing assignment for this property/purpose, including inactive or uncertain
+   attempts. Inspection or a separately reviewed rotation is required; do not
+   adopt, retarget, repair or overwrite an existing role/secret on retry.
+2. Generate a fresh `vayada_next_hotel_setup_property_*` role. Record its exact OID;
+   start with NOLOGIN, no password, no ownership and safe native role attributes.
+   Grant only the non-settable property scope membership and the selected compiled
+   column inventory. Only `launch_settings` receives its reviewed contact DELETE.
+   Reject insufficient-grant warnings and roll back every grant on staging failure.
+   Commit verified NOLOGIN staging and grants before activating the recorded identity.
+3. Set a random password and activate only this exact newly staged identity. Follow
+   the existing reader activation's identity/verifier checks and failure cleanup;
+   a changed OID/verifier or ambiguous outcome requires inspection. In the guarded
+   activation transaction, recheck current authority and insert the exact
+   `(database_login,property_id,organization_id,operation_class,active=true)`
+   assignment. Preserve the one-active-assignment-per-property/operation constraint
+   and commit before opening the separate native proof connection; it must see
+   the committed assignment. Any ambiguous activation/commit blocks publication.
+4. Verify native TLS authentication, exact columns, memberships, owners, policies,
+   functions, triggers and assigned purpose using the final image's
+   `hotelSetupPropertyPreflight` implementation. It invokes no business command.
+   Both image slots must pass on the same final schema, including migration 0462.
+   Keep the new credential unavailable to the command service until proof passes;
+   any staged assignment with no published credential fails closed.
+5. After successful proof and current ownership recheck, publish only the exact
+   two-field `{username,password}` credential under the fixed property prefix.
+   Reread the immutable published version. Existing versions, mismatched readback
+   or uncertain publication fail release; do not retry publication blindly.
+   Native secret publication is distinct from reader/internal-token publication.
+6. On failure, disable only this attempt's verified role identity and remove its
+   assignment or mark it unusable; terminate its sessions. Never clean up another
+   attempt's role or overwrite its secret. Ambiguous commit/publication/cleanup
+   emits a sanitized inspection-required receipt and blocks release.
+
+Sanitized evidence records source/image/schema, property/purpose, role OID,
+assignment and secret version references, native proof and cleanup status. Never
+include passwords, tokens, database URLs or PostgreSQL diagnostic payloads.
+
+## Full onboarding acceptance and retries
+
+Creation returns and preserves the canonical UUID before property bootstrap.
+If creation commits but its response is lost, recover that UUID from setup status
+before retrying; an ambiguous outcome must not issue a blind new creation.
+Until `launch_settings` is ready, Save returns a recoverable setup-unavailable
+result, retains form data and retries the same property; no broad credential
+fallback. The Save owner owns this caller/adapter behavior. Provisioning alone
+neither saves settings nor enables Financials.
+
+Native PMS first-currency completion separately requires `currency_ready`.
+Its existing single transaction owns currency, seven categories and initial
+Financials activation; later currency and Feature Hub use their distinct purposes.
+A successful Save or secret publication does not prove first-currency readiness.
+
+Before release, owned PG16/17 tests must prove cross-property/purpose and revoked
+ownership denials; extra/missing/grant-option ACL rejection; failed grants and
+native authentication; lost commit/publication outcomes; same-identity cleanup;
+existing-role/assignment/secret rejection. Full flow must prove creation, optional
+logo, assignment readiness, Save/status reload, same-property retry and native
+first currency for both reported accounts. Existing Owner-off and billing/global
+restrictions must remain enforced. Live provisioning and release require separate
+explicit authority after these reviewable checks; no automatic provisioner is
+implemented or approved by this design.
+
+## Protected operational entrypoint
+
+The main-only `hotel-setup-property-bootstrap.yml` workflow runs one reviewed operation for one canonical property, owning organization and original Owner actor. Its operational image inventory starts empty. Add an image only after both bundled compiled preflight roots pass the native credential contract and publication cleanup checks.
+
+The wrapper requires the reviewed stable public task, a proved caller image with explicit blocked property admission, and an existing property service at zero desired/running/pending tasks. It clones the serving task only as an operational task, removes serving credentials and ports, uses the dedicated native-bootstrap task role, and injects the owner URL from SSM. Overrides contain only scope identifiers, code and the pinned public CA within the ECS size limit. No generated native password or database URL enters overrides or workflow output.
+
+The launcher accepts the existing production owner `/postgres?sslmode=require` shape, privately changes it to the target database with verified TLS, and starts the fixed compiled CLI with the pinned CA. That CLI checks both `/app` and `/proof/rollback` before publishing its internally generated native credential. It reports only a nonsecret receipt or inspection-required failure. Existing credentials and ambiguous outcomes require inspection; do not blindly retry.
+
+The operational IAM role can create/read/write only native property credential secrets. It cannot access reader/token containers or organization credentials. The workflow never updates a service and always stops its own temporary task and deregisters its temporary task definition. Private service startup and public admission are separate protected releases after all required receipts are verified.
+
+### Canonical account identifier lookup
+
+`hotel-setup-owner-audit.yml` obtains canonical actor, organization membership and existing owned property identifiers for a reported email before credential staging. It uses the same reviewed image, stable blocked caller and zero-task service gates, but attaches no SDK task role. Only the dedicated execution identity injects the owner parameter. The script pins the production RDS destination and CA and issues parameterized SELECTs inside `BEGIN READ ONLY`; it neither changes account access nor creates a property. Its receipt is lookup evidence, not authorization or account recovery. Staging independently rechecks current ownership and operation permission, and the original Owner session must still complete the full wizard.

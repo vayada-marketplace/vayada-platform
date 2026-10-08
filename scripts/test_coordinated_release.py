@@ -830,7 +830,7 @@ class ActivationTests(unittest.TestCase):
         prefix = "arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:"
         historical = {"containerDefinitions": [{"name": "vayada-next-api", "image": repo+"@"+old,
             "environment": [{"name":"FINANCE_EXPORT_WORKER_ENABLED","value":"false"},
-                            {"name":"HOTEL_SETUP_LOGO_COMMAND_ADMISSION","value":"blocked"}]}]}
+                            {"name":"PMS_CHANNEX_WORKER_ENABLED","value":"false"}]}]}
         manifest = copy.deepcopy(self.manifest)
         manifest["services"][key]["digest"] = desired
         for stale in (True, False):
@@ -838,9 +838,9 @@ class ActivationTests(unittest.TestCase):
                 path = Path(directory)/"manifest.json"; path.write_text(json.dumps(manifest))
                 live = copy.deepcopy(historical); live["containerDefinitions"][0]["image"] = repo+"@"+desired
                 if stale:
-                    live["containerDefinitions"][0]["environment"][-1]["value"] = "enabled"
-                    live["containerDefinitions"][0]["environment"].append({"name":"HOTEL_SETUP_LOGO_COMMAND_ORIGIN","value":"https://hotel-setup-property-command.vayada.com"})
-                    live["containerDefinitions"][0]["secrets"] = [{"name":"HOTEL_SETUP_LOGO_COMMAND_INTERNAL_TOKEN","valueFrom":"fixture"}]
+                    live["containerDefinitions"][0]["environment"][-1]["value"] = "true"
+                    live["containerDefinitions"][0]["environment"].append({"name":"PMS_CHANNEX_CONNECTION_MODE","value":"mutating"})
+                    live["containerDefinitions"][0]["secrets"] = [{"name":"PMS_CHANNEX_MANAGEMENT_DATABASE_URL","valueFrom":"fixture"}]
                 current = prefix+("1200" if stale else "1197")
                 pending = {"schemaVersion":1,"operationId":"interrupted-logo","service":key,
                     "manifestId":manifest["manifestId"],"desiredDigest":desired,

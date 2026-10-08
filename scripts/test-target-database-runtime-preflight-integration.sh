@@ -46,13 +46,12 @@ done
 
 docker exec -i "${database_container}" psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
 CREATE ROLE legacy_owner LOGIN PASSWORD 'owner';
-CREATE ROLE hotel_setup_provision_admin LOGIN CREATEROLE PASSWORD 'provision';
 CREATE ROLE vayada_next_api_runtime LOGIN PASSWORD 'runtime'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 CREATE ROLE elevated NOLOGIN;
 REVOKE CREATE, TEMPORARY ON DATABASE postgres FROM PUBLIC;
 GRANT CONNECT ON DATABASE postgres TO vayada_next_api_runtime;
-GRANT CONNECT ON DATABASE postgres TO legacy_owner, hotel_setup_provision_admin;
+GRANT CONNECT ON DATABASE postgres TO legacy_owner;
 
 CREATE SCHEMA platform AUTHORIZATION legacy_owner;
 CREATE SCHEMA app AUTHORIZATION legacy_owner;
@@ -302,53 +301,7 @@ docker run --rm \
   --workdir /work node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/target-database-runtime-preflight.mjs" "${work}/preflight.mjs"
-cp "${root}/scripts/provision-hotel-setup-scope-role.mjs" "${work}/hotel-setup-scope.mjs"
 cp "${root}/scripts/grant-target-database-runtime-product-dml.mjs" "${work}/product-dml-grant.mjs"
-
-run_hotel_setup_scope() {
-  local database_role="${1:-postgres}"
-  local password="${2:-postgres}"
-  local fixture_flag="${3:-1}"
-  docker run --rm \
-    --network "${network}" \
-    --volume "${node_modules_container}:/work" \
-    --volume "${work}/hotel-setup-scope.mjs:/work/hotel-setup-scope.mjs:ro" \
-    --workdir /work \
-    --env "TARGET_DATABASE_ADMIN_URL=postgresql://${database_role}:${password}@vayada-db-preflight:5432/postgres" \
-    --env "VAYADA_HOTEL_SETUP_SCOPE_LOCAL_FIXTURE=${fixture_flag}" \
-    node:22-bookworm node hotel-setup-scope.mjs
-}
-
-if untrusted_scope_output="$(run_hotel_setup_scope postgres postgres 0 2>&1)"; then
-  echo "hotel setup scope accepted an untrusted host" >&2
-  exit 1
-fi
-grep -F '"code":"hotel_setup_scope_admin_endpoint_untrusted"' <<<"${untrusted_scope_output}" >/dev/null
-if unprivileged_scope_output="$(run_hotel_setup_scope legacy_owner owner 2>&1)"; then
-  echo "hotel setup scope accepted a non-admin login" >&2
-  exit 1
-fi
-grep -F '"code":"hotel_setup_scope_admin_privilege_missing"' <<<"${unprivileged_scope_output}" >/dev/null
-run_hotel_setup_scope hotel_setup_provision_admin provision | grep -F '"created":true' >/dev/null
-run_hotel_setup_scope hotel_setup_provision_admin provision | grep -F '"created":false' >/dev/null
-docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-  'GRANT SELECT ON hotel_catalog.hotel_setup_effective_creation_scopes TO vayada_next_hotel_setup_scope' >/dev/null
-docker exec "${database_container}" psql -U postgres -tAc \
-  "SELECT has_table_privilege('vayada_next_hotel_setup_scope', 'hotel_catalog.hotel_setup_effective_creation_scopes', 'SELECT')" | grep -Fx t >/dev/null
-docker exec "${database_container}" psql -U postgres -Atqc "
-  SELECT NOT (rolcanlogin OR rolsuper OR rolcreaterole OR rolcreatedb OR
-    rolinherit OR rolbypassrls OR rolreplication)
-  FROM pg_roles WHERE rolname = 'vayada_next_hotel_setup_scope'
-" | grep -Fx t >/dev/null
-docker exec "${database_container}" psql -v ON_ERROR_STOP=1 -U postgres -c \
-  'GRANT elevated TO vayada_next_hotel_setup_scope' >/dev/null
-if unsafe_scope_output="$(run_hotel_setup_scope 2>&1)"; then
-  echo "hotel setup scope accepted inherited membership" >&2
-  exit 1
-fi
-grep -F '"code":"hotel_setup_scope_role_unsafe"' <<<"${unsafe_scope_output}" >/dev/null
-docker exec "${database_container}" psql -v ON_ERROR_STOP=1 -U postgres -c \
-  'REVOKE elevated FROM vayada_next_hotel_setup_scope' >/dev/null
 
 run_grant() {
   local database_role="$1"
