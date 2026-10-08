@@ -108,35 +108,35 @@ and `target:migration-status` before doing anything else.
 ## Read-only counts (`readonly-counts`)
 
 ```bash
-EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts <counts.sql> READONLY_COUNTS:<sha256 of counts.sql>
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts-plan <counts.sql> <target-check.sql>
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh readonly-counts <counts.sql> <target-check.sql> READONLY_COUNTS:<plan sha256>
 ```
 
-This is a read-only snapshot of legacy numbers, for planning. It also runs only
-after Flamur's go, and that go names the SQL file's SHA-256. The SQL file stays
-in the evidence folder because it names the candidate hotels. It still reaches
-the disposable task definition, which is deleted afterwards, and CloudTrail.
+A read-only snapshot for go-day planning. It covers:
+- the legacy PMS/Booking blocks in `readonly-counts.sql`;
+- the 6c pre-deploy check (`6c/predeploy-readonly-check.sql`) on the production
+  target;
+- Stripe subscription counts.
 
-- **Input check.** Locally, `scripts/legacy-readonly-counts.py --check` accepts
-  only blocks headed `-- (N) LEGACY PMS|BOOKING database: <title>`, each with one
-  `SELECT`/`WITH` statement. It rejects functions that act even inside a
-  read-only transaction, such as `pg_terminate_backend` and `dblink`. **Whether
-  the rows are aggregates is up to the reviewed SQL.** The tool only caps the
-  output at 50 rows per block.
-- **The task.** The one-off family `vayada-legacy-readonly-counts` copies the
-  running `vayada-pms-backend` task: the same image and execution role, with no
-  task role, and an explicit `python -c` entrypoint. It keeps only three of its
-  secrets: `DATABASE_URL` (PMS), `BOOKING_ENGINE_DATABASE_URL` (Booking) and
-  `STRIPE_SECRET_KEY`. It is not the `vayada-pms-backend` family, so `tf-apply`
-  never rolls the service onto it.
-- **Each SQL block** runs inside `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`,
-  with a 60-second statement timeout and a 2-second lock timeout.
-- **Stripe** (platform account): one paged `subscriptions.list(status=all)`,
-  reported as a count per status (`active`, `past_due`, `trialing`,
-  `incomplete`, `unpaid`, `canceled`, `other`), in total and for fixed-plan
-  subscriptions (`metadata.vayada_payment_kind = fixed_plan`). No IDs, emails or
-  amounts. Errors print only a code or the exception type.
-- **The Markdown output** is saved as `readonly-counts-result.md` (0600). An
-  existing result is never overwritten.
+Both SQL files stay in the evidence folder, because they name candidate hotels.
+Nothing runs before the plan is reviewed and Flamur's go names the plan SHA-256.
+
+| Coordinator check | How it is met |
+|---|---|
+| Owner-checked pattern | **Image:** the digest of the running `vayada-pms-backend` task, never a tag. **Embedded in the disposable definition:** the code (`python -c`), both SQL files and the RDS CA bundle (`rehearsal/rds-ca-rsa2048-g1.pem`, SHA-256 `f5c5f92a…`, checked by the script and again in the task). **Secrets:** exactly four reviewed SSM names: `/vayada/prod/db-pms-url`, `/vayada/prod/db-booking-url`, `/vayada/prod/stripe-secret-key`, `/vayada/prod/target-database-url`. **Connections:** host `vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com`, port 5432, and the database (`vayada_pms_db`, `vayada_booking_db`, `vayada_target_prod`) are pinned per secret. TLS is verified against that CA, including the hostname (sslmode `verify-full`). |
+| Read-only, aggregates only | **Transaction:** every statement runs inside `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`, with a 60 s statement timeout and a 2 s lock timeout. **Legacy blocks:** must aggregate and may return at most 50 rows. **Target checks:** each 6c `SELECT` (the file's own `BEGIN`/`ROLLBACK` are dropped) runs as `SELECT count(*) AS rows_found FROM (…)`, so no target row is printed; the expected answer is 0. **Stripe:** counts per status, in total and for fixed-plan subscriptions; no IDs, emails or amounts. **Errors:** only a code or the exception type is printed. |
+| Least privilege, no new IAM | No task role. The execution role is the existing `ecsTaskExecutionRole`, the role the legacy services already use. Logs go to the existing `/ecs/vayada-pms-backend` group (prefix `legacy-readonly-counts`). Nothing goes through Terraform. The definition is deregistered and deleted afterwards. |
+| Dry-run / plan mode | `readonly-counts-plan` makes only read-only AWS calls. It prints every statement exactly as it will run, the image, roles, secrets and log group, both SQL SHA-256s and the plan SHA-256, and saves all of it to `readonly-counts-plan.txt`. The run rebuilds the definition and refuses if its SHA-256 differs from the one in the go (a new image, SQL, code or CA). |
+| Only SELECT | Each block or check must be a single `SELECT`/`WITH`. The script refuses write keywords (`INSERT`, `UPDATE`, `DELETE`, `MERGE`, DDL, `COPY`, `CALL`, `DO`, `LOCK`, `SELECT … INTO`, `FOR UPDATE/SHARE`, …) and functions that act even inside a read-only transaction (`pg_terminate_backend`, `dblink`, `pg_advisory_*`, `nextval`, …). This is checked locally before any AWS call and again in the task. |
+
+**Why the target login is the migration login:** row-level security on
+`hotel_catalog.properties` and `platform.jobs` could hide rows from the ordinary
+runtime login and produce a false zero. The read-only transaction and the
+refusals above keep that login from writing.
+
+**Results:** `readonly-counts-result.md` (legacy blocks and Stripe) and
+`predeploy-readonly-check-result.md` (6c), both 0600, with the raw task log in
+`readonly-counts-task.log`. Existing results are never overwritten.
 
 ## The practice run (`target:cutover:dry-run`) and the go-day window
 

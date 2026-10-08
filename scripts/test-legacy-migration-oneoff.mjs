@@ -209,23 +209,21 @@ esac
   }
 });
 
-test('readonly-counts copies only the pms-backend image, role and three secrets and saves the result', () => {
+test('readonly-counts plans first, then runs the pinned image with only the four reviewed secrets', () => {
   const root = mkdtempSync(join(tmpdir(), 'legacy-oneoff-counts-'));
   try {
     mkdirSync(join(root, 'scripts'));
+    mkdirSync(join(root, 'rehearsal'));
     for (const name of ['legacy-migration-oneoff.sh', 'legacy-readonly-counts.py'])
       copyFileSync(new URL(`./${name}`, import.meta.url), join(root, 'scripts', name));
+    copyFileSync(new URL('../rehearsal/rds-ca-rsa2048-g1.pem', import.meta.url), join(root, 'rehearsal/rds-ca-rsa2048-g1.pem'));
     const evidence = join(root, 'evidence');
     mkdirSync(evidence, { mode: 0o700 });
-    const sql = join(root, 'counts.sql');
-    writeFileSync(sql, '-- (1) LEGACY PMS database: x\nSELECT count(*) AS n FROM bookings;\n-- (2) LEGACY BOOKING database: y\nSELECT 1 AS one;\n');
-    const pms = {
-      executionRoleArn: 'arn:aws:iam::269416271598:role/ecsTaskExecutionRole', taskRoleArn: 'arn:aws:iam::269416271598:role/ecsTaskRole',
-      containerDefinitions: [{ name: 'vayada-pms-backend', image: '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-pms-backend:latest',
-        secrets: ['DATABASE_URL', 'AUTH_DATABASE_URL', 'BOOKING_ENGINE_DATABASE_URL', 'JWT_SECRET_KEY', 'STRIPE_SECRET_KEY', 'CHANNEX_API_KEY']
-          .map((name) => ({ name, valueFrom: `arn:aws:ssm:eu-west-1:269416271598:parameter/vayada/prod/${name.toLowerCase()}` })) }],
-    };
-    writeFileSync(join(root, 'pms.json'), JSON.stringify(pms));
+    const counts = join(root, 'counts.sql');
+    const target = join(root, 'target.sql');
+    writeFileSync(counts, '-- (1) LEGACY PMS database: x\nSELECT count(*) AS n FROM bookings;\n-- (2) LEGACY BOOKING database: y\nSELECT count(*) AS n FROM booking_hotels;\n');
+    writeFileSync(target, '-- check\nBEGIN READ ONLY;\nSELECT job.id FROM platform.jobs job;\nROLLBACK;\n');
+    const digest = `sha256:${'a'.repeat(64)}`;
     mkdirSync(join(root, 'bin'));
     writeFileSync(join(root, 'bin/aws'), `#!/usr/bin/env bash
 shift 4
@@ -235,39 +233,65 @@ args=("$@"); for ((i = 0; i < \${#args[@]}; i++)); do
 done
 case "$1 $2" in
   "sts get-caller-identity") echo 269416271598 ;;
-  "ecs list-tasks") echo 0 ;;
-  "ecs describe-services") echo '{"taskDefinition":"arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-pms-backend:7","networkConfiguration":{"awsvpcConfiguration":{"subnets":["subnet-2"]}}}' ;;
-  "ecs describe-task-definition") cat "${root}/pms.json" ;;
+  "ecs list-tasks") [[ "$*" == *--service-name* ]] && echo arn:aws:ecs:eu-west-1:269416271598:task/vayada-backend-cluster/1111 || echo 0 ;;
+  "ecs describe-services") echo '{"awsvpcConfiguration":{"subnets":["subnet-2"]}}' ;;
+  "ecs describe-tasks")
+    if [[ "$*" == *imageDigest* ]]; then echo ${digest}
+    elif [[ "$*" == *lastStatus* ]]; then echo STOPPED
+    else echo '{"containers":[{"exitCode":0}]}'; fi ;;
   "ecs register-task-definition") echo arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-legacy-readonly-counts:1 ;;
   "ecs run-task") echo '{"tasks":[{"taskArn":"arn:aws:ecs:eu-west-1:269416271598:task/vayada-target-database-runtime-preflight/0123456789abcdef0123456789abcdef"}]}' ;;
-  "ecs describe-tasks") [[ "$*" == *lastStatus* ]] && echo STOPPED || echo '{"containers":[{"exitCode":0}]}' ;;
-  "logs get-log-events") [[ "$*" == *next-token* ]] && echo '{"events":[],"nextForwardToken":"f/1"}' || echo '{"events":[{"message":"# VAY-1362 read-only counts"},{"message":"| active | 2 |"}],"nextForwardToken":"f/1"}' ;;
+  "logs get-log-events") [[ "$*" == *next-token* ]] && echo '{"events":[],"nextForwardToken":"f/1"}' || echo '{"events":[{"message":"# counts"},{"message":"| active | 2 | 1 |"},{"message":"<!-- predeploy-readonly-check -->"},{"message":"# target"},{"message":"| 0 |"}],"nextForwardToken":"f/1"}' ;;
 esac
 `);
     chmodSync(join(root, 'bin/aws'), 0o755);
-    const run = (confirmation) => spawnSync('bash', [join(root, 'scripts/legacy-migration-oneoff.sh'), 'readonly-counts', sql, confirmation],
-      { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, EVIDENCE_DIR: evidence } });
+    const run = (...args) => {
+      rmSync(join(root, 'aws.log'), { force: true });
+      return spawnSync('bash', [join(root, 'scripts/legacy-migration-oneoff.sh'), ...args],
+        { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, EVIDENCE_DIR: evidence } });
+    };
+    const awsCalls = () => (existsSync(join(root, 'aws.log')) ? readFileSync(join(root, 'aws.log'), 'utf8') : '');
 
-    const sqlSha = createHash('sha256').update(readFileSync(sql)).digest('hex');
-    assert.equal(run('READONLY_COUNTS').status, 2);
-    assert.equal(run(`READONLY_COUNTS:${'0'.repeat(64)}`).status, 2);
-    assert.equal(existsSync(join(root, 'aws.log')), false);
-    const result = run(`READONLY_COUNTS:${sqlSha}`);
+    writeFileSync(join(root, 'bad.sql'), '-- (1) LEGACY PMS database: x\nDELETE FROM bookings;\n');
+    assert.equal(run('readonly-counts-plan', join(root, 'bad.sql'), target).status, 2);
+    assert.equal(awsCalls(), '');
+
+    const planned = run('readonly-counts-plan', counts, target);
+    assert.equal(planned.status, 0, planned.stderr);
+    assert.doesNotMatch(awsCalls(), /register|run-task/);
+    const planSha = planned.stdout.match(/^Plan sha256: ([0-9a-f]{64})$/m)[1];
+    assert.match(planned.stdout, /SELECT count\(\*\) AS rows_found FROM \(\nSELECT job\.id FROM platform\.jobs job\n\) AS check_rows/);
+    assert.match(planned.stdout, new RegExp(`Image: 269416271598\\.dkr\\.ecr\\.eu-west-1\\.amazonaws\\.com/vayada-pms-backend@${digest}`));
+    assert.match(planned.stdout, /Secrets: DATABASE_URL <- \/vayada\/prod\/db-pms-url, BOOKING_ENGINE_DATABASE_URL <- \/vayada\/prod\/db-booking-url, STRIPE_SECRET_KEY <- \/vayada\/prod\/stripe-secret-key, TARGET_DATABASE_URL <- \/vayada\/prod\/target-database-url/);
+    assert.equal(readFileSync(join(evidence, 'readonly-counts-plan.txt'), 'utf8'), planned.stdout);
+
+    assert.equal(run('readonly-counts', counts, target, 'READONLY_COUNTS').status, 2);
+    const stale = run('readonly-counts', counts, target, `READONLY_COUNTS:${'0'.repeat(64)}`);
+    assert.equal(stale.status, 2);
+    assert.match(stale.stderr, /plan changed/);
+    assert.doesNotMatch(awsCalls(), /register/);
+
+    const result = run('readonly-counts', counts, target, `READONLY_COUNTS:${planSha}`);
     assert.equal(result.status, 0, result.stderr);
     const definition = JSON.parse(readFileSync(join(root, 'definition.json'), 'utf8'));
     assert.equal(definition.family, 'vayada-legacy-readonly-counts');
-    assert.equal(definition.executionRoleArn, pms.executionRoleArn);
+    assert.equal(definition.executionRoleArn, 'arn:aws:iam::269416271598:role/ecsTaskExecutionRole');
     assert.equal(definition.taskRoleArn, undefined);
     const [container] = definition.containerDefinitions;
-    assert.equal(container.image, pms.containerDefinitions[0].image);
+    assert.equal(container.image, `269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-pms-backend@${digest}`);
     assert.deepEqual([...container.entryPoint, ...container.command], ['python', '-c', readFileSync(new URL('./legacy-readonly-counts.py', import.meta.url), 'utf8')]);
-    assert.deepEqual(container.environment, [{ name: 'COUNTS_SQL', value: readFileSync(sql, 'utf8') }]);
-    assert.deepEqual(container.secrets.map((s) => s.name), ['DATABASE_URL', 'BOOKING_ENGINE_DATABASE_URL', 'STRIPE_SECRET_KEY']);
+    assert.deepEqual(Object.fromEntries(container.environment.map((e) => [e.name, e.value])), {
+      COUNTS_SQL: readFileSync(counts, 'utf8'), TARGET_CHECK_SQL: readFileSync(target, 'utf8'),
+      VAYADA_DB_RDS_CA_BUNDLE: readFileSync(new URL('../rehearsal/rds-ca-rsa2048-g1.pem', import.meta.url), 'utf8'),
+    });
+    assert.deepEqual(container.secrets.map((s) => s.name), ['DATABASE_URL', 'BOOKING_ENGINE_DATABASE_URL', 'STRIPE_SECRET_KEY', 'TARGET_DATABASE_URL']);
     assert.equal(container.logConfiguration.options['awslogs-group'], '/ecs/vayada-pms-backend');
-    assert.equal(readFileSync(join(evidence, 'readonly-counts-result.md'), 'utf8'), '# VAY-1362 read-only counts\n| active | 2 |\n');
-    assert.equal(statSync(join(evidence, 'readonly-counts-result.md')).mode & 0o777, 0o600);
-    assert.match(readFileSync(join(root, 'aws.log'), 'utf8'), /ecs deregister-task-definition\necs delete-task-definitions\n$/);
-    const again = run(`READONLY_COUNTS:${sqlSha}`);
+    for (const [name, content] of [['readonly-counts-result.md', '# counts\n| active | 2 | 1 |\n'], ['predeploy-readonly-check-result.md', '# target\n| 0 |\n']]) {
+      assert.equal(readFileSync(join(evidence, name), 'utf8'), content);
+      assert.equal(statSync(join(evidence, name)).mode & 0o777, 0o600);
+    }
+    assert.match(awsCalls(), /ecs deregister-task-definition\necs delete-task-definitions\n$/);
+    const again = run('readonly-counts', counts, target, `READONLY_COUNTS:${planSha}`);
     assert.equal(again.status, 2);
     assert.match(again.stderr, /already exists/);
   } finally {
