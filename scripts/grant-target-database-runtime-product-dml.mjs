@@ -21,8 +21,7 @@ export const noReadPatterns = [
 export const noWrite = [
   "platform.schema_migrations", "platform.pricing_runtime_property_scopes",
   "platform.channex_management_worker_properties", "platform.legacy_owner_approval_records",
-  "platform.legacy_owner_approval_revocations", "booking.pricing_authority_heads",
-  "booking.pricing_authority_revisions", "booking.pricing_quotes",
+  "platform.legacy_owner_approval_revocations",
   "booking.pricing_runtime_effective_authority_scopes", "booking.pricing_runtime_effective_property_scopes",
   "marketplace.affiliate_click_occurrences", "booking.affiliate_click_contexts",
   "booking.affiliate_click_admissions", "booking.affiliate_original_booking_bindings",
@@ -33,17 +32,21 @@ export const noWrite = [
 ];
 export const noWritePatterns = [
   "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|hotel_setup_|identity_migration_)",
-  "^booking\\.pricing_authority_", "^pms\\.channex_room_availability_", "^pms\\.channex_ari_schedule_",
+  "^pms\\.channex_room_availability_", "^pms\\.channex_ari_schedule_",
   "^(marketplace|booking)\\.affiliate_click_", "^finance\\.expense_generation_",
 ];
-// Insert-only evidence without database-enforced immutability: the API never updates or deletes it.
+// Insert-only evidence: the API never updates or deletes it (pricing quotes also have an append-only trigger).
 export const appendOnly = [
   "platform.product_audit_events", "platform.domain_events", "booking.addon_revenue_evidence",
   "pms.channex_offer_ari_receipts", "pms.channex_offer_create_receipts", "pms.channex_offer_target_versions",
   "finance.commission_rate_changes", "distribution.external_api_usage_events",
-  "finance.affiliate_percentage_policy_approvals",
+  "finance.affiliate_percentage_policy_approvals", "booking.pricing_quotes",
 ];
-export const noDelete = ["hotel_catalog.properties"];
+// Pricing authority (VAY-2057): the revisions keep UPDATE only because the API locks them
+// FOR SHARE together with the heads; the append-only trigger rejects real updates.
+export const noDelete = [
+  "hotel_catalog.properties", "booking.pricing_authority_heads", "booking.pricing_authority_revisions",
+];
 // Trigger-invoked Channex helpers (app migrations 0167 and 0314, invoker rights) that the
 // Channex management worker provisioning revokes from PUBLIC: the API's writes to
 // pms.rate_rules, pms.operating_calendar_revisions, platform.outbox_events and
