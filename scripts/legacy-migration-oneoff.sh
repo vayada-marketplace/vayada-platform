@@ -12,7 +12,7 @@ usage() {
 [[ "$#" -ge 2 ]] || usage
 command="$1"
 evidence="${EVIDENCE_DIR:-}"
-[[ -n "$evidence" && -d "$evidence" && "$(stat -f %Lp "$evidence" 2>/dev/null || stat -c %a "$evidence")" == 700 ]] || {
+[[ -n "$evidence" && -d "$evidence" && "$(stat -c %a "$evidence" 2>/dev/null || stat -f %Lp "$evidence")" == 700 ]] || {
   echo "Set EVIDENCE_DIR to the run's 0700 evidence folder." >&2; exit 2;
 }
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
