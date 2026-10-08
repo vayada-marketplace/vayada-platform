@@ -15,10 +15,11 @@ hotel_setup_property_image_digests = {
   primary  = "sha256:eacd03ed0c836b1d1e77e1b8fdb0ba5bb3a178b218700a627f6552534f60c846"
   rollback = "sha256:eacd03ed0c836b1d1e77e1b8fdb0ba5bb3a178b218700a627f6552534f60c846"
 }
-# Retain both admitted callers after the protected activation and native proofs.
-# Later applies reject removal of installed origin/token pairs or enabled admission.
-# Profile edits stay off until the protected profile release; this change adds no caller.
-hotel_setup_public_caller = { creation = "enabled", property = "enabled", logo = "enabled", profile = "enabled" }
+# VAY-2056 step 4: the public API runs hotel setup on its ordinary login and no longer reads
+# the caller wiring. Every caller is retired: no admission, origin or token, the default
+# execution role and no caller security group on the API task. tf-apply accepts dropping a
+# caller only after the protected release blocked it (decommission step 1).
+hotel_setup_public_caller = { creation = "off", property = "off", logo = "off", profile = "off" }
 
 # Reviewed scoped logo protocol; automatic provisioning remains disabled.
 enable_hotel_setup_logo_storage    = true

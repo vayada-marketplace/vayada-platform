@@ -781,8 +781,8 @@ The ordinary API login `vayada_next_api_runtime` receives ordinary DML on the
 product schemas (`hotel_catalog`, `booking`, `pms`, `marketplace`,
 `distribution`, `finance`, `platform`) plus default privileges for future
 tables, and is denied a short protected list (credential scope tables,
-migration ledger and evidence, worker allowlists, pricing authority, guarded
-affiliate evidence, worker-only Channex and Finance state). On `identity.*` it
+migration ledger and evidence, worker allowlists, guarded affiliate evidence,
+worker-only Channex and Finance state). On `identity.*` it
 only gains `UPDATE (created_at)` on the six tables the API row-locks (platform
 #240 precedent: PostgreSQL needs an `UPDATE` privilege on one column for
 `FOR SHARE`/`FOR UPDATE`); no authorization column becomes writable, and no
@@ -838,7 +838,11 @@ not owned by the migration owner, when an identity lock table has no
 `created_at` column, or when the protected list is still writable or readable
 after the grant.
 Re-running it is a no-op. Run it again after any migration that adds a
-protected-class table; the preflight names the relation. Before committing it
+protected-class table; the preflight names the relation. Run it again also
+after a change to the protected list or the narrowings in this script (VAY-2057
+released the pricing authority and quote tables): until then the preflight
+reports `runtime_product_dml_missing` for the released relations and the next
+`tf-apply` fails. Before committing it
 also runs the preflight's global posture checks (no TRUNCATE/REFERENCES/
 TRIGGER/MAINTAIN anywhere, no default privileges for the login from any other
 role or schema, no SECURITY DEFINER EXECUTE, no owned objects, no role
@@ -859,7 +863,9 @@ every non-protected product relation has `SELECT, INSERT, UPDATE, DELETE`
 (`runtime_product_dml_missing`), the protected list and name patterns are not
 writable (`runtime_protected_relation_write_forbidden`) or readable
 (`runtime_protected_relation_read_forbidden`), audit and domain events stay
-append-only and `hotel_catalog.properties` keeps no `DELETE`
+append-only, `hotel_catalog.properties` keeps no `DELETE`
+and the pricing authority keeps no `DELETE` on its heads and revisions and no
+`UPDATE`/`DELETE` on `booking.pricing_quotes`
 (`runtime_narrowed_relation_writable`), the six identity lock tables carry the
 `created_at` lock column (`runtime_identity_lock_column_missing`), identity
 writes stay within the extended product-link column matrix plus that lock column
@@ -877,3 +883,51 @@ revokes the schema-wide DML and default privileges, revokes `EXECUTE` on the
 two Channex helpers, and restores the legacy allowlist (table and column grants)
 so the legacy preflight posture passes again. It does not change application
 migrations.
+
+### Hotel setup on the ordinary API login (VAY-2056)
+
+From the VAY-2056 next-API release, the public API runs hotel creation, hotel-detail
+edits, launch settings, the first pricing currency, Feature Hub Financials and the
+hotel logo on `vayada_next_api_runtime` (design: app repo
+`engineering/hotel-setup-ordinary-login.md`). New hotels, co-Owners and ownership
+transfers need no per-hotel native login, Secrets Manager secret, bootstrap or
+protected workflow.
+
+- **No new grant and no `SECURITY DEFINER` exception.** Every hotel-setup definer
+  function derives its authority from its native login, so the Owner re-check runs
+  in application SQL inside each write transaction. The existing
+  `runtime_security_definer_execute_forbidden` check (both postures, and the grant
+  transaction's global posture check) is the exact list of definer functions the
+  role may execute: none. No `runtimeDefinerFunctions` list is added.
+- **Admission variables are inert and no longer a kill switch.** The new image does
+  not read `HOTEL_SETUP_CREATION_COMMAND_*`, `HOTEL_SETUP_COMMAND_*`,
+  `HOTEL_SETUP_PROFILE_COMMAND_*` or `HOTEL_SETUP_LOGO_COMMAND_*`. They stay
+  installed until the caller wiring is retired (the retention assertion
+  `scripts/assert-hotel-setup-caller-retained.py` is unchanged by this release);
+  `hotel-setup-release.yml state=blocked` has no effect on the new image. Stopping
+  these operations means rolling the API image back.
+- **Owner-off markers and row rewrites.** A Feature Hub Owner-off marker counts only
+  while it equals the entitlement row's `xmin`. Anything that rewrites rows or
+  changes `xmin` (`pg_repack`, `VACUUM FULL`/`CLUSTER`, a logical-replication
+  blue/green switchover, dump and restore) cancels every Owner-off marker; affected
+  Owners then see Financials as not re-enableable, and an operator re-enables it on
+  request.
+- **Rollback window.** `vayada-hotel-setup-service` and
+  `vayada-hotel-setup-property-service` keep running idle on the images re-released
+  with VAY-2055 (migration 0473) until they are stopped right after acceptance.
+  Rolling the API image back forwards to them again (once stopped: redeploy the
+  previous API image, then `hotel-setup-release.yml state=start` for both services
+  and `state=enabled` for the four callers), but only while every object their
+  preflights pin is unchanged: any later migration
+  that changes a native-pinned policy, trigger, function, view or constraint ends the
+  image-only rollback window unless the native images are re-released with it.
+- **Decommission (right after acceptance, separate PRs, in order):** add the new
+  API image digest to `hotel-setup-caller-images.json`, `hotel-setup-logo-images.json`
+  and `hotel-setup-profile-images.json` (the release script refuses `state=blocked`
+  for an image it does not list), block the public callers (`hotel-setup-release.yml`,
+  `state=blocked` for logo, profile, property and creation), stop both private
+  services (`state=stop`), remove the native code paths from the app, retire the caller
+  wiring (`hotel_setup_public_caller = off` and relax the retention assertion), retire
+  the private infrastructure, workflows, runner modes and image inventories, then an
+  app migration drops the per-hotel logins, scope roles, scope tables and the
+  hotel-setup policies, triggers and functions (role drops need `vayada_admin`).

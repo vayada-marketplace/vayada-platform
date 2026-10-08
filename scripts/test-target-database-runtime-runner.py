@@ -303,7 +303,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
                        'VAYADA_AUDIT_GRANT_LOCAL_FIXTURE', '"revoke_product_dml"'):
             self.assertIn(marker, source)
         for relation in ('platform.hotel_setup_property_scopes', 'platform.identity_migration_provenance',
-                         'platform.schema_migrations', 'booking.pricing_authority_heads',
+                         'platform.schema_migrations', 'booking.pricing_authority_heads', 'booking.pricing_quotes',
                          'marketplace.affiliate_click_occurrences', 'finance.expense_generation_dispatches',
                          'platform.finance_expense_worker_properties', 'pms.channex_room_availability_attempts',
                          'platform.legacy_owner_bootstrap_receipts', 'identity.organizations'):

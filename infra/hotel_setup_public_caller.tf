@@ -29,11 +29,16 @@ locals {
   hotel_setup_caller_secrets = [for purpose, state in local.hotel_setup_caller_configured : {
     name = "${local.hotel_setup_caller_prefixes[purpose]}_INTERNAL_TOKEN", valueFrom = local.hotel_setup_caller_tokens[purpose]
   }]
+  # VAY-2056 step 4 detaches this identity from the API task, but the platform deploy role
+  # may not change or delete it (iam:PutRolePolicy/DeleteRole are denied). Keep the role and
+  # its exact token reads unchanged until step 5 removes them in an authorized operator apply.
+  hotel_setup_public_execution_tokens   = distinct(compact(values(local.hotel_setup_caller_tokens)))
+  hotel_setup_public_execution_retained = length(local.hotel_setup_caller_configured) > 0 || length(local.hotel_setup_public_execution_tokens) > 0
 }
 
 # Only the public API uses this execution identity; no native setup secret access.
 resource "aws_iam_role" "hotel_setup_public_execution" {
-  count = length(local.hotel_setup_caller_configured) > 0 ? 1 : 0
+  count = local.hotel_setup_public_execution_retained ? 1 : 0
 
   name               = "vayada-next-api-setup-caller-execution"
   assume_role_policy = local.hotel_setup_role_trust
@@ -52,12 +57,12 @@ resource "aws_iam_role" "hotel_setup_public_execution" {
   }
 }
 resource "aws_iam_role_policy_attachment" "hotel_setup_public_execution" {
-  count      = length(local.hotel_setup_caller_configured) > 0 ? 1 : 0
+  count      = local.hotel_setup_public_execution_retained ? 1 : 0
   role       = aws_iam_role.hotel_setup_public_execution[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 resource "aws_iam_role_policy" "hotel_setup_public_execution" {
-  count = length(local.hotel_setup_caller_configured) > 0 ? 1 : 0
+  count = local.hotel_setup_public_execution_retained ? 1 : 0
 
   name = "public-api-existing-parameters-and-exact-setup-tokens"
   role = aws_iam_role.hotel_setup_public_execution[0].id
@@ -65,7 +70,7 @@ resource "aws_iam_role_policy" "hotel_setup_public_execution" {
     Version = "2012-10-17"
     Statement = [
       { Effect = "Allow", Action = ["ssm:GetParameters"], Resource = distinct([for secret in local.services["next-target-backend"].secrets : "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter${secret.valueFrom}"]) },
-      { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = distinct([for secret in local.hotel_setup_caller_secrets : secret.valueFrom]) },
+      { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = length(local.hotel_setup_caller_configured) > 0 ? distinct([for secret in local.hotel_setup_caller_secrets : secret.valueFrom]) : local.hotel_setup_public_execution_tokens },
     ]
   })
 }
