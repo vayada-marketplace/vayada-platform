@@ -92,8 +92,9 @@ class RuntimePreflightContractTest(unittest.TestCase):
             self.assertIn(relation, js_list(CHECK, "noRead"))
         for relation in (
             "platform.schema_migrations",
-            "booking.pricing_authority_heads",
-            "booking.pricing_quotes",
+            "platform.pricing_runtime_property_scopes",
+            "booking.pricing_runtime_effective_authority_scopes",
+            "booking.pricing_runtime_effective_property_scopes",
             "marketplace.affiliate_click_occurrences",
             "booking.affiliate_original_booking_bindings",
             "finance.expense_generation_dispatches",
@@ -103,7 +104,14 @@ class RuntimePreflightContractTest(unittest.TestCase):
             self.assertIn(relation, js_list(CHECK, "noWrite"))
         self.assertIn("platform.product_audit_events", js_list(CHECK, "appendOnly"))
         self.assertIn("platform.domain_events", js_list(CHECK, "appendOnly"))
-        self.assertEqual(js_list(CHECK, "noDelete"), ["hotel_catalog.properties"])
+        # Pricing on the ordinary login (VAY-2057): table-level narrowings instead of protection.
+        for relation in ("booking.pricing_authority_heads", "booking.pricing_authority_revisions", "booking.pricing_quotes"):
+            self.assertNotIn(relation, js_list(CHECK, "noWrite"))
+        self.assertNotIn("^booking\\\\.pricing_authority_", js_list(CHECK, "noWritePatterns"))
+        self.assertIn("booking.pricing_quotes", js_list(CHECK, "appendOnly"))
+        self.assertEqual(js_list(CHECK, "noDelete"), [
+            "hotel_catalog.properties", "booking.pricing_authority_heads", "booking.pricing_authority_revisions",
+        ])
         self.assertEqual(len(js_list(CHECK, "identityLockOnly")), 6)
         # Trigger-invoked Channex helpers revoked from PUBLIC by the worker provisioning (VAY-2054 follow-up).
         self.assertEqual(js_list(CHECK, "runtimeExecutableFunctions"), js_list(GRANT, "runtimeExecutableFunctions"))
