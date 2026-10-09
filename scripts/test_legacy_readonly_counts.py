@@ -215,6 +215,44 @@ class ReadonlyCountsTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 module.printed_shape(bad, "block_1")
 
+    def test_pricing_shapes_and_no_second_value_after_an_aggregate(self):
+        module, *_ = load([], [])
+        header = "-- (1) LEGACY PMS database: x\n"
+        for good in ("SELECT h.id, h.name, count(*), bool_or(h.instant_book), max(ps.payment_provider), max(cp.free_cancellation_days), "
+                     "bool_or(coalesce(h.last_minute_discount @? '$ ? (@.enabled == true)', false)) AS lm, "
+                     "bool_or(ps.stripe_connect_account_id IS NOT NULL) AS has_account "
+                     "FROM hotels h LEFT JOIN hotel_payment_settings ps ON ps.hotel_id = h.id "
+                     "LEFT JOIN cancellation_policies cp ON cp.hotel_id = h.id GROUP BY h.id, h.name",
+                     "SELECT rt.hotel_id, count(*), min(rt.currency), max(rt.currency), "
+                     "count(*) FILTER (WHERE (rt.rate_payment_methods @? '$.*[*] ? (@ == \"card\")')) AS card, "
+                     "count(*) FILTER (WHERE (rt.seasons::text ~ '\"rate\": \"?[0-9]+\\.[0-9]{2}[0-9]*[1-9]')) AS sub_cent, "
+                     "count(*) FILTER (WHERE (rt.weekend_surcharge ~ '\\.[0-9]{2}(')) AS odd_paren "
+                     "FROM room_types rt WHERE rt.is_active GROUP BY rt.hotel_id",
+                     "SELECT m.hotel_id, count(*), max(m.markup_pct) FROM channex_channel_markups m GROUP BY m.hotel_id"):
+            module.legacy_blocks(header + good + ";")
+        for bad in (
+                # A second value after an aggregate (the FILTER clause used to swallow it, also through a ')' in a string).
+                "SELECT count(*) FILTER (WHERE true) + max(b.total_amount) FILTER (WHERE true) AS n FROM bookings b",
+                "SELECT count(') FILTER (WHERE ') + max(b.total_amount) FILTER (WHERE true) AS n FROM bookings b",
+                "SELECT count(*) FILTER (WHERE true)::int + 1 FROM t",
+                "SELECT bool_or(b.paid) OR true FROM bookings b",
+                "SELECT bool_or(b.paid)::text FROM bookings b",
+                "SELECT max(m.markup_pct) + max(b.total_amount) FROM channex_channel_markups m, bookings b",
+                # min/max only over reviewed labels, reviewed numeric settings, or cast time columns.
+                "SELECT max(b.total_amount) FROM bookings b",
+                "SELECT min(g.email) FROM guests g",
+                "SELECT min(g.created_at) FROM guests g",
+                "SELECT max(h.name) FROM hotels h",
+                "SELECT bool_or(b.paid) FILTER (WHERE true) FROM bookings b",
+                "SELECT count(*), sum(b.total_amount) FROM bookings b",
+                # $ and " stay refused outside string literals.
+                "SELECT count(*) FROM t WHERE x = $1",
+                "SELECT count(*) FROM t WHERE x = $tag$a$tag$",
+                "SELECT count(*) FROM \"t\"",
+                "SELECT count(*), \"x\" FROM t GROUP BY 2"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.legacy_blocks(header + bad + ";")
+
     def test_plan_without_target_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             counts = Path(directory, "counts.sql")
@@ -267,9 +305,10 @@ class ReadonlyCountsTest(unittest.TestCase):
                 self.assertEqual(kwargs["ssl"].verify_mode, ssl.CERT_REQUIRED)
                 self.assertTrue(kwargs["ssl"].check_hostname)
             for index in range(fetches):
-                session = [statement for _, statement in executed[index * 6:index * 6 + 6]]
-                self.assertEqual(session[:3] + session[4:], ["BEGIN TRANSACTION READ ONLY", "SET LOCAL statement_timeout = '15s'",
-                                                             "SET LOCAL lock_timeout = '1s'", "ROLLBACK", "CLOSE"])
+                session = [statement for _, statement in executed[index * 7:index * 7 + 7]]
+                self.assertEqual(session[:4] + session[5:], ["BEGIN TRANSACTION READ ONLY", "SET LOCAL standard_conforming_strings = on",
+                                                             "SET LOCAL statement_timeout = '15s'", "SET LOCAL lock_timeout = '1s'",
+                                                             "ROLLBACK", "CLOSE"])
             self.assertEqual(output.splitlines()[-1], f"COUNTS_COMPLETE kind={kind} statements={fetches}")
             if kind == "TARGET":
                 self.assertTrue(all(s.startswith("FETCH SELECT count(*) AS rows_found FROM ( SELECT") for _, s in executed if s.startswith("FETCH")))
