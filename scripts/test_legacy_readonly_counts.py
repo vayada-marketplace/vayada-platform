@@ -253,6 +253,27 @@ class ReadonlyCountsTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 module.legacy_blocks(header + bad + ";")
 
+    def test_refund_tier_numbers_and_cancellation_type(self):
+        module, *_ = load([], [])
+        header = "-- (1) LEGACY PMS database: x\n"
+        module.legacy_blocks(header + (
+            "SELECT rt.hotel_id, rt.flexible_cancellation_type, count(*), max(jsonb_array_length(rt.partial_refund_tiers)) AS tiers, "
+            "max((rt.partial_refund_tiers -> 0 ->> 'min_days_before_check_in')::int) AS t0_days, "
+            "min((rt.partial_refund_tiers -> 3 ->> 'refund_percent')::integer) AS t3_percent, "
+            "max(rt.partial_refund_cancel_window_days), max(rt.partial_refund_amount_percent) "
+            "FROM room_types rt GROUP BY rt.hotel_id, rt.flexible_cancellation_type;"))
+        for bad in ("SELECT max((g.partial_refund_tiers -> 0 ->> 'email')::int) FROM guests g",
+                    "SELECT max((rt.partial_refund_tiers -> 0 ->> 'refund_percent')::text) FROM room_types rt",
+                    "SELECT max(rt.partial_refund_tiers -> 0 ->> 'refund_percent') FROM room_types rt",
+                    "SELECT max((rt.seasons -> 0 ->> 'rate')::int) FROM room_types rt",
+                    "SELECT max((rt.partial_refund_tiers -> 0 ->> 'refund_percent' || 'x')::int) FROM room_types rt",
+                    "SELECT max((rt.partial_refund_tiers -> 0 ->> 'refund_percent')::int) + max(b.total_amount) FROM room_types rt, bookings b",
+                    "SELECT max(jsonb_array_length(g.addresses)) FROM guests g",
+                    "SELECT jsonb_array_length(rt.partial_refund_tiers) FROM room_types rt",
+                    "SELECT rt.id, count(*) FROM room_types rt GROUP BY rt.id"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.legacy_blocks(header + bad + ";")
+
     def test_plan_without_target_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             counts = Path(directory, "counts.sql")
