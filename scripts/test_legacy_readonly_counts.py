@@ -280,6 +280,36 @@ class ReadonlyCountsTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 module.target_checks(bad)
 
+    def test_target_checks_may_use_trunc_jsonb_array_elements_and_using(self):
+        module, *_ = load([], [])
+        checks = module.target_checks(
+            "-- IDR add-ons.\nSELECT 1 FROM booking.addon_definitions WHERE currency = 'IDR' AND price_amount <> trunc(price_amount);\n"
+            "-- Fixed charges.\nSELECT 1 FROM booking.fixed_charge_heads h JOIN booking.fixed_charge_revisions r USING (property_id, revision) "
+            "WHERE r.policy->>'currency' = 'IDR' AND EXISTS (SELECT 1 FROM jsonb_array_elements(r.policy->'charges') c "
+            "WHERE (c->>'amountMinor')::numeric % 100 <> 0);\n")
+        self.assertEqual([(n, t) for n, t, _ in checks], [("1", "IDR add-ons."), ("2", "Fixed charges.")])
+        for bad in ("SELECT 1 FROM t WHERE x = jsonb_each(y);", "SELECT pg_sleep(1) FROM t;", "SELECT 1 FROM t WHERE x = pg_catalog.trunc(y);"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.target_checks(bad)
+        # The counted-only functions stay refused in printed blocks.
+        for bad in ("SELECT count(*) FILTER (WHERE price_amount <> trunc(price_amount)) FROM booking_addons",
+                    "SELECT count(*) FROM t, jsonb_array_elements(t.x) e"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.legacy_blocks("-- (1) LEGACY PMS database: x\n" + bad + ";")
+
+    def test_plan_with_target_checks_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory, "target.sql")
+            target.write_text("-- IDR revisions.\nSELECT DISTINCT property_id FROM pms.pricing_v2_revisions WHERE currency = 'IDR';\n")
+            result = subprocess.run([sys.executable, "-I", str(SCRIPT), "--plan", "none", str(target)], capture_output=True, text=True,
+                                    env={"PYTHONDONTWRITEBYTECODE": "1"})
+            both = subprocess.run([sys.executable, "-I", str(SCRIPT), "--plan", "none", "none"], capture_output=True, text=True,
+                                  env={"PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith("Check 1 on vayada_target_prod as vayada_target_prod_user (TARGET_DATABASE_URL): IDR revisions."))
+        self.assertNotIn("Block ", result.stdout)
+        self.assertNotEqual(both.returncode, 0)
+
     def test_the_repository_copy_of_the_6c_check_is_counted_and_concatenation_free(self):
         module, *_ = load([], [])
         sql = (SCRIPT.parent / "legacy-predeploy-readonly-check.sql").read_text()

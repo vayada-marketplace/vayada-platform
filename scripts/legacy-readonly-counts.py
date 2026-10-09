@@ -35,9 +35,9 @@ MAX_ROWS = 50
 COMPLETE = "COUNTS_COMPLETE"
 # Only the functions the reviewed files use. Printed blocks and the counted 6c checks differ.
 PRINTED_FUNCTIONS = {"count", "max", "min", "bool_or", "coalesce"}
-COUNTED_FUNCTIONS = {"count"}
+COUNTED_FUNCTIONS = {"count", "trunc", "jsonb_array_elements"}
 # Keywords that a parenthesis may follow without being a function call.
-PAREN_KEYWORDS = {"as", "in", "values", "exists", "filter", "from", "join", "on", "where", "and", "or", "not", "select"}
+PAREN_KEYWORDS = {"as", "in", "values", "exists", "filter", "from", "join", "on", "using", "where", "and", "or", "not", "select"}
 # Labels a printed block may group by and print: reviewed, non-personal columns.
 LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan|currency|hotel_id|payment_provider)"
 # Hotel identity (id and public name/slug) may be printed as a label, but only from a legacy hotels
@@ -365,9 +365,14 @@ def main():
 
 
 def plan(counts_path, target_path):
-    """Prints every statement as it will run; target_path "none" means a run without the 6c checks."""
-    with open(counts_path, encoding="utf-8") as counts:
-        legacy = legacy_blocks(counts.read())
+    """Prints every statement as it will run. Either path may be "none" (no legacy blocks, or no
+    target checks), but not both."""
+    if counts_path == target_path == "none":
+        raise ValueError("nothing_to_run")
+    legacy = []
+    if counts_path != "none":
+        with open(counts_path, encoding="utf-8") as counts:
+            legacy = legacy_blocks(counts.read())
     checks = []
     if target_path != "none":
         with open(target_path, encoding="utf-8") as target:
