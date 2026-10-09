@@ -35,10 +35,6 @@ const publicReads = new Set([
   "booking.pricing_runtime_effective_authority_scopes",
   "booking.pricing_runtime_effective_property_scopes",
 ]);
-// VAY-2079: an app migration drops the authority-scope view after the pricing authority was
-// removed. While it exists it must meet the same public-read contract; once it is gone it is
-// skipped. The property-scope view stays required.
-const droppablePublicReads = new Set(["booking.pricing_runtime_effective_authority_scopes"]);
 const knownPrivileges = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 const ownerBypass = "(CURRENT_USER <> 'vayada_next_identity_runtime'::name)";
 const expectedPolicies = new Map([
@@ -167,8 +163,8 @@ try {
 
   const publicReadContracts = await client.query(`
     SELECT count(*)::int AS count FROM unnest($1::text[]) item(name)
-    JOIN pg_class c ON c.oid=to_regclass(item.name)
-    WHERE c.relkind='v' AND current_user=pg_get_userbyid(c.relowner)
+    LEFT JOIN pg_class c ON c.oid=to_regclass(item.name)
+    WHERE c.oid IS NULL OR c.relkind='v' AND current_user=pg_get_userbyid(c.relowner)
       AND c.reloptions@>ARRAY['security_barrier=true']::text[]
       AND (SELECT array_agg(acl.privilege_type||':'||acl.is_grantable)
            FROM aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) acl
@@ -178,11 +174,7 @@ try {
       AND NOT EXISTS(SELECT 1 FROM pg_attribute a, LATERAL aclexplode(a.attacl) acl
                      WHERE a.attrelid=c.oid AND acl.grantee=(SELECT oid FROM pg_roles WHERE rolname=$2))
   `, [[...publicReads], role]);
-  const droppedPublicReads = await client.query(
-    "SELECT count(*)::int AS count FROM unnest($1::text[]) item(name) WHERE to_regclass(item.name) IS NULL",
-    [[...droppablePublicReads]],
-  );
-  if (publicReadContracts.rows[0].count !== publicReads.size - droppedPublicReads.rows[0].count)
+  if (publicReadContracts.rows[0].count !== publicReads.size)
     throw new Error("identity_public_read_contract_unsafe");
 
   const excess = await client.query(`
