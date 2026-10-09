@@ -321,7 +321,9 @@ locals {
         { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
         { name = "BOOKING_WEB_EVENT_SINK", value = "target" },
         { name = "BOOKING_WEB_LEGACY_CHECKOUT_COMMAND_PROXY_ENABLED", value = "false" },
-        { name = "REPLACEMENT_PRICING_ACCEPTANCE_ALLOWED_SLUGS", value = "codex-test-hotel-not-bookable" },
+        # VAY-1543: card payment for public pricing-v2 bookings (instant, full prepayment on the
+        # hotel's connected Stripe account). Flip only with Flamur's go, after VAY-2088 is live.
+        { name = "REPLACEMENT_PRICING_CARD_ACCEPTANCE_ENABLED", value = "true" },
         { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
         { name = "BOOKING_EMAIL_FROM", value = "Vayada Bookings <bookings@vayada.com>" },
         { name = "MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_CURRENT_KEY_VERSION", value = var.marketplace_communication_unsubscribe_current_key_version },
