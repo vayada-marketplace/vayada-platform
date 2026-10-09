@@ -39,8 +39,10 @@ COUNTED_FUNCTIONS = {"count"}
 # Keywords that a parenthesis may follow without being a function call.
 PAREN_KEYWORDS = {"as", "in", "values", "exists", "filter", "from", "join", "on", "where", "and", "or", "not", "select"}
 # Labels a printed block may group by and print: reviewed, non-personal columns.
-LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan)"
-# Hotel identity (id and public name/slug) may be printed as a label, but only from the legacy hotels table.
+LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan|currency|hotel_id)"
+# Hotel identity (id and public name/slug) may be printed as a label, but only from a legacy hotels
+# table: hotels (PMS) or booking_hotels (Booking).
+HOTEL_TABLES = ("hotels", "booking_hotels")
 HOTEL_LABELS = ("id", "name", "slug")
 TIME_COLUMNS = r"\w*(_at|_date)|check_in|check_out"
 WRITES = re.compile(
@@ -118,16 +120,16 @@ def split_top(original, bare):
 
 
 def hotel_aliases(bare, begin, start):
-    """Names that refer to the legacy hotels table in the top-level FROM: its alias, or `hotels`
-    itself when it is referenced without one.
+    """Names that refer to a legacy hotels table (HOTEL_TABLES) in the top-level FROM: its alias,
+    or the table name itself when it is referenced without one.
 
-    Every appearance of the word hotels must be a table reference right after FROM/JOIN, a
-    `hotels.<column>` reference, or an output column name in the printed SELECT list (begin to
+    Every appearance of a hotels table name must be a table reference right after FROM/JOIN, a
+    `<table>.<column>` reference, or an output column name in the printed SELECT list (begin to
     start). It may not alias another relation or a subquery, be schema qualified, name a CTE, or
-    carry a column alias list, so nothing else can pose as hotels."""
+    carry a column alias list, so nothing else can pose as a hotels table."""
     clauses = r"(?:on|where|join|left|right|inner|outer|cross|full|natural|group|order|having|limit|using)\b"
     zero, aliases = depth_zero(bare), set()
-    for match in re.finditer(r"(?i)\bhotels\b", bare):
+    for match in re.finditer(rf"(?i)\b(?:{'|'.join(HOTEL_TABLES)})\b", bare):
         before, after = bare[:match.start()].rstrip(), bare[match.end():]
         if before.endswith("."):
             raise ValueError("hotels_qualified")
@@ -141,7 +143,7 @@ def hotel_aliases(bare, begin, start):
         if re.match(r"\s*\(", after[alias.end():] if alias else after):
             raise ValueError("hotels_column_alias_list")
         if match.start() >= start and match.start() in zero:
-            aliases.add(alias.group(1).lower() if alias else "hotels")
+            aliases.add((alias.group(1) if alias else match.group(0)).lower())
     return aliases
 
 
