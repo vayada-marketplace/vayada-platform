@@ -818,17 +818,66 @@ What remains on purpose:
   releases) refuses any task definition that still carries hotel-setup caller
   wiring, so an image-only rollback to a pre-VAY-2056 task definition is no longer
   possible.
-- The runtime preflight and product DML grant keep `platform.hotel_setup_*` and
-  `hotel_catalog.hotel_setup_*` on the protected list. The per-hotel native logins,
-  scope roles, scope tables, policies, triggers and functions stay in the database
-  until the decommission step 6 application migration (role drops need
-  `vayada_admin`).
+- Decommission step 6 removed the database side: app migration 0474 dropped the
+  scope tables, view, policies, triggers and functions (2026-10-09), and the
+  per-hotel logins and scope roles were disabled and then dropped by
+  `retire-hotel-setup-database-roles.yml`. The runtime preflight and product DML
+  grant no longer list `hotel_setup_` relations.
 - Operator follow-up outside Terraform: schedule deletion (with a recovery window,
   never `--force-delete-without-recovery`) of the per-login secrets the bootstrap
   workflows created under `hotel-setup-command/prod/organization/` and
   `hotel-setup-command/prod/property/`; optionally deregister the retained
   `vayada-hotel-setup-*` task definition revisions (`skip_destroy`); delete the
   `hotel-setup-automatic-provisioning` GitHub environment.
+
+#### Retiring the hotel-setup database roles (step 6a and 6c)
+
+`retire-hotel-setup-database-roles.yml` (main only, `platform-mutations-v2`,
+`production-ecs-mutations` lock) runs
+`run-target-database-runtime-preflight.sh --retire-hotel-setup-roles <step> <phase>
+<fingerprint>`. That registers a disposable task: the serving API image, only
+`TARGET_DATABASE_ADMIN_URL`, and `retire-hotel-setup-database-roles.mjs`. The task
+connects as `vayada_admin` to `vayada_target_prod` (pinned host, CA and
+`sslmode=require`).
+
+The runner refuses to start while the serving API task still carries hotel-setup
+caller wiring, or while either private hotel-setup service runs a task. The script
+then checks:
+- it is `vayada_admin`, not a superuser, holds CREATEROLE, and is on a primary
+  with PostgreSQL 16+;
+- it holds a dedicated advisory lock;
+- every role under `vayada_next_hotel_setup_` has a known shape (four parents,
+  two readers, per-hotel logins).
+
+1. **`disable` (6a), before app migration 0474.**
+   - `inspect` is read-only. It prints a `PLAN` with the roles, their sessions,
+     the number of `vayada_admin` grants, a `ready` flag with any blockers, and a
+     fingerprint of everything it read.
+   - `apply` with that fingerprint does the following:
+     - It recaptures and refuses on any drift.
+     - It sets every hotel-setup login and reader to `NOLOGIN`.
+     - It revokes every grant `vayada_admin` gave a hotel-setup role. A
+       `REVOKE` notice that it revoked nothing aborts the run.
+     - It commits, then ends their sessions with `pg_terminate_backend`. That
+       needs `pg_signal_backend`; if it is missing and a session is live, the
+       run reports `COMMITTED_UNVERIFIED`.
+     - It verifies the result.
+   - Grants the migration owner made stay, for 0474 to revoke. Blocked if
+     `vayada_admin` lacks ADMIN OPTION on a login.
+2. **`drop` (6c), after 0474 is live.**
+   - `inspect` reports blockers until everything below holds:
+     - every role is `NOLOGIN` with no session;
+     - `vayada_admin` holds ADMIN OPTION on each role;
+     - no ACL, `pg_shdepend` entry (in any database) or default privilege
+       remains;
+     - no policy, function or view still names a hotel-setup role as text
+       (`pg_shdepend` cannot see those).
+   - `apply` with the fingerprint drops the logins, then the readers, then the
+     four parents, in one transaction, and verifies that none remain.
+   - It never uses `DROP OWNED BY`.
+
+Failures print `FAIL` (nothing changed), `UNCERTAIN` (the commit outcome is
+unknown) or `COMMITTED_UNVERIFIED`. Re-run `inspect` after either of the last two.
 
 ### Target database runtime role: product DML grant (VAY-2054)
 

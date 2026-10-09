@@ -291,7 +291,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
                        'await client.query("BEGIN")', 'ROLLBACK', 'unexpected_database_host', 'rds_ca_missing',
                        'VAYADA_AUDIT_GRANT_LOCAL_FIXTURE', '"revoke_product_dml"'):
             self.assertIn(marker, source)
-        for relation in ('platform.hotel_setup_property_scopes', 'platform.identity_migration_provenance',
+        for relation in ('platform.identity_migration_provenance',
                          'platform.schema_migrations', 'booking.pricing_authority_heads', 'booking.pricing_quotes',
                          'marketplace.affiliate_click_occurrences', 'finance.expense_generation_dispatches',
                          'platform.finance_expense_worker_properties', 'pms.channex_room_availability_attempts',
@@ -300,6 +300,37 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         for marker in ('productIdentityColumns', '"resource_product", "resource_type", "resource_id"', '"status", "updated_at"'):
             self.assertIn(marker, source)
         self.assertNotIn('vayada_next_identity_runtime', source)
+
+    def test_hotel_setup_role_retirement_is_main_only_fingerprinted_and_post_decommission(self) -> None:
+        branch = RUNNER.split('  --retire-hotel-setup-roles)', 1)[1].split('    ;;', 1)[0]
+        for marker in ('"${GITHUB_REF:-}" == refs/heads/main', '"${GITHUB_EVENT_NAME:-}" == workflow_dispatch',
+                       '"$2" =~ ^(disable|drop)$', '"$3" == inspect && -z "$4"', '"$3" == apply && "$4" =~ ^[a-f0-9]{64}$',
+                       'code_file="retire-hotel-setup-database-roles.mjs"', 'code_in_definition="true"',
+                       'secret_name="TARGET_DATABASE_ADMIN_URL"', 'secret_parameter="/vayada/prod/db-marketplace-url"'):
+            self.assertIn(marker, branch)
+        self.assertNotIn('extra_secret_', branch)
+        self.assertIn('Role retirement requires the retired hotel-setup caller wiring.', RUNNER)
+        self.assertIn('Role retirement requires both private hotel-setup services stopped.', RUNNER)
+        self.assertIn('elif [[ "${role_retirement_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";', RUNNER)
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('GITHUB_')}
+        for args in (['disable', 'inspect', ''], ['drop', 'apply', 'a' * 64], ['disable', 'apply', ''],
+                     ['disable', 'inspect', 'a' * 64], ['other', 'inspect', '']):
+            local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+                                    '--retire-hotel-setup-roles', *args], capture_output=True, text=True, env=environment)
+            self.assertEqual(local.returncode, 2, args)
+        source = (ROOT / 'scripts/retire-hotel-setup-database-roles.mjs').read_text()
+        for marker in ('MEMBER WITH ADMIN OPTION', 'hotel_setup_roles_plan_changed', 'hotel_setup_roles_still_referenced',
+                       'hotel_setup_roles_dependencies_remaining', 'hotel_setup_roles_admin_option_missing',
+                       'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', 'pg_try_advisory_lock', 'pg_terminate_backend',
+                       '"01006", "01007"', 'COMMITTED_UNVERIFIED', 'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com',
+                       'url.search !== "?sslmode=require"', 'rejectUnauthorized: true'):
+            self.assertIn(marker, source)
+        self.assertNotIn('DROP OWNED', source)
+        workflow = (ROOT / '.github/workflows/retire-hotel-setup-database-roles.yml').read_text()
+        for marker in ("if: github.ref == 'refs/heads/main'", 'environment: platform-mutations-v2',
+                       'group: production-ecs-mutations', 'options: [disable, drop]', 'options: [inspect, apply]',
+                       '--retire-hotel-setup-roles "$STEP" "$PHASE" "$FROZEN"'):
+            self.assertIn(marker, workflow)
 
     def test_cleanup_is_scoped_to_dedicated_cluster_and_log_group(self) -> None:
         self.assertIn('cluster="vayada-target-database-runtime-preflight"', RUNNER)

@@ -39,7 +39,12 @@ COUNTED_FUNCTIONS = {"count"}
 # Keywords that a parenthesis may follow without being a function call.
 PAREN_KEYWORDS = {"as", "in", "values", "exists", "filter", "from", "join", "on", "where", "and", "or", "not", "select"}
 # Labels a printed block may group by and print: reviewed, non-personal columns.
-LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan)"
+LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan|currency|hotel_id)"
+# Hotel identity (id and public name/slug) may be printed as a label, but only from a legacy hotels
+# table: hotels (PMS) or booking_hotels (Booking).
+HOTEL_TABLES = ("hotels", "booking_hotels")
+HOTEL_LABELS = ("id", "name", "slug")
+TIME_COLUMNS = r"\w*(_at|_date)|check_in|check_out"
 WRITES = re.compile(
     r"(?i)\b(insert|update|delete|merge|truncate|alter|create|drop|grant|revoke|copy|call|do|lock|vacuum|analyze|"
     r"cluster|reindex|refresh|comment|import|listen|notify|prepare|execute|into|share|returning)\b"
@@ -114,9 +119,44 @@ def split_top(original, bare):
     return [part.strip() for part in parts + [original[last:]]]
 
 
-def aggregate_or_label(item):
-    item = re.sub(r"(?is)\s+as\s+[a-z_]\w*$", "", item.strip())
+def hotel_aliases(bare, begin, start):
+    """Names that refer to a legacy hotels table (HOTEL_TABLES) in the top-level FROM: its alias,
+    or the table name itself when it is referenced without one.
+
+    Every appearance of a hotels table name must be a table reference right after FROM/JOIN, a
+    `<table>.<column>` reference, or an output column name in the printed SELECT list (begin to
+    start). It may not alias another relation or a subquery, be schema qualified, name a CTE, or
+    carry a column alias list, so nothing else can pose as a hotels table."""
+    clauses = r"(?:on|where|join|left|right|inner|outer|cross|full|natural|group|order|having|limit|using)\b"
+    zero, aliases = depth_zero(bare), set()
+    for match in re.finditer(rf"(?i)\b(?:{'|'.join(HOTEL_TABLES)})\b", bare):
+        before, after = bare[:match.start()].rstrip(), bare[match.end():]
+        if before.endswith("."):
+            raise ValueError("hotels_qualified")
+        if not re.search(r"(?i)\b(?:from|join)$", before):
+            if re.match(r"\s*\.", after):
+                continue  # a hotels.<column> reference
+            if begin <= match.start() < start and match.start() in zero and re.search(r"(?i)\bas$", before):
+                continue  # an output column name, such as count(...) AS hotels
+            raise ValueError("hotels_name_reused")
+        alias = re.match(rf"(?i)\s+(?:as\s+)?(?!{clauses})([a-z_]\w*)", after)
+        if re.match(r"\s*\(", after[alias.end():] if alias else after):
+            raise ValueError("hotels_column_alias_list")
+        if match.start() >= start and match.start() in zero:
+            aliases.add((alias.group(1) if alias else match.group(0)).lower())
+    return aliases
+
+
+def is_label(item, aliases):
     if re.fullmatch(LABELS, item, re.I) or re.fullmatch(rf"(?is)coalesce\(\s*{LABELS}\s*,\s*'[^']*'\s*\)", item):
+        return True
+    hotel = re.fullmatch(r"(?i)([a-z_]\w*)\.([a-z_]\w*)", item)
+    return bool(hotel) and hotel.group(1).lower() in aliases and hotel.group(2).lower() in HOTEL_LABELS
+
+
+def aggregate_or_label(item, aliases):
+    item = re.sub(r"(?is)\s+as\s+[a-z_]\w*$", "", item.strip())
+    if is_label(item, aliases):
         return "label"
     call = re.match(r"(?i)(count|max)\s*\(", item)
     if not call:
@@ -129,7 +169,7 @@ def aggregate_or_label(item):
     argument, rest = item[call.end():index], item[index + 1:]
     if call.group(1).lower() == "max":
         # max may only summarise a time column, cast to a date or timestamp, so no text value can print.
-        if not re.fullmatch(r"(?i)\s*(?:[a-z_]\w*\.)?\w*(_at|_date)\s*", argument):
+        if not re.fullmatch(rf"(?i)\s*(?:[a-z_]\w*\.)?(?:{TIME_COLUMNS})\s*", argument):
             return None
         return "aggregate" if re.fullmatch(r"(?i)\s*::\s*(date|timestamp|timestamptz)\s*", rest) else None
     return "aggregate" if re.fullmatch(r"(?is)\s*(filter\s*\(\s*where\b.*\))?\s*(::\s*[a-z_]+)?\s*", rest) else None
@@ -146,7 +186,27 @@ def printed_shape(statement, name):
     begin = selects[-1].end()
     froms = top_level(statement, bare, r"\bfrom\b", begin)
     end = begin + froms[0].start() if froms else len(statement)
-    kinds = [aggregate_or_label(item) for item in split_top(statement[begin:end], bare[begin:end])]
+    # Printed columns may come only from base tables and VALUES lists: no derived tables, no
+    # LATERAL, and every CTE must be a VALUES list (the reviewed hotel labels, for example).
+    stops = top_level(statement, bare, r"\b(where|group\s+by|having|order\s+by|limit)\b", end)
+    sources = bare[end:end + stops[0].start()] if stops else bare[end:]
+    if re.search(r"(?i)(?:\bfrom|\bjoin|,)\s*\(|\blateral\b", sources) or re.search(r"(?i)\bwith\s+recursive\b", bare):
+        raise ValueError(f"{name}_derived_source")
+    for cte in re.finditer(r"(?i)(?:\bwith|,)\s*[a-z_]\w*\s*(?:\([^()]*\))?\s*as\s*(?:not\s+)?(?:materialized\s*)?\(", bare):
+        depth = 0
+        for index in range(cte.end() - 1, len(bare)):
+            depth += {"(": 1, ")": -1}.get(bare[index], 0)
+            if depth == 0:
+                break
+        # Literal rows only: strings, numbers, NULL/TRUE/FALSE and simple casts, so no row can read a table.
+        rows = re.sub(r"(?i)::\s*[a-z_]\w*|\b(?:null|true|false)\b", " ", bare[cte.end():index])
+        if not re.fullmatch(r"(?i)\s*values[\s(),'0-9.+-]*", rows):
+            raise ValueError(f"{name}_derived_source")
+    try:
+        aliases = hotel_aliases(bare, begin, end)
+    except ValueError:
+        raise ValueError(f"{name}_not_aggregate") from None
+    kinds = [aggregate_or_label(item, aliases) for item in split_top(statement[begin:end], bare[begin:end])]
     if None in kinds or "aggregate" not in kinds:
         raise ValueError(f"{name}_not_aggregate")
     groups = top_level(statement, bare, r"\bgroup\s+by\b", end)
@@ -155,7 +215,7 @@ def printed_shape(statement, name):
         tail = top_level(statement, bare, r"\b(order\s+by|having|limit)\b", start)
         stop = start + tail[0].start() if tail else len(statement)
         for item in split_top(statement[start:stop], bare[start:stop]):
-            if not re.fullmatch(rf"(?is)\d+|{LABELS}|coalesce\(\s*{LABELS}\s*,\s*'[^']*'\s*\)", item):
+            if not re.fullmatch(r"\d+", item) and not is_label(item, aliases):
                 raise ValueError(f"{name}_groups_by_unreviewed_column")
     elif "label" in kinds:
         raise ValueError(f"{name}_not_aggregate")
@@ -282,8 +342,13 @@ def main():
 
 
 def plan(counts_path, target_path):
-    with open(counts_path, encoding="utf-8") as counts, open(target_path, encoding="utf-8") as target:
-        legacy, checks = legacy_blocks(counts.read()), target_checks(target.read())
+    """Prints every statement as it will run; target_path "none" means a run without the 6c checks."""
+    with open(counts_path, encoding="utf-8") as counts:
+        legacy = legacy_blocks(counts.read())
+    checks = []
+    if target_path != "none":
+        with open(target_path, encoding="utf-8") as target:
+            checks = target_checks(target.read())
     for number, kind, title, statement in legacy:
         variable, database, user = DATABASES[kind]
         print(f"Block {number} on {database} as {user} ({variable}): {title}\n{statement}\n")

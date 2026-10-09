@@ -134,12 +134,6 @@ CREATE TABLE platform.channex_management_worker_properties (property_id uuid PRI
 CREATE TABLE platform.finance_expense_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.finance_export_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.pricing_runtime_property_scopes (database_login name PRIMARY KEY);
-CREATE TABLE platform.hotel_setup_property_scopes (database_login name PRIMARY KEY, property_id uuid, organization_id uuid);
-CREATE TABLE platform.hotel_setup_creation_scopes (database_login name PRIMARY KEY, organization_id uuid);
-CREATE TABLE platform.hotel_setup_linked_properties (property_id uuid PRIMARY KEY);
-CREATE TABLE platform.hotel_setup_reconciliation_cursors (mode text PRIMARY KEY, scope_id uuid);
-CREATE VIEW hotel_catalog.hotel_setup_effective_creation_scopes WITH (security_barrier = true) AS
-  SELECT organization_id FROM platform.hotel_setup_creation_scopes WHERE database_login = session_user;
 CREATE TABLE pms.inventory_coverage_validation_queue (id uuid PRIMARY KEY);
 -- VAY-2054 product DML fixture: ordinary product tables, protected classes and the identity lock set.
 CREATE TABLE platform.schema_migrations (name text PRIMARY KEY);
@@ -366,10 +360,10 @@ fi
 
 # A missing read must never mask an unexpected authority leak before repair.
 docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-  'GRANT SELECT ON platform.hotel_setup_creation_scopes TO vayada_next_api_runtime' >/dev/null
+  'GRANT SELECT ON platform.identity_migration_provenance TO vayada_next_api_runtime' >/dev/null
 expect_failure runtime_protected_relation_read_forbidden
 docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-  'REVOKE SELECT ON platform.hotel_setup_creation_scopes FROM vayada_next_api_runtime' >/dev/null
+  'REVOKE SELECT ON platform.identity_migration_provenance FROM vayada_next_api_runtime' >/dev/null
 
 run_preflight | grep -F '"status":"PASS"' >/dev/null
 docker exec "${database_container}" psql -U postgres -c \
@@ -447,13 +441,12 @@ for table in finance_expense_worker_properties finance_export_worker_properties;
 done
 run_preflight | grep -F '"status":"PASS"' >/dev/null
 
-# Exact hotel setup exclusions must reject leaked direct, PUBLIC and inherited reads.
+# Exact read exclusions must reject leaked direct, PUBLIC and inherited reads.
 for entry in \
-  platform.hotel_setup_property_scopes:database_login \
-  platform.hotel_setup_creation_scopes:database_login \
-  platform.hotel_setup_linked_properties:property_id \
-  platform.hotel_setup_reconciliation_cursors:scope_id \
-  hotel_catalog.hotel_setup_effective_creation_scopes:organization_id; do
+  platform.identity_migration_provenance:id \
+  platform.legacy_historical_binding_transitions:id \
+  platform.finance_export_worker_properties:property_id \
+  pms.inventory_coverage_validation_queue:id; do
   table="${entry%:*}"
   column="${entry#*:}"
   for grantee in vayada_next_api_runtime PUBLIC elevated; do
@@ -751,9 +744,9 @@ owner_psql "REVOKE UPDATE (status) ON identity.users FROM vayada_next_api_runtim
 owner_psql "GRANT INSERT ON platform.schema_migrations TO PUBLIC" >/dev/null
 expect_failure runtime_protected_relation_write_forbidden
 owner_psql "REVOKE INSERT ON platform.schema_migrations FROM PUBLIC" >/dev/null
-owner_psql "GRANT SELECT ON platform.hotel_setup_creation_scopes TO PUBLIC" >/dev/null
+owner_psql "GRANT SELECT ON platform.identity_migration_provenance TO PUBLIC" >/dev/null
 expect_failure runtime_protected_relation_read_forbidden
-owner_psql "REVOKE SELECT ON platform.hotel_setup_creation_scopes FROM PUBLIC" >/dev/null
+owner_psql "REVOKE SELECT ON platform.identity_migration_provenance FROM PUBLIC" >/dev/null
 owner_psql "ALTER TABLE identity.organizations RENAME COLUMN created_at TO created_at_renamed" >/dev/null
 expect_failure runtime_identity_lock_column_missing
 owner_psql "ALTER TABLE identity.organizations RENAME COLUMN created_at_renamed TO created_at" >/dev/null
@@ -840,9 +833,8 @@ expect_runtime_denied "DELETE FROM identity.product_entitlements WHERE resource_
 expect_runtime_denied "DELETE FROM identity.organization_resource_links WHERE resource_id = 'offer-1'"
 [[ "$(owner_psql "SELECT name FROM identity.organizations WHERE id = '00000000-0000-4000-8000-00000000aa01'")" == fixture ]]
 expect_runtime_denied "INSERT INTO identity.users(id) VALUES ('00000000-0000-4000-8000-000000000104')"
-expect_runtime_denied "INSERT INTO platform.hotel_setup_creation_scopes(database_login) VALUES ('x')"
-expect_runtime_denied "SELECT count(*) FROM platform.hotel_setup_creation_scopes"
-expect_runtime_denied "SELECT count(*) FROM hotel_catalog.hotel_setup_effective_creation_scopes"
+expect_runtime_denied "INSERT INTO platform.identity_migration_provenance(id) VALUES ('00000000-0000-4000-8000-00000000010f')"
+expect_runtime_denied "SELECT count(*) FROM platform.identity_migration_provenance"
 expect_runtime_denied "INSERT INTO platform.production_cutover_runs(id) VALUES ('00000000-0000-4000-8000-000000000105')"
 expect_runtime_denied "INSERT INTO platform.schema_migrations(name) VALUES ('9999')"
 expect_runtime_denied "INSERT INTO marketplace.affiliate_click_occurrences(id) VALUES ('00000000-0000-4000-8000-000000000106')"
