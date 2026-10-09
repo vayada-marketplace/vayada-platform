@@ -134,6 +134,74 @@ class ReadonlyCountsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.legacy_blocks("SELECT count(*) FROM bookings;")
 
+    def test_hotel_identity_labels_only_from_the_top_level_hotels_table(self):
+        module, *_ = load([], [])
+        header = "-- (1) LEGACY PMS database: x\n"
+        for good in ("SELECT h.id, h.name, h.slug, count(*), max(b.check_out)::date FROM hotels h JOIN bookings b ON b.hotel_id = h.id "
+                     "WHERE h.id NOT IN ('00000000-0000-4000-8000-000000000001') GROUP BY h.id, h.name, h.slug HAVING count(*) > 0 ORDER BY 4 DESC",
+                     "SELECT hotels.name, count(*) FROM hotels GROUP BY 1"):
+            module.legacy_blocks(header + good + ";")
+        for bad in ("SELECT u.name, count(*) FROM users u GROUP BY 1",
+                    "SELECT h.name, count(*) FROM users h GROUP BY 1",
+                    "SELECT h.email, count(*) FROM hotels h GROUP BY 1",
+                    "SELECT name, count(*) FROM hotels GROUP BY 1",
+                    "SELECT h.name, count(*) FROM hotels h JOIN users u ON u.id = h.owner_id GROUP BY 1, u.email",
+                    "SELECT h.name, count(*) FROM users h WHERE EXISTS (SELECT 1 FROM hotels h) GROUP BY 1",
+                    "WITH hotels AS (SELECT email AS name FROM users) SELECT hotels.name, count(*) FROM hotels GROUP BY 1",
+                    "SELECT h.name, count(*), max(b.check_out) FROM hotels h JOIN bookings b ON b.hotel_id = h.id GROUP BY 1",
+                    "SELECT h.name, count(*), max(b.guest_name)::date FROM hotels h JOIN bookings b ON b.hotel_id = h.id GROUP BY 1"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.legacy_blocks(header + bad + ";")
+
+    def test_nothing_else_can_pose_as_hotels_or_feed_a_printed_column(self):
+        module, *_ = load([], [])
+        header = "-- (1) LEGACY PMS database: x\n"
+        for good in ("SELECT count(DISTINCT h.id) AS hotels, count(*) FROM hotels h",
+                     "WITH c(id, label) AS (VALUES ('00000000-0000-4000-8000-000000000001'::uuid, '1 A'), (NULL, '-2.5')) "
+                     "SELECT coalesce(c.label, 'other'), h.name, count(*) FROM hotels AS h LEFT JOIN c ON c.id = h.id GROUP BY 1, h.name"):
+            module.legacy_blocks(header + good + ";")
+        for bad in (
+                # Another relation, subquery or CTE named hotels.
+                "SELECT hotels.name, count(*) FROM users hotels GROUP BY 1",
+                "SELECT hotels.name, count(*) FROM users AS hotels GROUP BY 1",
+                "SELECT hotels.name, count(*) FROM (SELECT email AS name FROM users) AS hotels GROUP BY 1",
+                "SELECT hotels.name, count(*) FROM other.hotels GROUP BY 1",
+                "SELECT h.name, count(*) FROM other.hotels h GROUP BY 1",
+                "WITH RECURSIVE hotels(name) AS (SELECT email FROM users) SELECT hotels.name, count(*) FROM hotels GROUP BY 1",
+                "WITH hotels AS MATERIALIZED (SELECT email AS name FROM users) SELECT hotels.name, count(*) FROM hotels GROUP BY 1",
+                "WITH hotels(name) AS NOT MATERIALIZED (SELECT email FROM users) SELECT hotels.name, count(*) FROM hotels GROUP BY 1",
+                "WITH c AS (VALUES (1)), hotels AS (SELECT email AS name FROM users) SELECT hotels.name, count(*) FROM hotels GROUP BY 1",
+                # A hotels alias only counts in the top-level FROM, not in a subquery.
+                "SELECT h.name, count(*) FROM bookings b WHERE b.hotel_id IN (SELECT id FROM hotels h) GROUP BY 1",
+                # A column alias list could rename any hotels column to name or slug.
+                "SELECT h.name, count(*) FROM hotels h(x1, x2, x3, name) GROUP BY 1",
+                "SELECT h.name, count(*) FROM hotels AS h (x1, name) GROUP BY 1",
+                "SELECT filter.name, count(*) FROM hotels AS filter (x1, name) GROUP BY 1",
+                # Printed labels may not come from derived tables, LATERAL or non-literal CTEs.
+                "SELECT u.label, count(*) FROM (SELECT email AS label FROM users) u GROUP BY 1",
+                "SELECT h.name, u.label, count(*) FROM hotels h, (SELECT email AS label FROM users) u GROUP BY 1, 2",
+                "SELECT h.name, u.label, count(*) FROM hotels h JOIN LATERAL (SELECT email AS label FROM users) u ON true GROUP BY 1, 2",
+                "SELECT h.name, count(*) FROM (hotels h JOIN bookings b ON b.hotel_id = h.id) GROUP BY 1",
+                "WITH c AS (SELECT email AS label FROM users) SELECT c.label, count(*) FROM c GROUP BY 1",
+                "WITH c(label) AS (TABLE user_emails) SELECT c.label, count(*) FROM c GROUP BY 1",
+                "WITH c(id, label) AS (VALUES (1, (SELECT email FROM users LIMIT 1))) SELECT c.label, count(*) FROM c GROUP BY 1",
+                "WITH c(label) AS (VALUES ((TABLE user_emails LIMIT 1))) SELECT c.label, count(*) FROM c GROUP BY 1",
+                "WITH c(label) AS (VALUES (current_user)) SELECT c.label, count(*) FROM c GROUP BY 1"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.legacy_blocks(header + bad + ";")
+            with self.assertRaises(ValueError, msg=bad):  # the shape rules hold even without the function allow-list
+                module.printed_shape(bad, "block_1")
+
+    def test_plan_without_target_checks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            counts = Path(directory, "counts.sql")
+            counts.write_text("-- (1) LEGACY PMS database: per hotel.\nSELECT h.name, count(*) FROM hotels h GROUP BY 1;\n")
+            result = subprocess.run([sys.executable, "-I", str(SCRIPT), "--plan", str(counts), "none"], capture_output=True, text=True,
+                                    env={"PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith("Block 1 on vayada_pms_db as vayada_pms_user (DATABASE_URL): per hotel."))
+        self.assertNotIn("Check ", result.stdout)
+
     def test_target_checks_drop_the_file_transaction_and_count_only(self):
         module, *_ = load([], [])
         checks = module.target_checks(TARGET_SQL)

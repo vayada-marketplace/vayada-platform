@@ -7,8 +7,8 @@ set -euo pipefail
 usage() {
   echo "Usage: legacy-migration-oneoff.sh <command> <run-file.json> <run-file-sha256> <confirmation>" >&2
   echo "       legacy-migration-oneoff.sh watch <task-arn>" >&2
-  echo "       legacy-migration-oneoff.sh readonly-counts-plan <counts.sql> <target-check.sql>" >&2
-  echo "       legacy-migration-oneoff.sh readonly-counts <counts.sql> <target-check.sql> READONLY_COUNTS:<plan sha256>" >&2
+  echo "       legacy-migration-oneoff.sh readonly-counts-plan <counts.sql> <target-check.sql|none>" >&2
+  echo "       legacy-migration-oneoff.sh readonly-counts <counts.sql> <target-check.sql|none> READONLY_COUNTS:<plan sha256>" >&2
   exit 2
 }
 [[ "$#" -ge 2 ]] || usage
@@ -136,7 +136,9 @@ pms_image() {
 }
 # One definition for one database kind: only that kind's secret and input.
 counts_definition() {
-  jq -cnS --arg kind "$1" --rawfile counts "$2" --rawfile target "$3" --arg digest "$4" \
+  local target_file="$3"
+  if [[ "$target_file" == none ]]; then target_file=/dev/null; fi
+  jq -cnS --arg kind "$1" --rawfile counts "$2" --rawfile target "$target_file" --arg digest "$4" \
     --rawfile code "$root/scripts/legacy-readonly-counts.py" --rawfile ca "$root/rehearsal/rds-ca-rsa2048-g1.pem" \
     --arg account "$account" --arg region "$region" '
     {PMS: {secret: "DATABASE_URL", parameter: "db-pms-url", input: "COUNTS_SQL", value: $counts},
@@ -154,18 +156,24 @@ counts_definition() {
 }
 if [[ "$command" == readonly-counts-plan || "$command" == readonly-counts ]]; then
   [[ ( "$command" == readonly-counts-plan && "$#" -eq 3 ) || ( "$command" == readonly-counts && "$#" -eq 4 ) ]] || usage
-  [[ -f "$2" && -f "$3" ]] || { echo "Both SQL files must exist." >&2; exit 2; }
+  # "none" instead of the 6c file runs only the legacy blocks (no target task, no 6c result).
+  [[ -f "$2" && ( -f "$3" || "$3" == none ) ]] || { echo "Both SQL files must exist (or the 6c file is none)." >&2; exit 2; }
   [[ "$(shasum -a 256 "$root/rehearsal/rds-ca-rsa2048-g1.pem" | cut -d' ' -f1)" == "$ca_sha256" ]] || { echo "The pinned RDS CA bundle changed." >&2; exit 2; }
   statements="$(python3 -I "$root/scripts/legacy-readonly-counts.py" --plan "$2" "$3")" || {
     echo "Only single read-only SELECTs with allow-listed functions are accepted." >&2; exit 2;
   }
-  kinds="$(python3 -I "$root/scripts/legacy-readonly-counts.py" --kinds "$2") TARGET"
-  results="readonly-counts-result.md predeploy-readonly-check-result.md"
+  kinds="$(python3 -I "$root/scripts/legacy-readonly-counts.py" --kinds "$2")"
+  results="readonly-counts-result.md"
+  if [[ "$3" != none ]]; then
+    kinds="${kinds} TARGET"
+    results="${results} predeploy-readonly-check-result.md"
+  fi
+  # A folder that holds a completed run keeps its plan and results: plan and run again in a new folder.
+  for result in readonly-counts-result.md predeploy-readonly-check-result.md; do
+    [[ ! -e "${evidence}/${result}" ]] || { echo "${result} already exists; use a new evidence folder." >&2; exit 2; }
+  done
   if [[ "$command" == readonly-counts ]]; then
     [[ "$4" =~ ^READONLY_COUNTS:[0-9a-f]{64}$ ]] || { echo "Confirmation must be READONLY_COUNTS:<plan sha256>." >&2; exit 2; }
-    for result in $results; do
-      [[ ! -e "${evidence}/${result}" ]] || { echo "${result} already exists; move it first." >&2; exit 2; }
-    done
   fi
   require_profile
   settled vayada-next-api-service
@@ -189,7 +197,7 @@ if [[ "$command" == readonly-counts-plan || "$command" == readonly-counts ]]; th
           + " no task role, secret \($c.secrets[0].name) <- \($c.secrets[0].valueFrom | split(":parameter") | last),"
           + " environment \([$c.environment[].name] | join(", ")), log group \($c.logConfiguration.options["awslogs-group"])")' <<<"$plan"
       echo "Counts SQL sha256: $(shasum -a 256 "$2" | cut -d' ' -f1)"
-      echo "Target check SQL sha256: $(shasum -a 256 "$3" | cut -d' ' -f1)"
+      echo "Target check SQL sha256: $([[ "$3" == none ]] && echo none || shasum -a 256 "$3" | cut -d' ' -f1)"
       echo "Plan sha256: ${plan_sha256}"
       echo "Run after the go: readonly-counts $2 $3 READONLY_COUNTS:${plan_sha256}"
     } | tee "${evidence}/readonly-counts-plan.txt"
@@ -218,10 +226,12 @@ if [[ "$command" == readonly-counts-plan || "$command" == readonly-counts ]]; th
       [[ "$kind" == TARGET ]] || grep -v '^COUNTS_COMPLETE ' "${evidence}/readonly-counts-$(tr '[:upper:]' '[:lower:]' <<<"$kind")-${stamp}.log"
     done
   } > "${evidence}/readonly-counts-result.md"
-  { echo "# VAY-1362-6C pre-deploy check: production target, counts only"
-    grep -v '^COUNTS_COMPLETE ' "${evidence}/readonly-counts-target-${stamp}.log"
-  } > "${evidence}/predeploy-readonly-check-result.md"
-  echo "Saved readonly-counts-result.md and predeploy-readonly-check-result.md"
+  if [[ "$3" != none ]]; then
+    { echo "# VAY-1362-6C pre-deploy check: production target, counts only"
+      grep -v '^COUNTS_COMPLETE ' "${evidence}/readonly-counts-target-${stamp}.log"
+    } > "${evidence}/predeploy-readonly-check-result.md"
+  fi
+  echo "Saved ${results// / and }"
   exit 0
 fi
 
