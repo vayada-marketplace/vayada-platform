@@ -131,6 +131,8 @@ on:
       - "scripts/test-vay2042-media-infra.mjs"
       - "scripts/test-legacy-pms-freeze.mjs"
       - "docs/legacy-pms-freeze.md"
+      - "scripts/test-legacy-wave-cutover.mjs"
+      - "docs/legacy-wave-cutover.md"
       - "scripts/legacy-migration-oneoff.sh"
       - "scripts/legacy-migration-oneoff.mjs"
       - "scripts/legacy-migration-tls.cjs"
@@ -355,6 +357,9 @@ jobs:
 
       - name: Verify legacy PMS freeze switches (offline)
         run: node --test scripts/test-legacy-pms-freeze.mjs
+
+      - name: Verify legacy wave cutover rules (offline)
+        run: node --test scripts/test-legacy-wave-cutover.mjs
 
       - name: Terraform format check
         run: terraform fmt -check -recursive
