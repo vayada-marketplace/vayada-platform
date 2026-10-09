@@ -23,7 +23,7 @@ docker network create "${network}" >/dev/null
 docker volume create "${modules}" >/dev/null
 docker run --detach --rm --name "${database}" --network "${network}" \
   --network-alias vayada-hotel-setup-roles-db --env POSTGRES_PASSWORD=postgres \
-  "postgres:${version}" >/dev/null
+  "public.ecr.aws/docker/library/postgres:${version}" >/dev/null
 for _ in {1..30}; do
   docker exec "${database}" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
   sleep 1
@@ -69,7 +69,7 @@ GRANT UPDATE (logo) ON hotel_catalog.property_media TO ${login};
 GRANT DELETE ON hotel_catalog.property_media TO ${login};
 SQL
 
-docker run --rm --volume "${modules}:/work" --workdir /work node:22-bookworm \
+docker run --rm --volume "${modules}:/work" --workdir /work public.ecr.aws/docker/library/node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/retire-hotel-setup-database-roles.mjs" "${work}/retire.mjs"
 run() {
@@ -78,7 +78,7 @@ run() {
     --env "TARGET_DATABASE_ADMIN_URL=postgresql://vayada_admin:admin@vayada-hotel-setup-roles-db:5432/postgres" \
     --env VAYADA_HOTEL_SETUP_ROLES_LOCAL_FIXTURE=1 --env "VAYADA_HOTEL_SETUP_ROLES_STEP=$1" \
     --env "VAYADA_HOTEL_SETUP_ROLES_PHASE=$2" --env "VAYADA_HOTEL_SETUP_ROLES_FROZEN=${3:-}" \
-    node:22-bookworm node retire.mjs 2>&1
+    public.ecr.aws/docker/library/node:22-bookworm node retire.mjs 2>&1
 }
 field() { jq -r "$1" <<<"$2"; }
 expect_fail() {
