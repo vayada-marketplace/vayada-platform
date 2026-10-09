@@ -39,7 +39,7 @@ COUNTED_FUNCTIONS = {"count", "trunc", "jsonb_array_elements"}
 # Keywords that a parenthesis may follow without being a function call.
 PAREN_KEYWORDS = {"as", "in", "values", "exists", "filter", "from", "join", "on", "using", "where", "and", "or", "not", "select"}
 # Labels a printed block may group by and print: reviewed, non-personal columns.
-LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan|currency|hotel_id|payment_provider|flexible_cancellation_type)"
+LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan|currency|hotel_id|payment_provider|flexible_cancellation_type|custom_domain)"
 # Hotel identity (id and public name/slug) may be printed as a label, but only from a legacy hotels
 # table: hotels (PMS) or booking_hotels (Booking).
 HOTEL_TABLES = ("hotels", "booking_hotels")

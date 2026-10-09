@@ -274,6 +274,18 @@ class ReadonlyCountsTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 module.legacy_blocks(header + bad + ";")
 
+    def test_custom_domain_is_a_label(self):
+        module, *_ = load([], [])
+        header = "-- (2) LEGACY BOOKING database: x\n"
+        module.legacy_blocks(header + "SELECT b.id, b.slug, b.custom_domain, b.billing_active_plan, count(*), count(b.custom_domain) "
+                             "FROM booking_hotels b GROUP BY b.id, b.slug, b.custom_domain, b.billing_active_plan;")
+        for bad in ("SELECT b.custom_domain FROM booking_hotels b",
+                    "SELECT b.custom_domain, count(*) FROM booking_hotels b",
+                    "SELECT b.custom_domain, b.email, count(*) FROM booking_hotels b GROUP BY 1, 2",
+                    "SELECT u.custom_domain, count(*) FROM (SELECT email AS custom_domain FROM users) u GROUP BY 1"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.legacy_blocks(header + bad + ";")
+
     def test_plan_without_target_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             counts = Path(directory, "counts.sql")
