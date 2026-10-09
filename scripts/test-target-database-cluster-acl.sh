@@ -21,7 +21,7 @@ docker network create "${network}" >/dev/null
 docker volume create "${modules}" >/dev/null
 docker run --detach --rm --name "${database}" --network "${network}" \
   --network-alias vayada-cluster-acl-db --env POSTGRES_PASSWORD=postgres \
-  "postgres:${version}" >/dev/null
+  "public.ecr.aws/docker/library/postgres:${version}" >/dev/null
 for _ in {1..30}; do
   docker exec "${database}" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
   sleep 1
@@ -42,14 +42,14 @@ CREATE DATABASE vayada_target_prod OWNER cluster_admin;
 REVOKE CONNECT, CREATE, TEMPORARY ON DATABASE vayada_target_prod FROM PUBLIC;
 CREATE DATABASE unexpected_db OWNER cluster_admin;
 SQL
-docker run --rm --volume "${modules}:/work" --workdir /work node:22-bookworm \
+docker run --rm --volume "${modules}:/work" --workdir /work public.ecr.aws/docker/library/node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/harden-target-database-cluster-acl.mjs" "${work}/harden.mjs"
 run_harden() {
   docker run --rm --network "${network}" --volume "${modules}:/work" \
     --volume "${work}/harden.mjs:/work/harden.mjs:ro" --workdir /work \
     --env "TARGET_DATABASE_ADMIN_URL=postgresql://cluster_admin:admin@vayada-cluster-acl-db:5432/vayada_target_prod" \
-    --env VAYADA_CLUSTER_ACL_LOCAL_FIXTURE=1 node:22-bookworm node harden.mjs
+    --env VAYADA_CLUSTER_ACL_LOCAL_FIXTURE=1 public.ecr.aws/docker/library/node:22-bookworm node harden.mjs
 }
 
 if output="$(run_harden 2>&1)"; then
@@ -82,10 +82,10 @@ run_harden | grep -F '"changed":true' >/dev/null
 docker exec "${database}" psql -U postgres -Atqc \
   "SELECT count(*) FROM pg_database d CROSS JOIN LATERAL aclexplode(COALESCE(d.datacl, acldefault('d', d.datdba))) a WHERE d.datallowconn AND a.grantee = 0 AND (a.privilege_type IN ('CONNECT', 'CREATE', 'TEMPORARY'))" \
   | grep -Fx 0 >/dev/null
-docker run --rm --network "${network}" --env PGPASSWORD=service postgres:"${version}" \
+docker run --rm --network "${network}" --env PGPASSWORD=service public.ecr.aws/docker/library/postgres:"${version}" \
   psql -h vayada-cluster-acl-db -U service_user -d service_db -Atqc 'SELECT current_user' \
   | grep -Fx service_user >/dev/null
-if docker run --rm --network "${network}" --env PGPASSWORD=blocked postgres:"${version}" \
+if docker run --rm --network "${network}" --env PGPASSWORD=blocked public.ecr.aws/docker/library/postgres:"${version}" \
   psql -h vayada-cluster-acl-db -U blocked_user -d service_db -Atqc 'SELECT 1' >/dev/null 2>&1; then
   echo 'blocked role unexpectedly connected to sibling database' >&2
   exit 1
