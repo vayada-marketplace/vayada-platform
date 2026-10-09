@@ -21,7 +21,7 @@ docker network create "${network}" >/dev/null
 docker volume create "${modules}" >/dev/null
 docker run --detach --rm --name "${database}" --network "${network}" \
   --network-alias vayada-identity-grant-db --env POSTGRES_PASSWORD=postgres \
-  "postgres:${version}" >/dev/null
+  "public.ecr.aws/docker/library/postgres:${version}" >/dev/null
 for _ in {1..30}; do
   docker exec "${database}" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
   sleep 1

@@ -30,7 +30,7 @@ docker run --detach --rm \
   --network "${network}" \
   --network-alias vayada-db-preflight \
   --env POSTGRES_PASSWORD=postgres \
-  "postgres:${postgres_version}" >/dev/null
+  "public.ecr.aws/docker/library/postgres:${postgres_version}" >/dev/null
 
 ready_checks=0
 for _ in {1..60}; do
