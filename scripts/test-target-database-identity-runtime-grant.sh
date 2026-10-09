@@ -320,4 +320,15 @@ expect_grant_failure identity_role_existing_privilege_too_broad
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c 'REVOKE SELECT ON booking.guest_booking_view FROM vayada_next_identity_runtime; CREATE SEQUENCE booking.guest_booking_seq; GRANT USAGE ON SEQUENCE booking.guest_booking_seq TO vayada_next_identity_runtime' >/dev/null
 expect_grant_failure identity_role_existing_sequence_privilege
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE USAGE ON SEQUENCE booking.guest_booking_seq FROM vayada_next_identity_runtime; DROP VIEW booking.guest_booking_view' >/dev/null
+
+# VAY-2079: the app drops the authority-scope view; the grant stays valid without it, while the
+# property-scope view remains required.
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'DROP VIEW booking.pricing_runtime_effective_authority_scopes' >/dev/null
+run_grant | grep -F '"status":"PASS"' >/dev/null
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'DROP VIEW booking.pricing_runtime_effective_property_scopes' >/dev/null
+expect_grant_failure identity_public_read_contract_unsafe
 echo "identity runtime grant contract passed (PostgreSQL ${version})"
