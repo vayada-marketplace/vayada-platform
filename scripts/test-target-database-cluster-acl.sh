@@ -42,14 +42,14 @@ CREATE DATABASE vayada_target_prod OWNER cluster_admin;
 REVOKE CONNECT, CREATE, TEMPORARY ON DATABASE vayada_target_prod FROM PUBLIC;
 CREATE DATABASE unexpected_db OWNER cluster_admin;
 SQL
-docker run --rm --volume "${modules}:/work" --workdir /work node:22-bookworm \
+docker run --rm --volume "${modules}:/work" --workdir /work public.ecr.aws/docker/library/node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/harden-target-database-cluster-acl.mjs" "${work}/harden.mjs"
 run_harden() {
   docker run --rm --network "${network}" --volume "${modules}:/work" \
     --volume "${work}/harden.mjs:/work/harden.mjs:ro" --workdir /work \
     --env "TARGET_DATABASE_ADMIN_URL=postgresql://cluster_admin:admin@vayada-cluster-acl-db:5432/vayada_target_prod" \
-    --env VAYADA_CLUSTER_ACL_LOCAL_FIXTURE=1 node:22-bookworm node harden.mjs
+    --env VAYADA_CLUSTER_ACL_LOCAL_FIXTURE=1 public.ecr.aws/docker/library/node:22-bookworm node harden.mjs
 }
 
 if output="$(run_harden 2>&1)"; then
