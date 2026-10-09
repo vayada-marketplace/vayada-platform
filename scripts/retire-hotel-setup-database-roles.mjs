@@ -116,6 +116,12 @@ const blockersFor = (step, state) => {
 const summarize = (step, state) => ({
   roles: state.roles.map(({ name, kind, canLogin, sessions }) => ({ name, kind, canLogin, sessions })),
   adminGrants: state.grants.filter((grant) => grant.grantor === admin).length,
+  // The exact grants disable revokes, so a re-enable before app migration 0474 can restore them.
+  ...(step === "disable" && {
+    adminGrantList: state.grants
+      .filter((grant) => grant.grantor === admin)
+      .map(({ kind, object, column, grantee, privilege }) => [kind, object, column, grantee, privilege]),
+  }),
   otherGrants: state.grants.filter((grant) => grant.grantor !== admin).length,
   dependencies: state.dependencies.reduce((total, row) => total + row.count, 0),
   references: state.references,

@@ -100,6 +100,9 @@ sql postgres <<<'DROP ROLE vayada_next_hotel_setup_org_unadministered_0001;'
 # Disable: plan, refuse a changed state, then apply the exact plan.
 plan="$(run disable inspect)"
 [[ "$(field .ready "${plan}")" == true && "$(field .adminGrants "${plan}")" -ge 4 ]]
+[[ "$(field '.adminGrantList | length' "${plan}")" == "$(field .adminGrants "${plan}")" ]]
+field '.adminGrantList[] | @tsv' "${plan}" | grep -F "database	vayada_target_prod		${login}	CONNECT" >/dev/null
+field '.adminGrantList[] | @tsv' "${plan}" | grep -F "column	hotel_catalog.property_media	logo	${login}	UPDATE" >/dev/null
 frozen="$(field .fingerprint "${plan}")"
 expect_fail disable apply "$(printf '%064d' 0)" | grep -F '"code":"hotel_setup_roles_plan_changed"' >/dev/null
 sql vayada_target_prod vayada_admin <<<"GRANT TEMPORARY ON DATABASE vayada_target_prod TO vayada_next_hotel_setup_reader;"
