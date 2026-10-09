@@ -62,8 +62,10 @@ settings, so without these keys the switches would do nothing.
    about a mistyped key and then leaves that switch unset. A merge applies the
    whole root, so nothing else may merge to `main` between this plan and the
    merge.
-3. Merge it. Merging is the apply: `tf-apply.yml` waits for approval on the
-   `platform-mutations-v2` environment, registers the new revision, and then
+3. Merge it only with the freeze go. Merging is the apply: `tf-apply.yml` starts
+   at once on the `platform-mutations-v2` environment, which admits only `main`
+   and has no required reviewer, so nothing in GitHub waits for an approval. It
+   registers the new revision, and then
    (step "Check production PMS task definition drift") rolls
    `vayada-pms-backend-service` onto it. It keeps the image that is running now
    and waits for the service to be stable. If the workflow fails before that
@@ -79,8 +81,28 @@ settings, so without these keys the switches would do nothing.
      `aws ecs describe-task-definition --region eu-west-1 --profile vayada --task-definition "$(aws ecs describe-services --region eu-west-1 --profile vayada --cluster vayada-backend-cluster --services vayada-pms-backend-service --query 'services[0].taskDefinition' --output text)" --query "taskDefinition.containerDefinitions[0].environment"`.
 5. Continue with the target writers and the drain (runbook F3 and F4).
 
-App image deploys during the freeze keep the switches: `deploy.yml` copies the
-running revision and only swaps the image.
+## Legacy app deploys
+
+The app repo's legacy deploy workflows (`deploy-pms-api.yml`,
+`deploy-booking-api.yml`, `deploy-marketplace-api.yml`) are disabled in GitHub
+and stay disabled (Flamur's decision). A legacy change goes live only through an
+explicit `workflow_dispatch` of this repo's `deploy.yml` on `main`, one deploy
+at a time, with Flamur's go for that deploy naming the service and the image
+digest:
+
+| Input | Value |
+|---|---|
+| `service` | `pms-backend`, `booking-backend` or `marketplace-backend` |
+| `ecr_repo` | `vayada-pms-backend`, `vayada-booking-backend` or `vayada-creator-marketplace-backend` |
+| `image_sha` | the image's 40-character git SHA tag |
+| `image_digest` | the image's `sha256:` digest; the workflow checks that tag and digest match in ECR |
+| `environment` | `production` |
+
+`platform-mutations-v2` has no required reviewer, so a dispatched deploy runs
+without any further approval. The go comes before the dispatch.
+
+Such a deploy keeps the freeze switches: `deploy.yml` copies the running
+revision and only swaps the image.
 
 ## Thaw or rollback (runbook R1)
 
