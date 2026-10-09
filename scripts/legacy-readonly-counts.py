@@ -34,17 +34,19 @@ HEADER = re.compile(r"^-- \((\d+)\) LEGACY (PMS|BOOKING) database: (.+)$", re.M)
 MAX_ROWS = 50
 COMPLETE = "COUNTS_COMPLETE"
 # Only the functions the reviewed files use. Printed blocks and the counted 6c checks differ.
-PRINTED_FUNCTIONS = {"count", "max", "coalesce"}
+PRINTED_FUNCTIONS = {"count", "max", "min", "bool_or", "coalesce"}
 COUNTED_FUNCTIONS = {"count"}
 # Keywords that a parenthesis may follow without being a function call.
 PAREN_KEYWORDS = {"as", "in", "values", "exists", "filter", "from", "join", "on", "where", "and", "or", "not", "select"}
 # Labels a printed block may group by and print: reviewed, non-personal columns.
-LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan|currency|hotel_id)"
+LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan|currency|hotel_id|payment_provider)"
 # Hotel identity (id and public name/slug) may be printed as a label, but only from a legacy hotels
 # table: hotels (PMS) or booking_hotels (Booking).
 HOTEL_TABLES = ("hotels", "booking_hotels")
 HOTEL_LABELS = ("id", "name", "slug")
 TIME_COLUMNS = r"\w*(_at|_date)|check_in|check_out"
+# Reviewed numeric hotel settings that min()/max() may print as they are.
+NUMBERS = r"free_cancellation_days|markup_pct"
 WRITES = re.compile(
     r"(?i)\b(insert|update|delete|merge|truncate|alter|create|drop|grant|revoke|copy|call|do|lock|vacuum|analyze|"
     r"cluster|reindex|refresh|comment|import|listen|notify|prepare|execute|into|share|returning)\b"
@@ -91,7 +93,10 @@ def only_select(statement, name, functions):
         raise ValueError(f"{name}_not_one_select") from None
     if ";" in bare or not re.match(r"(?i)(select|with)\b", statement):
         raise ValueError(f"{name}_not_one_select")
-    if WRITES.search(bare) or re.search(r'(?i)--|/\*|\*/|"|\$|u&|(?<![a-z0-9_])e\'', statement):
+    # $ and " are refused outside string literals (no dollar quotes, parameters or quoted identifiers).
+    # Inside a literal they are plain characters (jsonpath, regex): standard_conforming_strings is
+    # forced on in the transaction, so the server reads every literal exactly as blank_strings does.
+    if WRITES.search(bare) or re.search(r'(?i)--|/\*|\*/|u&|(?<![a-z0-9_])e\'', statement) or re.search(r'["$]', bare):
         raise ValueError(f"{name}_not_read_only")
     if "||" in bare:
         raise ValueError(f"{name}_concatenates")
@@ -154,25 +159,42 @@ def is_label(item, aliases):
     return bool(hotel) and hotel.group(1).lower() in aliases and hotel.group(2).lower() in HOTEL_LABELS
 
 
+def closing(bare, opening):
+    """Index of the parenthesis that closes the one at `opening`, in string-blanked text."""
+    depth = 0
+    for index in range(opening, len(bare)):
+        depth += {"(": 1, ")": -1}.get(bare[index], 0)
+        if depth == 0:
+            return index
+    raise ValueError("unbalanced_parentheses")
+
+
 def aggregate_or_label(item, aliases):
+    """One printed column: a reviewed label, or exactly one allow-listed aggregate with nothing after
+    it but a cast (count may also carry one FILTER (WHERE ...) clause)."""
     item = re.sub(r"(?is)\s+as\s+[a-z_]\w*$", "", item.strip())
     if is_label(item, aliases):
         return "label"
-    call = re.match(r"(?i)(count|max)\s*\(", item)
+    bare = blank_strings(item)  # parentheses inside string literals must not end the call early
+    call = re.match(r"(?i)(count|max|min|bool_or)\s*\(", bare)
     if not call:
         return None
-    depth = 0
-    for index in range(call.end() - 1, len(item)):
-        depth += {"(": 1, ")": -1}.get(item[index], 0)
-        if depth == 0:
-            break
-    argument, rest = item[call.end():index], item[index + 1:]
-    if call.group(1).lower() == "max":
-        # max may only summarise a time column, cast to a date or timestamp, so no text value can print.
-        if not re.fullmatch(rf"(?i)\s*(?:[a-z_]\w*\.)?(?:{TIME_COLUMNS})\s*", argument):
-            return None
+    end = closing(bare, call.end() - 1)
+    kind, argument, rest = call.group(1).lower(), bare[call.end():end], bare[end + 1:]
+    if kind == "count":
+        if re.match(r"(?i)\s*filter\s*\(\s*where\b", rest):
+            rest = rest[closing(rest, rest.index("(")) + 1:]
+        return "aggregate" if re.fullmatch(r"(?i)\s*(::\s*[a-z_]+)?\s*", rest) else None
+    if kind == "bool_or":
+        # A boolean: it tells no more than count(*) FILTER (WHERE ...) does.
+        return "aggregate" if not rest.strip() else None
+    # min/max print a reviewed label or numeric setting as it is, or a time column cast to a date or
+    # timestamp, so no other value can print.
+    if re.fullmatch(rf"(?i)\s*(?:{LABELS}|(?:[a-z_]\w*\.)?(?:{NUMBERS}))\s*", argument):
+        return "aggregate" if not rest.strip() else None
+    if re.fullmatch(rf"(?i)\s*(?:[a-z_]\w*\.)?(?:{TIME_COLUMNS})\s*", argument):
         return "aggregate" if re.fullmatch(r"(?i)\s*::\s*(date|timestamp|timestamptz)\s*", rest) else None
-    return "aggregate" if re.fullmatch(r"(?is)\s*(filter\s*\(\s*where\b.*\))?\s*(::\s*[a-z_]+)?\s*", rest) else None
+    return None
 
 
 def printed_shape(statement, name):
@@ -293,6 +315,7 @@ async def read_only(kind, statement, context):
     try:
         await connection.execute("BEGIN TRANSACTION READ ONLY")
         try:
+            await connection.execute("SET LOCAL standard_conforming_strings = on")
             await connection.execute("SET LOCAL statement_timeout = '15s'")
             await connection.execute("SET LOCAL lock_timeout = '1s'")
             records = await connection.fetch(statement)
