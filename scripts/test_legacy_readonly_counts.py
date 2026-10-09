@@ -192,6 +192,29 @@ class ReadonlyCountsTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):  # the shape rules hold even without the function allow-list
                 module.printed_shape(bad, "block_1")
 
+    def test_booking_hotels_identity_and_currency_labels(self):
+        module, *_ = load([], [])
+        header = "-- (1) LEGACY BOOKING database: x\n"
+        for good in ("SELECT h.id AS hotel_id, h.name, h.currency, count(*) AS n FROM booking_hotels h "
+                     "WHERE h.id IN ('00000000-0000-4000-8000-000000000001') GROUP BY h.id, h.name, h.currency ORDER BY h.currency, h.name",
+                     "SELECT booking_hotels.slug, count(*) FROM booking_hotels GROUP BY 1",
+                     "SELECT rt.hotel_id, rt.currency AS room_type_currency, count(*) FROM room_types rt GROUP BY rt.hotel_id, rt.currency"):
+            module.legacy_blocks(header + good + ";")
+        for bad in ("SELECT h.id, h.name, h.currency FROM booking_hotels h",
+                    "SELECT h.name, count(*) FROM booking_hotels h",
+                    "SELECT h.email, count(*) FROM booking_hotels h GROUP BY 1",
+                    "SELECT booking_hotels.name, count(*) FROM users booking_hotels GROUP BY 1",
+                    "SELECT booking_hotels.name, count(*) FROM other.booking_hotels GROUP BY 1",
+                    "WITH booking_hotels(name) AS (VALUES ('x')) SELECT booking_hotels.name, count(*) FROM booking_hotels GROUP BY 1",
+                    "SELECT filter.name, count(*) FROM booking_hotels AS filter (x1, name) GROUP BY 1",
+                    "SELECT h.name, count(*) FROM users h WHERE EXISTS (SELECT 1 FROM booking_hotels h) GROUP BY 1",
+                    "SELECT u.currency, count(*) FROM (SELECT email AS currency FROM users) u GROUP BY 1",
+                    "SELECT rt.hotel_id, rt.name, count(*) FROM room_types rt GROUP BY 1, 2"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.legacy_blocks(header + bad + ";")
+            with self.assertRaises(ValueError, msg=bad):
+                module.printed_shape(bad, "block_1")
+
     def test_plan_without_target_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             counts = Path(directory, "counts.sql")
