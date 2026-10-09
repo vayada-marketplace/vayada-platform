@@ -412,7 +412,13 @@ esac
     assert.equal(awsCalls().match(/ecs delete-task-definitions/g).length, 3);
     const again = run('readonly-counts', counts, target, `READONLY_COUNTS:${planSha}`);
     assert.equal(again.status, 2);
-    assert.match(again.stderr, /already exists/);
+    assert.match(again.stderr, /already exists; use a new evidence folder/);
+    // A completed run's folder keeps its plan: re-planning there is refused before AWS, even with "none".
+    const replan = run('readonly-counts-plan', counts, 'none');
+    assert.equal(replan.status, 2);
+    assert.match(replan.stderr, /readonly-counts-result\.md already exists; use a new evidence folder/);
+    assert.equal(awsCalls(), '');
+    assert.equal(readFileSync(join(evidence, 'readonly-counts-plan.txt'), 'utf8'), planned.stdout);
 
     // "none" instead of the 6c file: only the legacy task runs, and only the counts result is written.
     const evidenceOnly = join(root, 'evidence-only');

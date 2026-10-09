@@ -168,11 +168,12 @@ if [[ "$command" == readonly-counts-plan || "$command" == readonly-counts ]]; th
     kinds="${kinds} TARGET"
     results="${results} predeploy-readonly-check-result.md"
   fi
+  # A folder that holds a completed run keeps its plan and results: plan and run again in a new folder.
+  for result in readonly-counts-result.md predeploy-readonly-check-result.md; do
+    [[ ! -e "${evidence}/${result}" ]] || { echo "${result} already exists; use a new evidence folder." >&2; exit 2; }
+  done
   if [[ "$command" == readonly-counts ]]; then
     [[ "$4" =~ ^READONLY_COUNTS:[0-9a-f]{64}$ ]] || { echo "Confirmation must be READONLY_COUNTS:<plan sha256>." >&2; exit 2; }
-    for result in $results; do
-      [[ ! -e "${evidence}/${result}" ]] || { echo "${result} already exists; move it first." >&2; exit 2; }
-    done
   fi
   require_profile
   settled vayada-next-api-service

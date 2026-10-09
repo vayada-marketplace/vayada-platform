@@ -153,6 +153,45 @@ class ReadonlyCountsTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 module.legacy_blocks(header + bad + ";")
 
+    def test_nothing_else_can_pose_as_hotels_or_feed_a_printed_column(self):
+        module, *_ = load([], [])
+        header = "-- (1) LEGACY PMS database: x\n"
+        for good in ("SELECT count(DISTINCT h.id) AS hotels, count(*) FROM hotels h",
+                     "WITH c(id, label) AS (VALUES ('00000000-0000-4000-8000-000000000001'::uuid, '1 A'), (NULL, '-2.5')) "
+                     "SELECT coalesce(c.label, 'other'), h.name, count(*) FROM hotels AS h LEFT JOIN c ON c.id = h.id GROUP BY 1, h.name"):
+            module.legacy_blocks(header + good + ";")
+        for bad in (
+                # Another relation, subquery or CTE named hotels.
+                "SELECT hotels.name, count(*) FROM users hotels GROUP BY 1",
+                "SELECT hotels.name, count(*) FROM users AS hotels GROUP BY 1",
+                "SELECT hotels.name, count(*) FROM (SELECT email AS name FROM users) AS hotels GROUP BY 1",
+                "SELECT hotels.name, count(*) FROM other.hotels GROUP BY 1",
+                "SELECT h.name, count(*) FROM other.hotels h GROUP BY 1",
+                "WITH RECURSIVE hotels(name) AS (SELECT email FROM users) SELECT hotels.name, count(*) FROM hotels GROUP BY 1",
+                "WITH hotels AS MATERIALIZED (SELECT email AS name FROM users) SELECT hotels.name, count(*) FROM hotels GROUP BY 1",
+                "WITH hotels(name) AS NOT MATERIALIZED (SELECT email FROM users) SELECT hotels.name, count(*) FROM hotels GROUP BY 1",
+                "WITH c AS (VALUES (1)), hotels AS (SELECT email AS name FROM users) SELECT hotels.name, count(*) FROM hotels GROUP BY 1",
+                # A hotels alias only counts in the top-level FROM, not in a subquery.
+                "SELECT h.name, count(*) FROM bookings b WHERE b.hotel_id IN (SELECT id FROM hotels h) GROUP BY 1",
+                # A column alias list could rename any hotels column to name or slug.
+                "SELECT h.name, count(*) FROM hotels h(x1, x2, x3, name) GROUP BY 1",
+                "SELECT h.name, count(*) FROM hotels AS h (x1, name) GROUP BY 1",
+                "SELECT filter.name, count(*) FROM hotels AS filter (x1, name) GROUP BY 1",
+                # Printed labels may not come from derived tables, LATERAL or non-literal CTEs.
+                "SELECT u.label, count(*) FROM (SELECT email AS label FROM users) u GROUP BY 1",
+                "SELECT h.name, u.label, count(*) FROM hotels h, (SELECT email AS label FROM users) u GROUP BY 1, 2",
+                "SELECT h.name, u.label, count(*) FROM hotels h JOIN LATERAL (SELECT email AS label FROM users) u ON true GROUP BY 1, 2",
+                "SELECT h.name, count(*) FROM (hotels h JOIN bookings b ON b.hotel_id = h.id) GROUP BY 1",
+                "WITH c AS (SELECT email AS label FROM users) SELECT c.label, count(*) FROM c GROUP BY 1",
+                "WITH c(label) AS (TABLE user_emails) SELECT c.label, count(*) FROM c GROUP BY 1",
+                "WITH c(id, label) AS (VALUES (1, (SELECT email FROM users LIMIT 1))) SELECT c.label, count(*) FROM c GROUP BY 1",
+                "WITH c(label) AS (VALUES ((TABLE user_emails LIMIT 1))) SELECT c.label, count(*) FROM c GROUP BY 1",
+                "WITH c(label) AS (VALUES (current_user)) SELECT c.label, count(*) FROM c GROUP BY 1"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.legacy_blocks(header + bad + ";")
+            with self.assertRaises(ValueError, msg=bad):  # the shape rules hold even without the function allow-list
+                module.printed_shape(bad, "block_1")
+
     def test_plan_without_target_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             counts = Path(directory, "counts.sql")

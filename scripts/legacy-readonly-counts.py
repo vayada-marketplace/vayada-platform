@@ -117,16 +117,32 @@ def split_top(original, bare):
     return [part.strip() for part in parts + [original[last:]]]
 
 
-def hotel_aliases(statement, bare, start):
-    """Names that refer to the legacy hotels table in the top-level FROM: the table and its alias.
+def hotel_aliases(bare, begin, start):
+    """Names that refer to the legacy hotels table in the top-level FROM: its alias, or `hotels`
+    itself when it is referenced without one.
 
-    Only top-level FROM/JOIN clauses count, so a subquery cannot lend its alias, and a CTE named
-    hotels (which would shadow the table) is refused."""
-    if re.search(r"(?i)(?:\bwith|,)\s*hotels\s*(?:\([^()]*\))?\s*as\s*\(", bare):
-        raise ValueError("cte_shadows_hotels")
-    clauses = r"(?:on|where|join|left|right|inner|outer|cross|full|natural|group|order|having|limit)\b"
-    return {"hotels"} | {match.group(1).lower() for match in top_level(
-        statement, bare, rf"\b(?:from|join)\s+hotels(?:\s+(?:as\s+)?(?!{clauses})([a-z_]\w*))?\b", start) if match.group(1)}
+    Every appearance of the word hotels must be a table reference right after FROM/JOIN, a
+    `hotels.<column>` reference, or an output column name in the printed SELECT list (begin to
+    start). It may not alias another relation or a subquery, be schema qualified, name a CTE, or
+    carry a column alias list, so nothing else can pose as hotels."""
+    clauses = r"(?:on|where|join|left|right|inner|outer|cross|full|natural|group|order|having|limit|using)\b"
+    zero, aliases = depth_zero(bare), set()
+    for match in re.finditer(r"(?i)\bhotels\b", bare):
+        before, after = bare[:match.start()].rstrip(), bare[match.end():]
+        if before.endswith("."):
+            raise ValueError("hotels_qualified")
+        if not re.search(r"(?i)\b(?:from|join)$", before):
+            if re.match(r"\s*\.", after):
+                continue  # a hotels.<column> reference
+            if begin <= match.start() < start and match.start() in zero and re.search(r"(?i)\bas$", before):
+                continue  # an output column name, such as count(...) AS hotels
+            raise ValueError("hotels_name_reused")
+        alias = re.match(rf"(?i)\s+(?:as\s+)?(?!{clauses})([a-z_]\w*)", after)
+        if re.match(r"\s*\(", after[alias.end():] if alias else after):
+            raise ValueError("hotels_column_alias_list")
+        if match.start() >= start and match.start() in zero:
+            aliases.add(alias.group(1).lower() if alias else "hotels")
+    return aliases
 
 
 def is_label(item, aliases):
@@ -168,8 +184,24 @@ def printed_shape(statement, name):
     begin = selects[-1].end()
     froms = top_level(statement, bare, r"\bfrom\b", begin)
     end = begin + froms[0].start() if froms else len(statement)
+    # Printed columns may come only from base tables and VALUES lists: no derived tables, no
+    # LATERAL, and every CTE must be a VALUES list (the reviewed hotel labels, for example).
+    stops = top_level(statement, bare, r"\b(where|group\s+by|having|order\s+by|limit)\b", end)
+    sources = bare[end:end + stops[0].start()] if stops else bare[end:]
+    if re.search(r"(?i)(?:\bfrom|\bjoin|,)\s*\(|\blateral\b", sources) or re.search(r"(?i)\bwith\s+recursive\b", bare):
+        raise ValueError(f"{name}_derived_source")
+    for cte in re.finditer(r"(?i)(?:\bwith|,)\s*[a-z_]\w*\s*(?:\([^()]*\))?\s*as\s*(?:not\s+)?(?:materialized\s*)?\(", bare):
+        depth = 0
+        for index in range(cte.end() - 1, len(bare)):
+            depth += {"(": 1, ")": -1}.get(bare[index], 0)
+            if depth == 0:
+                break
+        # Literal rows only: strings, numbers, NULL/TRUE/FALSE and simple casts, so no row can read a table.
+        rows = re.sub(r"(?i)::\s*[a-z_]\w*|\b(?:null|true|false)\b", " ", bare[cte.end():index])
+        if not re.fullmatch(r"(?i)\s*values[\s(),'0-9.+-]*", rows):
+            raise ValueError(f"{name}_derived_source")
     try:
-        aliases = hotel_aliases(statement, bare, end)
+        aliases = hotel_aliases(bare, begin, end)
     except ValueError:
         raise ValueError(f"{name}_not_aggregate") from None
     kinds = [aggregate_or_label(item, aliases) for item in split_top(statement[begin:end], bare[begin:end])]
