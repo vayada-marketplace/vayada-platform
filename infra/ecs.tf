@@ -110,7 +110,7 @@ locals {
       desired_count  = var.legacy_pms_api_desired_count
       health_check   = "/health"
       log_group      = "/ecs/vayada-pms-backend"
-      environment = [
+      environment = concat([
         { name = "CORS_ORIGINS", value = "https://pms.vayada.com,https://admin.booking.vayada.com,https://admin.vayada.com" },
         { name = "CORS_ORIGIN_REGEX", value = ".*" },
         { name = "API_PORT", value = "8002" },
@@ -124,7 +124,7 @@ locals {
         { name = "CHANNEX_API_BASE_URL", value = "https://app.channex.io" },
         { name = "ENVIRONMENT", value = "production" },
         { name = "DEBUG", value = "false" },
-      ]
+      ], local.legacy_pms_freeze_environment)
       secrets = [
         { name = "DATABASE_URL", valueFrom = "/vayada/prod/db-pms-url" },
         { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/db-auth-url" },

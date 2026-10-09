@@ -214,10 +214,11 @@ The Landing service is excluded — App Runner polls ECR for `:latest` and deplo
 
 ECS services use `lifecycle { ignore_changes = [task_definition] }` in Terraform, so `terraform apply` never rolls back in-flight CI deploys.
 When Terraform registers newer task definitions for `vayada-next-api`,
-`vayada-booking-frontend`, `vayada-booking-admin`, or the frozen staging PMS
-runtime, `tf-apply.yml` rolls the corresponding service forward. Production
-services retain their current container image; staging PMS uses its
-Terraform-owned `latest` image reference.
+`vayada-pms-backend`, `vayada-booking-frontend`, `vayada-booking-admin`, or the
+frozen staging PMS runtime, `tf-apply.yml` rolls the corresponding service
+forward. Production services retain their current container image; staging PMS
+uses its Terraform-owned `latest` image reference. The production legacy PMS
+freeze switches use this path; see [Production legacy PMS freeze](legacy-pms-freeze.md).
 
 `next-api.vayada.com` is the TypeScript validation hostname. It is served by
 `vayada-next-api-service` and reads production-owned target runtime secrets
@@ -435,7 +436,10 @@ SSM parameters are referenced by ARN in ECS task definitions — containers read
 ### Frozen staging PMS runtime
 
 Terraform can create a dedicated staging PMS backend runtime for the
-legacy scheduler-freeze proof. It is disabled by default and is controlled by:
+legacy scheduler-freeze proof. It was retired after VAY-794 acceptance: the
+plan and apply workflows now pass `TF_VAR_enable_staging_pms_runtime: "false"`,
+so re-enabling it needs a reviewed workflow change. It is disabled by default
+and is controlled by:
 
 ```hcl
 enable_staging_pms_runtime              = true
