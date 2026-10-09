@@ -34,19 +34,24 @@ HEADER = re.compile(r"^-- \((\d+)\) LEGACY (PMS|BOOKING) database: (.+)$", re.M)
 MAX_ROWS = 50
 COMPLETE = "COUNTS_COMPLETE"
 # Only the functions the reviewed files use. Printed blocks and the counted 6c checks differ.
-PRINTED_FUNCTIONS = {"count", "max", "min", "bool_or", "coalesce"}
+PRINTED_FUNCTIONS = {"count", "max", "min", "bool_or", "coalesce", "jsonb_array_length"}
 COUNTED_FUNCTIONS = {"count", "trunc", "jsonb_array_elements"}
 # Keywords that a parenthesis may follow without being a function call.
 PAREN_KEYWORDS = {"as", "in", "values", "exists", "filter", "from", "join", "on", "using", "where", "and", "or", "not", "select"}
 # Labels a printed block may group by and print: reviewed, non-personal columns.
-LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan|currency|hotel_id|payment_provider)"
+LABELS = r"(?:[a-z_]\w*\.)?(?:label|stripe_billing_status|billing_active_plan|currency|hotel_id|payment_provider|flexible_cancellation_type)"
 # Hotel identity (id and public name/slug) may be printed as a label, but only from a legacy hotels
 # table: hotels (PMS) or booking_hotels (Booking).
 HOTEL_TABLES = ("hotels", "booking_hotels")
 HOTEL_LABELS = ("id", "name", "slug")
 TIME_COLUMNS = r"\w*(_at|_date)|check_in|check_out"
 # Reviewed numeric hotel settings that min()/max() may print as they are.
-NUMBERS = r"free_cancellation_days|markup_pct"
+NUMBERS = r"free_cancellation_days|markup_pct|partial_refund_cancel_window_days|partial_refund_amount_percent"
+# Reviewed numbers inside room_types.partial_refund_tiers that min()/max() may print: the tier count, and one
+# tier's days or percent, cast to a number.
+TIER_NUMBERS = (r"jsonb_array_length\(\s*(?:[a-z_]\w*\.)?partial_refund_tiers\s*\)"
+                r"|\(\s*(?:[a-z_]\w*\.)?partial_refund_tiers\s*->\s*\d\s*->>\s*'(?:min_days_before_check_in|refund_percent)'\s*\)"
+                r"\s*::\s*(?:int|integer|numeric)")
 WRITES = re.compile(
     r"(?i)\b(insert|update|delete|merge|truncate|alter|create|drop|grant|revoke|copy|call|do|lock|vacuum|analyze|"
     r"cluster|reindex|refresh|comment|import|listen|notify|prepare|execute|into|share|returning)\b"
@@ -191,6 +196,8 @@ def aggregate_or_label(item, aliases):
     # min/max print a reviewed label or numeric setting as it is, or a time column cast to a date or
     # timestamp, so no other value can print.
     if re.fullmatch(rf"(?i)\s*(?:{LABELS}|(?:[a-z_]\w*\.)?(?:{NUMBERS}))\s*", argument):
+        return "aggregate" if not rest.strip() else None
+    if re.fullmatch(rf"(?i)\s*(?:{TIER_NUMBERS})\s*", item[call.end():end]):  # the key names are string literals
         return "aggregate" if not rest.strip() else None
     if re.fullmatch(rf"(?i)\s*(?:[a-z_]\w*\.)?(?:{TIME_COLUMNS})\s*", argument):
         return "aggregate" if re.fullmatch(r"(?i)\s*::\s*(date|timestamp|timestamptz)\s*", rest) else None
