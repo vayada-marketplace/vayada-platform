@@ -1,0 +1,44 @@
+name: Retire the hotel setup database roles (VAY-2056 step 6a/6c)
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: disable (6a, before app migration 0474) or drop (6c, after 0474 is live)
+        type: choice
+        options: [disable, drop]
+        required: true
+      phase:
+        description: inspect is read-only and prints the PLAN fingerprint; apply needs that exact fingerprint
+        type: choice
+        options: [inspect, apply]
+        required: true
+      expected_fingerprint:
+        description: Empty for inspect; the PLAN fingerprint of the same step for apply
+        required: false
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+jobs:
+  retire:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Inspect or apply the hotel setup role retirement as vayada_admin
+        env:
+          STEP: ${{ inputs.step }}
+          PHASE: ${{ inputs.phase }}
+          FROZEN: ${{ inputs.expected_fingerprint }}
+        run: |
+          bash scripts/run-target-database-runtime-preflight.sh --retire-hotel-setup-roles "$STEP" "$PHASE" "$FROZEN"
