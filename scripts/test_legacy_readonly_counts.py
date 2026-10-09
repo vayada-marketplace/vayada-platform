@@ -215,6 +215,44 @@ class ReadonlyCountsTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 module.printed_shape(bad, "block_1")
 
+    def test_pricing_shapes_and_no_second_value_after_an_aggregate(self):
+        module, *_ = load([], [])
+        header = "-- (1) LEGACY PMS database: x\n"
+        for good in ("SELECT h.id, h.name, count(*), bool_or(h.instant_book), max(ps.payment_provider), max(cp.free_cancellation_days), "
+                     "bool_or(coalesce(h.last_minute_discount @? '$ ? (@.enabled == true)', false)) AS lm, "
+                     "bool_or(ps.stripe_connect_account_id IS NOT NULL) AS has_account "
+                     "FROM hotels h LEFT JOIN hotel_payment_settings ps ON ps.hotel_id = h.id "
+                     "LEFT JOIN cancellation_policies cp ON cp.hotel_id = h.id GROUP BY h.id, h.name",
+                     "SELECT rt.hotel_id, count(*), min(rt.currency), max(rt.currency), "
+                     "count(*) FILTER (WHERE (rt.rate_payment_methods @? '$.*[*] ? (@ == \"card\")')) AS card, "
+                     "count(*) FILTER (WHERE (rt.seasons::text ~ '\"rate\": \"?[0-9]+\\.[0-9]{2}[0-9]*[1-9]')) AS sub_cent, "
+                     "count(*) FILTER (WHERE (rt.weekend_surcharge ~ '\\.[0-9]{2}(')) AS odd_paren "
+                     "FROM room_types rt WHERE rt.is_active GROUP BY rt.hotel_id",
+                     "SELECT m.hotel_id, count(*), max(m.markup_pct) FROM channex_channel_markups m GROUP BY m.hotel_id"):
+            module.legacy_blocks(header + good + ";")
+        for bad in (
+                # A second value after an aggregate (the FILTER clause used to swallow it, also through a ')' in a string).
+                "SELECT count(*) FILTER (WHERE true) + max(b.total_amount) FILTER (WHERE true) AS n FROM bookings b",
+                "SELECT count(') FILTER (WHERE ') + max(b.total_amount) FILTER (WHERE true) AS n FROM bookings b",
+                "SELECT count(*) FILTER (WHERE true)::int + 1 FROM t",
+                "SELECT bool_or(b.paid) OR true FROM bookings b",
+                "SELECT bool_or(b.paid)::text FROM bookings b",
+                "SELECT max(m.markup_pct) + max(b.total_amount) FROM channex_channel_markups m, bookings b",
+                # min/max only over reviewed labels, reviewed numeric settings, or cast time columns.
+                "SELECT max(b.total_amount) FROM bookings b",
+                "SELECT min(g.email) FROM guests g",
+                "SELECT min(g.created_at) FROM guests g",
+                "SELECT max(h.name) FROM hotels h",
+                "SELECT bool_or(b.paid) FILTER (WHERE true) FROM bookings b",
+                "SELECT count(*), sum(b.total_amount) FROM bookings b",
+                # $ and " stay refused outside string literals.
+                "SELECT count(*) FROM t WHERE x = $1",
+                "SELECT count(*) FROM t WHERE x = $tag$a$tag$",
+                "SELECT count(*) FROM \"t\"",
+                "SELECT count(*), \"x\" FROM t GROUP BY 2"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.legacy_blocks(header + bad + ";")
+
     def test_plan_without_target_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             counts = Path(directory, "counts.sql")
@@ -242,6 +280,36 @@ class ReadonlyCountsTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 module.target_checks(bad)
 
+    def test_target_checks_may_use_trunc_jsonb_array_elements_and_using(self):
+        module, *_ = load([], [])
+        checks = module.target_checks(
+            "-- IDR add-ons.\nSELECT 1 FROM booking.addon_definitions WHERE currency = 'IDR' AND price_amount <> trunc(price_amount);\n"
+            "-- Fixed charges.\nSELECT 1 FROM booking.fixed_charge_heads h JOIN booking.fixed_charge_revisions r USING (property_id, revision) "
+            "WHERE r.policy->>'currency' = 'IDR' AND EXISTS (SELECT 1 FROM jsonb_array_elements(r.policy->'charges') c "
+            "WHERE (c->>'amountMinor')::numeric % 100 <> 0);\n")
+        self.assertEqual([(n, t) for n, t, _ in checks], [("1", "IDR add-ons."), ("2", "Fixed charges.")])
+        for bad in ("SELECT 1 FROM t WHERE x = jsonb_each(y);", "SELECT pg_sleep(1) FROM t;", "SELECT 1 FROM t WHERE x = pg_catalog.trunc(y);"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.target_checks(bad)
+        # The counted-only functions stay refused in printed blocks.
+        for bad in ("SELECT count(*) FILTER (WHERE price_amount <> trunc(price_amount)) FROM booking_addons",
+                    "SELECT count(*) FROM t, jsonb_array_elements(t.x) e"):
+            with self.assertRaises(ValueError, msg=bad):
+                module.legacy_blocks("-- (1) LEGACY PMS database: x\n" + bad + ";")
+
+    def test_plan_with_target_checks_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory, "target.sql")
+            target.write_text("-- IDR revisions.\nSELECT DISTINCT property_id FROM pms.pricing_v2_revisions WHERE currency = 'IDR';\n")
+            result = subprocess.run([sys.executable, "-I", str(SCRIPT), "--plan", "none", str(target)], capture_output=True, text=True,
+                                    env={"PYTHONDONTWRITEBYTECODE": "1"})
+            both = subprocess.run([sys.executable, "-I", str(SCRIPT), "--plan", "none", "none"], capture_output=True, text=True,
+                                  env={"PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith("Check 1 on vayada_target_prod as vayada_target_prod_user (TARGET_DATABASE_URL): IDR revisions."))
+        self.assertNotIn("Block ", result.stdout)
+        self.assertNotEqual(both.returncode, 0)
+
     def test_the_repository_copy_of_the_6c_check_is_counted_and_concatenation_free(self):
         module, *_ = load([], [])
         sql = (SCRIPT.parent / "legacy-predeploy-readonly-check.sql").read_text()
@@ -267,9 +335,10 @@ class ReadonlyCountsTest(unittest.TestCase):
                 self.assertEqual(kwargs["ssl"].verify_mode, ssl.CERT_REQUIRED)
                 self.assertTrue(kwargs["ssl"].check_hostname)
             for index in range(fetches):
-                session = [statement for _, statement in executed[index * 6:index * 6 + 6]]
-                self.assertEqual(session[:3] + session[4:], ["BEGIN TRANSACTION READ ONLY", "SET LOCAL statement_timeout = '15s'",
-                                                             "SET LOCAL lock_timeout = '1s'", "ROLLBACK", "CLOSE"])
+                session = [statement for _, statement in executed[index * 7:index * 7 + 7]]
+                self.assertEqual(session[:4] + session[5:], ["BEGIN TRANSACTION READ ONLY", "SET LOCAL standard_conforming_strings = on",
+                                                             "SET LOCAL statement_timeout = '15s'", "SET LOCAL lock_timeout = '1s'",
+                                                             "ROLLBACK", "CLOSE"])
             self.assertEqual(output.splitlines()[-1], f"COUNTS_COMPLETE kind={kind} statements={fetches}")
             if kind == "TARGET":
                 self.assertTrue(all(s.startswith("FETCH SELECT count(*) AS rows_found FROM ( SELECT") for _, s in executed if s.startswith("FETCH")))

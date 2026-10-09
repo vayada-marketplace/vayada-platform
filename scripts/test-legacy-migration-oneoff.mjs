@@ -406,7 +406,7 @@ esac
     assert.deepEqual(definitions.map((d) => d.containerDefinitions[0].secrets[0].name), ['DATABASE_URL', 'BOOKING_ENGINE_DATABASE_URL', 'TARGET_DATABASE_URL']);
     assert.equal(definitions[2].containerDefinitions[0].environment.find((e) => e.name === 'TARGET_CHECK_SQL').value, readFileSync(target, 'utf8'));
     assert.equal(readFileSync(join(evidence, 'readonly-counts-result.md'), 'utf8'), '# VAY-1362 read-only counts (legacy PMS and Booking)\n## PMS section\n## BOOKING section\n');
-    assert.equal(readFileSync(join(evidence, 'predeploy-readonly-check-result.md'), 'utf8'), '# VAY-1362-6C pre-deploy check: production target, counts only\n## TARGET section\n');
+    assert.equal(readFileSync(join(evidence, 'predeploy-readonly-check-result.md'), 'utf8'), '# Target checks: production target, counts only\n## TARGET section\n');
     for (const name of ['readonly-counts-result.md', 'predeploy-readonly-check-result.md'])
       assert.equal(statSync(join(evidence, name)).mode & 0o777, 0o600);
     assert.equal(awsCalls().match(/ecs delete-task-definitions/g).length, 3);
@@ -441,6 +441,32 @@ esac
     assert.deepEqual(readFileSync(join(root, 'definitions.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line).family), ['vayada-legacy-readonly-counts-pms']);
     assert.equal(readFileSync(join(evidenceOnly, 'readonly-counts-result.md'), 'utf8'), '# VAY-1362 read-only counts (legacy PMS and Booking)\n## PMS section\n');
     assert.equal(existsSync(join(evidenceOnly, 'predeploy-readonly-check-result.md')), false);
+
+    // "none" instead of the counts file: only the target task runs, and only the target result is written.
+    const evidenceTarget = join(root, 'evidence-target');
+    mkdirSync(evidenceTarget, { mode: 0o700 });
+    const runTarget = (...args) => {
+      writeFileSync(join(root, 'definitions.jsonl'), '');
+      return spawnSync('bash', [join(root, 'scripts/legacy-migration-oneoff.sh'), ...args],
+        { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, EVIDENCE_DIR: evidenceTarget } });
+    };
+    const neither = runTarget('readonly-counts-plan', 'none', 'none');
+    assert.equal(neither.status, 2);
+    assert.match(neither.stderr, /not both none/);
+    const targetPlan = runTarget('readonly-counts-plan', 'none', target);
+    assert.equal(targetPlan.status, 0, targetPlan.stderr);
+    assert.equal(targetPlan.stdout.match(/^Task /gm).length, 1);
+    assert.match(targetPlan.stdout, /^Task vayada-legacy-readonly-counts-target: /m);
+    assert.match(targetPlan.stdout, /^Counts SQL sha256: none$/m);
+    assert.doesNotMatch(targetPlan.stdout, /^Block /m);
+    const targetSha = targetPlan.stdout.match(/^Plan sha256: ([0-9a-f]{64})$/m)[1];
+    const targetRun = runTarget('readonly-counts', 'none', target, `READONLY_COUNTS:${targetSha}`);
+    assert.equal(targetRun.status, 0, targetRun.stderr);
+    const targetDefinitions = readFileSync(join(root, 'definitions.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.deepEqual(targetDefinitions.map((d) => d.family), ['vayada-legacy-readonly-counts-target']);
+    assert.equal(targetDefinitions[0].containerDefinitions[0].secrets[0].name, 'TARGET_DATABASE_URL');
+    assert.equal(readFileSync(join(evidenceTarget, 'predeploy-readonly-check-result.md'), 'utf8'), '# Target checks: production target, counts only\n## TARGET section\n');
+    assert.equal(existsSync(join(evidenceTarget, 'readonly-counts-result.md')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
