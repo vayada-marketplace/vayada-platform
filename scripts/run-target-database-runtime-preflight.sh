@@ -32,6 +32,9 @@ vay2017_source_sha=""
 vay2017_execution_id=""
 vay2017_phase=""
 vay2017_source_import_phase=""
+role_retirement_step=""
+role_retirement_phase=""
+role_retirement_frozen=""
 case "${mode}" in
   preflight|--preflight-runtime-product-dml)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -244,6 +247,23 @@ case "${mode}" in
       code_file="grant-target-database-identity-runtime.mjs"
     fi
     ;;
+  --retire-hotel-setup-roles)
+    # VAY-2056 step 6a/6c: vayada_admin disables (NOLOGIN, its own grants, sessions), later drops,
+    # the retired hotel-setup roles. inspect is read-only; apply must repeat its PLAN fingerprint.
+    [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main &&
+       "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_REPOSITORY:-}" == vayada-marketplace/vayada-platform &&
+       "$#" -eq 4 && "$2" =~ ^(disable|drop)$ ]] || exit 2
+    [[ ( "$3" == inspect && -z "$4" ) || ( "$3" == apply && "$4" =~ ^[a-f0-9]{64}$ ) ]] || exit 2
+    ca_required=true
+    code_file="retire-hotel-setup-database-roles.mjs"
+    code_in_definition="true"
+    secret_name="TARGET_DATABASE_ADMIN_URL"
+    secret_parameter="/vayada/prod/db-marketplace-url"
+    family="vayada-next-api-db-runtime-preflight"
+    role_retirement_step="$2"
+    role_retirement_phase="$3"
+    role_retirement_frozen="$4"
+    ;;
   *) echo "Unknown mode: ${mode}" >&2; exit 2 ;;
 esac
 if [[ "${ca_required}" == true ]]; then
@@ -294,6 +314,8 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
   --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg channex_scope "${channex_scope}" --arg financials_readiness_property "${financials_readiness_property}" \
   --arg product_dml_required "${product_dml_required}" --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
   --arg vay2017_source_import_phase "${vay2017_source_import_phase}" \
+  --arg role_retirement_step "${role_retirement_step}" --arg role_retirement_phase "${role_retirement_phase}" --arg role_retirement_frozen "${role_retirement_frozen}" \
+  --arg github_actions "${GITHUB_ACTIONS:-}" --arg github_ref "${GITHUB_REF:-}" \
   --arg vay2017_signing_key_id "${VAY2017_PREFLIGHT_SIGNING_KEY_ID:-}" --arg vay2017_input "${VAY2017_PREFLIGHT_INPUT_GZIP_BASE64:-}" --arg vay2017_signature "${VAY2017_PREFLIGHT_SIGNATURE:-}" --arg vay2017_public_key "${VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64:-}" --arg vay2017_principal "${CHANNEX_ADOPTION_EXECUTION_PRINCIPAL:-}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
     environment:([{name:"VAYADA_DB_RUNTIME_PREFLIGHT_CODE",value:$code}] +
@@ -311,6 +333,10 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $channex_scope == "" then [] else [{name:"VAYADA_DB_CHANNEX_SCOPE",value:$channex_scope}] end) +
       (if $vay2017_phase == "" then [] else [{name:"VAY2017_PREFLIGHT_PHASE",value:$vay2017_phase}] end) +
       (if $vay2017_source_import_phase == "" then [] else [{name:"VAY2017_SOURCE_IMPORT_PHASE",value:$vay2017_source_import_phase}] end) +
+      (if $role_retirement_step == "" then [] else [{name:"VAYADA_HOTEL_SETUP_ROLES_STEP",value:$role_retirement_step},
+        {name:"VAYADA_HOTEL_SETUP_ROLES_PHASE",value:$role_retirement_phase},
+        {name:"VAYADA_HOTEL_SETUP_ROLES_FROZEN",value:$role_retirement_frozen},
+        {name:"GITHUB_ACTIONS",value:$github_actions},{name:"GITHUB_REF",value:$github_ref}] end) +
       (if $vay2017_source_import_phase == "extract" then [{name:"SOURCE_ATTESTATION_OWNER",value:"vay2017_source_attestor_20260929"}] else [] end) +
       (if $vay2017_source_sha == "" then [] else [{name:"VAY2017_PREFLIGHT_SOURCE_SHA",value:$vay2017_source_sha}] end) +
       (if $vay2017_execution_id == "" then [] else [{name:"VAY2017_PREFLIGHT_EXECUTION_ID",value:$vay2017_execution_id}] end) +
@@ -360,6 +386,20 @@ if [[ "${mode}" == "--audit-financials-readiness" ]]; then
   source_image="$(jq -r '.containerDefinitions[] | select(.name == "vayada-next-api") | .image' <<<"${source_definition}")"
   [[ "${source_image}" == *@"${financials_readiness_image_digest}" ]] || {
     echo "Financials readiness task definition is not pinned to the observed image." >&2; exit 1;
+  }
+fi
+if [[ -n "${role_retirement_step}" ]]; then
+  # Only after the decommission: the serving API carries no hotel-setup caller wiring (#462 applied)
+  # and neither private hotel-setup service runs a task.
+  jq -e '[.containerDefinitions[] | select(.name == "vayada-next-api") | ((.environment // []) + (.secrets // []))[] | .name
+    | select(test("^HOTEL_SETUP_(CREATION_|LOGO_|PROFILE_)?COMMAND_"))] | length == 0' <<<"${source_definition}" >/dev/null || {
+    echo "Role retirement requires the retired hotel-setup caller wiring." >&2; exit 1;
+  }
+  private_services="$(aws ecs describe-services --cluster "${service_cluster}" \
+    --services vayada-hotel-setup-service vayada-hotel-setup-property-service --region "${region}" --output json)"
+  jq -e '[.services[] | select(.status == "ACTIVE" and (.desiredCount > 0 or .runningCount > 0 or .pendingCount > 0))]
+    | length == 0' <<<"${private_services}" >/dev/null || {
+    echo "Role retirement requires both private hotel-setup services stopped." >&2; exit 1;
   }
 fi
 temporary_definition="$(jq -c --arg family "${family}" --arg container "${container}" --argjson definition_environment "$definition_environment" \
@@ -426,6 +466,8 @@ elif [[ "${vay2017_phase}" == "cleanup" ]]; then vay2017_expected_status="clean"
 elif [[ "${vay2017_source_import_phase}" == "prepare" ]]; then vay2017_expected_status="prepared";
 elif [[ "${vay2017_source_import_phase}" == "extract" ]]; then vay2017_expected_status="complete";
 elif [[ "${vay2017_source_import_phase}" == "cleanup" ]]; then vay2017_expected_status="clean";
+elif [[ "${role_retirement_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";
+elif [[ "${role_retirement_phase}" == "apply" ]]; then vay2017_expected_status="PASS";
 fi
 task="$(aws ecs describe-tasks --cluster "${cluster}" --tasks "${task_arn}" --region "${region}" \
   --query 'tasks[0].{exitCode:containers[0].exitCode,reason:stoppedReason}' --output json)"
@@ -448,7 +490,8 @@ if [[ "${mode}" == "--audit-financials-readiness" && "$(jq -r '.exitCode' <<<"${
 fi
 [[ "$(jq -r '.exitCode' <<<"${task}")" == "0" ]] || {
   echo "Runtime preflight task failed: $(jq -r '.reason' <<<"${task}")" >&2
-  jq -r '.[] | fromjson? | select(.status == "FAIL" or .status == "failed") | .code' <<<"${messages}" >&2
+  jq -r '.[] | fromjson? | select(.status == "FAIL" or .status == "failed" or .status == "COMMITTED_UNVERIFIED" or .status == "UNCERTAIN")
+    | if .status == "FAIL" or .status == "failed" then .code else "\(.status) \(.code)" end' <<<"${messages}" >&2
   exit 1
 }
 if [[ -n "${vay2017_expected_status}" ]]; then
