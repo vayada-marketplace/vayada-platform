@@ -818,11 +818,11 @@ What remains on purpose:
   releases) refuses any task definition that still carries hotel-setup caller
   wiring, so an image-only rollback to a pre-VAY-2056 task definition is no longer
   possible.
-- The runtime preflight and product DML grant keep `platform.hotel_setup_*` and
-  `hotel_catalog.hotel_setup_*` on the protected list. The per-hotel native logins,
-  scope roles, scope tables, policies, triggers and functions stay in the database
-  until the decommission step 6 application migration (role drops need
-  `vayada_admin`).
+- Decommission step 6 removed the database side: app migration 0474 dropped the
+  scope tables, view, policies, triggers and functions (2026-10-09), and the
+  per-hotel logins and scope roles were disabled and then dropped by
+  `retire-hotel-setup-database-roles.yml`. The runtime preflight and product DML
+  grant no longer list `hotel_setup_` relations.
 - Operator follow-up outside Terraform: schedule deletion (with a recovery window,
   never `--force-delete-without-recovery`) of the per-login secrets the bootstrap
   workflows created under `hotel-setup-command/prod/organization/` and

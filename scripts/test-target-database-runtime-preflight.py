@@ -80,9 +80,10 @@ class RuntimePreflightContractTest(unittest.TestCase):
     def test_protected_list_matches_the_grant_script(self) -> None:
         for name in ("noRead", "noReadPatterns", "noWrite", "noWritePatterns", "appendOnly", "noDelete", "identityLockOnly"):
             self.assertEqual(js_list(CHECK, name), js_list(GRANT, name), name)
+        # VAY-2056: the native hotel-setup scope relations were dropped by app migration 0474.
+        for name in ("noRead", "noReadPatterns", "noWrite", "noWritePatterns"):
+            self.assertFalse([entry for entry in js_list(CHECK, name) if "hotel_setup" in entry], name)
         for relation in (
-            "platform.hotel_setup_property_scopes",
-            "hotel_catalog.hotel_setup_effective_creation_scopes",
             "platform.identity_migration_provenance",
             "platform.legacy_historical_binding_transitions",
             "platform.finance_expense_worker_properties",

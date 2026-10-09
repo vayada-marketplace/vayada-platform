@@ -8,16 +8,14 @@ const productSchemas = ["hotel_catalog", "booking", "pms", "marketplace", "distr
 
 // Protected list: keep identical to scripts/grant-target-database-runtime-product-dml.mjs.
 const noRead = [
-  "platform.hotel_setup_property_scopes", "platform.hotel_setup_creation_scopes",
-  "platform.hotel_setup_linked_properties", "platform.hotel_setup_reconciliation_cursors",
-  "hotel_catalog.hotel_setup_effective_creation_scopes", "platform.identity_migration_provenance",
+  "platform.identity_migration_provenance",
   "platform.legacy_historical_binding_transitions", "platform.finance_expense_worker_properties",
   "platform.finance_export_worker_properties", "marketplace.affiliate_click_quota_windows",
   "pms.inventory_coverage_validation_queue",
 ];
 const noReadPatterns = [
-  "^platform\\.(hotel_setup_|identity_migration_|legacy_historical_binding_)",
-  "^platform\\.finance_.*_worker_properties$", "^hotel_catalog\\.hotel_setup_",
+  "^platform\\.(identity_migration_|legacy_historical_binding_)",
+  "^platform\\.finance_.*_worker_properties$",
 ];
 const noWrite = [
   "platform.schema_migrations", "platform.pricing_runtime_property_scopes",
@@ -32,7 +30,7 @@ const noWrite = [
   "booking.affiliate_referral_production_preflight_revocations",
 ];
 const noWritePatterns = [
-  "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|hotel_setup_|identity_migration_)",
+  "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|identity_migration_)",
   "^pms\\.channex_room_availability_", "^pms\\.channex_ari_schedule_",
   "^(marketplace|booking)\\.affiliate_click_", "^finance\\.expense_generation_",
 ];
