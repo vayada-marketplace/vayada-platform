@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:${{ matrix.postgres }}
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_PASSWORD: fixture
         ports: ['5432:5432']
