@@ -21,7 +21,7 @@ docker network create "${network}" >/dev/null
 docker volume create "${modules}" >/dev/null
 docker run --detach --rm --name "${database}" --network "${network}" \
   --network-alias vayada-identity-grant-db --env POSTGRES_PASSWORD=postgres \
-  "postgres:${version}" >/dev/null
+  "public.ecr.aws/docker/library/postgres:${version}" >/dev/null
 for _ in {1..30}; do
   docker exec "${database}" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
   sleep 1
@@ -105,7 +105,7 @@ CREATE POLICY identity_runtime_scope ON platform.dead_letter_events TO PUBLIC
 RESET ROLE;
 SQL
 
-docker run --rm --volume "${modules}:/work" --workdir /work node:22-bookworm \
+docker run --rm --volume "${modules}:/work" --workdir /work public.ecr.aws/docker/library/node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/grant-target-database-identity-runtime.mjs" "${work}/grant.mjs"
 cp "${root}/scripts/provision-target-database-identity-runtime.mjs" "${work}/provision.mjs"
@@ -123,7 +123,7 @@ run_provision() {
     --env "FINANCE_EXPORT_WORKER_DATABASE_URL=postgresql://vayada_next_finance_export_worker:export@vayada-identity-grant-db:5432/postgres" \
     --env "VAYADA_IDENTITY_PROVISION_FORCE_LOGIN_FAILURE=${force_failure}" \
     --env "VAYADA_IDENTITY_PROVISION_FORCE_MARKER_MISMATCH=${force_marker_mismatch}" \
-    node:22-bookworm node provision.mjs
+    public.ecr.aws/docker/library/node:22-bookworm node provision.mjs
 }
 if output="$(run_provision 2>&1)"; then
   echo 'identity role provision unexpectedly allowed template database access' >&2
@@ -176,7 +176,7 @@ run_grant() {
     --volume "${work}/grant.mjs:/work/grant.mjs:ro" --workdir /work \
     --env "TARGET_DATABASE_MIGRATION_URL=postgresql://${user}:${password}@vayada-identity-grant-db:5432/postgres" \
     --env "VAYADA_IDENTITY_GRANT_LOCAL_FIXTURE=${fixture}" \
-    node:22-bookworm node grant.mjs
+    public.ecr.aws/docker/library/node:22-bookworm node grant.mjs
 }
 expect_grant_failure() {
   local code="$1"
@@ -320,4 +320,21 @@ expect_grant_failure identity_role_existing_privilege_too_broad
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c 'REVOKE SELECT ON booking.guest_booking_view FROM vayada_next_identity_runtime; CREATE SEQUENCE booking.guest_booking_seq; GRANT USAGE ON SEQUENCE booking.guest_booking_seq TO vayada_next_identity_runtime' >/dev/null
 expect_grant_failure identity_role_existing_sequence_privilege
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE USAGE ON SEQUENCE booking.guest_booking_seq FROM vayada_next_identity_runtime; DROP VIEW booking.guest_booking_view' >/dev/null
+
+# VAY-2079: the app drops the authority-scope view. A dropped public-read view grants nothing,
+# so the grant passes without it; a view under that name that breaks the contract still fails.
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'DROP VIEW booking.pricing_runtime_effective_authority_scopes' >/dev/null
+run_grant | grep -F '"status":"PASS"' >/dev/null
+docker exec -i "${database}" psql -U postgres -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+SET ROLE legacy_owner;
+CREATE VIEW booking.pricing_runtime_effective_authority_scopes AS SELECT id AS property_id FROM booking.guest_bookings;
+GRANT SELECT ON booking.pricing_runtime_effective_authority_scopes TO PUBLIC;
+SQL
+expect_grant_failure identity_public_read_contract_unsafe
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'DROP VIEW booking.pricing_runtime_effective_authority_scopes' >/dev/null
+run_grant | grep -F '"status":"PASS"' >/dev/null
 echo "identity runtime grant contract passed (PostgreSQL ${version})"
