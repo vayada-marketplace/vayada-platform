@@ -72,3 +72,9 @@ secret and declares exactly `PMS_CHANNEX_WORKER_ENABLED=true` with
 `PMS_CHANNEX_CONNECTION_MODE=mutating`, `pause-next-api-channex-worker.py`
 preserves that connection-only scope and still pauses the other five durable
 capabilities. See `docs/channex-management-worker-database.md`.
+
+VAY-2108 adds the claimed booking scope on top of the connection scope
+(`PMS_CHANNEX_SCOPE=claimed`, booking sync mutating and `target-owned` for the
+hotels in `PMS_CHANNEX_OWNED_PROPERTY_IDS`). The script preserves it only when it is
+declared exactly. Otherwise it removes every claimed setting and keeps the connection
+scope. See `docs/channex-management-worker-database.md`.

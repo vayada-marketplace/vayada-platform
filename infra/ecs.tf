@@ -274,7 +274,7 @@ locals {
       # health checks replace a task that is still waiting.
       health_check_grace_period_seconds = 180
       log_group                         = "/ecs/vayada-next-api"
-      environment = [
+      environment = concat([
         { name = "HOST", value = "0.0.0.0" },
         { name = "PORT", value = "8003" },
         { name = "NODE_ENV", value = "production" },
@@ -311,11 +311,12 @@ locals {
         { name = "AIRBNB_IMPORT_CALLBACK_ORIGIN", value = "https://next-marketplace.vayada.com" },
         # VAY-2055: only the connection (enable) capability may run here, with the
         # dedicated worker credential; every other durable capability stays paused.
+        # VAY-2108: the claimed scope adds booking sync for owned, claimed hotels.
         { name = "PMS_CHANNEX_WORKER_ENABLED", value = tostring(var.channex_connection_worker_enabled) },
         { name = "PMS_CHANNEX_CONNECTION_MODE", value = var.channex_connection_worker_enabled ? "mutating" : "observe_only" },
         { name = "PMS_CHANNEX_PROVISIONING_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_ARI_SYNC_MODE", value = "observe_only" },
-        { name = "PMS_CHANNEX_BOOKING_SYNC_MODE", value = "observe_only" },
+        { name = "PMS_CHANNEX_BOOKING_SYNC_MODE", value = var.channex_claimed_scope == "off" ? "observe_only" : "mutating" },
         { name = "PMS_CHANNEX_MARKUPS_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_MESSAGING_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_REVIEWS_MODE", value = "mutating" },
@@ -355,7 +356,11 @@ locals {
         { name = "AUTH_BOOKING_ADMIN_LOGOUT_URL", value = "https://next-booking-admin.vayada.com/login" },
         { name = "AUTH_AFFILIATE_DASHBOARD_SUCCESS_URL", value = "https://next-affiliate.vayada.com/dashboard" },
         { name = "AUTH_AFFILIATE_DASHBOARD_LOGOUT_URL", value = "https://next-affiliate.vayada.com/login" },
-      ]
+        ], var.channex_claimed_scope == "off" ? [] : [
+        { name = "PMS_CHANNEX_SCOPE", value = "claimed" },
+        { name = "PMS_CHANNEX_OWNED_PROPERTY_IDS", value = join(",", var.channex_owned_property_ids) },
+        { name = "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE", value = "target-owned" },
+      ])
       secrets = concat([
         { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-runtime-url" },
         { name = "TARGET_DATABASE_MIGRATION_URL", valueFrom = "/vayada/prod/target-database-url" },
@@ -600,6 +605,16 @@ resource "aws_ecs_task_definition" "services" {
     precondition {
       condition     = each.key != "next-target-backend" || !var.channex_connection_worker_enabled || var.channex_connection_worker_secret_mapped
       error_message = "Channex connection processing requires the dedicated worker secret to be mapped and preflighted first."
+    }
+
+    precondition {
+      condition     = each.key != "next-target-backend" || var.channex_claimed_scope == "off" || var.channex_connection_worker_enabled
+      error_message = "The claimed Channex scope requires the enabled, preflighted connection worker."
+    }
+
+    precondition {
+      condition     = each.key != "next-target-backend" || (var.channex_claimed_scope == "off") == (length(var.channex_owned_property_ids) == 0)
+      error_message = "The claimed Channex scope needs at least one owned property, and owned properties need the claimed scope."
     }
 
     precondition {

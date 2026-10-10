@@ -64,6 +64,11 @@ def main() -> None:
         supported = dict(line.split() for line in Path(__file__).with_name("next-api-ongoing-export-compatible-images.txt").read_text().splitlines() if line.strip() and not line.startswith("#"))
         if digest not in supported.values():
             fail("disable ongoing exports before deploying an older image")
+    # VAY-2108: an image that predates the claimed Channex scope refuses it at startup.
+    if any(e.get("name") == "PMS_CHANNEX_SCOPE" for e in environment):
+        claimed = dict(line.split() for line in Path(__file__).with_name("next-api-channex-claimed-compatible-images.txt").read_text().splitlines() if line.strip() and not line.startswith("#"))
+        if digest not in claimed.values():
+            fail("set channex_claimed_scope off before deploying an image without claimed Channex support")
     print("next-api split launcher guard passed")
 
 

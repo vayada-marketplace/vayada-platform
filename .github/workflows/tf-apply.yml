@@ -173,6 +173,13 @@ jobs:
           fi
           rm planned-export-runtime.json
 
+      - name: Require claimed Channex support in the running next-api image
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra show -json tfplan > planned-channex-scope.json
+          python3 scripts/assert-planned-channex-claimed-image.py planned-channex-scope.json current-next-api-running-tasks.json
+          rm planned-channex-scope.json
+
       - name: Preserve installed hotel setup caller
         run: |
           terraform -chdir=infra show -json tfplan > planned-setup-caller.json

@@ -1,0 +1,2 @@
+# VAY-2108: reviewed next-api images that recognise PMS_CHANNEX_SCOPE=claimed (the first is app PR C's).
+# Set channex_claimed_scope = "off" before deploying, or rolling back to, any image not listed here.

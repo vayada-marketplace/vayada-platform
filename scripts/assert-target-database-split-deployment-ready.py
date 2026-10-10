@@ -19,6 +19,18 @@ FINANCE_EXPORT_ID = "f3429f38-b462-4453-b7f1-d901fc86ebfa"
 CHANNEX_WORKER_PARAMETER = "/vayada/prod/target-database-channex-management-worker-url"
 # VAY-2055: the worker may only run the connection capability on the public API.
 CHANNEX_PAUSED_CAPABILITIES = ("PROVISIONING", "ARI_SYNC", "BOOKING_SYNC", "MARKUPS", "MESSAGING")
+# VAY-2108: the claimed scope adds pull-only booking sync for owned, claimed hotels.
+CHANNEX_CLAIMED_BOOKING = {
+    "PMS_CHANNEX_SCOPE": "claimed", "PMS_CHANNEX_BOOKING_SYNC_MODE": "mutating",
+    "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": "target-owned", "CHANNEX_WEBHOOK_INTAKE_MODE": "observe_only",
+}
+CHANNEX_CLAIMED_SETTINGS = ("PMS_CHANNEX_SCOPE", "PMS_CHANNEX_OWNED_PROPERTY_IDS", "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE")
+UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+# Staging and test properties in the production database (app migration 0432).
+CHANNEX_RESERVED_PROPERTY_IDS = {
+    "17621565-40b5-4ebc-8727-3a301ac947a2", "46906724-72cb-4acf-a2eb-b740a3bdbcf7",
+    "65f6b2fc-c783-4963-9d6b-a85f82319769", "8f4c1e47-3de1-4150-8bde-ad031a013842",
+}
 PARAMETER_ARN = re.compile(
     r"^arn:aws:ssm:eu-west-1:269416271598:parameter(?P<name>/vayada/prod/[^/]+)$"
 )
@@ -149,14 +161,31 @@ def main() -> None:
     channex_worker = environment.get("PMS_CHANNEX_WORKER_ENABLED")
     if channex_worker not in {None, "false", "true"}:
         fail("Channex worker enablement state is unexpected")
+    if set(CHANNEX_CLAIMED_SETTINGS).intersection(secrets):
+        fail("claimed Channex settings must not come from secrets")
+    channex_claimed = any(name in environment for name in CHANNEX_CLAIMED_SETTINGS)
+    if channex_claimed:
+        owned = environment.get("PMS_CHANNEX_OWNED_PROPERTY_IDS")
+        owned_ids = owned.split(",") if owned else []
+        if (
+            channex_worker != "true"
+            or any(environment.get(name) != value for name, value in CHANNEX_CLAIMED_BOOKING.items())
+            or owned is None
+            or not re.fullmatch(rf"(?:{UUID}(?:,{UUID})*)?", owned)
+            or len(set(owned_ids)) != len(owned_ids)
+            or CHANNEX_RESERVED_PROPERTY_IDS.intersection(owned_ids)
+            or any(name.startswith("PMS_CHANNEX_STAGING_") for name in environment)
+        ):
+            fail("claimed Channex scope must be exactly the reviewed booking shape on the connection worker")
     if channex_worker == "true":
         if not channex_secret_present:
             fail("enabled Channex worker lacks its dedicated database secret")
         if environment.get("PMS_CHANNEX_CONNECTION_MODE") != "mutating" or any(
             environment.get(f"PMS_CHANNEX_{name}_MODE") != "observe_only"
             for name in CHANNEX_PAUSED_CAPABILITIES
+            if not (channex_claimed and name == "BOOKING_SYNC")
         ):
-            fail("enabled Channex worker must be connection-only")
+            fail("enabled Channex worker must be connection-only or claimed booking")
     expense_secret_present = "FINANCE_EXPENSE_WORKER_DATABASE_URL" in secrets
     expense_value = secrets.get("FINANCE_EXPENSE_WORKER_DATABASE_URL")
     expense_enabled = environment.get("FINANCE_EXPENSE_WORKER_ENABLED")
