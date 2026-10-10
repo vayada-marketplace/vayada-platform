@@ -243,6 +243,41 @@ class DeploymentReadinessTest(unittest.TestCase):
         ):
             self.assertNotEqual(run(image, secrets, environment=env).returncode, 0, (secrets, env))
 
+    def test_accepts_only_the_exact_claimed_booking_shape_on_the_connection_worker(self) -> None:
+        secrets = {"TARGET_DATABASE_URL": RUNTIME, "AUTH_DATABASE_URL": IDENTITY, "TARGET_DATABASE_MIGRATION_URL": OWNER,
+                   "PMS_CHANNEX_MANAGEMENT_DATABASE_URL": CHANNEX_WORKER}
+        owned = "0f0e2b9c-1d3a-4c5b-8e7f-1a2b3c4d5e6f,7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
+        claimed = {
+            "PMS_CHANNEX_WORKER_ENABLED": "true", "PMS_CHANNEX_CONNECTION_MODE": "mutating",
+            **{f"PMS_CHANNEX_{name}_MODE": "observe_only" for name in ("PROVISIONING", "ARI_SYNC", "MARKUPS", "MESSAGING")},
+            "PMS_CHANNEX_BOOKING_SYNC_MODE": "mutating", "PMS_CHANNEX_SCOPE": "claimed",
+            "PMS_CHANNEX_OWNED_PROPERTY_IDS": owned, "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": "target-owned",
+            "CHANNEX_WEBHOOK_INTAKE_MODE": "observe_only",
+        }
+        def environment(**changes: str | None) -> list[dict[str, str]]:
+            values = {**claimed, **changes}
+            return [{"name": name, "value": value} for name, value in values.items() if value is not None]
+        image = f"{REPOSITORY}@{DIGEST}"
+        for env in (environment(), environment(PMS_CHANNEX_OWNED_PROPERTY_IDS="")):
+            result = run(image, secrets, environment=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        first = owned.split(",")[0]
+        for changes in (
+            {"PMS_CHANNEX_SCOPE": None}, {"PMS_CHANNEX_SCOPE": "staging"}, {"PMS_CHANNEX_OWNED_PROPERTY_IDS": None},
+            {"PMS_CHANNEX_OWNED_PROPERTY_IDS": f"{first},{first}"}, {"PMS_CHANNEX_OWNED_PROPERTY_IDS": first.upper()},
+            {"PMS_CHANNEX_OWNED_PROPERTY_IDS": f"{first},"}, {"PMS_CHANNEX_OWNED_PROPERTY_IDS": "65f6b2fc-c783-4963-9d6b-a85f82319769"},
+            {"CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": "legacy-owned"}, {"CHANNEX_WEBHOOK_INTAKE_MODE": "mutating"},
+            {"PMS_CHANNEX_BOOKING_SYNC_MODE": "observe_only"}, {"PMS_CHANNEX_ARI_SYNC_MODE": "mutating"},
+            {"PMS_CHANNEX_WORKER_ENABLED": "false"}, {"PMS_CHANNEX_CONNECTION_MODE": "observe_only"},
+            {"PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID": "65f6b2fc-c783-4963-9d6b-a85f82319769"},
+        ):
+            self.assertNotEqual(run(image, secrets, environment=environment(**changes)).returncode, 0, changes)
+        # A claimed setting smuggled in as a secret on an otherwise connection-only task.
+        connection_only = environment(PMS_CHANNEX_SCOPE=None, PMS_CHANNEX_OWNED_PROPERTY_IDS=None,
+                                      CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE=None, PMS_CHANNEX_BOOKING_SYNC_MODE="observe_only")
+        self.assertEqual(run(image, secrets, environment=connection_only).returncode, 0)
+        self.assertNotEqual(run(image, {**secrets, "PMS_CHANNEX_SCOPE": "/vayada/prod/channex-scope"}, environment=connection_only).returncode, 0)
+
     def test_accepts_exact_finance_export_worker_mapping_and_scope(self) -> None:
         result = run(
             f"{REPOSITORY}@{DIGEST}",

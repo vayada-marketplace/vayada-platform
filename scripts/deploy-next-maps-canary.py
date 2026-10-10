@@ -120,7 +120,7 @@ def verify_reviewed_digest(actual, reviewed, required=False):
         raise ValueError("ECR image digest differs from the reviewed image digest")
 
 
-def verify_inventory_image(digest, closure=False, no_show=False, published_offers=False, worker_database=False):
+def run_image_probe(digest, probe):
     """Probe compiled config without AWS/DB credentials or container networking."""
     image = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     password = subprocess.run(["aws", "ecr", "get-login-password", "--region", REGION],
@@ -129,6 +129,24 @@ def verify_inventory_image(digest, closure=False, no_show=False, published_offer
                     f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com"], input=password,
                    check=True, capture_output=True, text=True)
     subprocess.run(["docker", "pull", image], check=True, capture_output=True, text=True)
+    subprocess.run(["docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+                    "--entrypoint", "node", image, "--input-type=module", "-e", probe],
+                   check=True, capture_output=True, text=True)
+
+
+def verify_claimed_booking_image(digest):
+    """VAY-2108: an older image accepts the claimed env in loadConfig and fails only at startup."""
+    run_image_probe(digest, """import { loadConfig } from '/app/apps/api/dist/config.js';
+const c = loadConfig({TARGET_DATABASE_URL:'postgresql://synthetic', PMS_OPERATIONS_SOURCE:'target',
+CHANNEX_API_BASE_URL:'https://staging.channex.io', CHANNEX_API_KEY:'synthetic', PMS_CHANNEX_WORKER_ENABLED:'false',
+API_BACKGROUND_WORKERS_ENABLED:'false', PMS_CHANNEX_SCOPE:'claimed', PMS_CHANNEX_OWNED_PROPERTY_IDS:'%s',
+PMS_CHANNEX_BOOKING_SYNC_MODE:'mutating', CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE:'target-owned'});
+if(c.channexManagement.scope !== 'claimed' || JSON.stringify(c.channexManagement.ownedPropertyIds) !== JSON.stringify(['%s']))
+  throw new Error('Claimed-booking-capable image required');
+""" % (PROPERTY, PROPERTY))
+
+
+def verify_inventory_image(digest, closure=False, no_show=False, published_offers=False, worker_database=False):
     probe = """import { loadConfig } from '/app/apps/api/dist/config.js';
 const c = loadConfig({TARGET_DATABASE_URL:'postgresql://synthetic', PMS_OPERATIONS_SOURCE:'target',
 CHANNEX_API_BASE_URL:'https://staging.channex.io', CHANNEX_API_KEY:'synthetic', PMS_CHANNEX_WORKER_ENABLED:'false',
@@ -149,9 +167,7 @@ if(loadConfig({PMS_ROOM_CLOSURE_ENABLED:'true'}).pmsRoomClosureEnabled !== true)
         probe += "\nif(c.channexManagement.stagingPublishedOffersEnabled !== true) throw new Error('Published-offer-capable image required');"
     if worker_database:
         probe += "\nconst {CHANNEX_MANAGEMENT_WORKER_ROLE:r}=await import('/app/apps/api/dist/jobs/channexManagementWorkerPrivileges.js'); if(r!=='vayada_next_channex_management_worker') throw new Error('Worker boundary image required'); await import('/app/apps/api/dist/jobs/channexManagementWorkerStartup.js');"
-    subprocess.run(["docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
-                    "--entrypoint", "node", image, "--input-type=module", "-e", probe],
-                   check=True, capture_output=True, text=True)
+    run_image_probe(digest, probe)
 
 
 def configure_channex_staging(container, meals=False, worker_enabled="true", inventory=False, closure=False, no_show=False, published_offers=False):
@@ -185,6 +201,39 @@ def configure_channex_staging(container, meals=False, worker_enabled="true", inv
 
 CHANNEX_WORKER_SECRET_NAME = "PMS_CHANNEX_MANAGEMENT_DATABASE_URL"
 CHANNEX_WORKER_SECRET_PARAMETER = "/vayada/prod/target-database-channex-management-worker-url"
+# VAY-2108: production next-api may carry the claimed booking scope for production
+# hotels. Every canary copies that env, so each mode except claimed booking drops it.
+CLAIMED_SETTINGS = {"PMS_CHANNEX_SCOPE", "PMS_CHANNEX_OWNED_PROPERTY_IDS", "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE"}
+
+
+def drop_claimed_scope(container):
+    names = {*CLAIMED_SETTINGS, "PMS_CHANNEX_BOOKING_SYNC_MODE"}
+    container["environment"] = [e for e in container["environment"] if e["name"] not in names]
+    container["environment"].append({"name": "PMS_CHANNEX_BOOKING_SYNC_MODE", "value": "observe_only"})
+    container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in names]
+
+
+def configure_channex_claimed_booking(container):
+    """Pull-only booking sync for the synthetic property against staging Channex, no worker."""
+    settings = {
+        "CHANNEX_API_BASE_URL": "https://staging.channex.io",
+        "CHANNEX_WEBHOOK_INTAKE_MODE": "observe_only",
+        "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE": "observe_only",
+        "PMS_CHANNEX_SCOPE": "claimed",
+        "PMS_CHANNEX_OWNED_PROPERTY_IDS": PROPERTY,
+        "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": "target-owned",
+        "PMS_CHANNEX_WORKER_ENABLED": "false",
+        "PMS_CHANNEX_BOOKING_SYNC_MODE": "mutating",
+        **{f"PMS_CHANNEX_{mode}_MODE": "observe_only" for mode in
+           ("CONNECTION", "PROVISIONING", "ARI_SYNC", "MARKUPS", "MESSAGING", "REVIEWS", "IFRAME")},
+    }
+    dropped = {*settings, "CHANNEX_API_KEY", "CHANNEX_WEBHOOK_SECRET", CHANNEX_WORKER_SECRET_NAME}
+    container["environment"] = [e for e in container["environment"]
+                                if e["name"] not in dropped and not e["name"].startswith("PMS_CHANNEX_STAGING_")]
+    container["environment"] += [{"name": k, "value": v} for k, v in settings.items()]
+    container["secrets"] = [e for e in container.get("secrets", [])
+                            if e["name"] not in dropped and not e["name"].startswith("PMS_CHANNEX_STAGING_")]
+    container["secrets"].append({"name": "CHANNEX_API_KEY", "valueFrom": CHANNEX_SECRET})
 GENERAL_RUNTIME_SECRET_PARAMETERS = {
     "/vayada/prod/target-database-runtime-url",
     f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/vayada/prod/target-database-runtime-url",
@@ -371,7 +420,15 @@ def main():
     parser.add_argument("--channex-staging-alerts", action="store_true")
     parser.add_argument("--channex-staging-no-show", action="store_true")
     parser.add_argument("--channex-worker-state", choices=("preserve", "paused", "running"), default="preserve")
+    parser.add_argument("--channex-staging-booking", action="store_true")
     args = parser.parse_args()
+    if args.channex_staging_booking and (
+            args.channex_staging or args.channex_worker_database or args.channex_staging_meals
+            or args.channex_staging_inventory or args.channex_staging_published_offers
+            or args.disable_channex_staging_published_offers or args.room_closure or args.channex_staging_alerts
+            or args.channex_staging_no_show or args.channex_worker_state != "preserve"
+            or args.activate_guest or args.remove):
+        raise ValueError("Claimed staging booking excludes the restrictions canary, guest activation and removal")
     if args.channex_worker_database and (not args.channex_staging or not args.channex_staging_inventory or args.channex_worker_state != "preserve"):
         raise ValueError("Worker database mapping requires scoped staging inventory and preserved pause")
     if args.room_closure and (not args.channex_staging or not args.channex_staging_inventory or args.channex_worker_state != "preserve"):
@@ -436,6 +493,9 @@ def main():
     has_meals = any(matching_conditions(rule["Conditions"], meal_condition) for rule in owned_rules)
     if args.channex_staging_meals or has_meals:
         conditions.append(meal_condition)
+    # Claimed staging booking never inherits the restrictions canary's routes or settings.
+    if args.channex_staging_booking and any(c in conditions for c in (closure_condition, channex_condition, alerts_condition, no_show_condition, meal_condition)):
+        raise ValueError("Remove the restrictions canary (--remove) before claimed staging booking")
     if has_meals and not args.channex_staging_meals and not args.remove and not args.activate_guest:
         raise ValueError("Existing staging meals require --channex-staging-meals to preserve configuration")
     if any(not any(matching_conditions(rule["Conditions"], expected) for expected in conditions) for rule in owned_rules):
@@ -508,6 +568,8 @@ def main():
     verify_reviewed_digest(digest, args.image_digest, required=mapped_worker_database)
     if args.channex_staging_inventory or args.channex_staging_no_show or published_offers:
         verify_inventory_image(digest, closure=args.room_closure, no_show=args.channex_staging_no_show, published_offers=published_offers, worker_database=mapped_worker_database)
+    if args.channex_staging_booking:
+        verify_claimed_booking_image(digest)
     if args.activate_guest:
         activate_guest(existing, group, owned_rules, conditions, digest)
         return
@@ -520,6 +582,12 @@ def main():
     source["environment"] = [e for e in source["environment"] if e["name"] not in webhook_settings]
     source["environment"].append({"name": "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", "value": "observe_only"})
     source["secrets"] = [e for e in source.get("secrets", []) if e["name"] not in webhook_settings]
+    if args.channex_staging_booking:
+        parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_SECRET.split(":parameter")[1]]}])["Parameters"]
+        assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
+        configure_channex_claimed_booking(source)
+    else:
+        drop_claimed_scope(source)
     if args.channex_staging:
         parameters = aws("ssm", "describe-parameters", ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [CHANNEX_SECRET.split(":parameter")[1]]}])["Parameters"]
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"

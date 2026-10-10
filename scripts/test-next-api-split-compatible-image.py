@@ -119,6 +119,54 @@ class CompatibleImageTest(unittest.TestCase):
     def test_skips_unrelated_service(self) -> None:
         self.assertEqual(run("pms-backend", "other", "tag", []).returncode, 0)
 
+    def scripts_with_claimed_images(self, directory: Path, digests: list[str]) -> Path:
+        for name in ("assert-next-api-split-compatible-image.py", "assert-planned-channex-claimed-image.py",
+                     "next-api-split-compatible-images.txt", "next-api-ongoing-export-compatible-images.txt"):
+            (directory / name).write_text((ROOT / "scripts" / name).read_text())
+        (directory / "next-api-channex-claimed-compatible-images.txt").write_text(
+            "# fixture\n" + "".join(f"{'f' * 40} {digest}\n" for digest in digests))
+        return directory
+
+    def test_claimed_channex_scope_deploys_and_rolls_back_only_to_listed_images(self) -> None:
+        # VAY-2108: the current task declares the claimed scope; the guard runs for the deploy and the rollback digest.
+        claimed = [{"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"}, {"name": "PMS_CHANNEX_SCOPE", "value": "claimed"}]
+        result = run("next-target-backend", "vayada-next-api", DIGEST, [], environment=claimed)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("set channex_claimed_scope off", result.stderr)
+        self.assertEqual(run("next-target-backend", "vayada-next-api", DIGEST, [], environment=claimed[:1]).returncode, 0)
+        global CHECK
+        original = CHECK
+        with tempfile.TemporaryDirectory() as directory:
+            CHECK = self.scripts_with_claimed_images(Path(directory), [DIGEST]) / original.name
+            try:
+                result = run("next-target-backend", "vayada-next-api", DIGEST, [], environment=claimed)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotEqual(run("next-target-backend", "vayada-next-api", VAY_846_DIGEST, [], environment=claimed).returncode, 0)
+            finally:
+                CHECK = original
+
+    def test_planned_claimed_scope_requires_a_listed_running_image(self) -> None:
+        def plan(environment):
+            definition = json.dumps([{"name": "vayada-next-api", "environment": environment}])
+            return {"planned_values": {"root_module": {"resources": [{
+                "address": 'aws_ecs_task_definition.services["next-target-backend"]',
+                "values": {"container_definitions": definition}}]}}}
+        def tasks(*digests):
+            return {"tasks": [{"containers": [{"name": "vayada-next-api", "imageDigest": d}]} for d in digests]}
+        claimed = [{"name": "PMS_CHANNEX_SCOPE", "value": "claimed"}]
+        with tempfile.TemporaryDirectory() as directory:
+            folder = self.scripts_with_claimed_images(Path(directory), [DIGEST])
+            def check(planned, running):
+                (folder / "plan.json").write_text(json.dumps(planned))
+                (folder / "running.json").write_text(json.dumps(running))
+                return subprocess.run(["python3", str(folder / "assert-planned-channex-claimed-image.py"),
+                                       str(folder / "plan.json"), str(folder / "running.json")], capture_output=True, text=True)
+            self.assertEqual(check(plan([]), tasks(VAY_846_DIGEST)).returncode, 0)
+            self.assertEqual(check(plan(claimed), tasks(DIGEST)).returncode, 0)
+            for planned, running in ((plan(claimed), tasks(VAY_846_DIGEST)), (plan(claimed), tasks(DIGEST, VAY_846_DIGEST)),
+                                     (plan(claimed), tasks()), ({"planned_values": {}}, tasks(DIGEST)), (plan(claimed), {})):
+                self.assertNotEqual(check(planned, running).returncode, 0, (planned, running))
+
     def test_logo_image_has_split_and_ongoing_export_attestations(self):
         source = "3efb2195a823f40b7cd5a716db5bf08ac3fe90ad"
         digest = "sha256:18fa7587a09fa58916e734ea9c3b2d38c274783bc98d793308cc2f122d688965"
