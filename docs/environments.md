@@ -191,6 +191,11 @@ only `v1`; creating or importing a future HMAC key never authorizes promotion.
 
    A failed Booking public smoke redeploys the pre-cutover task image automatically.
 
+The legacy backends (`pms-backend`, `booking-backend`, `marketplace-backend`) no
+longer deploy this way: their app-repo deploy workflows are disabled. Each legacy
+deploy is an explicit `workflow_dispatch` of `deploy.yml` with an image digest
+and Flamur's go; see [Legacy app deploys](legacy-pms-freeze.md#legacy-app-deploys).
+
 The complete six-service receiver is installed separately in
 `.github/workflows/deploy-coordinated-release.yml` and remains in `legacy`
 ownership mode until VAY-2029 activates it with an exact published manifest.

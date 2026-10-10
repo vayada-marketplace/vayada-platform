@@ -41,6 +41,8 @@ State is stored in S3. Never run `terraform apply` without a clean `terraform pl
 
 Platform CI receives a `repository_dispatch` event from the app repo when a new image is published. It then updates the ECS task definition with the SHA-pinned image and deploys.
 
+Legacy backends (`pms-backend`, `booking-backend`, `marketplace-backend`) are the exception: their app-repo deploy workflows are disabled. Each legacy deploy is an explicit `workflow_dispatch` of `deploy.yml` with an image digest and Flamur's go for that deploy (see `docs/legacy-pms-freeze.md`). `platform-mutations-v2` has no required reviewer, so nothing in GitHub waits for an approval.
+
 Do not manually trigger ECS deploys outside of this workflow during normal operations.
 
 ## What not to do
