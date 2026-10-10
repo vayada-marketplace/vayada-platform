@@ -83,6 +83,62 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
             probe = probe.replace("/app/", os.environ["VAYADA_WORKER_IMAGE_FIXTURE_ROOT"].rstrip("/")+"/")
             subprocess.run(["node","--input-type=module","-e",probe],check=True,capture_output=True,text=True)
 
+    def production_claimed_container(self):
+        # VAY-2108: what a canary copies from production next-api once the claimed scope is on.
+        env = {"CHANNEX_API_BASE_URL":"https://app.channex.io", "CHANNEX_WEBHOOK_INTAKE_MODE":"observe_only",
+               "PMS_CHANNEX_WORKER_ENABLED":"true", "PMS_CHANNEX_CONNECTION_MODE":"mutating",
+               "PMS_CHANNEX_BOOKING_SYNC_MODE":"mutating", "PMS_CHANNEX_SCOPE":"claimed",
+               "PMS_CHANNEX_OWNED_PROPERTY_IDS":"0f0e2b9c-1d3a-4c5b-8e7f-1a2b3c4d5e6f",
+               "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE":"target-owned", "PMS_CHANNEX_STAGING_INVENTORY_ENABLED":"true"}
+        return {"name":"vayada-next-api", "environment":[{"name":k, "value":v} for k, v in env.items()], "secrets":[
+            {"name":"TARGET_DATABASE_URL", "valueFrom":"/vayada/prod/target-database-runtime-url"},
+            {"name":"CHANNEX_API_KEY", "valueFrom":"/vayada/prod/channex-api-key"},
+            {"name":"CHANNEX_WEBHOOK_SECRET", "valueFrom":"/vayada/prod/next-channex-webhook-token"},
+            {"name":canary.CHANNEX_WORKER_SECRET_NAME, "valueFrom":canary.CHANNEX_WORKER_SECRET_PARAMETER}]}
+
+    def test_claimed_booking_canary_is_pull_only_staging_without_the_worker(self):
+        value = self.production_claimed_container()
+        canary.configure_channex_claimed_booking(value)
+        env = {e["name"]:e["value"] for e in value["environment"]}
+        self.assertEqual(len(env), len(value["environment"]))
+        self.assertEqual({k:v for k, v in env.items() if "CHANNEX" in k}, {
+            "CHANNEX_API_BASE_URL":"https://staging.channex.io", "CHANNEX_WEBHOOK_INTAKE_MODE":"observe_only",
+            "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE":"observe_only", "PMS_CHANNEX_SCOPE":"claimed",
+            "PMS_CHANNEX_OWNED_PROPERTY_IDS":canary.PROPERTY, "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE":"target-owned",
+            "PMS_CHANNEX_WORKER_ENABLED":"false", "PMS_CHANNEX_BOOKING_SYNC_MODE":"mutating",
+            **{f"PMS_CHANNEX_{mode}_MODE":"observe_only" for mode in
+               ("CONNECTION", "PROVISIONING", "ARI_SYNC", "MARKUPS", "MESSAGING", "REVIEWS", "IFRAME")}})
+        self.assertEqual(sorted((x["name"], x["valueFrom"]) for x in value["secrets"]), [
+            ("CHANNEX_API_KEY", canary.CHANNEX_SECRET), ("TARGET_DATABASE_URL", "/vayada/prod/target-database-runtime-url")])
+
+    def test_every_other_canary_mode_drops_the_production_claimed_scope(self):
+        for staging in (False, True):
+            value = self.production_claimed_container()
+            canary.drop_claimed_scope(value)
+            if staging:
+                canary.configure_channex_staging(value, worker_enabled="false", inventory=True)
+            env = {e["name"]:e["value"] for e in value["environment"]}
+            self.assertEqual(len(env), len(value["environment"]))
+            self.assertFalse(canary.CLAIMED_SETTINGS & env.keys())
+            self.assertEqual(env["PMS_CHANNEX_BOOKING_SYNC_MODE"], "observe_only")
+
+    def test_claimed_booking_flag_excludes_every_other_canary_mode(self):
+        for extra in (["--channex-staging"], ["--channex-staging", "--channex-staging-inventory", "--channex-worker-database"],
+                      ["--channex-staging-alerts"], ["--channex-worker-state", "paused"], ["--activate-guest"], ["--remove"]):
+            argv = ["deploy", "--image-sha", "next-" + "a" * 40, "--channex-staging-booking", *extra]
+            with patch("sys.argv", argv), patch.object(canary, "aws", side_effect=AssertionError("no AWS")), \
+                    self.assertRaises(ValueError):
+                canary.main()
+
+    def test_claimed_booking_probe_rejects_images_without_the_claimed_scope(self):
+        with patch.object(canary.subprocess, "run", return_value=SimpleNamespace(stdout="synthetic")) as run:
+            canary.verify_claimed_booking_image(DIGEST)
+        probe = run.call_args.args[0][-1]
+        for fragment in ("PMS_CHANNEX_SCOPE:'claimed'", "PMS_CHANNEX_WORKER_ENABLED:'false'", "c.channexManagement.scope !== 'claimed'",
+                         f"PMS_CHANNEX_OWNED_PROPERTY_IDS:'{canary.PROPERTY}'", "ownedPropertyIds"):
+            self.assertIn(fragment, probe)
+        self.assertEqual(run.call_args.args[0][:9], ["docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--entrypoint"])
+
     def test_protected_runner_uses_explicit_image_and_only_worker_secret(self):
         runner = (ROOT / "scripts/run-target-database-runtime-preflight.sh").read_text()
         self.assertIn('--provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker|--grant-channex-connection-worker|--preflight-channex-connection-worker)', runner)

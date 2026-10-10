@@ -104,3 +104,18 @@ dedicated secret is mapped and exactly `PMS_CHANNEX_WORKER_ENABLED=true` with
 capability is still forced to `observe_only` on each deployment. Inspect the
 `pms.channex.management` queue for pending non-enable jobs before and after the
 rollout: the connection worker must leave them untouched.
+
+## Claimed booking staging canary (VAY-2108)
+
+`Deploy App Service` with service `next-maps-canary`, environment `next` and
+`channex_staging_booking=true` runs the claimed booking pull (every 5 minutes:
+fetch the Channex booking feed, persist, acknowledge) for the synthetic property
+`65f6b2fc-c783-4963-9d6b-a85f82319769` against staging Channex, with the staging
+key, `PMS_CHANNEX_WORKER_ENABLED=false`, no worker or webhook secret and
+background workers off. It excludes the restrictions canary (`channex_staging`)
+and its options, and refuses to start while that canary's routes exist: remove it
+first (service `next-maps-canary-remove`). The image must report
+`channexManagement.scope === "claimed"`.
+Every other canary mode drops the claimed settings it would otherwise copy from
+production next-api and forces booking sync to `observe_only`, so a canary never
+pulls production hotels.

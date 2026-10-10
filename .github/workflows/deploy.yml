@@ -64,6 +64,11 @@ on:
         required: false
         type: boolean
         default: false
+      channex_staging_booking:
+        description: "Pull-only claimed booking sync for the synthetic property on staging Channex (VAY-2108)"
+        required: false
+        type: boolean
+        default: false
       channex_worker_state:
         description: "Preserve worker state, or pause/resume on the current canary image"
         required: false
@@ -511,6 +516,7 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
           CHANNEX_WORKER_DATABASE: ${{ inputs.channex_worker_database }}
           CHANNEX_STAGING: ${{ inputs.channex_staging }}
+          CHANNEX_STAGING_BOOKING: ${{ inputs.channex_staging_booking }}
           ACTIVATE_GUEST: ${{ inputs.activate_guest }}
         run: bash scripts/validate-channex-worker-state.sh
 
@@ -533,6 +539,7 @@ jobs:
           ROOM_CLOSURE: ${{ inputs.room_closure }}
           CHANNEX_STAGING_ALERTS: ${{ inputs.channex_staging_alerts }}
           CHANNEX_STAGING_NO_SHOW: ${{ inputs.channex_staging_no_show }}
+          CHANNEX_STAGING_BOOKING: ${{ inputs.channex_staging_booking }}
           CHANNEX_WORKER_STATE: ${{ inputs.channex_worker_state }}
         run: |
           set -euo pipefail
@@ -553,6 +560,7 @@ jobs:
           if [ "$ROOM_CLOSURE" = true ]; then args+=(--room-closure); fi
           if [ "$CHANNEX_STAGING_ALERTS" = true ]; then args+=(--channex-staging-alerts); fi
           if [ "$CHANNEX_STAGING_NO_SHOW" = true ]; then args+=(--channex-staging-no-show); fi
+          if [ "$CHANNEX_STAGING_BOOKING" = true ]; then args+=(--channex-staging-booking); fi
           if [ "$SERVICE" = next-maps-canary-remove ]; then args+=(--remove); fi
           if [ "$ACTIVATE_GUEST" = true ]; then args+=(--activate-guest); fi
           python3 scripts/deploy-next-maps-canary.py "${args[@]}"

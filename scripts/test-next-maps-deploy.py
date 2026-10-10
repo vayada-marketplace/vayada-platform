@@ -79,6 +79,75 @@ class DeploymentGuards(unittest.TestCase):
             self.assertEqual([e for e in container["secrets"] if e["name"] == "CHANNEX_WEBHOOK_SECRET"],
                              [{"name": "CHANNEX_WEBHOOK_SECRET", "valueFrom": api["CHANNEX_WEBHOOK_SECRET"]}] if "--channex-staging-alerts" in extra else [])
 
+    def claimed_production_source(self):
+        # VAY-2108: production next-api once channex_claimed_scope = "booking".
+        env = {"PUBLIC_HOTEL_PROFILE_SOURCE": "target", "CHANNEX_API_BASE_URL": "https://app.channex.io",
+               "CHANNEX_WEBHOOK_INTAKE_MODE": "observe_only", "PMS_CHANNEX_WORKER_ENABLED": "true",
+               "PMS_CHANNEX_CONNECTION_MODE": "mutating", "PMS_CHANNEX_BOOKING_SYNC_MODE": "mutating",
+               "PMS_CHANNEX_SCOPE": "claimed", "PMS_CHANNEX_OWNED_PROPERTY_IDS": "0f0e2b9c-1d3a-4c5b-8e7f-1a2b3c4d5e6f",
+               "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": "target-owned"}
+        return {"name": "vayada-next-api", "environment": [{"name": k, "value": v} for k, v in env.items()], "secrets": [
+            {"name": "CHANNEX_API_KEY", "valueFrom": "production-key"},
+            {"name": "CHANNEX_WEBHOOK_SECRET", "valueFrom": "production-token"},
+            {"name": api["CHANNEX_WORKER_SECRET_NAME"], "valueFrom": api["CHANNEX_WORKER_SECRET_PARAMETER"]}]}
+
+    def deploy_until_register(self, extra, source, rules=None, group=None):
+        main = api["main"]
+        events = []
+        def aws(service, op, **kwargs):
+            if op == "get-caller-identity": return {"Account": api["ACCOUNT"]}
+            if op == "describe-services":
+                return {"services": [{"taskDefinition": "baseline"}] if kwargs["services"] == ["vayada-next-api-service"] else []}
+            if op == "describe-task-definition": return {"taskDefinition": {"containerDefinitions": [source]}}
+            if op == "describe-target-groups": return {"TargetGroups": [group] if group else []}
+            if op == "describe-tags": return {"TagDescriptions": [{"Tags": [{"Key": "Task", "Value": "VAY-1480"}]}]}
+            if op == "describe-rules":
+                return {"Rules": (rules or []) + [{"Priority": "100", "Conditions": [{"Field": "host-header", "HostHeaderConfig": {"Values": ["next-api.vayada.com"]}}], "Actions": []}]}
+            if op == "describe-images": return {"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]}
+            if op == "describe-parameters": return {"Parameters": [{"Type": "SecureString"}]}
+            if op == "register-task-definition":
+                events.append(("register", kwargs["containerDefinitions"][0]))
+                raise RuntimeError("stop before deployment")
+            raise AssertionError(op)
+        probe = lambda digest: events.append(("probe", digest))
+        with patch.dict(main.__globals__, {"aws": aws, "verify_claimed_booking_image": probe}), \
+                patch("sys.argv", ["deploy", "--image-sha", "next-" + "a" * 40, *extra]), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "stop before deployment"):
+                main()
+        return events
+
+    def test_production_claimed_scope_reaches_a_canary_only_in_booking_mode(self):
+        claimed = {"PMS_CHANNEX_SCOPE", "PMS_CHANNEX_OWNED_PROPERTY_IDS", "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE"}
+        for extra in ([], ["--channex-staging"]):
+            with self.subTest(options=extra):
+                events = self.deploy_until_register(extra, self.claimed_production_source())
+                self.assertEqual([kind for kind, _ in events], ["register"])
+                env = {e["name"]: e["value"] for e in events[0][1]["environment"]}
+                self.assertFalse(claimed & env.keys())
+                self.assertEqual(env["PMS_CHANNEX_BOOKING_SYNC_MODE"], "observe_only")
+        events = self.deploy_until_register(["--channex-staging-booking"], self.claimed_production_source())
+        self.assertEqual([kind for kind, _ in events], ["probe", "register"])
+        container = events[1][1]
+        env = {e["name"]: e["value"] for e in container["environment"]}
+        self.assertEqual(len(env), len(container["environment"]))
+        self.assertEqual({k: env[k] for k in (*claimed, "PMS_CHANNEX_BOOKING_SYNC_MODE", "PMS_CHANNEX_WORKER_ENABLED", "CHANNEX_API_BASE_URL", "API_BACKGROUND_WORKERS_ENABLED")}, {
+            "PMS_CHANNEX_SCOPE": "claimed", "PMS_CHANNEX_OWNED_PROPERTY_IDS": api["PROPERTY"],
+            "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": "target-owned", "PMS_CHANNEX_BOOKING_SYNC_MODE": "mutating",
+            "PMS_CHANNEX_WORKER_ENABLED": "false", "CHANNEX_API_BASE_URL": "https://staging.channex.io",
+            "API_BACKGROUND_WORKERS_ENABLED": "false"})
+        self.assertEqual(sorted(x["name"] for x in container["secrets"]), ["CHANNEX_API_KEY", "GOOGLE_PLACES_SERVER_API_KEY"])
+        self.assertEqual(next(x for x in container["secrets"] if x["name"] == "CHANNEX_API_KEY")["valueFrom"], api["CHANNEX_SECRET"])
+
+    def test_claimed_booking_refuses_an_existing_restrictions_canary_before_mutation(self):
+        group = {"TargetGroupName": api["GROUP"], "TargetGroupArn": "canary"}
+        host = {"Field": "host-header", "HostHeaderConfig": {"Values": ["next-api.vayada.com"]}}
+        for path in (f"/api/pms/properties/{api['PROPERTY']}/channex", f"/api/pms/properties/{api['PROPERTY']}/reservations/*/no-show-report"):
+            values = [path, path + "/*"] if path.endswith("/channex") else [path]
+            rules = [{"RuleArn": "owned", "Priority": "10", "Conditions": [host, {"Field": "path-pattern", "PathPatternConfig": {"Values": values}}],
+                      "Actions": [{"TargetGroupArn": "canary"}]}]
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, "Remove the restrictions canary"):
+                self.deploy_until_register(["--channex-staging-booking"], self.claimed_production_source(), rules=rules, group=group)
+
     def test_alert_setup_rejects_nonstaging_and_worker_changes_before_aws(self):
         main = api["main"]
         for extra in ([], ["--channex-staging", "--channex-worker-state", "paused"]):
@@ -664,7 +733,23 @@ class WorkerStateChanges(unittest.TestCase):
                    "CHANNEX_STAGING": staging, "ENVIRONMENT": environment, "ACTIVATE_GUEST": activation}
             result = subprocess.run(["bash", str(script)], env=env, capture_output=True)
             self.assertEqual(result.returncode == 0, ok, (service, state, staging, environment, activation))
+        # VAY-2108: claimed staging booking only on the canary in next, never with the restrictions canary.
+        for service, staging, database, state, environment, activation, ok in (
+            ("next-maps-canary", "false", "false", "preserve", "next", "false", True),
+            ("next-target-backend", "false", "false", "preserve", "next", "false", False),
+            ("next-maps-canary", "true", "false", "preserve", "next", "false", False),
+            ("next-maps-canary", "false", "true", "preserve", "next", "false", False),
+            ("next-maps-canary", "false", "false", "paused", "next", "false", False),
+            ("next-maps-canary", "false", "false", "preserve", "production", "false", False),
+            ("next-maps-canary", "false", "false", "preserve", "next", "true", False),
+        ):
+            env = {**os.environ, "SERVICE": service, "CHANNEX_STAGING_BOOKING": "true", "CHANNEX_STAGING": staging,
+                   "CHANNEX_WORKER_DATABASE": database, "CHANNEX_WORKER_STATE": state, "ENVIRONMENT": environment,
+                   "ACTIVATE_GUEST": activation}
+            result = subprocess.run(["bash", str(script)], env=env, capture_output=True)
+            self.assertEqual(result.returncode == 0, ok, (service, staging, database, state, environment, activation))
         workflow = pathlib.Path(__file__).parent.parent.joinpath(".github/workflows/deploy.yml").read_text()
+        self.assertIn('if [ "$CHANNEX_STAGING_BOOKING" = true ]; then args+=(--channex-staging-booking); fi', workflow)
         for section in workflow.split("    steps:")[1:]:
             self.assertLess(section.index("bash scripts/validate-channex-worker-state.sh"), section.index("aws-actions/configure-aws-credentials"))
 
