@@ -268,3 +268,67 @@ resource "aws_lb_listener_rule" "default_booking_frontend" {
     Name = "default-custom-domains"
   }
 }
+
+# VAY-1362 waves (infra/legacy_wave_cutover.tf): none unless go-day sets the inputs.
+resource "aws_lb_listener_rule" "legacy_booking_block" {
+  for_each = local.legacy_booking_block_rules
+
+  listener_arn = data.aws_lb_listener.https.arn
+  priority     = each.value.priority
+
+  action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "application/json"
+      message_body = jsonencode({ detail = "Bookings for this hotel have moved to the new Vayada booking system." })
+      status_code  = "410"
+    }
+  }
+
+  condition {
+    host_header {
+      values = ["pms-api.vayada.com"]
+    }
+  }
+
+  condition {
+    path_pattern {
+      values = each.value.paths
+    }
+  }
+
+  tags = {
+    Name = "legacy-booking-block-${each.key}"
+  }
+}
+
+resource "aws_lb_listener_rule" "legacy_booking_redirect" {
+  for_each = local.legacy_booking_redirect_rules
+
+  listener_arn = data.aws_lb_listener.https.arn
+  priority     = each.value.priority
+
+  action {
+    type = "redirect"
+
+    redirect {
+      protocol    = "HTTPS"
+      port        = "443"
+      host        = each.value.to
+      path        = "/#{path}"
+      query       = "#{query}"
+      status_code = "HTTP_302"
+    }
+  }
+
+  condition {
+    host_header {
+      values = [each.key]
+    }
+  }
+
+  tags = {
+    Name = "legacy-booking-redirect-${each.value.priority}"
+  }
+}
