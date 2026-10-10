@@ -46,11 +46,11 @@ The request file holds exactly one action for one hotel:
 
 | `action` | Fields besides `action`, `property` and `approvalRef` (printable ASCII, 3–200 characters) |
 |---|---|
-| `activate` | `legacyDisabledAt` (ISO 8601 with `Z` or an offset) and `legacyReadbackFile`, a non-empty file in the evidence folder holding the legacy-disable readback. The script passes its SHA-256 to the CLI. |
+| `activate` | `legacyDisabledAt` (ISO 8601 with `Z` or an offset) and `legacyReadbackFile`, a non-empty regular file (not a symlink) in the evidence folder holding the legacy-disable readback. The script passes its SHA-256 to the CLI. |
 | `revoke` | `reason` (printable ASCII, 3–500 characters) |
+| `open-sales`, `close-sales` | none |
 
 `approvalRef` and `reason` must not start with `@` or `-`.
-| `open-sales`, `close-sales` | none |
 
 - **Plan:** the CLI's own dry run in a read-only transaction. The task uses the
   digest of the single running `vayada-next-api` task, which must be listed in
