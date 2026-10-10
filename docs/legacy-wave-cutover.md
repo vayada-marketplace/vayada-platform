@@ -19,7 +19,7 @@ Flamur's go.
   page. The redirect is temporary (302), so browsers do not keep it after a
   rollback.
 
-## Wave 1 file (verify before go-day)
+## Wave 1 file
 
 `infra/legacy_wave_cutover.auto.tfvars.json`:
 
@@ -33,26 +33,31 @@ Flamur's go.
   "legacy_booking_redirects": {
     "aetherhilltopvillas-a0ae2226.booking.vayada.com": "aetherhilltopvillas-a0ae2226.next-booking.vayada.com",
     "dolcemareresort-9448d754.booking.vayada.com": "dolcemareresort-9448d754.next-booking.vayada.com",
-    "haighahouse-aa2e01a9.booking.vayada.com": "haighahouse-aa2e01a9.next-booking.vayada.com"
+    "haighahouse-aa2e01a9.booking.vayada.com": "haighahouse-aa2e01a9.next-booking.vayada.com",
+    "www.booking.aetherhilltopvillas.com": "aetherhilltopvillas-a0ae2226.next-booking.vayada.com"
   }
 }
 ```
 
-Before go-day, check each value:
+How these values were checked, and what is still open:
 
-1. **The slug is the hotel's legacy booking slug (`booking_hotels.slug`).** The
-   legacy storefront takes it from its subdomain, or resolves a custom domain to
-   it through booking-api `/api/resolve-domain`, and sends it in the pms-api
-   path. pms-api resolves it against PMS `hotels.slug`, which register-hotel
-   mirrors from `booking_hotels`. Haigha's PMS `hotels.slug`
-   `haighahouse-aa2e01a9` was read on 2026-10-08. The Aether B and Dolcemare
-   slugs come from the inventory and have not been read yet.
+1. **The slug is the hotel's legacy booking slug (`booking_hotels.slug`).**
+   - The legacy storefront takes it from its subdomain, or resolves a custom
+     domain to it through booking-api `/api/resolve-domain`, and sends it in
+     the pms-api path.
+   - pms-api resolves it against PMS `hotels.slug`, which register-hotel
+     mirrors from `booking_hotels`.
+   - A read-only read on 2026-10-10 (plan `90358b4b`) found that PMS
+     `hotels.slug` equals `booking_hotels.slug` for all three hotels: Aether B
+     `29f39aae`, Dolcemare `7d3f6dcc` and Haigha `e41d252d`.
 2. **The v2 host serves the hotel.** The migration keeps the legacy booking slug
-   as the v2 canonical slug. Check it after the hotel's migration:
+   as the v2 canonical slug. After the hotel's migration,
    `curl -s -o /dev/null -w '%{http_code}\n' https://<slug>.next-booking.vayada.com/`
-   must print 200.
-3. **Custom domains.** Add each one (`booking_hotels.custom_domain`, for example
-   Aether B's) to `legacy_booking_redirects`; see below.
+   must print 200. Still to do on go-day.
+3. **Custom domains.** The same read found one, `booking_hotels.custom_domain`
+   `www.booking.aetherhilltopvillas.com` for Aether B. Dolcemare and Haigha have
+   none. Its redirect depends on Cloudflare passing the custom `Host`; see
+   below.
 
 ## Go-day (with Flamur's go for the wave)
 

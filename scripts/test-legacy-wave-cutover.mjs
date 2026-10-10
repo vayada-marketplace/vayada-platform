@@ -34,7 +34,7 @@ test('empty inputs add no listener rule, so the plan shows no change', () => {
   assert.deepEqual(evaluate({}), { blocks: {}, redirects: {} });
 });
 
-test('the documented wave-1 file blocks three slugs in one rule and redirects three hosts', () => {
+test('the documented wave-1 file blocks three slugs in one rule and redirects four hosts', () => {
   const waveFile = JSON.parse(doc.match(/```json\n([\s\S]*?)```/)?.[1] ?? 'null');
   assert.ok(waveFile, 'wave file missing from docs/legacy-wave-cutover.md');
   const declared = [...readFileSync(cutoverTf, 'utf8').matchAll(/^variable "([a-z_]+)"/gm)].map((m) => m[1]);
@@ -54,6 +54,7 @@ test('the documented wave-1 file blocks three slugs in one rule and redirects th
       'aetherhilltopvillas-a0ae2226.booking.vayada.com': { priority: 31, to: 'aetherhilltopvillas-a0ae2226.next-booking.vayada.com' },
       'dolcemareresort-9448d754.booking.vayada.com': { priority: 32, to: 'dolcemareresort-9448d754.next-booking.vayada.com' },
       'haighahouse-aa2e01a9.booking.vayada.com': { priority: 33, to: 'haighahouse-aa2e01a9.next-booking.vayada.com' },
+      'www.booking.aetherhilltopvillas.com': { priority: 34, to: 'aetherhilltopvillas-a0ae2226.next-booking.vayada.com' },
     },
   });
 });
