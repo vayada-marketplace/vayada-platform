@@ -956,6 +956,12 @@ VAY-2108 protects every `platform.channex_management_worker_*` table (the
 owner-managed Channex worker scope, which the schema-wide grant had left
 writable for `platform.channex_management_worker_operations`), and until the
 re-run the preflight reports `runtime_protected_relation_write_forbidden`.
+It also protects the worker-only Channex offer ARI delivery evidence
+(`pms.channex_offer_ari_deliver*`, app migration 0481). 0481 revokes the API
+login's writes in the same transaction that creates the tables, so this
+pattern goes on `main` before 0481 is released and needs no re-run. A pattern
+that matches no table is harmless. If 0481 shipped first, the required-DML
+check would fail closed, and a grant re-run would give the writes back.
 Before committing it
 also runs the preflight's global posture checks (no TRUNCATE/REFERENCES/
 TRIGGER/MAINTAIN anywhere, no default privileges for the login from any other
