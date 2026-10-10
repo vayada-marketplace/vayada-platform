@@ -25,6 +25,11 @@ const COMMANDS = {
   'target:cutover:abort': ['target', 'cutover.js', 'abort'],
   'target:source:extract': ['source', 'sourceExtract.js'],
   'target:cutover': ['source', 'cutover.js', 'cutover'],
+  // VAY-2108: the audited Channex handover executor, one hotel per run (legacy-migration-oneoff.sh channex-handover).
+  'target:channex:handover:activate': ['target', 'channexHandover.js', 'activate'],
+  'target:channex:handover:revoke': ['target', 'channexHandover.js', 'revoke'],
+  'target:channex:handover:open-sales': ['target', 'channexHandover.js', 'open-sales'],
+  'target:channex:handover:close-sales': ['target', 'channexHandover.js', 'close-sales'],
 };
 
 const refuse = (code) => {

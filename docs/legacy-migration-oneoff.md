@@ -31,6 +31,68 @@ folder, saves the log and returns the exit code.
 Use it on its own only for a standalone extraction, and check that its report's
 `runId` equals the run file's `sourceRunId`.
 
+## Channex handover (VAY-2108)
+
+Per hotel, the audited `target:channex:handover` executor (application
+`packages/backend-migration/src/cli/channexHandover.ts`) runs through the same
+one-off task path, in two steps:
+
+```bash
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh channex-handover-plan <request.json>
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh channex-handover <request.json> CHANNEX_HANDOVER:<action>:<property>:<plan sha256>
+```
+
+The request file holds exactly one action for one hotel:
+
+| `action` | Fields besides `action`, `property` and `approvalRef` (printable ASCII, 3–200 characters) |
+|---|---|
+| `activate` | `legacyDisabledAt` (ISO 8601 with `Z` or an offset) and `legacyReadbackFile`, a non-empty regular file (not a symlink) in the evidence folder holding the legacy-disable readback. The script passes its SHA-256 to the CLI. |
+| `revoke` | `reason` (printable ASCII, 3–500 characters) |
+| `open-sales`, `close-sales` | none |
+
+`approvalRef` and `reason` must not start with `@` or `-`.
+
+- **Plan:** the CLI's own dry run in a read-only transaction. The task uses the
+  digest of the single running `vayada-next-api` task, which must be listed in
+  `scripts/next-api-split-compatible-images.txt`. Its definition holds only the
+  migration secret (`/vayada/prod/target-database-url`, pinned to
+  `vayada_target_prod_user` @ `vayada_target_prod`), the pinned RDS CA and TLS
+  preload, no task role, and the family `vayada-channex-handover-oneoff`.
+  - The script saves `channex-handover-<action>-<property>-plan.json` (0600).
+    It holds the CLI's plan and the CLI's `planSha256`, plus the script's
+    binding: the request SHA-256, the exact CLI arguments (including the
+    readback SHA-256), the image digest, the network, the cluster, and the
+    SHA-256s of this script, its task launcher and the TLS preload.
+  - The plan SHA-256 is SHA-256 of `<CLI plan sha>:<binding sha>`. A re-plan on
+    another image, network or code therefore gives a new plan SHA, and an older
+    go no longer matches.
+  - It prints the plan SHA and the line to run after the go.
+- **Go:** Flamur names that plan SHA-256 in
+  `CHANNEX_HANDOVER:<action>:<property>:<plan sha>`.
+- **Apply:**
+  - Before any AWS call, the script refuses a go for another plan or a changed
+    request.
+  - It then recomputes the binding from the live service. It refuses unless the
+    plan SHA it gets is the one the go names ("Re-plan and get a new go").
+  - It passes `--apply <CLI plan sha>`. The CLI re-plans under row locks and
+    refuses `plan_changed` on any difference, so the approval reference, the
+    readback and every other input stay exactly as approved.
+- **Result:** `channex-handover-<action>-<property>-result.json` is written
+  only when the CLI exits 0 and prints exactly one JSON line with
+  `applied: true` for the CLI plan SHA. A `CHANNEX_HANDOVER_COMPLETE` line, when
+  printed, must name the same action, hotel and CLI plan SHA. The CLI's JSON
+  line must stay under 16 KB, because Docker splits longer log lines. A longer
+  line fails closed with "no plan recorded".
+  - The folder then refuses that action for that hotel again: use a new folder.
+  - If the script is interrupted, `watch <task-arn>` saves the log. Never rerun
+    the apply blindly: inspect the log, then re-plan.
+- **Not a migration command:** handover runs never use a run file. The generic
+  `<command> <run-file>` path refuses `target:channex:handover:*`, and handover
+  runs refuse to start while any one-off migration or handover task is running.
+- **Provider access:** none. `open-sales`/`close-sales` only change the hotel's
+  offer targets in the database; the claimed Channex worker then pushes the
+  change. No step deletes or disables a Channex property.
+
 ## What one call does
 
 1. **Before any AWS call, it checks the inputs:**
@@ -44,7 +106,7 @@ Use it on its own only for a standalone extraction, and check that its report's
    overrides `AWS_ENDPOINT_URL*`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`
    and `AWS_CA_BUNDLE`, and
    requires the `vayada` profile to resolve to account `269416271598`. It refuses if a
-   one-off migration task is still running.
+   one-off migration or Channex handover task is still running.
 3. **It registers one disposable task definition.** The family is
    `vayada-legacy-migration-oneoff-target` or `-source`. That is never the
    `vayada-next-api` family, so `tf-apply` will not roll a service onto it.
@@ -231,5 +293,5 @@ That adds roughly 1.5–2.5 hours: the copy restore, a second migration run,
 smoke and approval. It moves the window from about 3.5–4.5 hours to about
 5–7 hours, so OTA closeouts are needed.
 
-Tests: `node --test scripts/test-legacy-migration-oneoff.mjs` and
+Tests: `node --test scripts/test-legacy-migration-oneoff.mjs` (including the Channex handover modes) and
 `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/test_legacy_readonly_counts.py`.
