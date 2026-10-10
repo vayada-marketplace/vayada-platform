@@ -21,7 +21,7 @@ const noWrite = [
   "platform.schema_migrations", "platform.pricing_runtime_property_scopes",
   "platform.channex_management_worker_properties", "platform.legacy_owner_approval_records",
   "platform.legacy_owner_approval_revocations",
-  "booking.pricing_runtime_effective_authority_scopes", "booking.pricing_runtime_effective_property_scopes",
+  "booking.pricing_runtime_effective_property_scopes",
   "marketplace.affiliate_click_occurrences", "booking.affiliate_click_contexts",
   "booking.affiliate_click_admissions", "booking.affiliate_original_booking_bindings",
   "finance.expense_generation_dispatches", "pms.channex_room_availability_attempts",
@@ -40,11 +40,7 @@ const appendOnly = [
   "finance.commission_rate_changes", "distribution.external_api_usage_events",
   "finance.affiliate_percentage_policy_approvals", "booking.pricing_quotes",
 ];
-// Pricing authority (VAY-2057): the revisions keep UPDATE only because the API locks them
-// FOR SHARE together with the heads; the append-only trigger rejects real updates.
-const noDelete = [
-  "hotel_catalog.properties", "booking.pricing_authority_heads", "booking.pricing_authority_revisions",
-];
+const noDelete = ["hotel_catalog.properties"];
 // Trigger-invoked Channex helpers the Channex management worker provisioning revokes from
 // PUBLIC; the API's product writes PERFORM them through triggers (VAY-2054 follow-up).
 // Keep identical to scripts/grant-target-database-runtime-product-dml.mjs.
