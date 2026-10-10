@@ -131,6 +131,7 @@ CREATE TABLE platform.legacy_owner_approval_revocations (id uuid PRIMARY KEY);
 CREATE TABLE platform.identity_migration_provenance (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_historical_binding_transitions (id uuid PRIMARY KEY);
 CREATE TABLE platform.channex_management_worker_properties (property_id uuid PRIMARY KEY);
+CREATE TABLE platform.channex_management_worker_operations (operation_type text PRIMARY KEY CHECK (operation_type = 'enable'));
 CREATE TABLE platform.finance_expense_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.finance_export_worker_properties (property_id uuid PRIMARY KEY);
 CREATE TABLE platform.pricing_runtime_property_scopes (database_login name PRIMARY KEY);
@@ -265,7 +266,7 @@ GRANT SELECT ON marketplace.affiliate_links, marketplace.affiliate_agreement_lif
   finance.affiliate_earning_reconciliation_revisions, finance.affiliate_eligible_earning_revisions,
   finance.affiliate_earning_allocations, finance.affiliate_earning_allocation_items,
   platform.pricing_runtime_property_scopes, platform.channex_management_worker_properties,
-  platform.domain_events TO vayada_next_api_runtime;
+  platform.channex_management_worker_operations, platform.domain_events TO vayada_next_api_runtime;
 GRANT INSERT ON platform.product_audit_events, platform.domain_events, platform.jobs,
   finance.expense_categories, finance.expenses, finance.recurring_expense_rules, finance.folios,
   finance.folio_revisions, finance.folio_lines, finance.folio_payment_references TO vayada_next_api_runtime;
@@ -715,6 +716,14 @@ run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/d
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
 VAYADA_DB_REQUIRE_PRODUCT_DML=1 run_preflight | grep -F '"status":"PASS"' >/dev/null
+# VAY-2108: a grant from before the worker scope pattern left the Channex operation scope writable.
+# The preflight fails closed, the dry run changes nothing, and re-running the grant repairs it.
+owner_psql "GRANT INSERT, UPDATE, DELETE ON platform.channex_management_worker_operations TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_protected_relation_write_forbidden:3
+run_grant legacy_owner owner 1 inspect_product_dml | grep -F '"committed":false' >/dev/null
+[[ "$(owner_psql "SELECT has_table_privilege('vayada_next_api_runtime','platform.channex_management_worker_operations','INSERT')")" == t ]]
+run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
+run_preflight | grep -F '"posture":"product_dml"' >/dev/null
 owner_psql "GRANT INSERT ON platform.schema_migrations TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_protected_relation_write_forbidden
 owner_psql "REVOKE INSERT ON platform.schema_migrations FROM vayada_next_api_runtime" >/dev/null
@@ -823,6 +832,10 @@ expect_runtime_denied "INSERT INTO platform.schema_migrations(name) VALUES ('999
 expect_runtime_denied "INSERT INTO marketplace.affiliate_click_occurrences(id) VALUES ('00000000-0000-4000-8000-000000000106')"
 expect_runtime_denied "INSERT INTO finance.expense_generation_dispatches(id) VALUES ('00000000-0000-4000-8000-000000000107')"
 expect_runtime_denied "INSERT INTO pms.channel_sync_status(id) VALUES ('00000000-0000-4000-8000-00000000010a')"
+expect_runtime_denied "INSERT INTO platform.channex_management_worker_operations(operation_type) VALUES ('enable')"
+expect_runtime_denied "UPDATE platform.channex_management_worker_operations SET operation_type = operation_type WHERE false"
+expect_runtime_denied "DELETE FROM platform.channex_management_worker_operations WHERE false"
+runtime_psql "SELECT count(*) FROM platform.channex_management_worker_operations" >/dev/null
 # Pricing quotes on the ordinary login (VAY-2057) stay append-only.
 runtime_psql "INSERT INTO booking.pricing_quotes(id) VALUES ('00000000-0000-4000-8000-00000000bb21')" >/dev/null
 expect_runtime_denied "UPDATE booking.pricing_quotes SET id = id WHERE false"

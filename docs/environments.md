@@ -946,7 +946,12 @@ protected-class table; the preflight names the relation. Run it again also
 after a change to the protected list or the narrowings in this script (VAY-2057
 released the pricing authority and quote tables): until then the preflight
 reports `runtime_product_dml_missing` for the released relations and the next
-`tf-apply` fails. Before committing it
+`tf-apply` fails. A newly protected relation fails the other way:
+VAY-2108 protects every `platform.channex_management_worker_*` table (the
+owner-managed Channex worker scope, which the schema-wide grant had left
+writable for `platform.channex_management_worker_operations`), and until the
+re-run the preflight reports `runtime_protected_relation_write_forbidden`.
+Before committing it
 also runs the preflight's global posture checks (no TRUNCATE/REFERENCES/
 TRIGGER/MAINTAIN anywhere, no default privileges for the login from any other
 role or schema, no SECURITY DEFINER EXECUTE, no owned objects, no role
