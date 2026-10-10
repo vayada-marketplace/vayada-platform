@@ -270,7 +270,10 @@ locals {
       memory         = 1024
       task_role_arn  = aws_iam_role.next_api_media.arn
       health_check   = "/health"
-      log_group      = "/ecs/vayada-next-api"
+      # VAY-2084: startup waits up to 120s for the database before migrating; don't let ALB
+      # health checks replace a task that is still waiting.
+      health_check_grace_period_seconds = 180
+      log_group                         = "/ecs/vayada-next-api"
       environment = concat([
         { name = "HOST", value = "0.0.0.0" },
         { name = "PORT", value = "8003" },
@@ -695,6 +698,8 @@ resource "aws_ecs_service" "services" {
   task_definition = aws_ecs_task_definition.services[each.key].arn
   desired_count   = try(each.value.desired_count, 1)
   launch_type     = "FARGATE"
+
+  health_check_grace_period_seconds = try(each.value.health_check_grace_period_seconds, null)
 
   network_configuration {
     subnets          = var.subnet_ids

@@ -44,6 +44,9 @@ locals {
       name         = "next-target-backend-tg"
       port         = 8003
       health_check = "/health"
+      # VAY-2084: a stopped next-api task held its slot for the default 300s drain, which
+      # delayed the replacement by about 4 minutes. Requests are short, so 30s is enough.
+      deregistration_delay = 30
     }
     next-pms-frontend = {
       name         = "next-pms-frontend-tg"
@@ -189,11 +192,12 @@ locals {
 resource "aws_lb_target_group" "services" {
   for_each = local.target_groups
 
-  name        = each.value.name
-  port        = each.value.port
-  protocol    = "HTTP"
-  vpc_id      = var.vpc_id
-  target_type = "ip"
+  name                 = each.value.name
+  port                 = each.value.port
+  protocol             = "HTTP"
+  vpc_id               = var.vpc_id
+  target_type          = "ip"
+  deregistration_delay = try(each.value.deregistration_delay, 300)
 
   health_check {
     enabled             = true
