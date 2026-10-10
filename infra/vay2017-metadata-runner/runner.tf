@@ -272,8 +272,18 @@ resource "aws_db_instance" "vay2017_isolated_restore" {
   }
 }
 
+# The four interface endpoints cost about $32/mo while idle. They are only needed
+# while runner tasks execute, so plan and apply with
+# -var vay2017_interface_endpoints_enabled=true before a rehearsal run, and apply
+# again without it afterwards.
+variable "vay2017_interface_endpoints_enabled" {
+  description = "Create the ECR, Secrets Manager and Logs interface endpoints the isolated runner needs"
+  type        = bool
+  default     = false
+}
+
 resource "aws_vpc_endpoint" "vay2017_interface" {
-  for_each = local.vay2017_rehearsal_endpoint_names
+  for_each = var.vay2017_interface_endpoints_enabled ? local.vay2017_rehearsal_endpoint_names : toset([])
 
   vpc_id              = aws_vpc.vay2017_runner.id
   service_name        = "com.amazonaws.${local.vay2017_rehearsal_region}.${each.key}"
