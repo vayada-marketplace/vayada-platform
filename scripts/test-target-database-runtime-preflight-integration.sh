@@ -145,25 +145,16 @@ CREATE TABLE platform.media_objects (id uuid PRIMARY KEY);
 CREATE TABLE platform.production_cutover_runs (id uuid PRIMARY KEY);
 CREATE TABLE hotel_catalog.property_setup_sessions (id uuid PRIMARY KEY);
 CREATE TABLE hotel_catalog.property_setup_step_drafts (id uuid PRIMARY KEY, revision integer DEFAULT 1);
--- Pricing authority and quotes (app migrations 0306/0309): the head points at an immutable
--- revision of the same property; revisions and quotes are append-only by trigger.
-CREATE TABLE booking.pricing_authority_revisions (property_id uuid, revision uuid, PRIMARY KEY (property_id, revision));
-CREATE TABLE booking.pricing_authority_heads (property_id uuid PRIMARY KEY, revision uuid NOT NULL,
-  FOREIGN KEY (property_id, revision) REFERENCES booking.pricing_authority_revisions);
+-- Pricing quotes (app migration 0309) are append-only by trigger. App migration 0475 (VAY-2079)
+-- dropped the pricing authority tables and view.
 CREATE TABLE booking.pricing_quotes (id uuid PRIMARY KEY);
 CREATE FUNCTION booking.prevent_append_only_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   RAISE EXCEPTION 'append-only table % cannot be %', TG_TABLE_NAME, TG_OP USING ERRCODE = '55000';
 END;
 $$;
-CREATE TRIGGER pricing_authority_revisions_immutable BEFORE UPDATE OR DELETE ON booking.pricing_authority_revisions
-  FOR EACH ROW EXECUTE FUNCTION booking.prevent_append_only_mutation();
 CREATE TRIGGER pricing_quotes_append_only BEFORE UPDATE OR DELETE ON booking.pricing_quotes
   FOR EACH ROW EXECUTE FUNCTION booking.prevent_append_only_mutation();
-INSERT INTO booking.pricing_authority_revisions VALUES
-  ('00000000-0000-4000-8000-00000000bb01', '00000000-0000-4000-8000-00000000bb11');
-INSERT INTO booking.pricing_authority_heads VALUES
-  ('00000000-0000-4000-8000-00000000bb01', '00000000-0000-4000-8000-00000000bb11');
 CREATE TABLE finance.expense_generation_dispatches (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_room_availability_attempts (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_ari_schedule_sources (id uuid PRIMARY KEY);
@@ -251,7 +242,7 @@ GRANT SELECT ON platform.legacy_owner_approval_records,
 GRANT SELECT ON platform.schema_migrations, distribution.public_room_offer_snapshots, platform.outbox_events, platform.job_attempts,
   platform.dead_letter_events, platform.media_objects, platform.production_cutover_runs,
   hotel_catalog.property_setup_sessions, hotel_catalog.property_setup_step_drafts,
-  booking.pricing_authority_heads, booking.pricing_authority_revisions, booking.pricing_quotes,
+  booking.pricing_quotes,
   finance.expense_generation_dispatches, pms.channex_room_availability_attempts,
   pms.channex_ari_schedule_sources, pms.channel_sync_status, pms.channex_offer_create_receipts,
   booking.affiliate_referral_production_preflight_revocations,
@@ -661,14 +652,6 @@ expect_runtime_denied() {
   grep -F "ERROR:  42501:" <<<"${output}" >/dev/null || { echo "expected SQLSTATE 42501 for: $1" >&2; echo "${output}" >&2; exit 1; }
   [[ -z "${2:-}" ]] || grep -F "$2" <<<"${output}" >/dev/null || { echo "expected '$2' for: $1" >&2; echo "${output}" >&2; exit 1; }
 }
-expect_runtime_trigger_rejected() {
-  local output
-  if output="$(docker exec -e PGPASSWORD=runtime "${database_container}" \
-    psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -Atq -c '\set VERBOSITY verbose' -c "$1" 2>&1)"; then
-    echo "runtime role unexpectedly ran: $1" >&2; exit 1
-  fi
-  grep -F "ERROR:  55000: append-only table" <<<"${output}" >/dev/null || { echo "expected the append-only trigger for: $1" >&2; echo "${output}" >&2; exit 1; }
-}
 legacy_owner_psql() {
   docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d postgres -v ON_ERROR_STOP=1 -Atqc "$1"
 }
@@ -761,9 +744,9 @@ docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d 
 owner_psql "GRANT UPDATE ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_narrowed_relation_writable
 owner_psql "REVOKE UPDATE ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
-owner_psql "GRANT DELETE ON booking.pricing_authority_heads TO vayada_next_api_runtime" >/dev/null
+owner_psql "GRANT DELETE ON hotel_catalog.properties TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_narrowed_relation_writable
-owner_psql "REVOKE DELETE ON booking.pricing_authority_heads FROM vayada_next_api_runtime" >/dev/null
+owner_psql "REVOKE DELETE ON hotel_catalog.properties FROM vayada_next_api_runtime" >/dev/null
 owner_psql "GRANT UPDATE ON booking.pricing_quotes TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_narrowed_relation_writable
 owner_psql "REVOKE UPDATE ON booking.pricing_quotes FROM vayada_next_api_runtime" >/dev/null
@@ -840,19 +823,7 @@ expect_runtime_denied "INSERT INTO platform.schema_migrations(name) VALUES ('999
 expect_runtime_denied "INSERT INTO marketplace.affiliate_click_occurrences(id) VALUES ('00000000-0000-4000-8000-000000000106')"
 expect_runtime_denied "INSERT INTO finance.expense_generation_dispatches(id) VALUES ('00000000-0000-4000-8000-000000000107')"
 expect_runtime_denied "INSERT INTO pms.channel_sync_status(id) VALUES ('00000000-0000-4000-8000-00000000010a')"
-# Pricing authority on the ordinary login (VAY-2057): the owner lock on head and revision works,
-# a new revision and the CAS head move work, history and quotes stay append-only.
-[[ "$(runtime_psql "SELECT r.revision FROM booking.pricing_authority_heads h
-  JOIN booking.pricing_authority_revisions r USING (property_id, revision)
-  WHERE h.property_id = '00000000-0000-4000-8000-00000000bb01' FOR SHARE OF h, r")" == 00000000-0000-4000-8000-00000000bb11 ]]
-runtime_psql "BEGIN; INSERT INTO booking.pricing_authority_revisions VALUES
-  ('00000000-0000-4000-8000-00000000bb01', '00000000-0000-4000-8000-00000000bb12');
-  UPDATE booking.pricing_authority_heads SET revision = '00000000-0000-4000-8000-00000000bb12'
-  WHERE property_id = '00000000-0000-4000-8000-00000000bb01' AND revision = '00000000-0000-4000-8000-00000000bb11'; COMMIT" >/dev/null
-[[ "$(owner_psql "SELECT revision FROM booking.pricing_authority_heads")" == 00000000-0000-4000-8000-00000000bb12 ]]
-expect_runtime_denied "DELETE FROM booking.pricing_authority_heads WHERE false"
-expect_runtime_denied "DELETE FROM booking.pricing_authority_revisions WHERE false"
-expect_runtime_trigger_rejected "UPDATE booking.pricing_authority_revisions SET revision = revision"
+# Pricing quotes on the ordinary login (VAY-2057) stay append-only.
 runtime_psql "INSERT INTO booking.pricing_quotes(id) VALUES ('00000000-0000-4000-8000-00000000bb21')" >/dev/null
 expect_runtime_denied "UPDATE booking.pricing_quotes SET id = id WHERE false"
 expect_runtime_denied "DELETE FROM booking.pricing_quotes WHERE false"
