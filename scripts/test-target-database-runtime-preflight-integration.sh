@@ -724,6 +724,21 @@ run_grant legacy_owner owner 1 inspect_product_dml | grep -F '"committed":false'
 [[ "$(owner_psql "SELECT has_table_privilege('vayada_next_api_runtime','platform.channex_management_worker_operations','INSERT')")" == t ]]
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
+# VAY-2108 app migration 0481 creates worker-only delivery tables and, in the same transaction,
+# revokes the API login's writes from the default DML. The pattern is on main first, so the
+# preflight passes right after the migration, and a later grant re-run keeps the writes revoked.
+legacy_owner_psql "BEGIN; CREATE TABLE pms.channex_offer_ari_deliveries (id uuid PRIMARY KEY);
+  REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON pms.channex_offer_ari_deliveries FROM vayada_next_api_runtime; COMMIT" >/dev/null
+VAYADA_DB_REQUIRE_PRODUCT_DML=1 run_preflight | grep -F '"status":"PASS"' >/dev/null
+runtime_psql "SELECT count(*) FROM pms.channex_offer_ari_deliveries" >/dev/null
+expect_runtime_denied "INSERT INTO pms.channex_offer_ari_deliveries(id) VALUES ('00000000-0000-4000-8000-00000000dd01')"
+run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
+expect_runtime_denied "DELETE FROM pms.channex_offer_ari_deliveries WHERE false"
+# Without the revoke the default DML would make the protected table writable: the preflight fails closed.
+legacy_owner_psql "CREATE TABLE pms.channex_offer_ari_delivery_dates (id uuid PRIMARY KEY)" >/dev/null
+expect_failure runtime_protected_relation_write_forbidden:3
+run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
+VAYADA_DB_REQUIRE_PRODUCT_DML=1 run_preflight | grep -F '"status":"PASS"' >/dev/null
 owner_psql "GRANT INSERT ON platform.schema_migrations TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_protected_relation_write_forbidden
 owner_psql "REVOKE INSERT ON platform.schema_migrations FROM vayada_next_api_runtime" >/dev/null

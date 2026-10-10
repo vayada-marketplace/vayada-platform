@@ -107,6 +107,10 @@ class RuntimePreflightContractTest(unittest.TestCase):
         for relation in ("platform.channex_management_worker_operations", "platform.channex_management_worker_properties"):
             self.assertTrue(any(re.search(pattern, relation) for pattern in patterns), relation)
         self.assertFalse(any(re.search(pattern, "platform.channex_webhook_events") for pattern in patterns))
+        # VAY-2108 app migration 0481: worker-only offer ARI delivery evidence; the API's own receipts stay append-only.
+        for relation in ("pms.channex_offer_ari_deliveries", "pms.channex_offer_ari_delivery_dates", "pms.channex_offer_ari_delivery_receipts"):
+            self.assertTrue(any(re.search(pattern, relation) for pattern in patterns), relation)
+        self.assertFalse(any(re.search(pattern, "pms.channex_offer_ari_receipts") for pattern in patterns))
         self.assertIn("platform.product_audit_events", js_list(CHECK, "appendOnly"))
         self.assertIn("platform.domain_events", js_list(CHECK, "appendOnly"))
         # Pricing quotes on the ordinary login (VAY-2057): append-only, not protected.

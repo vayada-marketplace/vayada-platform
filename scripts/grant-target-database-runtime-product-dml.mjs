@@ -30,7 +30,7 @@ export const noWrite = [
 ];
 export const noWritePatterns = [
   "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|channex_management_worker_|identity_migration_)",
-  "^pms\\.channex_room_availability_", "^pms\\.channex_ari_schedule_",
+  "^pms\\.channex_room_availability_", "^pms\\.channex_ari_schedule_", "^pms\\.channex_offer_ari_deliver",
   "^(marketplace|booking)\\.affiliate_click_", "^finance\\.expense_generation_",
 ];
 // Insert-only evidence: the API never updates or deletes it (pricing quotes also have an append-only trigger).
