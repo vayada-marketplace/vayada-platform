@@ -105,6 +105,69 @@ capability is still forced to `observe_only` on each deployment. Inspect the
 `pms.channex.management` queue for pending non-enable jobs before and after the
 rollout: the connection worker must leave them untouched.
 
+## Claimed booking scope (VAY-2108)
+
+Hotels handed over from legacy get their Channex bookings from `vayada-next-api`.
+The target pulls each claimed hotel's Channex booking feed every 5 minutes,
+persists the revisions and acknowledges them. Booking sync and the feed pull
+run on the ordinary API login, so this stage needs no worker grant: the worker
+keeps exactly the connection scope above. Webhook intake stays `observe_only`
+(pull only).
+
+Terraform (`infra/channex_claimed_scope.tf`):
+
+- `channex_claimed_scope = "booking"` sets `PMS_CHANNEX_SCOPE=claimed`,
+  `PMS_CHANNEX_BOOKING_SYNC_MODE=mutating` and
+  `CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE=target-owned` on next-api only. It
+  requires the enabled connection worker. The default `"off"` renders the task
+  definition unchanged.
+- `channex_owned_property_ids` becomes `PMS_CHANNEX_OWNED_PROPERTY_IDS`
+  (comma-separated). A hotel is synced only when it has an active binding claim
+  *and* is listed here. The list is non-empty exactly when the scope is
+  `"booking"`: the app refuses the claimed scope without the variable, and an
+  empty ECS environment value is not relied on. Terraform refuses duplicates,
+  non-canonical UUIDs and the four staging/test properties reserved by app
+  migration 0432.
+- `scripts/next-api-channex-claimed-compatible-images.txt` lists the reviewed
+  images that recognise the claimed scope; an older image refuses it at startup
+  (`channex_worker_scope_unsupported`). While the current task declares the
+  scope, `Deploy App Service` refuses to deploy, or roll back to, an unlisted
+  image. `tf-apply` refuses a plan that declares the scope unless every running
+  next-api task uses a listed image, because it rolls the new task definition
+  out on the running image.
+
+Never set the legacy PMS `CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE`
+(`infra/legacy_pms_freeze.tf`) for this: on legacy any non-legacy value
+freezes booking polling for every hotel. Legacy stops per hotel through the
+handover runbook (`is_active=false`), which must happen before the hotel is
+claimed, because Channex feed acknowledgements are shared.
+
+Order, each step reviewed and approved separately (instructions, not evidence):
+
+```sh
+# 0. Admit the claimed-capable image to
+#    scripts/next-api-channex-claimed-compatible-images.txt, deploy it to next-api
+#    and verify the running digest. Keep a listed image as the rollback target.
+# 1. First hotel, at handover: legacy disable plus readback, then Terraform
+#    channex_claimed_scope = "booking" with channex_owned_property_ids = [that
+#    hotel]. Still inert for it: it has no active claim yet.
+# 2. The audited claim activation for that hotel starts its 5-minute pull.
+# 3. Each further hotel: legacy disable plus readback, add it to
+#    channex_owned_property_ids, then activate its claim.
+```
+
+Kill switches: revoke one hotel's claim or remove it from
+`channex_owned_property_ids` (for the last hotel, set the scope to `"off"` with an
+empty list), or set `channex_claimed_scope = "off"` (all hotels). Never use the
+target Channex disable command for this: it deletes the Channex property.
+
+`Deploy App Service` keeps the claimed booking scope on `next-target-backend`
+only when it is declared exactly, on top of the connection scope: `PMS_CHANNEX_SCOPE=claimed`,
+booking sync mutating, `target-owned`, a valid owned-property list and
+`CHANNEX_WEBHOOK_INTAKE_MODE=observe_only`. Anything else falls back to the
+connection scope with every claimed setting removed. The `tf-apply` readiness
+check accepts the same two shapes.
+
 ## Claimed booking staging canary (VAY-2108)
 
 `Deploy App Service` with service `next-maps-canary`, environment `next` and
