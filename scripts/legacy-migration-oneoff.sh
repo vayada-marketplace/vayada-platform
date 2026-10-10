@@ -9,6 +9,8 @@ usage() {
   echo "       legacy-migration-oneoff.sh watch <task-arn>" >&2
   echo "       legacy-migration-oneoff.sh readonly-counts-plan <counts.sql|none> <target-check.sql|none>" >&2
   echo "       legacy-migration-oneoff.sh readonly-counts <counts.sql|none> <target-check.sql|none> READONLY_COUNTS:<plan sha256>" >&2
+  echo "       legacy-migration-oneoff.sh channex-handover-plan <handover-request.json>" >&2
+  echo "       legacy-migration-oneoff.sh channex-handover <handover-request.json> CHANNEX_HANDOVER:<action>:<property>:<plan sha256>" >&2
   exit 2
 }
 [[ "$#" -ge 2 ]] || usage
@@ -243,6 +245,159 @@ if [[ "$command" == readonly-counts-plan || "$command" == readonly-counts ]]; th
   exit 0
 fi
 
+# VAY-2108 Channex handover: one audited action for one hotel. The plan is the CLI's own dry run
+# (read-only) on the running reviewed next-api image. The go names the plan SHA-256, which covers
+# the CLI's plan SHA and everything this script binds (request, arguments, image, network, code),
+# so any change needs a new plan and a new go. The run passes --apply <CLI plan SHA>, and the CLI
+# re-plans under row locks and refuses on any change. See docs/legacy-migration-oneoff.md.
+handover_families="vayada-channex-handover-oneoff vayada-legacy-migration-oneoff-target vayada-legacy-migration-oneoff-source"
+# Prints the digest of the single running next-api task, which must be a reviewed image.
+next_api_image() {
+  local tasks digest
+  settled vayada-next-api-service
+  tasks="$(aws_ ecs list-tasks --cluster vayada-backend-cluster --service-name vayada-next-api-service --desired-status RUNNING --output json)"
+  [[ "$(jq '.taskArns | length' <<<"$tasks")" == 1 ]] || { echo "next-api must run exactly one task." >&2; exit 1; }
+  digest="$(aws_ ecs describe-tasks --cluster vayada-backend-cluster --tasks "$(jq -r '.taskArns[0]' <<<"$tasks")" \
+    --query "tasks[0].containers[?name=='vayada-next-api'].imageDigest | [0]" --output text)"
+  [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Could not resolve the running next-api image digest." >&2; exit 1; }
+  awk -v digest="$digest" '$2 == digest { found = 1 } END { exit !found }' "$root/scripts/next-api-split-compatible-images.txt" || {
+    echo "The running next-api image is not a reviewed pair in scripts/next-api-split-compatible-images.txt." >&2; exit 1;
+  }
+  echo "$digest"
+}
+# A target-only definition: the migration secret, the pinned CA and TLS preload, no task role.
+handover_definition() {
+  jq -cnS --arg command "$1" --arg args "$2" --arg image "${account}.dkr.ecr.${region}.amazonaws.com/vayada-next-api@$3" \
+    --rawfile ca "$root/rehearsal/rds-ca-rsa2048-g1.pem" --rawfile tls "$root/scripts/legacy-migration-tls.cjs" \
+    --rawfile code "$root/scripts/legacy-migration-oneoff.mjs" --arg account "$account" --arg region "$region" '
+    {family: "vayada-channex-handover-oneoff", networkMode: "awsvpc", requiresCompatibilities: ["FARGATE"],
+     cpu: "512", memory: "1024", executionRoleArn: "arn:aws:iam::\($account):role/ecsTaskExecutionRole",
+     containerDefinitions: [{name: "vayada-channex-handover-oneoff", image: $image, essential: true,
+       entryPoint: ["node", "--input-type=module", "--eval"], command: [$code, "target"],
+       environment: [{name: "AWS_REGION", value: $region}, {name: "LEGACY_MIGRATION_COMMAND", value: $command},
+         {name: "LEGACY_MIGRATION_ARGS", value: $args}, {name: "VAYADA_DB_RDS_CA_BUNDLE", value: $ca},
+         {name: "LEGACY_MIGRATION_TLS_PRELOAD", value: $tls}],
+       secrets: [{name: "TARGET_DATABASE_URL", valueFrom: "arn:aws:ssm:\($region):\($account):parameter/vayada/prod/target-database-url"}],
+       logConfiguration: {logDriver: "awslogs", options: {"awslogs-group": "/ecs/vayada-next-api",
+         "awslogs-region": $region, "awslogs-stream-prefix": "channex-handover"}}}]}'
+}
+# Prints the CLI's one JSON line that carries a planSha256 (empty when there is none or more than one).
+handover_output() {
+  local lines
+  lines="$(jq -cR 'fromjson? | select(type == "object" and has("planSha256"))' "$1")"
+  [[ -n "$lines" && "$(wc -l <<<"$lines" | tr -d ' ')" == 1 ]] && echo "$lines" || true
+}
+if [[ "$command" == channex-handover-plan || "$command" == channex-handover ]]; then
+  [[ ( "$command" == channex-handover-plan && "$#" -eq 2 ) || ( "$command" == channex-handover && "$#" -eq 3 ) ]] || usage
+  # Every input check runs before the first AWS call.
+  request="$2"
+  [[ -f "$request" ]] || { echo "Handover request not found." >&2; exit 2; }
+  request_sha256="$(shasum -a 256 "$request" | cut -d' ' -f1)"
+  action="$(jq -er '.action | select(type == "string" and test("^(activate|revoke|open-sales|close-sales)\\z"))' "$request")" || {
+    echo "The request action must be activate, revoke, open-sales or close-sales." >&2; exit 2;
+  }
+  property="$(jq -er '.property | select(type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\z"))' "$request")" || {
+    echo "The request property must be a lowercase UUID." >&2; exit 2;
+  }
+  jq -e --arg action "$action" '
+    ({activate: ["action", "approvalRef", "legacyDisabledAt", "legacyReadbackFile", "property"],
+      revoke: ["action", "approvalRef", "property", "reason"]}[$action] // ["action", "approvalRef", "property"]) as $keys
+    | keys == $keys and (.approvalRef | type == "string" and test("^[ -,.-?A-~][ -~]{2,199}\\z"))
+      and ($action != "activate" or ((.legacyDisabledAt | type == "string"
+            and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})\\z"))
+        and (.legacyReadbackFile | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\z"))))
+      and ($action != "revoke" or (.reason | type == "string" and test("^[ -,.-?A-~][ -~]{2,499}\\z")))' "$request" >/dev/null || {
+    echo "The request must hold exactly the ${action} fields, in the formats the CLI accepts." >&2; exit 2;
+  }
+  readback_sha256=""
+  if [[ "$action" == activate ]]; then
+    # The legacy-disable readback is evidence in this folder; the CLI records its SHA-256.
+    readback="${evidence}/$(jq -r .legacyReadbackFile "$request")"
+    [[ -f "$readback" && -s "$readback" && ! -L "$readback" ]] || { echo "The legacy readback file must be a non-empty regular file in the evidence folder." >&2; exit 2; }
+    readback_sha256="$(shasum -a 256 "$readback" | cut -d' ' -f1)"
+  fi
+  args="$(jq -c --arg action "$action" --arg readback "$readback_sha256" '["--property", .property, "--approval-ref", .approvalRef]
+    + (if $action == "activate" then ["--legacy-disabled-at", .legacyDisabledAt, "--legacy-readback-sha256", $readback]
+       elif $action == "revoke" then ["--reason", .reason] else [] end)' "$request")"
+  plan_record="${evidence}/channex-handover-${action}-${property}-plan.json"
+  result_file="${evidence}/channex-handover-${action}-${property}-result.json"
+  # A folder that holds this hotel's completed action keeps its plan and result: use a new folder.
+  [[ ! -e "$result_file" ]] || { echo "${result_file##*/} already exists; use a new evidence folder." >&2; exit 2; }
+  go_sha256="" cli_sha256=""
+  if [[ "$command" == channex-handover ]]; then
+    [[ "$3" =~ ^CHANNEX_HANDOVER:([a-z-]+):([0-9a-f-]{36}):([0-9a-f]{64})$ && "${BASH_REMATCH[1]}" == "$action" && "${BASH_REMATCH[2]}" == "$property" ]] || {
+      echo "Confirmation must be CHANNEX_HANDOVER:${action}:${property}:<plan sha256>." >&2; exit 2;
+    }
+    go_sha256="${BASH_REMATCH[3]}"
+    [[ -f "$plan_record" ]] || { echo "No plan for this action and hotel in the evidence folder; run channex-handover-plan first." >&2; exit 2; }
+    jq -e --arg sha "$go_sha256" --arg request "$request_sha256" '.planSha256 == $sha and .requestSha256 == $request' "$plan_record" >/dev/null || {
+      echo "The go names another plan, or the request changed since the plan. Re-plan." >&2; exit 2;
+    }
+    cli_sha256="$(jq -r .cliPlanSha256 "$plan_record")"
+  fi
+  [[ "$(shasum -a 256 "$root/rehearsal/rds-ca-rsa2048-g1.pem" | cut -d' ' -f1)" == "$ca_sha256" ]] || { echo "The pinned RDS CA bundle changed." >&2; exit 2; }
+  require_profile
+  image="$(next_api_image)"
+  network="$(aws_ ecs describe-services --cluster vayada-backend-cluster --services vayada-next-api-service \
+    --query 'services[0].networkConfiguration' --output json)"
+  for family in $handover_families; do
+    [[ "$(aws_ ecs list-tasks --cluster "$cluster" --family "$family" --query 'length(taskArns)' --output text)" == 0 ]] || {
+      echo "A one-off task is still running. Inspect it before starting another." >&2; exit 1;
+    }
+  done
+  # The binding covers what this script controls: request, exact arguments, image, network, cluster and code.
+  binding="$(jq -cnS --arg action "$action" --arg property "$property" --arg request "$request_sha256" --argjson args "$args" \
+    --arg image "$image" --argjson network "$network" --arg cluster "$cluster" \
+    --arg launcher "$(shasum -a 256 "$root/scripts/legacy-migration-oneoff.mjs" | cut -d' ' -f1)" \
+    --arg tls "$(shasum -a 256 "$root/scripts/legacy-migration-tls.cjs" | cut -d' ' -f1)" \
+    --arg runner "$(shasum -a 256 "$root/scripts/legacy-migration-oneoff.sh" | cut -d' ' -f1)" \
+    '{action: $action, property: $property, requestSha256: $request, args: $args, imageDigest: $image, network: $network,
+      cluster: $cluster, launcherSha256: $launcher, tlsSha256: $tls, runnerSha256: $runner}')"
+  binding_sha256="$(printf '%s' "$binding" | shasum -a 256 | cut -d' ' -f1)"
+  cli_command="target:channex:handover:${action}"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  if [[ "$command" == channex-handover-plan ]]; then
+    log="${evidence}/channex-handover-${action}-${property}-plan-${stamp}.log"
+    run_oneoff "$(handover_definition "$cli_command" "$args" "$image")" "$network" "$log"
+    output="$(handover_output "$log")"
+    [[ "$task_exit_code" == 0 && -n "$output" ]] &&
+      jq -e '.applied == false and (.planSha256 | type == "string" and test("^[0-9a-f]{64}$"))' <<<"$output" >/dev/null || {
+      echo "The dry run printed no single read-only plan; no plan recorded. Raw log: ${log}" >&2; exit 1;
+    }
+    cli_sha256="$(jq -r .planSha256 <<<"$output")"
+    jq -nS --argjson binding "$binding" --arg binding_sha256 "$binding_sha256" --argjson output "$output" \
+      --arg plan_sha256 "$(printf '%s' "${cli_sha256}:${binding_sha256}" | shasum -a 256 | cut -d' ' -f1)" '
+      {action: $binding.action, property: $binding.property, requestSha256: $binding.requestSha256, planSha256: $plan_sha256,
+       bindingSha256: $binding_sha256, binding: $binding, cliPlanSha256: $output.planSha256, cliPlan: $output.plan}' > "$plan_record"
+    { echo "Channex handover plan: ${action} for property ${property}"
+      jq -r '"Image: \(.binding.imageDigest)", "Arguments: \(.binding.args | tostring)", "Request sha256: \(.requestSha256)",
+        "Binding sha256: \(.bindingSha256)", "CLI plan:", (.cliPlan | tostring), "CLI plan sha256: \(.cliPlanSha256)",
+        "Plan sha256 (CLI plan and binding): \(.planSha256)"' "$plan_record"
+      echo "Run after the go: channex-handover ${request} CHANNEX_HANDOVER:${action}:${property}:$(jq -r .planSha256 "$plan_record")"
+    } | tee "${evidence}/channex-handover-${action}-${property}-plan.txt"
+    exit 0
+  fi
+  [[ "$(printf '%s' "${cli_sha256}:${binding_sha256}" | shasum -a 256 | cut -d' ' -f1)" == "$go_sha256" ]] || {
+    echo "The plan changed since the go (image, code, network or arguments). Re-plan and get a new go." >&2; exit 2;
+  }
+  log="${evidence}/channex-handover-${action}-${property}-apply-${stamp}.log"
+  run_oneoff "$(handover_definition "$cli_command" "$(jq -c --arg sha "$cli_sha256" '. + ["--apply", $sha]' <<<"$args")" "$image")" "$network" "$log"
+  output="$(handover_output "$log")"
+  marker="$(grep '^CHANNEX_HANDOVER_COMPLETE ' "$log" || true)"
+  # The result is written only when the CLI applied exactly this plan (a marker, when printed, must agree).
+  [[ "$task_exit_code" == 0 && -n "$output" ]] &&
+    jq -e --arg sha "$cli_sha256" '.applied == true and .planSha256 == $sha' <<<"$output" >/dev/null &&
+    [[ -z "$marker" || "$marker" =~ ^CHANNEX_HANDOVER_COMPLETE\ action=${action}\ property=${property}\ planSha256=${cli_sha256}\ replayed=(true|false)$ ]] || {
+    echo "The handover did not complete; no result written. Raw log: ${log}" >&2
+    [[ "$task_exit_code" == 0 ]] && exit 1
+    exit "$task_exit_code"
+  }
+  jq -S --arg go "$go_sha256" --arg binding_sha256 "$binding_sha256" --arg marker "$marker" \
+    '. + {goPlanSha256: $go, bindingSha256: $binding_sha256, marker: $marker}' <<<"$output" > "$result_file"
+  echo "Saved ${result_file}"
+  exit 0
+fi
+
 [[ "$#" -eq 4 ]] || usage
 input="$2" input_sha256="$3" confirmation="$4"
 case "$command" in
@@ -296,7 +451,7 @@ jq -e '(.files // {}) | type == "object" and all(keys[]; test("^[a-z][a-z0-9-]{0
 files="$(jq -c '.files // {}' "$input" | gzip -n -9 | base64 | tr -d '\n')"
 
 require_profile
-for family in vayada-legacy-migration-oneoff-target vayada-legacy-migration-oneoff-source; do
+for family in vayada-legacy-migration-oneoff-target vayada-legacy-migration-oneoff-source vayada-channex-handover-oneoff; do
   [[ "$(aws_ ecs list-tasks --cluster "$cluster" --family "$family" --query 'length(taskArns)' --output text)" == 0 ]] || {
     echo "A one-off migration task is still running. Inspect it before starting another." >&2; exit 1;
   }

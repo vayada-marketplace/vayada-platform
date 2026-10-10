@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -28,9 +28,12 @@ const DB_ENV = {
     .map(([name, db]) => [`${name}_SOURCE_DATABASE_URL`, `postgresql://vay1362_source_reader:p%40ss@${RESTORE_HOST}/${db}`])),
 };
 
-test('dispatcher and script share the four-command production allow-list', () => {
+test('dispatcher and script share the production allow-list', () => {
   assert.deepEqual(commandKinds, {
     'target:migration-status': 'target', 'target:cutover:abort': 'target', 'target:source:extract': 'source', 'target:cutover': 'source',
+    // VAY-2108: reachable only through channex-handover-plan / channex-handover, never with a run file.
+    'target:channex:handover:activate': 'target', 'target:channex:handover:revoke': 'target',
+    'target:channex:handover:open-sales': 'target', 'target:channex:handover:close-sales': 'target',
   });
   assert.ok(script.includes('target:migration-status|target:cutover:abort) kind="target"'));
   assert.ok(script.includes('target:source:extract|target:cutover) kind="source"'));
@@ -469,5 +472,255 @@ esac
     assert.equal(existsSync(join(evidenceTarget, 'readonly-counts-result.md')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('channex handover plans the CLI dry run, then applies exactly that plan for one hotel', () => {
+  const root = mkdtempSync(join(tmpdir(), 'channex-handover-'));
+  try {
+    mkdirSync(join(root, 'scripts'));
+    mkdirSync(join(root, 'rehearsal'));
+    for (const name of ['legacy-migration-oneoff.sh', 'legacy-migration-oneoff.mjs', 'legacy-migration-tls.cjs', 'next-api-split-compatible-images.txt'])
+      copyFileSync(new URL(`./${name}`, import.meta.url), join(root, 'scripts', name));
+    copyFileSync(new URL('../rehearsal/rds-ca-rsa2048-g1.pem', import.meta.url), join(root, 'rehearsal/rds-ca-rsa2048-g1.pem'));
+    const evidence = join(root, 'evidence');
+    mkdirSync(evidence, { mode: 0o700 });
+    const readbackFile = join(evidence, 'f7-readback.txt');
+    writeFileSync(readbackFile, 'legacy is_active=false readback\n');
+    const readbackSha = createHash('sha256').update(readFileSync(readbackFile)).digest('hex');
+    writeFileSync(join(root, 'outside.txt'), 'not evidence\n');
+    symlinkSync(join(root, 'outside.txt'), join(evidence, 'linked.txt'));
+    const PROPERTY = '29f39aae-1111-4222-8333-444455556666';
+    const OTHER_PROPERTY = '7d3f6dcc-1111-4222-8333-444455556666';
+    const OTHER_DIGEST = readFileSync(new URL('./next-api-split-compatible-images.txt', import.meta.url), 'utf8').trim().split('\n').at(-2).split(' ')[1];
+    const CLI_SHA = 'a'.repeat(64);
+    const state = (name, value) => writeFileSync(join(root, name), value);
+    state('account', '269416271598');
+    state('digest', DIGEST);
+    state('exit', '0');
+    state('network', '{"awsvpcConfiguration":{"subnets":["subnet-1"]}}');
+    const cliLines = (lines) => state('events', JSON.stringify({ events: lines.map((message) => ({ message })), nextForwardToken: 'f/1' }));
+    const planLine = (overrides = {}) => JSON.stringify({ applied: false, plan: { evidence: { approvalRef: 'x' } }, planSha256: CLI_SHA, ...overrides });
+    const applyLine = (overrides = {}) => JSON.stringify({ applied: true, plan: {}, planSha256: CLI_SHA, auditId: 'audit-1', ...overrides });
+    mkdirSync(join(root, 'bin'));
+    writeFileSync(join(root, 'bin/aws'), `#!/usr/bin/env bash
+[[ "$1 $2 $3 $4" == "--profile vayada --region eu-west-1" ]] || { echo "unexpected aws options: $*" >&2; exit 9; }
+shift 4
+echo "$1 $2" >> "${root}/aws.log"
+args=("$@"); for ((i = 0; i < \${#args[@]}; i++)); do
+  [[ "\${args[i]}" == --cli-input-json ]] && printf '%s\\n' "\${args[i+1]}" >> "${root}/definitions.jsonl"
+done
+case "$1 $2" in
+  "sts get-caller-identity") cat "${root}/account" ;;
+  "ecs describe-services")
+    [[ "$*" == *networkConfiguration* ]] && cat "${root}/network" ||
+      echo '{"desiredCount":1,"runningCount":1,"deployments":[{"rolloutState":"COMPLETED"}]}' ;;
+  "ecs list-tasks") [[ "$*" == *--family* ]] && echo 0 || echo '{"taskArns":["arn:aws:ecs:eu-west-1:269416271598:task/vayada-backend-cluster/feed"]}' ;;
+  "ecs register-task-definition") echo arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-channex-handover-oneoff:1 ;;
+  "ecs run-task") echo '{"tasks":[{"taskArn":"arn:aws:ecs:eu-west-1:269416271598:task/vayada-target-database-runtime-preflight/0123456789abcdef0123456789abcdef"}],"failures":[]}' ;;
+  "ecs describe-tasks")
+    if [[ "$*" == *imageDigest* ]]; then cat "${root}/digest"
+    elif [[ "$*" == *lastStatus* ]]; then echo STOPPED
+    else echo "{\\"containers\\":[{\\"exitCode\\":$(cat "${root}/exit")}]}"; fi ;;
+  "logs get-log-events") [[ "$*" == *next-token* ]] && echo '{"events":[],"nextForwardToken":"f/1"}' || cat "${root}/events" ;;
+esac
+`);
+    chmodSync(join(root, 'bin/aws'), 0o755);
+    const script = join(root, 'scripts/legacy-migration-oneoff.sh');
+    // /bin/bash: macOS operators run bash 3.2.
+    const run = (args) => {
+      rmSync(join(root, 'aws.log'), { force: true });
+      rmSync(join(root, 'definitions.jsonl'), { force: true });
+      return spawnSync('/bin/bash', [script, ...args], { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, EVIDENCE_DIR: evidence } });
+    };
+    const awsCalls = () => (existsSync(join(root, 'aws.log')) ? readFileSync(join(root, 'aws.log'), 'utf8') : '');
+    const definitions = () => readFileSync(join(root, 'definitions.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const recordFile = join(evidence, `channex-handover-activate-${PROPERTY}-plan.json`);
+    const resultFile = join(evidence, `channex-handover-activate-${PROPERTY}-result.json`);
+    const planSha = () => JSON.parse(readFileSync(recordFile, 'utf8')).planSha256;
+    const requestFile = join(root, 'activate.json');
+    const activate = { action: 'activate', property: PROPERTY, approvalRef: 'flamur-go-aether-b', legacyDisabledAt: '2026-10-12T09:00:00Z', legacyReadbackFile: 'f7-readback.txt' };
+    const writeRequest = (request, file = requestFile) => writeFileSync(file, JSON.stringify(request));
+    const go = (sha, action = 'activate', property = PROPERTY) => `CHANNEX_HANDOVER:${action}:${property}:${sha}`;
+    const plan = () => {
+      cliLines(['{"status":"START","command":"target:channex:handover:activate","flags":["--property"]}', planLine()]);
+      const result = run(['channex-handover-plan', requestFile]);
+      assert.equal(result.status, 0, result.stderr);
+      return result;
+    };
+
+    // Every input check runs before any AWS call.
+    for (const [request, message] of [
+      [{ ...activate, action: 'disable' }, /must be activate, revoke, open-sales or close-sales/],
+      [{ ...activate, action: 'activate\n' }, /must be activate, revoke, open-sales or close-sales/],
+      [{ ...activate, property: PROPERTY.toUpperCase() }, /lowercase UUID/],
+      [{ ...activate, property: `${PROPERTY}\n` }, /lowercase UUID/],
+      [{ ...activate, extra: 'x' }, /exactly the activate fields/],
+      [{ ...activate, approvalRef: 'ok' }, /exactly the activate fields/],
+      [{ ...activate, approvalRef: '@flamur go' }, /exactly the activate fields/],
+      [{ ...activate, approvalRef: '--apply' }, /exactly the activate fields/],
+      [{ ...activate, approvalRef: 'flamur go\n' }, /exactly the activate fields/],
+      [{ ...activate, legacyDisabledAt: '2026-10-12 09:00' }, /exactly the activate fields/],
+      [{ ...activate, legacyReadbackFile: '../f7-readback.txt' }, /exactly the activate fields/],
+      [{ ...activate, legacyReadbackFile: 'missing.txt' }, /non-empty regular file in the evidence folder/],
+      [{ ...activate, legacyReadbackFile: 'linked.txt' }, /non-empty regular file in the evidence folder/],
+      [{ action: 'revoke', property: PROPERTY, approvalRef: 'flamur-go', legacyDisabledAt: activate.legacyDisabledAt }, /exactly the revoke fields/],
+      [{ action: 'revoke', property: PROPERTY, approvalRef: 'flamur-go', reason: '-x legacy' }, /exactly the revoke fields/],
+    ]) {
+      writeRequest(request);
+      const result = run(['channex-handover-plan', requestFile]);
+      assert.equal(result.status, 2, `${JSON.stringify(request)} ${result.stderr}`);
+      assert.match(result.stderr, message);
+      assert.equal(awsCalls(), '');
+    }
+    writeRequest(activate);
+    for (const [confirmation, message] of [
+      [go(CLI_SHA), /run channex-handover-plan first/],
+      [go(CLI_SHA, 'revoke'), /Confirmation must be CHANNEX_HANDOVER:activate:/],
+      [go(CLI_SHA, 'activate', OTHER_PROPERTY), /Confirmation must be CHANNEX_HANDOVER:activate:/],
+      [`CHANNEX_HANDOVER:activate:${PROPERTY}:${'A'.repeat(64)}`, /Confirmation must be/],
+    ]) {
+      const result = run(['channex-handover', requestFile, confirmation]);
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, message);
+      assert.equal(awsCalls(), '');
+    }
+    // The generic migration path never reaches the handover CLI.
+    assert.match(run(['target:channex:handover:activate', requestFile, '0'.repeat(64), 'x']).stderr, /allow-list/);
+
+    // No plan is recorded for an unreviewed image, a failed dry run, an apply-shaped or a repeated plan line.
+    state('digest', `sha256:${'0'.repeat(64)}`);
+    assert.match(run(['channex-handover-plan', requestFile]).stderr, /not a reviewed pair/);
+    assert.doesNotMatch(awsCalls(), /register/);
+    state('digest', DIGEST);
+    for (const [lines, exit] of [
+      [['{"status":"START"}', 'Error: refused: claim_not_historical'], '1'],
+      [['{"status":"START"}', planLine()], '1'],
+      [['{"status":"START"}', planLine({ applied: true })], '0'],
+      [['{"status":"START"}', planLine(), planLine()], '0'],
+    ]) {
+      cliLines(lines);
+      state('exit', exit);
+      assert.match(run(['channex-handover-plan', requestFile]).stderr, /no plan recorded/);
+      assert.equal(existsSync(recordFile), false);
+    }
+    state('exit', '0');
+
+    // The plan: the CLI's own read-only dry run on the running reviewed image, target secret only.
+    const planned = plan();
+    const firstGo = planSha();
+    assert.notEqual(firstGo, CLI_SHA);
+    assert.match(planned.stdout, new RegExp(`Run after the go: channex-handover ${requestFile} CHANNEX_HANDOVER:activate:${PROPERTY}:${firstGo}`));
+    const [planDefinition] = definitions();
+    assert.equal(planDefinition.family, 'vayada-channex-handover-oneoff');
+    assert.equal(planDefinition.taskRoleArn, undefined);
+    const [planContainer] = planDefinition.containerDefinitions;
+    assert.equal(planContainer.image, `269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@${DIGEST}`);
+    assert.deepEqual([...planContainer.entryPoint, ...planContainer.command], ['node', '--input-type=module', '--eval', dispatcher, 'target']);
+    assert.deepEqual(planContainer.secrets.map((x) => `${x.name}=${x.valueFrom.split(':parameter')[1]}`), ['TARGET_DATABASE_URL=/vayada/prod/target-database-url']);
+    const planEnv = Object.fromEntries(planContainer.environment.map((e) => [e.name, e.value]));
+    assert.equal(planEnv.LEGACY_MIGRATION_COMMAND, 'target:channex:handover:activate');
+    assert.deepEqual(JSON.parse(planEnv.LEGACY_MIGRATION_ARGS), ['--property', PROPERTY, '--approval-ref', activate.approvalRef,
+      '--legacy-disabled-at', activate.legacyDisabledAt, '--legacy-readback-sha256', readbackSha]);
+    assert.equal(planEnv.LEGACY_MIGRATION_FILES, undefined);
+    assert.equal(JSON.parse(readFileSync(recordFile, 'utf8')).cliPlanSha256, CLI_SHA);
+    assert.equal(statSync(recordFile).mode & 0o777, 0o600);
+
+    // The go must name that plan for an unchanged request; anything the plan bound needs a new go.
+    assert.match(run(['channex-handover', requestFile, go(CLI_SHA)]).stderr, /names another plan/);
+    writeRequest({ ...activate, approvalRef: 'another-go' });
+    assert.match(run(['channex-handover', requestFile, go(firstGo)]).stderr, /names another plan/);
+    writeRequest(activate);
+    assert.equal(awsCalls(), '');
+    const drift = (change, undo) => {
+      change();
+      const result = run(['channex-handover', requestFile, go(firstGo)]);
+      undo();
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /plan changed since the go/);
+      assert.doesNotMatch(awsCalls(), /register/);
+    };
+    drift(() => state('digest', OTHER_DIGEST), () => state('digest', DIGEST));
+    drift(() => state('network', '{"awsvpcConfiguration":{"subnets":["subnet-2"]}}'), () => state('network', '{"awsvpcConfiguration":{"subnets":["subnet-1"]}}'));
+    drift(() => writeFileSync(readbackFile, 'edited readback\n'), () => writeFileSync(readbackFile, 'legacy is_active=false readback\n'));
+    const runnerText = readFileSync(script, 'utf8');
+    drift(() => writeFileSync(script, `${runnerText}\n# edited\n`), () => writeFileSync(script, runnerText));
+    // A re-plan on another image gives a new go; the old go stays refused.
+    state('digest', OTHER_DIGEST);
+    plan();
+    const secondGo = planSha();
+    assert.notEqual(secondGo, firstGo);
+    assert.match(run(['channex-handover', requestFile, go(firstGo)]).stderr, /names another plan/);
+    state('digest', DIGEST);
+    plan();
+    assert.equal(planSha(), firstGo);
+
+    // A CLI refusal, a non-zero exit, an unapplied report or a marker for another plan writes no result.
+    for (const [lines, exit, status] of [
+      [['{"status":"START"}', 'Error: refused: plan_changed'], '1', 1],
+      [['{"status":"START"}', applyLine()], '3', 3],
+      [['{"status":"START"}', applyLine({ applied: false })], '0', 1],
+      [['{"status":"START"}', applyLine(), `CHANNEX_HANDOVER_COMPLETE action=activate property=${PROPERTY} planSha256=${'c'.repeat(64)} replayed=false`], '0', 1],
+    ]) {
+      cliLines(lines);
+      state('exit', exit);
+      const result = run(['channex-handover', requestFile, go(firstGo)]);
+      assert.equal(result.status, status, result.stderr);
+      assert.match(result.stderr, /did not complete; no result written/);
+      assert.equal(existsSync(resultFile), false);
+    }
+    state('exit', '0');
+
+    // The apply passes --apply <CLI plan sha> and keeps the result; the folder then refuses this action again.
+    cliLines(['{"status":"START"}', applyLine(), `CHANNEX_HANDOVER_COMPLETE action=activate property=${PROPERTY} planSha256=${CLI_SHA} replayed=false`]);
+    const applied = run(['channex-handover', requestFile, go(firstGo)]);
+    assert.equal(applied.status, 0, applied.stderr);
+    const applyEnv = Object.fromEntries(definitions()[0].containerDefinitions[0].environment.map((e) => [e.name, e.value]));
+    assert.deepEqual(JSON.parse(applyEnv.LEGACY_MIGRATION_ARGS).slice(-2), ['--apply', CLI_SHA]);
+    assert.match(awsCalls(), /ecs register-task-definition\necs run-task\n[\s\S]*ecs deregister-task-definition\necs delete-task-definitions\n$/);
+    const result = JSON.parse(readFileSync(resultFile, 'utf8'));
+    assert.deepEqual([result.auditId, result.goPlanSha256], ['audit-1', firstGo]);
+    const again = run(['channex-handover', requestFile, go(firstGo)]);
+    assert.equal(again.status, 2);
+    assert.match(again.stderr, /already exists; use a new evidence folder/);
+    assert.equal(awsCalls(), '');
+
+    // Revoke and the sales actions carry only their own flags.
+    for (const [request, flags] of [
+      [{ action: 'revoke', property: PROPERTY, approvalRef: 'flamur-go-revoke', reason: 'legacy kept polling' }, ['--reason', 'legacy kept polling']],
+      [{ action: 'open-sales', property: PROPERTY, approvalRef: 'flamur-go-open' }, []],
+      [{ action: 'close-sales', property: PROPERTY, approvalRef: 'flamur-go-close' }, []],
+    ]) {
+      const file = join(root, `${request.action}.json`);
+      writeRequest(request, file);
+      cliLines(['{"status":"START"}', planLine()]);
+      const result = run(['channex-handover-plan', file]);
+      assert.equal(result.status, 0, result.stderr);
+      const env = Object.fromEntries(definitions()[0].containerDefinitions[0].environment.map((e) => [e.name, e.value]));
+      assert.equal(env.LEGACY_MIGRATION_COMMAND, `target:channex:handover:${request.action}`);
+      assert.deepEqual(JSON.parse(env.LEGACY_MIGRATION_ARGS), ['--property', PROPERTY, '--approval-ref', request.approvalRef, ...flags]);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the dispatcher maps each handover action to the handover CLI with the target secret only', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'channex-handover-dispatch-'));
+  try {
+    writeFileSync(join(dir, 'stub.cjs'), `const cp = require('node:child_process');
+cp.spawnSync = (file, argv, options) => { console.log(JSON.stringify({ argv: argv.slice(2), urls: Object.keys(options.env).filter((k) => k.endsWith('DATABASE_URL')).sort() })); return { status: 0 }; };
+require('node:module').syncBuiltinESMExports();`);
+    for (const action of ['activate', 'revoke', 'open-sales', 'close-sales']) {
+      const result = dispatch('target', { ...DB_ENV, LEGACY_MIGRATION_COMMAND: `target:channex:handover:${action}`,
+        LEGACY_MIGRATION_ARGS: JSON.stringify(['--property', '29f39aae-1111-4222-8333-444455556666', '--approval-ref', 'go']) }, ['--require', join(dir, 'stub.cjs')]);
+      assert.equal(result.status, 0, result.stderr);
+      const [start, run] = result.stdout.trim().split('\n').map((line) => JSON.parse(line));
+      assert.deepEqual(start.flags, ['--property', '--approval-ref']);
+      assert.deepEqual(run.argv, ['/app/packages/backend-migration/dist/cli/channexHandover.js', action, '--property', '29f39aae-1111-4222-8333-444455556666', '--approval-ref', 'go']);
+      assert.equal(dispatch('source', { ...DB_ENV, LEGACY_MIGRATION_COMMAND: `target:channex:handover:${action}`, LEGACY_MIGRATION_ARGS: '[]' }).status, 64);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
