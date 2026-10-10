@@ -103,6 +103,11 @@ class RuntimePreflightContractTest(unittest.TestCase):
             "platform.channex_management_worker_properties",
         ):
             self.assertIn(relation, js_list(CHECK, "noWrite"))
+        # VAY-2108: every owner-managed Channex worker scope table, including later ones, is protected.
+        patterns = [pattern.replace("\\\\", "\\") for pattern in js_list(CHECK, "noWritePatterns")]
+        for relation in ("platform.channex_management_worker_operations", "platform.channex_management_worker_properties"):
+            self.assertTrue(any(re.search(pattern, relation) for pattern in patterns), relation)
+        self.assertFalse(any(re.search(pattern, "platform.channex_webhook_events") for pattern in patterns))
         self.assertIn("platform.product_audit_events", js_list(CHECK, "appendOnly"))
         self.assertIn("platform.domain_events", js_list(CHECK, "appendOnly"))
         # Pricing on the ordinary login (VAY-2057): table-level narrowings instead of protection.
