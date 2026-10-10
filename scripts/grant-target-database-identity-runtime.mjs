@@ -31,10 +31,7 @@ const privileges = new Map([
   ["platform.product_audit_events", "SELECT, INSERT"],
 ]);
 const sharedTables = [...privileges.keys()].filter((table) => table.startsWith("platform."));
-const publicReads = new Set([
-  "booking.pricing_runtime_effective_authority_scopes",
-  "booking.pricing_runtime_effective_property_scopes",
-]);
+const publicReads = new Set(["booking.pricing_runtime_effective_property_scopes"]);
 const knownPrivileges = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 const ownerBypass = "(CURRENT_USER <> 'vayada_next_identity_runtime'::name)";
 const expectedPolicies = new Map([

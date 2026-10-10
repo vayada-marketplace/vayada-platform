@@ -94,7 +94,6 @@ class RuntimePreflightContractTest(unittest.TestCase):
         for relation in (
             "platform.schema_migrations",
             "platform.pricing_runtime_property_scopes",
-            "booking.pricing_runtime_effective_authority_scopes",
             "booking.pricing_runtime_effective_property_scopes",
             "marketplace.affiliate_click_occurrences",
             "booking.affiliate_original_booking_bindings",
@@ -110,14 +109,14 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertFalse(any(re.search(pattern, "platform.channex_webhook_events") for pattern in patterns))
         self.assertIn("platform.product_audit_events", js_list(CHECK, "appendOnly"))
         self.assertIn("platform.domain_events", js_list(CHECK, "appendOnly"))
-        # Pricing on the ordinary login (VAY-2057): table-level narrowings instead of protection.
-        for relation in ("booking.pricing_authority_heads", "booking.pricing_authority_revisions", "booking.pricing_quotes"):
-            self.assertNotIn(relation, js_list(CHECK, "noWrite"))
-        self.assertNotIn("^booking\\\\.pricing_authority_", js_list(CHECK, "noWritePatterns"))
+        # Pricing quotes on the ordinary login (VAY-2057): append-only, not protected.
+        self.assertNotIn("booking.pricing_quotes", js_list(CHECK, "noWrite"))
         self.assertIn("booking.pricing_quotes", js_list(CHECK, "appendOnly"))
-        self.assertEqual(js_list(CHECK, "noDelete"), [
-            "hotel_catalog.properties", "booking.pricing_authority_heads", "booking.pricing_authority_revisions",
-        ])
+        # VAY-2079: app migration 0475 dropped the pricing authority tables and view.
+        self.assertEqual(js_list(CHECK, "noDelete"), ["hotel_catalog.properties"])
+        self.assertEqual(js_list(GRANT, "noDelete"), ["hotel_catalog.properties"])
+        for name in ("noWrite", "noDelete", "appendOnly"):
+            self.assertFalse([r for r in js_list(GRANT, name) if "pricing_authority" in r or "authority_scopes" in r], name)
         self.assertEqual(len(js_list(CHECK, "identityLockOnly")), 6)
         # Trigger-invoked Channex helpers revoked from PUBLIC by the worker provisioning (VAY-2054 follow-up).
         self.assertEqual(js_list(CHECK, "runtimeExecutableFunctions"), js_list(GRANT, "runtimeExecutableFunctions"))
