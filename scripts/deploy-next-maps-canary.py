@@ -561,7 +561,8 @@ def main():
     assert baseline_rules
     before = min(int(r["Priority"]) for r in baseline_rules)
     assert all(int(r["Priority"]) < before for r in owned_rules)
-    assert any(e == {"name": "PUBLIC_HOTEL_PROFILE_SOURCE", "value": "target"} for e in source["environment"])
+    assert any(e.get("name") == "PUBLIC_HOTEL_PROFILE_SOURCE" and e.get("value") in {"target", "active_publication"}
+               for e in source["environment"])
     digest = aws("ecr", "describe-images", repositoryName="vayada-next-api",
                  imageIds=[{"imageTag": args.image_sha}])["imageDetails"][0]["imageDigest"]
     assert re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
