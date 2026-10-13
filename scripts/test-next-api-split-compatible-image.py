@@ -55,9 +55,9 @@ class CompatibleImageTest(unittest.TestCase):
             for name in ("_INTERNAL_TOKEN", "_ADMISSION"):
                 self.assertNotEqual(run("next-target-backend", "vayada-next-api", DIGEST, [], environment=base,
                                         secrets=[{"name": prefix + name, "valueFrom": "fixture"}]).returncode, 0)
-        # The unrelated adaptive-onboarding flag is not caller wiring.
+        # An unrelated HOTEL_SETUP_* flag is not caller wiring.
         result = run("next-target-backend", "vayada-next-api", DIGEST, [],
-                     environment=base + [{"name": "HOTEL_SETUP_ADAPTIVE_SHELL_ENABLED", "value": "true"}])
+                     environment=base + [{"name": "HOTEL_SETUP_UNRELATED_FLAG", "value": "true"}])
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_accepts_reviewed_next_api_digest(self) -> None:
