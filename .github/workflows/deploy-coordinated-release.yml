@@ -57,6 +57,7 @@ jobs:
     name: Validate and plan full release
     outputs:
       attempt: ${{ steps.attempt.outputs.value }}
+      auto_skip: ${{ steps.admission.outputs.auto_skip }}
     environment: next
     runs-on: ubuntu-latest
     steps:
@@ -124,6 +125,38 @@ jobs:
           fi
           python3 scripts/coordinated_release.py prepare "${arguments[@]}"
 
+      # Automatic events arrive before the reviewed admission PR lists the new API
+      # image. Skip reconciliation instead of failing at the split launcher guard.
+      # Manual dispatches never run this step, so they still fail hard there.
+      - name: Check automatic API image admission
+        id: admission
+        if: github.event_name == 'repository_dispatch'
+        run: |
+          python3 - <<'PY'
+          import importlib.util, json, os
+          spec = importlib.util.spec_from_file_location(
+              "split_guard", "scripts/assert-next-api-split-compatible-image.py")
+          guard = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(guard)
+          with open("release-bundle/manifest.json", encoding="utf-8") as handle:
+              digest = json.load(handle)["services"]["next-target-backend"]["digest"]
+          if not isinstance(digest, str) or not guard.DIGEST.fullmatch(digest):
+              raise SystemExit("next-target-backend digest is invalid")
+          admitted = guard.is_admitted(digest)
+          if not admitted:
+              with open("release-bundle/plan.json", encoding="utf-8") as handle:
+                  plan = json.load(handle)
+              message = (f"Image {digest} not admitted yet; skipping automatic deploy. "
+                         "Admit it and dispatch operation=ordinary.")
+              print(f"::notice title=Automatic deploy skipped::{message}")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  print(f"## Automatic deploy skipped\n\n{message}\n", file=summary)
+                  for field in ("artifactId", "manifestSha256", "publishedRecordSha256"):
+                      print(f"- `{field}`: `{plan[field]}`", file=summary)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"auto_skip={'false' if admitted else 'true'}", file=output)
+          PY
+
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ env.RELEASE_BUNDLE_ARTIFACT }}
@@ -134,7 +167,7 @@ jobs:
   api:
     name: Reconcile API and verify readiness
     needs: prepare
-    if: ${{ needs.prepare.result == 'success' && inputs.operation != 'verify' }}
+    if: ${{ needs.prepare.result == 'success' && inputs.operation != 'verify' && needs.prepare.outputs.auto_skip != 'true' }}
     environment: next
     runs-on: ubuntu-latest
     steps:
@@ -168,7 +201,7 @@ jobs:
       NEXT_BOOKING_CANARY_NAME: ${{ vars.NEXT_BOOKING_CANARY_NAME }}
     name: Reconcile ${{ matrix.service }}
     needs: [prepare, api]
-    if: needs.api.result == 'success'
+    if: needs.api.result == 'success' && needs.prepare.outputs.auto_skip != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -208,7 +241,7 @@ jobs:
   finalize:
     name: Report per-service durable result
     needs: [prepare, api, frontends]
-    if: always() && needs.prepare.result == 'success' && inputs.operation != 'verify'
+    if: always() && needs.prepare.result == 'success' && inputs.operation != 'verify' && needs.prepare.outputs.auto_skip != 'true'
     environment: next
     runs-on: ubuntu-latest
     steps:

@@ -74,6 +74,16 @@ five frontend jobs then run as a fail-fast-disabled matrix, retaining auth
 gateway and public Booking smoke checks. One frontend failure does not roll
 back a healthy API or cancel unrelated frontend jobs.
 
+Automatic `repository_dispatch` events usually arrive before the reviewed
+admission PR lists the release's next-api digest in
+`scripts/next-api-split-compatible-images.txt`. Such a run still prepares in
+full (publication validation, desired state, checkpoint obligations), then
+prints a notice and skips the API, frontend, and finalize jobs instead of
+failing at the split launcher guard; it mutates no ECS service. Admit the
+image, then dispatch `operation=ordinary` with the artifact ID and hashes from
+the run summary. Manual dispatches never take this path: an unadmitted API
+image still fails the API job.
+
 No-op services still run smoke and refresh manifest-bound provenance. If a
 runner stops after ECS mutation but before state write, rerunning the same
 artifact observes the live digest, reruns smoke, and records success; it never

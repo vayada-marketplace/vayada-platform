@@ -21,6 +21,11 @@ def fail(message: str) -> None:
     raise SystemExit(f"next-api split launcher guard failed: {message}")
 
 
+def is_admitted(digest: str) -> bool:
+    """Whether a reviewed admission lists the digest as split-launcher compatible."""
+    return digest in COMPATIBLE_IMAGES.values()
+
+
 def main() -> None:
     if len(sys.argv) != 6:
         fail("usage: <service> <repository> <digest> <ecr-image-details.json> <current-task.json>")
@@ -36,7 +41,7 @@ def main() -> None:
     matches = [item for item in details if item.get("imageDigest") == digest]
     if len(matches) != 1:
         fail("ECR did not return exactly one matching image")
-    if digest not in COMPATIBLE_IMAGES.values():
+    if not is_admitted(digest):
         fail("digest has no reviewed immutable split-launcher attestation")
     current = json.loads(Path(sys.argv[5]).read_text())
     current = current.get("taskDefinition", current)
