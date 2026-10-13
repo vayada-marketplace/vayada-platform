@@ -298,7 +298,7 @@ locals {
         { name = "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", value = "mutating" },
         { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
-        { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "target" },
+        { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "active_publication" },
         { name = "BOOKING_DOMAIN_RESOLUTION_SOURCE", value = "target" },
         { name = "PUBLIC_BOOKABILITY_SOURCE", value = "target" },
         { name = "BOOKING_SETTINGS_SOURCE", value = "target" },
