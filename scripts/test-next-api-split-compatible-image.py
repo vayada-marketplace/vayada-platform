@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -82,6 +83,16 @@ class CompatibleImageTest(unittest.TestCase):
             run("next-target-backend", "vayada-next-api", VAY_1512_DIGEST, [f"next-{VAY_1512_RELEASE}"]).returncode,
             0,
         )
+
+    def test_admission_helper_matches_the_reviewed_list(self) -> None:
+        # The coordinated release workflow skips automatic deploys with this same rule.
+        spec = importlib.util.spec_from_file_location("split_guard", CHECK)
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        self.assertTrue(guard.is_admitted(DIGEST))
+        self.assertTrue(guard.is_admitted(VAY_1512_DIGEST))
+        self.assertFalse(guard.is_admitted("sha256:" + "a" * 64))
+        self.assertFalse(guard.is_admitted(RELEASE))
 
     def test_rejects_unreviewed_digest_or_wrong_repository(self) -> None:
         self.assertNotEqual(
