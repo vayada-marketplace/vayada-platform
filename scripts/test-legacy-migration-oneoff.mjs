@@ -492,7 +492,8 @@ test('channex handover plans the CLI dry run, then applies exactly that plan for
     symlinkSync(join(root, 'outside.txt'), join(evidence, 'linked.txt'));
     const PROPERTY = '29f39aae-1111-4222-8333-444455556666';
     const OTHER_PROPERTY = '7d3f6dcc-1111-4222-8333-444455556666';
-    const OTHER_DIGEST = readFileSync(new URL('./next-api-split-compatible-images.txt', import.meta.url), 'utf8').trim().split('\n').at(-2).split(' ')[1];
+    // The newest admitted digest that differs from DIGEST: frontend-only releases admit the same api digest twice.
+    const OTHER_DIGEST = readFileSync(new URL('./next-api-split-compatible-images.txt', import.meta.url), 'utf8').trim().split('\n').map((line) => line.split(' ')[1]).filter((digest) => digest !== DIGEST).at(-1);
     const CLI_SHA = 'a'.repeat(64);
     const state = (name, value) => writeFileSync(join(root, name), value);
     state('account', '269416271598');
