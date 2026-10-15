@@ -90,6 +90,11 @@ locals {
 
   target_groups = merge(local.base_target_groups, local.staging_pms_target_groups)
 
+  affiliate_earnings_redirect = {
+    host = "next-marketplace.vayada.com"
+    path = "/earnings"
+  }
+
   base_listener_rules = {
     booking-admin = {
       priority     = 10
@@ -121,10 +126,14 @@ locals {
       host         = "pms.vayada.com"
       target_group = "pms-frontend"
     }
+    # VAY-2209: the standalone affiliate portals are retired. Both hosts send a temporary
+    # (302) redirect to Marketplace earnings and drop the query, so a legacy set-password
+    # token is never forwarded. Not 301: browsers cache that indefinitely, and the target is
+    # a temporary next-* host while affiliate.vayada.com will later serve /r/* share links.
     affiliate = {
-      priority     = 45
-      host         = "affiliate.vayada.com"
-      target_group = "affiliate-dashboard"
+      priority = 45
+      host     = "affiliate.vayada.com"
+      redirect = local.affiliate_earnings_redirect
     }
     booking-root = {
       priority     = 46
@@ -167,8 +176,18 @@ locals {
       target_group = "next-marketplace-frontend"
     }
     next-affiliate = {
-      priority     = 56
+      priority = 56
+      host     = "next-affiliate.vayada.com"
+      redirect = local.affiliate_earnings_redirect
+    }
+    # The auth-gateway smoke (tf-apply, coordinated releases) still probes this gateway's
+    # /auth/session and Google start until apps/api drops the affiliate-dashboard surface
+    # and auth-gateways.json loses its entry. Keeping /auth/* routed also keeps the target
+    # group attached, so ECS can still replace the task.
+    next-affiliate-auth = {
+      priority     = 47
       host         = "next-affiliate.vayada.com"
+      paths        = ["/auth/*"]
       target_group = "next-affiliate-dashboard"
     }
     booking-frontend = {
@@ -221,9 +240,30 @@ resource "aws_lb_listener_rule" "services" {
   listener_arn = data.aws_lb_listener.https.arn
   priority     = each.value.priority
 
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.services[each.value.target_group].arn
+  dynamic "action" {
+    for_each = try(each.value.redirect, null) == null ? [each.value.target_group] : []
+
+    content {
+      type             = "forward"
+      target_group_arn = aws_lb_target_group.services[action.value].arn
+    }
+  }
+
+  dynamic "action" {
+    for_each = try(each.value.redirect, null) == null ? [] : [each.value.redirect]
+
+    content {
+      type = "redirect"
+
+      redirect {
+        protocol    = "HTTPS"
+        port        = "443"
+        host        = action.value.host
+        path        = action.value.path
+        query       = ""
+        status_code = "HTTP_302"
+      }
+    }
   }
 
   condition {
