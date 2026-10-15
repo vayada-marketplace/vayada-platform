@@ -266,7 +266,7 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/workos-webhook-secret`  | `next-api`                         |
 | `/vayada/prod/auth-cookie-secret`     | `next-api`                         |
 | `/vayada/prod/marketplace-communication-unsubscribe-signing-keys` | `next-api` |
-| `/vayada/prod/google-places-server-api-key` | `next-api` `GOOGLE_PLACES_SERVER_API_KEY`, read only with `GOOGLE_NEARBY_ENABLED=true` (VAY-2207; Places API (New) only) |
+| `/vayada/prod/google-places-server-api-key` | `next-api` `GOOGLE_PLACES_SERVER_API_KEY` (VAY-2207; Places API (New) only). The API uses it only when `GOOGLE_NEARBY_ENABLED=true`, but ECS fetches every mapped secret at task start: create the parameter before this mapping is applied and never delete it while mapped. |
 
 The `next-api` task maps those SSM parameters to the backend's runtime
 environment as:
