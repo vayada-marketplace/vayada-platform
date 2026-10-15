@@ -299,6 +299,9 @@ locals {
         { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "active_publication" },
+        # VAY-2207: automatic nearby places (Google Places API (New)) for every hotel's
+        # Booking Admin Location editor and the public nearby route.
+        { name = "GOOGLE_NEARBY_ENABLED", value = "true" },
         { name = "BOOKING_DOMAIN_RESOLUTION_SOURCE", value = "target" },
         { name = "PUBLIC_BOOKABILITY_SOURCE", value = "target" },
         { name = "BOOKING_SETTINGS_SOURCE", value = "target" },
@@ -379,6 +382,7 @@ locals {
         { name = "AUTH_LEGACY_BOOKING_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_AFFILIATE_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
+        { name = "GOOGLE_PLACES_SERVER_API_KEY", valueFrom = "/vayada/prod/google-places-server-api-key" },
         ], var.finance_expense_worker_secret_mapped ? [
         { name = "FINANCE_EXPENSE_WORKER_DATABASE_URL", valueFrom = "/vayada/prod/target-database-finance-expense-worker-url" },
         ] : [], (var.finance_export_worker_secret_mapped || var.finance_export_worker_enabled) ? [
