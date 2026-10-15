@@ -933,10 +933,10 @@ Apply from the operator lane (`--profile vayada`):
 ```bash
 scripts/run-target-database-runtime-preflight.sh --inspect-runtime-product-dml   # dry run: applies, verifies, rolls back
 scripts/run-target-database-runtime-preflight.sh --grant-runtime-product-dml
-scripts/run-target-database-runtime-preflight.sh --preflight-runtime-product-dml
+scripts/run-target-database-runtime-preflight.sh preflight
 ```
 
-The three modes refuse to start unless the posture-aware preflight is in the
+The two grant modes refuse to start unless the posture-aware preflight is in the
 same checkout, so they cannot run from a `main` that would fail the next
 `tf-apply`.
 
@@ -972,13 +972,13 @@ task definition, not in the run-task override; the plain `preflight` mode uses
 the same path (verified read-only against production on 2026-10-07).
 
 The runtime preflight (`scripts/target-database-runtime-preflight.mjs`, run by
-every `tf-apply`) detects the posture from the migration owner's default
-privileges in the seven product schemas. With none it asserts the legacy
-allowlist as before, with one deliberate tightening that applies to both
-postures: the no-read list, the name patterns and `vayada_migration_evidence`
-are unreadable (`pms.inventory_coverage_validation_queue` was only exempt from
-the required reads before); production passed this read-only on 2026-10-07.
-With all seven it asserts the product DML posture:
+every `tf-apply`) requires the product DML posture: the migration owner's
+default privileges must grant the login DML in all seven product schemas, and
+anything less fails closed (`runtime_product_dml_posture_partial:<count>`).
+VAY-2211 removed the legacy allowlist posture; production has reported
+`"posture":"product_dml"` on every `tf-apply` since at least 2026-10-13. The
+preflight asserts that the no-read list, the name patterns and
+`vayada_migration_evidence` are unreadable, and that
 every non-protected product relation has `SELECT, INSERT, UPDATE, DELETE`
 (`runtime_product_dml_missing`), the protected list and name patterns are not
 writable (`runtime_protected_relation_write_forbidden`) or readable
@@ -993,16 +993,12 @@ writes stay within the extended product-link column matrix plus that lock column
 writable, sequences allow at most `USAGE, SELECT`, the login has no role
 memberships, and the two trigger-invoked Channex helpers are executable
 (`runtime_function_execute_missing`, directly or through PUBLIC where the worker
-provisioning has not run). A partial state fails closed
-(`runtime_product_dml_posture_partial`). `--preflight-runtime-product-dml`
-refuses the legacy posture (`runtime_product_dml_required`). A follow-up removes
-the legacy branch once production has switched.
+provisioning has not run).
 
-Rollback: `scripts/run-target-database-runtime-preflight.sh --revoke-runtime-product-dml`
-revokes the schema-wide DML and default privileges, revokes `EXECUTE` on the
-two Channex helpers, and restores the legacy allowlist (table and column grants)
-so the legacy preflight posture passes again. It does not change application
-migrations.
+There is no rollback to the legacy allowlist: VAY-2211 removed the
+`--revoke-runtime-product-dml` mode, because the preflight now rejects that
+posture and every `tf-apply` would fail. Fix a wrong grant forward by changing
+the reviewed lists in the grant script and re-running `--grant-runtime-product-dml`.
 
 ### Hotel setup on the ordinary API login (VAY-2056)
 
