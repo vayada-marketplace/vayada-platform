@@ -200,8 +200,11 @@ locals {
       ]
       secrets = []
     }
+    # VAY-2209: retired. affiliate.vayada.com redirects to Marketplace earnings (alb.tf), so
+    # nothing routes here; the service and task definition stay until the 30-day deletion.
     affiliate-dashboard = {
       name           = "vayada-affiliate-dashboard"
+      desired_count  = 0
       container_port = 3005
       cpu            = 256
       memory         = 512
