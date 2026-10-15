@@ -35,15 +35,19 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertIn("receipt_columns_writable", CHECK)
         self.assertIn("SELECT owner_user_ids", CHECK)
 
-    def test_both_postures_are_detected_from_default_privileges_and_fail_closed(self) -> None:
+    def test_product_posture_is_required_from_default_privileges_and_fails_closed(self) -> None:
         self.assertIn("pg_default_acl", CHECK)
         self.assertIn("acl.defaclrole = $2", CHECK)
-        self.assertIn('posture = coveredSchemas === 0 ? "legacy" : "product_dml"', CHECK)
-        self.assertIn('VAYADA_DB_REQUIRE_PRODUCT_DML', CHECK)
-        self.assertNotIn('VAYADA_DB_REQUIRE_FOLIO_COMMAND', CHECK)
+        # VAY-2211: no legacy allowlist posture; every product schema needs the default DML grant.
+        self.assertIn("check(coveredSchemas === productSchemas.length, `runtime_product_dml_posture_partial:${coveredSchemas}`)", CHECK)
+        self.assertIn('posture: "product_dml"', CHECK)
+        for removed in ("VAYADA_DB_REQUIRE_PRODUCT_DML", "VAYADA_DB_REQUIRE_FOLIO_COMMAND", '"legacy"', "legacyRequiredRelations",
+                        "legacyStagedRelations", "legacyRequiredColumns", "legacyStagedColumns", "legacyOptionalReads",
+                        "runtime_product_dml_required", "runtime_relation_access_missing", "runtime_column_access_missing",
+                        "runtime_unapproved_relation_column_write_forbidden"):
+            self.assertNotIn(removed, CHECK)
         for code in (
             "runtime_product_dml_posture_partial",
-            "runtime_product_dml_required",
             "runtime_product_dml_missing",
             "runtime_narrowed_relation_writable",
             "runtime_identity_lock_column_missing",
@@ -55,9 +59,6 @@ class RuntimePreflightContractTest(unittest.TestCase):
             "runtime_protected_relation_column_write_forbidden",
             "runtime_column_grant_option_forbidden",
             "runtime_unapproved_relation_write_forbidden",
-            "runtime_unapproved_relation_column_write_forbidden",
-            "runtime_relation_access_missing",
-            "runtime_column_access_missing",
             "runtime_schema_usage_missing",
             "runtime_relation_read_missing",
             "runtime_type_access_missing",
@@ -71,11 +72,6 @@ class RuntimePreflightContractTest(unittest.TestCase):
             "runtime_function_execute_missing",
         ):
             self.assertIn(code, CHECK)
-        # The legacy allowlist is still asserted exactly until the follow-up removes it.
-        self.assertIn('"booking.guest_bookings": ["SELECT", "INSERT", "UPDATE", "DELETE"]', CHECK)
-        self.assertIn('"platform.product_audit_events": ["SELECT", "INSERT"]', CHECK)
-        self.assertIn('"platform.jobs": ["INSERT"]', CHECK)
-        self.assertIn('"hotel_catalog.properties": { UPDATE: ["id"] }', CHECK)
 
     def test_protected_list_matches_the_grant_script(self) -> None:
         for name in ("noRead", "noReadPatterns", "noWrite", "noWritePatterns", "appendOnly", "noDelete", "identityLockOnly"):
@@ -130,7 +126,6 @@ class RuntimePreflightContractTest(unittest.TestCase):
         ])
         self.assertIn("runtime_function_security_definer", GRANT)
         self.assertIn("runtime_function_execute_scope_too_broad", GRANT)
-        self.assertIn("REVOKE EXECUTE ON FUNCTION ${name} FROM ${role}", GRANT)
         self.assertLess(CHECK.index('"runtime_security_definer_execute_forbidden"'),
                         CHECK.index('"runtime_function_execute_missing"'))
         for name in ("identityColumns", "productIdentityColumns"):
@@ -139,7 +134,6 @@ class RuntimePreflightContractTest(unittest.TestCase):
         for column in ('"resource_product", "resource_type", "resource_id"', '"metadata"', '"status", "updated_at"'):
             self.assertIn(column, extended)
         self.assertIn("productIdentityColumns, ...Object.fromEntries(lockColumns.rows", CHECK)
-        self.assertIn("...identityColumns,\n", CHECK)  # legacy staged columns stay on the VAY-965 matrix
         self.assertIn("'vayada_migration_evidence'", CHECK)
         self.assertIn('const identityLockColumn = "created_at"', CHECK)
         self.assertNotIn("pg_policy", CHECK)
@@ -152,7 +146,7 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertGreater(CHECK.rindex('"runtime_relation_read_missing"'),
                            CHECK.index('check(writableColumns.rowCount'))
         self.assertLess(CHECK.index('"runtime_protected_relation_read_forbidden"'),
-                        CHECK.index('posture === "legacy") {'))
+                        CHECK.index('"runtime_role_membership_forbidden"'))
 
 
 if __name__ == "__main__":

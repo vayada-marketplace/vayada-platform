@@ -26,7 +26,6 @@ log_group="/ecs/vayada-next-api"
 helper_file=""
 financials_readiness_property=""
 financials_readiness_image_digest=""
-product_dml_required="false"
 code_in_definition="false"
 vay2017_source_sha=""
 vay2017_execution_id=""
@@ -36,17 +35,16 @@ role_retirement_step=""
 role_retirement_phase=""
 role_retirement_frozen=""
 case "${mode}" in
-  preflight|--preflight-runtime-product-dml)
+  preflight)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
-    [[ "${mode}" == "--preflight-runtime-product-dml" ]] && product_dml_required="true"
     code_file="target-database-runtime-preflight.mjs"
     code_in_definition="true"
     secret_name="TARGET_DATABASE_URL"
     secret_parameter="/vayada/prod/target-database-runtime-url"
     family="vayada-next-api-db-runtime-preflight"
     ;;
-  --grant-runtime-product-dml|--revoke-runtime-product-dml|--inspect-runtime-product-dml)
-    # VAY-2054: the one reviewed grant set for the ordinary API login, its dry run and its rollback.
+  --grant-runtime-product-dml|--inspect-runtime-product-dml)
+    # VAY-2054: the one reviewed grant set for the ordinary API login and its dry run.
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
     # Granting before the posture-aware preflight is on main would fail every tf-apply.
     grep -q 'runtime_product_dml_posture_partial' "$(dirname "${BASH_SOURCE[0]}")/target-database-runtime-preflight.mjs" || {
@@ -56,7 +54,6 @@ case "${mode}" in
     code_file="grant-target-database-runtime-product-dml.mjs"
     code_in_definition="true"
     grant_scope="product_dml"
-    [[ "${mode}" == "--revoke-runtime-product-dml" ]] && grant_scope="revoke_product_dml"
     [[ "${mode}" == "--inspect-runtime-product-dml" ]] && grant_scope="inspect_product_dml"
     secret_name="TARGET_DATABASE_MIGRATION_URL"
     secret_parameter="/vayada/prod/target-database-url"
@@ -312,7 +309,7 @@ else
 fi
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
   --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg channex_scope "${channex_scope}" --arg financials_readiness_property "${financials_readiness_property}" \
-  --arg product_dml_required "${product_dml_required}" --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
+  --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
   --arg vay2017_source_import_phase "${vay2017_source_import_phase}" \
   --arg role_retirement_step "${role_retirement_step}" --arg role_retirement_phase "${role_retirement_phase}" --arg role_retirement_frozen "${role_retirement_frozen}" \
   --arg github_actions "${GITHUB_ACTIONS:-}" --arg github_ref "${GITHUB_REF:-}" \
@@ -322,7 +319,6 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $helper == "" then [] else [{name:"VAYADA_DB_RUNTIME_PREFLIGHT_HELPER",value:$helper}] end) +
       (if $ca == "" then [] else [{name:"VAYADA_DB_RDS_CA_BUNDLE_GZIP",value:$ca}] end) +
       (if $scope == "" then [] else [{name:"VAYADA_DB_GRANT_SCOPE",value:$scope}] end) +
-      (if $product_dml_required == "true" then [{name:"VAYADA_DB_REQUIRE_PRODUCT_DML",value:"1"}] else [] end) +
       (if $provision_scope == "" then [] else [{name:"VAYADA_DB_PROVISION_SCOPE",value:$provision_scope}] end) +
       (if $finance_property == "" then [] else [{name:"FINANCE_EXPENSE_WORKER_PROPERTY_ID",value:$finance_property}] end) +
       (if $export_property == "" then [] else [{name:"FINANCE_EXPORT_WORKER_PROPERTY_ID",value:$export_property}] end) +

@@ -258,12 +258,11 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn(']).get(scope)', provisioner)
 
     def test_runtime_product_dml_modes_use_owner_secret_and_definition_environment(self) -> None:
-        branch = RUNNER.split('  --grant-runtime-product-dml|--revoke-runtime-product-dml|--inspect-runtime-product-dml)', 1)[1].split('    ;;', 1)[0]
+        branch = RUNNER.split('  --grant-runtime-product-dml|--inspect-runtime-product-dml)', 1)[1].split('    ;;', 1)[0]
         self.assertIn('[[ "$#" -eq 1 ]]', branch)
         self.assertIn('code_file="grant-target-database-runtime-product-dml.mjs"', branch)
         self.assertIn('code_in_definition="true"', branch)
         self.assertIn('grant_scope="product_dml"', branch)
-        self.assertIn('grant_scope="revoke_product_dml"', branch)
         self.assertIn('grant_scope="inspect_product_dml"', branch)
         self.assertIn("grep -q 'runtime_product_dml_posture_partial'", branch)
         self.assertIn('secret_name="TARGET_DATABASE_MIGRATION_URL"', branch)
@@ -271,14 +270,21 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertNotIn('extra_secret_', branch)
         self.assertIn('if [[ "$code_in_definition" == true ]]; then', RUNNER)
         self.assertIn('  if [[ "$code_in_definition" == true || "${mode}" == "--audit-financials-readiness"', RUNNER)
-        preflight = RUNNER.split('  preflight|--preflight-runtime-product-dml)', 1)[1].split('    ;;', 1)[0]
-        self.assertIn('product_dml_required="true"', preflight)
+        preflight = RUNNER.split('  preflight)', 1)[1].split('    ;;', 1)[0]
         self.assertIn('code_in_definition="true"', preflight)
-        self.assertIn('{name:"VAYADA_DB_REQUIRE_PRODUCT_DML",value:"1"}', RUNNER)
-        for mode in ('--grant-runtime-product-dml', '--revoke-runtime-product-dml', '--inspect-runtime-product-dml', '--preflight-runtime-product-dml'):
+        # VAY-2211: the legacy posture, its rollback and the product-only preflight flag are gone.
+        for removed in ('product_dml_required', 'VAYADA_DB_REQUIRE_PRODUCT_DML', 'revoke_product_dml',
+                        '--revoke-runtime-product-dml', '--preflight-runtime-product-dml'):
+            self.assertNotIn(removed, RUNNER)
+        for mode in ('--grant-runtime-product-dml', '--inspect-runtime-product-dml', 'preflight'):
             invalid = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'), mode, 'unexpected'],
                                      capture_output=True, text=True)
             self.assertEqual(invalid.returncode, 2, mode)
+        for mode in ('--revoke-runtime-product-dml', '--preflight-runtime-product-dml'):
+            unknown = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'), mode],
+                                     capture_output=True, text=True)
+            self.assertEqual(unknown.returncode, 2, mode)
+            self.assertIn('Unknown mode', unknown.stderr, mode)
         source = (ROOT / 'scripts/grant-target-database-runtime-product-dml.mjs').read_text()
         for marker in ('runtime_dml_owner_required', 'runtime_role_membership_forbidden',
                        'runtime_identity_lock_column_missing', 'runtime_protected_relation_writable',
@@ -289,8 +295,10 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
                        'runtime_security_definer_execute_forbidden', 'verifyGlobalPosture',
                        'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA',
                        'await client.query("BEGIN")', 'ROLLBACK', 'unexpected_database_host', 'rds_ca_missing',
-                       'VAYADA_AUDIT_GRANT_LOCAL_FIXTURE', '"revoke_product_dml"'):
+                       'VAYADA_AUDIT_GRANT_LOCAL_FIXTURE'):
             self.assertIn(marker, source)
+        for removed in ('revoke_product_dml', 'legacyRelations', 'legacyColumns', 'revokeProductDml'):
+            self.assertNotIn(removed, source)
         for relation in ('platform.identity_migration_provenance',
                          'platform.schema_migrations', 'hotel_catalog.properties', 'booking.pricing_quotes',
                          'marketplace.affiliate_click_occurrences', 'finance.expense_generation_dispatches',
