@@ -64,7 +64,7 @@ a separate cutover ticket says otherwise:
 | `pms-api.vayada.com` | Legacy PMS API |
 | `pms.vayada.com` | Existing PMS Web |
 | `admin.vayada.com` | Existing Vayada Admin |
-| `affiliate.vayada.com` | 301 to Marketplace earnings (VAY-2209 cutover) |
+| `affiliate.vayada.com` | Temporary (302) redirect to Marketplace earnings (VAY-2209 cutover) |
 
 Next-stack changes must use only the `next-*` hostnames:
 `next-api.vayada.com`, `next-pms.vayada.com`, `next-admin.vayada.com`,
@@ -72,8 +72,10 @@ Next-stack changes must use only the `next-*` hostnames:
 `*.next-booking.vayada.com` and `next-marketplace.vayada.com`.
 
 VAY-2209 retired both affiliate portals: `affiliate.vayada.com` and
-`next-affiliate.vayada.com` answer with a permanent redirect to
-`https://next-marketplace.vayada.com/earnings` (query dropped). Only
+`next-affiliate.vayada.com` answer with a temporary (302) redirect to
+`https://next-marketplace.vayada.com/earnings` (query dropped). It is not a 301
+because browsers cache those indefinitely and both the target and the use of
+`affiliate.vayada.com` will change. Only
 `next-affiliate.vayada.com/auth/*` still reaches its service, because the
 auth-gateway smoke probes it until `apps/api` drops the `affiliate-dashboard`
 surface and `auth-gateways.json` loses its entry. The old portal service is

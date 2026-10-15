@@ -126,9 +126,10 @@ locals {
       host         = "pms.vayada.com"
       target_group = "pms-frontend"
     }
-    # VAY-2209: the standalone affiliate portals are retired. Both hosts send a permanent
-    # redirect to Marketplace earnings and drop the query, so a legacy set-password token is
-    # never forwarded. The portal services stay up (unrouted) until they are scaled to zero.
+    # VAY-2209: the standalone affiliate portals are retired. Both hosts send a temporary
+    # (302) redirect to Marketplace earnings and drop the query, so a legacy set-password
+    # token is never forwarded. Not 301: browsers cache that indefinitely, and the target is
+    # a temporary next-* host while affiliate.vayada.com will later serve /r/* share links.
     affiliate = {
       priority = 45
       host     = "affiliate.vayada.com"
@@ -260,7 +261,7 @@ resource "aws_lb_listener_rule" "services" {
         host        = action.value.host
         path        = action.value.path
         query       = ""
-        status_code = "HTTP_301"
+        status_code = "HTTP_302"
       }
     }
   }
