@@ -258,28 +258,6 @@ REVOKE EXECUTE ON FUNCTION pms.enqueue_restriction_ari(uuid,text),
 GRANT SELECT ON pms.rate_rules, pms.channex_external_rate_owners, pms.channex_offer_create_attempts
   TO vayada_next_api_runtime;
 GRANT USAGE ON TYPE app.hotel_state TO vayada_next_api_runtime;
--- Legacy allowlist end-state: what the retired per-incident grants produced in production.
-GRANT SELECT ON marketplace.affiliate_links, marketplace.affiliate_agreement_lifecycle_events,
-  marketplace.affiliate_click_occurrences, marketplace.affiliate_discrepancy_claims,
-  marketplace.affiliate_discrepancy_resolutions, booking.affiliate_click_contexts,
-  booking.affiliate_click_admissions, booking.affiliate_original_booking_bindings,
-  finance.affiliate_earning_reconciliation_revisions, finance.affiliate_eligible_earning_revisions,
-  finance.affiliate_earning_allocations, finance.affiliate_earning_allocation_items,
-  platform.pricing_runtime_property_scopes, platform.channex_management_worker_properties,
-  platform.channex_management_worker_operations, platform.domain_events TO vayada_next_api_runtime;
-GRANT INSERT ON platform.product_audit_events, platform.domain_events, platform.jobs,
-  finance.expense_categories, finance.expenses, finance.recurring_expense_rules, finance.folios,
-  finance.folio_revisions, finance.folio_lines, finance.folio_payment_references TO vayada_next_api_runtime;
-GRANT UPDATE (id) ON finance.folios, finance.billing_entitlements TO vayada_next_api_runtime;
-GRANT INSERT (organization_id, selected_tracks, revision), UPDATE (selected_tracks, revision, updated_at)
-  ON hotel_catalog.organization_setup_track_intents TO vayada_next_api_runtime;
-GRANT INSERT (organization_id, product, entitlement_key, status, starts_at, expires_at, metadata),
-  UPDATE (status, starts_at, expires_at, updated_at) ON identity.product_entitlements TO vayada_next_api_runtime;
-GRANT INSERT (organization_id, product, resource_type, resource_id, relationship, status), UPDATE (id)
-  ON identity.organization_resource_links TO vayada_next_api_runtime;
-GRANT INSERT (property_id) ON booking.booking_settings TO vayada_next_api_runtime;
-GRANT INSERT (property_id, organization_id, source_system, source_hotel_profile_id), UPDATE (property_id)
-  ON marketplace.marketplace_hotel_profiles TO vayada_next_api_runtime;
 SQL
 
 docker run --rm \
@@ -313,7 +291,6 @@ run_preflight() {
     --volume "${work}/preflight.mjs:/work/preflight.mjs:ro" \
     --workdir /work \
     --env "TARGET_DATABASE_URL=postgresql://vayada_next_api_runtime:runtime@${database_container}:5432/postgres" \
-    --env "VAYADA_DB_REQUIRE_PRODUCT_DML=${VAYADA_DB_REQUIRE_PRODUCT_DML:-0}" \
     public.ecr.aws/docker/library/node:22-bookworm node preflight.mjs
 }
 
@@ -325,6 +302,215 @@ expect_failure() {
     exit 1
   fi
   grep -F "${expected}" <<<"${output}" >/dev/null
+}
+
+# Boundary checks beyond the product grant itself. Each one restores the state it changes.
+boundary_checks() {
+  # A missing read must never mask an unexpected authority leak before repair.
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    'GRANT SELECT ON platform.identity_migration_provenance TO vayada_next_api_runtime' >/dev/null
+  expect_failure runtime_protected_relation_read_forbidden
+  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+    'REVOKE SELECT ON platform.identity_migration_provenance FROM vayada_next_api_runtime' >/dev/null
+
+  run_preflight | grep -F '"status":"PASS"' >/dev/null
+
+  # The fixture already grants UPDATE (resolved_at), so revoking only the grant option restores it.
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT UPDATE (resolved_at) ON pms.channel_operational_alerts TO vayada_next_api_runtime WITH GRANT OPTION" >/dev/null
+  expect_failure runtime_column_grant_option_forbidden
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE GRANT OPTION FOR UPDATE (resolved_at) ON pms.channel_operational_alerts FROM vayada_next_api_runtime" >/dev/null
+  run_preflight | grep -F '"status":"PASS"' >/dev/null
+  run_preflight | grep -F '"status":"PASS"' >/dev/null
+
+  for quota_read in 'SELECT' 'SELECT (link_id)'; do
+    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+      "GRANT ${quota_read} ON marketplace.affiliate_click_quota_windows TO vayada_next_api_runtime" >/dev/null
+    expect_failure runtime_protected_relation_read_forbidden
+    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+      "REVOKE ${quota_read} ON marketplace.affiliate_click_quota_windows FROM vayada_next_api_runtime" >/dev/null
+  done
+
+  for privilege in 'SELECT' 'SELECT (id)'; do
+    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+      "GRANT ${privilege} ON platform.identity_migration_provenance TO vayada_next_api_runtime" >/dev/null
+    expect_failure runtime_protected_relation_read_forbidden
+    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+      "REVOKE ${privilege} ON platform.identity_migration_provenance FROM vayada_next_api_runtime" >/dev/null
+  done
+  for privilege in 'SELECT' 'SELECT (id)'; do
+    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+      "GRANT ${privilege} ON platform.legacy_historical_binding_transitions TO vayada_next_api_runtime" >/dev/null
+    expect_failure runtime_protected_relation_read_forbidden
+    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+      "REVOKE ${privilege} ON platform.legacy_historical_binding_transitions FROM vayada_next_api_runtime" >/dev/null
+  done
+  for privilege in 'INSERT' 'UPDATE (id)'; do
+    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+      "GRANT ${privilege} ON platform.identity_migration_provenance TO vayada_next_api_runtime" >/dev/null
+    if [[ "${privilege}" == 'INSERT' ]]; then
+      expect_failure runtime_protected_relation_write_forbidden
+    else
+      expect_failure runtime_protected_relation_column_write_forbidden
+    fi
+    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+      "REVOKE ${privilege} ON platform.identity_migration_provenance FROM vayada_next_api_runtime" >/dev/null
+  done
+  run_preflight | grep -F '"status":"PASS"' >/dev/null
+
+  # Finance worker scopes remain private even when a table or column grant leaks.
+  for table in finance_expense_worker_properties finance_export_worker_properties; do
+    for privilege in 'SELECT' 'SELECT (property_id)'; do
+      docker exec "${database_container}" psql -U postgres -c \
+        "GRANT ${privilege} ON platform.${table} TO vayada_next_api_runtime" >/dev/null
+      expect_failure runtime_protected_relation_read_forbidden
+      docker exec "${database_container}" psql -U postgres -c \
+        "REVOKE ${privilege} ON platform.${table} FROM vayada_next_api_runtime" >/dev/null
+    done
+  done
+  run_preflight | grep -F '"status":"PASS"' >/dev/null
+
+  # Exact read exclusions must reject leaked direct, PUBLIC and inherited reads.
+  for entry in \
+    platform.identity_migration_provenance:id \
+    platform.legacy_historical_binding_transitions:id \
+    platform.finance_export_worker_properties:property_id \
+    pms.inventory_coverage_validation_queue:id; do
+    table="${entry%:*}"
+    column="${entry#*:}"
+    for grantee in vayada_next_api_runtime PUBLIC elevated; do
+      if [[ "${grantee}" == elevated ]]; then
+        docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+          'GRANT elevated TO vayada_next_api_runtime WITH INHERIT TRUE, SET FALSE, ADMIN FALSE' >/dev/null
+      fi
+      for privilege in SELECT "SELECT (${column})"; do
+        docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+          "GRANT ${privilege} ON ${table} TO ${grantee}" >/dev/null
+        expect_failure runtime_protected_relation_read_forbidden
+        docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+          "REVOKE ${privilege} ON ${table} FROM ${grantee}" >/dev/null
+      done
+      if [[ "${grantee}" == elevated ]]; then
+        docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+          'REVOKE elevated FROM vayada_next_api_runtime' >/dev/null
+      fi
+    done
+    for privilege in INSERT "UPDATE (${column})"; do
+      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+        "GRANT ${privilege} ON ${table} TO vayada_next_api_runtime" >/dev/null
+      if [[ "${privilege}" == INSERT ]]; then
+        expect_failure runtime_protected_relation_write_forbidden
+      else
+        expect_failure runtime_protected_relation_column_write_forbidden
+      fi
+      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+        "REVOKE ${privilege} ON ${table} FROM vayada_next_api_runtime" >/dev/null
+    done
+  done
+  run_preflight | grep -F '"status":"PASS"' >/dev/null
+
+  if docker exec -e PGPASSWORD=runtime "${database_container}" \
+    psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+    -c "INSERT INTO platform.legacy_owner_bootstrap_receipts(owner_user_ids) VALUES ('{}')" \
+    >/dev/null 2>&1; then
+    echo "runtime role unexpectedly wrote a receipt" >&2
+    exit 1
+  fi
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT INSERT (owner_user_ids) ON platform.legacy_owner_bootstrap_receipts TO vayada_next_api_runtime" >/dev/null
+  expect_failure receipt_columns_writable
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE INSERT (owner_user_ids) ON platform.legacy_owner_bootstrap_receipts FROM vayada_next_api_runtime" >/dev/null
+  if docker exec -e PGPASSWORD=runtime "${database_container}" \
+    psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
+    -c "SELECT authority_payload FROM platform.legacy_owner_bootstrap_receipts" \
+    >/dev/null 2>&1; then
+    echo "runtime role unexpectedly read receipt authority data" >&2
+    exit 1
+  fi
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT elevated TO vayada_next_api_runtime WITH SET TRUE" >/dev/null
+  expect_failure runtime_has_settable_or_admin_role_membership
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE elevated FROM vayada_next_api_runtime" >/dev/null
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT elevated TO vayada_next_api_runtime WITH ADMIN TRUE, SET FALSE" >/dev/null
+  expect_failure runtime_has_settable_or_admin_role_membership
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE elevated FROM vayada_next_api_runtime" >/dev/null
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "CREATE SCHEMA runtime_owned AUTHORIZATION vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_application_object_ownership_forbidden
+  docker exec "${database_container}" psql -U postgres -c "DROP SCHEMA runtime_owned" >/dev/null
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT CREATE ON SCHEMA app TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_schema_create_forbidden
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE CREATE ON SCHEMA app FROM vayada_next_api_runtime" >/dev/null
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT TRUNCATE ON app.hotel TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_destructive_relation_access_forbidden
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE TRUNCATE ON app.hotel FROM vayada_next_api_runtime" >/dev/null
+
+  if [[ "${postgres_version}" == "17" ]]; then
+    docker exec "${database_container}" psql -U postgres -c \
+      "GRANT MAINTAIN ON app.hotel TO vayada_next_api_runtime" >/dev/null
+    expect_failure runtime_destructive_relation_access_forbidden
+    docker exec "${database_container}" psql -U postgres -c \
+      "REVOKE MAINTAIN ON app.hotel FROM vayada_next_api_runtime" >/dev/null
+  fi
+
+  if [[ "${postgres_version}" == "17" ]]; then
+    docker exec "${database_container}" psql -U postgres -c \
+      "GRANT MAINTAIN ON platform.legacy_owner_bootstrap_receipts TO vayada_next_api_runtime" >/dev/null
+    expect_failure receipt_can_maintain_must_be_denied
+    docker exec "${database_container}" psql -U postgres -c \
+      "REVOKE MAINTAIN ON platform.legacy_owner_bootstrap_receipts FROM vayada_next_api_runtime" >/dev/null
+  fi
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT EXECUTE ON FUNCTION app.owner_only() TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_security_definer_execute_forbidden
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE EXECUTE ON FUNCTION app.owner_only() FROM vayada_next_api_runtime" >/dev/null
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT INSERT ON app.hotel TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_unapproved_relation_write_forbidden
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE INSERT ON app.hotel FROM vayada_next_api_runtime" >/dev/null
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE SELECT ON app.hotel FROM vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_relation_read_missing
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT SELECT ON app.hotel TO vayada_next_api_runtime" >/dev/null
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT USAGE ON SEQUENCE app.hotel_id_seq TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_sequence_access_forbidden
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE USAGE ON SEQUENCE app.hotel_id_seq FROM vayada_next_api_runtime" >/dev/null
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT INSERT ON platform.legacy_owner_approval_records TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_protected_relation_write_forbidden
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE INSERT ON platform.legacy_owner_approval_records FROM vayada_next_api_runtime" >/dev/null
+
+  docker exec "${database_container}" psql -U postgres -c \
+    "GRANT UPDATE (id) ON vayada_migration_evidence.database_attestations TO vayada_next_api_runtime" >/dev/null
+  expect_failure runtime_protected_relation_column_write_forbidden
+  docker exec "${database_container}" psql -U postgres -c \
+    "REVOKE UPDATE (id) ON vayada_migration_evidence.database_attestations FROM vayada_next_api_runtime" >/dev/null
 }
 
 if ambiguous_tls_output="$(docker run --rm \
@@ -350,296 +536,10 @@ if override_host_output="$(docker run --rm \
   exit 1
 fi
 
-# A missing read must never mask an unexpected authority leak before repair.
-docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-  'GRANT SELECT ON platform.identity_migration_provenance TO vayada_next_api_runtime' >/dev/null
-expect_failure runtime_protected_relation_read_forbidden
-docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-  'REVOKE SELECT ON platform.identity_migration_provenance FROM vayada_next_api_runtime' >/dev/null
+# Without the product DML grant the preflight fails closed (VAY-2211 removed the legacy allowlist posture).
+expect_failure runtime_product_dml_posture_partial:0
 
-run_preflight | grep -F '"status":"PASS"' >/dev/null
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT UPDATE (acknowledged_at) ON pms.channel_operational_alerts TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_unapproved_relation_column_write_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE UPDATE (acknowledged_at) ON pms.channel_operational_alerts FROM vayada_next_api_runtime" >/dev/null
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT UPDATE (resolved_at) ON pms.channel_operational_alerts TO vayada_next_api_runtime WITH GRANT OPTION" >/dev/null
-expect_failure runtime_column_grant_option_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE GRANT OPTION FOR UPDATE (resolved_at) ON pms.channel_operational_alerts FROM vayada_next_api_runtime" >/dev/null
-run_preflight | grep -F '"status":"PASS"' >/dev/null
-run_preflight | grep -F '"status":"PASS"' >/dev/null
-docker exec -e PGPASSWORD=runtime "${database_container}" \
-  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -c \
-  "BEGIN; INSERT INTO finance.folios(id) VALUES ('00000000-0000-4000-8000-000000000011'); SELECT id FROM finance.folios WHERE id='00000000-0000-4000-8000-000000000011' FOR UPDATE; INSERT INTO finance.folio_revisions(id) VALUES ('00000000-0000-4000-8000-000000000012'); INSERT INTO finance.folio_lines(id) VALUES ('00000000-0000-4000-8000-000000000013'); INSERT INTO finance.folio_payment_references(id) VALUES ('00000000-0000-4000-8000-000000000014'); ROLLBACK" >/dev/null
-if docker exec -e PGPASSWORD=runtime "${database_container}" \
-  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -c \
-  "UPDATE finance.folios SET property_id=property_id WHERE false" >/dev/null 2>&1; then
-  echo "runtime role unexpectedly updated Folios property scope" >&2
-  exit 1
-fi
-if docker exec -e PGPASSWORD=runtime "${database_container}" \
-  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -c \
-  "DELETE FROM finance.folios WHERE false" >/dev/null 2>&1; then
-  echo "runtime role unexpectedly deleted Folios" >&2
-  exit 1
-fi
-
-for quota_read in 'SELECT' 'SELECT (link_id)'; do
-  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-    "GRANT ${quota_read} ON marketplace.affiliate_click_quota_windows TO vayada_next_api_runtime" >/dev/null
-  expect_failure runtime_protected_relation_read_forbidden
-  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-    "REVOKE ${quota_read} ON marketplace.affiliate_click_quota_windows FROM vayada_next_api_runtime" >/dev/null
-done
-
-for privilege in 'SELECT' 'SELECT (id)'; do
-  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-    "GRANT ${privilege} ON platform.identity_migration_provenance TO vayada_next_api_runtime" >/dev/null
-  expect_failure runtime_protected_relation_read_forbidden
-  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-    "REVOKE ${privilege} ON platform.identity_migration_provenance FROM vayada_next_api_runtime" >/dev/null
-done
-for privilege in 'SELECT' 'SELECT (id)'; do
-  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-    "GRANT ${privilege} ON platform.legacy_historical_binding_transitions TO vayada_next_api_runtime" >/dev/null
-  expect_failure runtime_protected_relation_read_forbidden
-  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-    "REVOKE ${privilege} ON platform.legacy_historical_binding_transitions FROM vayada_next_api_runtime" >/dev/null
-done
-for privilege in 'INSERT' 'UPDATE (id)'; do
-  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-    "GRANT ${privilege} ON platform.identity_migration_provenance TO vayada_next_api_runtime" >/dev/null
-  if [[ "${privilege}" == 'INSERT' ]]; then
-    expect_failure runtime_protected_relation_write_forbidden
-  else
-    expect_failure runtime_protected_relation_column_write_forbidden
-  fi
-  docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-    "REVOKE ${privilege} ON platform.identity_migration_provenance FROM vayada_next_api_runtime" >/dev/null
-done
-run_preflight | grep -F '"status":"PASS"' >/dev/null
-
-# Finance worker scopes remain private even when a table or column grant leaks.
-for table in finance_expense_worker_properties finance_export_worker_properties; do
-  for privilege in 'SELECT' 'SELECT (property_id)'; do
-    docker exec "${database_container}" psql -U postgres -c \
-      "GRANT ${privilege} ON platform.${table} TO vayada_next_api_runtime" >/dev/null
-    expect_failure runtime_protected_relation_read_forbidden
-    docker exec "${database_container}" psql -U postgres -c \
-      "REVOKE ${privilege} ON platform.${table} FROM vayada_next_api_runtime" >/dev/null
-  done
-done
-run_preflight | grep -F '"status":"PASS"' >/dev/null
-
-# Exact read exclusions must reject leaked direct, PUBLIC and inherited reads.
-for entry in \
-  platform.identity_migration_provenance:id \
-  platform.legacy_historical_binding_transitions:id \
-  platform.finance_export_worker_properties:property_id \
-  pms.inventory_coverage_validation_queue:id; do
-  table="${entry%:*}"
-  column="${entry#*:}"
-  for grantee in vayada_next_api_runtime PUBLIC elevated; do
-    if [[ "${grantee}" == elevated ]]; then
-      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-        'GRANT elevated TO vayada_next_api_runtime WITH INHERIT TRUE, SET FALSE, ADMIN FALSE' >/dev/null
-    fi
-    for privilege in SELECT "SELECT (${column})"; do
-      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-        "GRANT ${privilege} ON ${table} TO ${grantee}" >/dev/null
-      expect_failure runtime_protected_relation_read_forbidden
-      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-        "REVOKE ${privilege} ON ${table} FROM ${grantee}" >/dev/null
-    done
-    if [[ "${grantee}" == elevated ]]; then
-      docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-        'REVOKE elevated FROM vayada_next_api_runtime' >/dev/null
-    fi
-  done
-  for privilege in INSERT "UPDATE (${column})"; do
-    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-      "GRANT ${privilege} ON ${table} TO vayada_next_api_runtime" >/dev/null
-    if [[ "${privilege}" == INSERT ]]; then
-      expect_failure runtime_protected_relation_write_forbidden
-    else
-      expect_failure runtime_protected_relation_column_write_forbidden
-    fi
-    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-      "REVOKE ${privilege} ON ${table} FROM vayada_next_api_runtime" >/dev/null
-  done
-done
-run_preflight | grep -F '"status":"PASS"' >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE INSERT ON platform.domain_events FROM vayada_next_api_runtime" >/dev/null
-run_preflight | grep -F '"status":"PASS"' >/dev/null
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT INSERT ON platform.domain_events TO vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT DELETE ON platform.domain_events TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_unapproved_relation_write_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE DELETE ON platform.domain_events FROM vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE INSERT ON platform.jobs FROM vayada_next_api_runtime" >/dev/null
-run_preflight | grep -F '"status":"PASS"' >/dev/null
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT INSERT ON platform.jobs TO vayada_next_api_runtime" >/dev/null
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT DELETE ON platform.jobs TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_unapproved_relation_write_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE DELETE ON platform.jobs FROM vayada_next_api_runtime" >/dev/null
-
-docker exec -e PGPASSWORD=runtime "${database_container}" \
-  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
-  -c "INSERT INTO platform.product_audit_events(id) VALUES ('00000000-0000-0000-0000-000000000001')" \
-  >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE INSERT ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
-expect_failure runtime_relation_access_missing
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT INSERT ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT UPDATE ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_unapproved_relation_write_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE UPDATE ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT DELETE ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_unapproved_relation_write_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE DELETE ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
-
-if docker exec -e PGPASSWORD=runtime "${database_container}" \
-  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
-  -c "INSERT INTO platform.legacy_owner_bootstrap_receipts(owner_user_ids) VALUES ('{}')" \
-  >/dev/null 2>&1; then
-  echo "runtime role unexpectedly wrote a receipt" >&2
-  exit 1
-fi
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT INSERT (owner_user_ids) ON platform.legacy_owner_bootstrap_receipts TO vayada_next_api_runtime" >/dev/null
-expect_failure receipt_columns_writable
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE INSERT (owner_user_ids) ON platform.legacy_owner_bootstrap_receipts FROM vayada_next_api_runtime" >/dev/null
-if docker exec -e PGPASSWORD=runtime "${database_container}" \
-  psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 \
-  -c "SELECT authority_payload FROM platform.legacy_owner_bootstrap_receipts" \
-  >/dev/null 2>&1; then
-  echo "runtime role unexpectedly read receipt authority data" >&2
-  exit 1
-fi
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT elevated TO vayada_next_api_runtime WITH SET TRUE" >/dev/null
-expect_failure runtime_has_settable_or_admin_role_membership
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE elevated FROM vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT elevated TO vayada_next_api_runtime WITH ADMIN TRUE, SET FALSE" >/dev/null
-expect_failure runtime_has_settable_or_admin_role_membership
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE elevated FROM vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "CREATE SCHEMA runtime_owned AUTHORIZATION vayada_next_api_runtime" >/dev/null
-expect_failure runtime_application_object_ownership_forbidden
-docker exec "${database_container}" psql -U postgres -c "DROP SCHEMA runtime_owned" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT CREATE ON SCHEMA app TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_schema_create_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE CREATE ON SCHEMA app FROM vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT TRUNCATE ON app.hotel TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_destructive_relation_access_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE TRUNCATE ON app.hotel FROM vayada_next_api_runtime" >/dev/null
-
-if [[ "${postgres_version}" == "17" ]]; then
-  docker exec "${database_container}" psql -U postgres -c \
-    "GRANT MAINTAIN ON app.hotel TO vayada_next_api_runtime" >/dev/null
-  expect_failure runtime_destructive_relation_access_forbidden
-  docker exec "${database_container}" psql -U postgres -c \
-    "REVOKE MAINTAIN ON app.hotel FROM vayada_next_api_runtime" >/dev/null
-fi
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT REFERENCES (id) ON app.hotel TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_unapproved_relation_column_write_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE REFERENCES (id) ON app.hotel FROM vayada_next_api_runtime" >/dev/null
-
-if [[ "${postgres_version}" == "17" ]]; then
-  docker exec "${database_container}" psql -U postgres -c \
-    "GRANT MAINTAIN ON platform.legacy_owner_bootstrap_receipts TO vayada_next_api_runtime" >/dev/null
-  expect_failure receipt_can_maintain_must_be_denied
-  docker exec "${database_container}" psql -U postgres -c \
-    "REVOKE MAINTAIN ON platform.legacy_owner_bootstrap_receipts FROM vayada_next_api_runtime" >/dev/null
-fi
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT EXECUTE ON FUNCTION app.owner_only() TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_security_definer_execute_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE EXECUTE ON FUNCTION app.owner_only() FROM vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT INSERT ON app.hotel TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_unapproved_relation_write_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE INSERT ON app.hotel FROM vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE SELECT ON app.hotel FROM vayada_next_api_runtime" >/dev/null
-expect_failure runtime_relation_read_missing
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT SELECT ON app.hotel TO vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT DELETE ON finance.payments TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_unapproved_relation_write_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE DELETE ON finance.payments FROM vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT USAGE ON SEQUENCE app.hotel_id_seq TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_sequence_access_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE USAGE ON SEQUENCE app.hotel_id_seq FROM vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE INSERT ON booking.guest_bookings FROM vayada_next_api_runtime" >/dev/null
-expect_failure runtime_relation_access_missing
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT INSERT ON booking.guest_bookings TO vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT INSERT ON platform.legacy_owner_approval_records TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_protected_relation_write_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE INSERT ON platform.legacy_owner_approval_records FROM vayada_next_api_runtime" >/dev/null
-
-docker exec "${database_container}" psql -U postgres -c \
-  "GRANT UPDATE (id) ON vayada_migration_evidence.database_attestations TO vayada_next_api_runtime" >/dev/null
-expect_failure runtime_protected_relation_column_write_forbidden
-docker exec "${database_container}" psql -U postgres -c \
-  "REVOKE UPDATE (id) ON vayada_migration_evidence.database_attestations FROM vayada_next_api_runtime" >/dev/null
-
-
-# VAY-2054: one owner-checked product DML grant, protected list re-verified, rollback restores the legacy allowlist.
+# VAY-2054: one owner-checked product DML grant, protected list re-verified.
 runtime_psql() {
   docker exec -e PGPASSWORD=runtime "${database_container}" \
     psql -U vayada_next_api_runtime -d postgres -v ON_ERROR_STOP=1 -Atqc "$1"
@@ -658,7 +558,6 @@ legacy_owner_psql() {
 }
 owner_psql() { docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -Atqc "$1"; }
 
-run_preflight | grep -F '"status":"PASS"' >/dev/null
 if product_non_owner="$(run_grant vayada_next_api_runtime runtime 1 product_dml 2>&1)"; then
   echo "product DML grant accepted a non-owner" >&2; exit 1
 fi
@@ -696,7 +595,7 @@ if product_destructive_drift="$(run_grant legacy_owner owner 1 product_dml 2>&1)
 fi
 grep -F '"code":"runtime_destructive_privilege_forbidden"' <<<"${product_destructive_drift}" >/dev/null
 owner_psql "REVOKE TRUNCATE ON app.hotel FROM vayada_next_api_runtime" >/dev/null
-# Trigger-invoked Channex helpers: PUBLIC EXECUTE is gone, so the legacy login cannot run them.
+# Trigger-invoked Channex helpers: PUBLIC EXECUTE is gone, so the login cannot run them before the grant.
 expect_runtime_denied "SELECT pms.enqueue_restriction_ari('00000000-0000-4000-8000-00000000cc01', 'test')" "for function enqueue_restriction_ari"
 # A SECURITY DEFINER helper or a missing helper rolls the whole grant back.
 owner_psql "ALTER FUNCTION pms.claim_channex_external_rate(uuid,text,text,uuid,jsonb) SECURITY DEFINER" >/dev/null
@@ -715,7 +614,10 @@ owner_psql "ALTER FUNCTION pms.enqueue_restriction_ari_renamed(uuid,text) RENAME
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
-VAYADA_DB_REQUIRE_PRODUCT_DML=1 run_preflight | grep -F '"status":"PASS"' >/dev/null
+run_preflight | grep -F '"status":"PASS"' >/dev/null
+# Boundary checks under the product DML posture.
+boundary_checks
+run_preflight | grep -F '"posture":"product_dml"' >/dev/null
 # VAY-2108: a grant from before the worker scope pattern left the Channex operation scope writable.
 # The preflight fails closed, the dry run changes nothing, and re-running the grant repairs it.
 owner_psql "GRANT INSERT, UPDATE, DELETE ON platform.channex_management_worker_operations TO vayada_next_api_runtime" >/dev/null
@@ -729,7 +631,7 @@ run_preflight | grep -F '"posture":"product_dml"' >/dev/null
 # preflight passes right after the migration, and a later grant re-run keeps the writes revoked.
 legacy_owner_psql "BEGIN; CREATE TABLE pms.channex_offer_ari_deliveries (id uuid PRIMARY KEY);
   REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON pms.channex_offer_ari_deliveries FROM vayada_next_api_runtime; COMMIT" >/dev/null
-VAYADA_DB_REQUIRE_PRODUCT_DML=1 run_preflight | grep -F '"status":"PASS"' >/dev/null
+run_preflight | grep -F '"status":"PASS"' >/dev/null
 runtime_psql "SELECT count(*) FROM pms.channex_offer_ari_deliveries" >/dev/null
 expect_runtime_denied "INSERT INTO pms.channex_offer_ari_deliveries(id) VALUES ('00000000-0000-4000-8000-00000000dd01')"
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
@@ -738,7 +640,7 @@ expect_runtime_denied "DELETE FROM pms.channex_offer_ari_deliveries WHERE false"
 legacy_owner_psql "CREATE TABLE pms.channex_offer_ari_delivery_dates (id uuid PRIMARY KEY)" >/dev/null
 expect_failure runtime_protected_relation_write_forbidden:3
 run_grant legacy_owner owner 1 product_dml | grep -F '"grant":"product_dml"' >/dev/null
-VAYADA_DB_REQUIRE_PRODUCT_DML=1 run_preflight | grep -F '"status":"PASS"' >/dev/null
+run_preflight | grep -F '"status":"PASS"' >/dev/null
 owner_psql "GRANT INSERT ON platform.schema_migrations TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_protected_relation_write_forbidden
 owner_psql "REVOKE INSERT ON platform.schema_migrations FROM vayada_next_api_runtime" >/dev/null
@@ -765,9 +667,20 @@ docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d 
 expect_failure runtime_product_dml_posture_partial:6
 docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d postgres -v ON_ERROR_STOP=1 -Atqc \
   "ALTER DEFAULT PRIVILEGES IN SCHEMA booking GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO vayada_next_api_runtime" >/dev/null
+# Sequences created later need the default USAGE, SELECT in every product schema.
+legacy_owner_psql "ALTER DEFAULT PRIVILEGES IN SCHEMA booking REVOKE USAGE, SELECT ON SEQUENCES FROM vayada_next_api_runtime" >/dev/null
+expect_failure runtime_default_privileges_missing
+legacy_owner_psql "ALTER DEFAULT PRIVILEGES IN SCHEMA booking GRANT USAGE, SELECT ON SEQUENCES TO vayada_next_api_runtime" >/dev/null
 owner_psql "GRANT UPDATE ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_narrowed_relation_writable
 owner_psql "REVOKE UPDATE ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+# Append-only tables also reject a column-level UPDATE and a DELETE.
+owner_psql "GRANT UPDATE (id) ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_narrowed_relation_writable
+owner_psql "REVOKE UPDATE (id) ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+owner_psql "GRANT DELETE ON platform.domain_events TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_narrowed_relation_writable
+owner_psql "REVOKE DELETE ON platform.domain_events FROM vayada_next_api_runtime" >/dev/null
 owner_psql "GRANT DELETE ON hotel_catalog.properties TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_narrowed_relation_writable
 owner_psql "REVOKE DELETE ON hotel_catalog.properties FROM vayada_next_api_runtime" >/dev/null
@@ -777,6 +690,9 @@ owner_psql "REVOKE UPDATE ON booking.pricing_quotes FROM vayada_next_api_runtime
 owner_psql "GRANT INSERT ON app.hotel TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_unapproved_relation_write_forbidden
 owner_psql "REVOKE INSERT ON app.hotel FROM vayada_next_api_runtime" >/dev/null
+owner_psql "GRANT REFERENCES (id) ON app.hotel TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_unapproved_relation_write_forbidden
+owner_psql "REVOKE REFERENCES (id) ON app.hotel FROM vayada_next_api_runtime" >/dev/null
 owner_psql "GRANT UPDATE ON SEQUENCE booking.fixture_sequence TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_sequence_access_forbidden
 owner_psql "REVOKE UPDATE ON SEQUENCE booking.fixture_sequence FROM vayada_next_api_runtime" >/dev/null
@@ -870,19 +786,11 @@ runtime_psql "SELECT owner_user_ids FROM platform.legacy_owner_bootstrap_receipt
 [[ "$(owner_psql "SELECT count(*) FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
   WHERE n.nspname IN ('hotel_catalog','booking','pms','marketplace','distribution','finance','platform') AND d.defaclobjtype = 'r'")" == 7 ]]
 
-run_grant legacy_owner owner 1 revoke_product_dml | grep -F '"grant":"revoke_product_dml"' >/dev/null
-expect_runtime_denied "INSERT INTO hotel_catalog.property_setup_step_drafts(id) VALUES ('00000000-0000-4000-8000-000000000108')"
-expect_runtime_denied "SELECT name FROM identity.organizations FOR SHARE"
-[[ "$(owner_psql "SELECT has_function_privilege('vayada_next_api_runtime','pms.enqueue_restriction_ari(uuid,text)','EXECUTE') OR has_function_privilege('vayada_next_api_runtime','pms.claim_channex_external_rate(uuid,text,text,uuid,jsonb)','EXECUTE')")" == f ]]
-expect_runtime_denied "SELECT pms.enqueue_restriction_ari('00000000-0000-4000-8000-00000000cc01', 'test')" "for function enqueue_restriction_ari"
-[[ "$(owner_psql "SELECT has_column_privilege('vayada_next_api_runtime','identity.product_entitlements','resource_type','INSERT') OR has_column_privilege('vayada_next_api_runtime','identity.organization_resource_links','status','UPDATE')")" == f ]]
-# The revoke restores the staged VAY-965 column grants exactly.
-[[ "$(owner_psql "SELECT has_column_privilege('vayada_next_api_runtime','identity.product_entitlements','status','UPDATE') AND has_column_privilege('vayada_next_api_runtime','identity.organization_resource_links','id','UPDATE') AND has_column_privilege('vayada_next_api_runtime','marketplace.marketplace_hotel_profiles','property_id','INSERT') AND has_column_privilege('vayada_next_api_runtime','hotel_catalog.organization_setup_track_intents','selected_tracks','UPDATE') AND has_column_privilege('vayada_next_api_runtime','finance.folios','id','UPDATE') AND NOT has_table_privilege('vayada_next_api_runtime','marketplace.marketplace_hotel_profiles','INSERT')")" == t ]]
-runtime_psql "INSERT INTO booking.guest_bookings(id) VALUES ('00000000-0000-4000-8000-000000000109')" >/dev/null
-runtime_psql "SELECT count(*) FROM hotel_catalog.property_setup_step_drafts" >/dev/null
-[[ "$(owner_psql "SELECT count(*) FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
-  WHERE n.nspname IN ('hotel_catalog','booking','pms','marketplace','distribution','finance','platform')")" == 0 ]]
-run_preflight | grep -F '"posture":"legacy"' >/dev/null
-VAYADA_DB_REQUIRE_PRODUCT_DML=1 expect_failure runtime_product_dml_required
+# VAY-2211: the revoke-to-legacy scope is gone.
+if revoke_output="$(run_grant legacy_owner owner 1 revoke_product_dml 2>&1)"; then
+  echo "grant script unexpectedly accepted the removed revoke scope" >&2; exit 1
+fi
+grep -F '"code":"unknown_grant_scope"' <<<"${revoke_output}" >/dev/null
+run_preflight | grep -F '"posture":"product_dml"' >/dev/null
 
 echo "PostgreSQL ${postgres_version} runtime preflight integration passed"

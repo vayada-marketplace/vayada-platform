@@ -1,6 +1,6 @@
 // VAY-2054: one owner-checked, idempotent, transactional grant for the ordinary API login.
-// Scope "product_dml" applies the reviewed grant set; "revoke_product_dml" restores the
-// legacy allowlist. Both re-verify the protected list before committing.
+// Scope "product_dml" applies the reviewed grant set and re-verifies the protected list before
+// committing; "inspect_product_dml" does the same and rolls back.
 import pg from "pg";
 
 const role = "vayada_next_api_runtime";
@@ -77,28 +77,6 @@ export const productIdentityColumns = {
     INSERT: identityColumns["identity.organization_resource_links"].INSERT,
     UPDATE: [...identityColumns["identity.organization_resource_links"].UPDATE, "status", "updated_at"],
   },
-};
-// Posture before VAY-2054; restored by the revoke scope.
-export const legacyRelations = {
-  "booking.guest_bookings": ["INSERT", "UPDATE", "DELETE"], "finance.payments": ["INSERT", "UPDATE"],
-  "platform.external_webhook_events": ["INSERT", "UPDATE"], "platform.idempotency_keys": ["INSERT", "UPDATE", "DELETE"],
-  "platform.product_audit_events": ["INSERT"], "pms.channel_connections": ["INSERT", "UPDATE"],
-  "finance.folios": ["INSERT"], "finance.folio_revisions": ["INSERT"], "finance.folio_lines": ["INSERT"],
-  "finance.folio_payment_references": ["INSERT"], "finance.expense_categories": ["INSERT"],
-  "finance.expenses": ["INSERT"], "finance.recurring_expense_rules": ["INSERT"],
-  "platform.domain_events": ["INSERT"], "platform.jobs": ["INSERT"],
-};
-export const legacyColumns = {
-  ...identityColumns,
-  "hotel_catalog.properties": { UPDATE: ["id"] },
-  "hotel_catalog.organization_setup_track_intents": {
-    INSERT: ["organization_id", "selected_tracks", "revision"], UPDATE: ["selected_tracks", "revision", "updated_at"],
-  },
-  "finance.billing_entitlements": { UPDATE: ["id"] }, "booking.booking_settings": { INSERT: ["property_id"] },
-  "marketplace.marketplace_hotel_profiles": {
-    INSERT: ["property_id", "organization_id", "source_system", "source_hotel_profile_id"], UPDATE: ["property_id"],
-  },
-  "finance.folios": { UPDATE: ["id"] }, "pms.channel_operational_alerts": { UPDATE: ["resolved_at"] },
 };
 const writePrivileges = ["INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 const relationKinds = "('r','p','v','m','f')";
@@ -225,44 +203,7 @@ async function applyProductDml(client, supportsMaintain) {
   return product.length;
 }
 
-async function revokeProductDml(client) {
-  for (const schema of schemas) {
-    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${ident(schema)} REVOKE ALL ON TABLES FROM ${role}`);
-    await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${ident(schema)} REVOKE ALL ON SEQUENCES FROM ${role}`);
-    await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${ident(schema)} FROM ${role}`);
-    await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${ident(schema)} FROM ${role}`);
-    await client.query(`GRANT SELECT ON ALL TABLES IN SCHEMA ${ident(schema)} TO ${role}`);
-  }
-  const product = await relations(client, `namespace.nspname = ANY($1::text[]) AND relation.relkind IN ${relationKinds}`, [schemas]);
-  for (const { name } of product) {
-    if (matches(name, noRead, noReadPatterns) || name === receipt) {
-      await client.query(`REVOKE ALL ON ${ident(name)} FROM ${role}`);
-      await revokeAllColumns(client, name, "ALL");
-    }
-  }
-  await client.query(`GRANT SELECT (owner_user_ids) ON ${ident(receipt)} TO ${role}`);
-  for (const [name, privileges] of Object.entries(legacyRelations))
-    if ((await client.query(`SELECT to_regclass($1) IS NOT NULL AS present`, [name])).rows[0].present)
-      await client.query(`GRANT ${privileges.join(", ")} ON ${ident(name)} TO ${role}`);
-  for (const [name, grants] of Object.entries(legacyColumns))
-    if ((await client.query(`SELECT to_regclass($1) IS NOT NULL AS present`, [name])).rows[0].present)
-      for (const [privilege, columns] of Object.entries(grants))
-        await client.query(`GRANT ${privilege} (${columns.join(", ")}) ON ${ident(name)} TO ${role}`);
-  for (const [name, column] of Object.entries(await lockColumns(client)))
-    await client.query(`REVOKE UPDATE ("${column}") ON ${ident(name)} FROM ${role}`);
-  // Back to the VAY-965 matrix: drop the product-posture identity columns.
-  for (const [name, grants] of Object.entries(productIdentityColumns))
-    for (const [privilege, columns] of Object.entries(grants)) {
-      const extra = columns.filter((column) => !identityColumns[name][privilege].includes(column));
-      if (extra.length) await client.query(`REVOKE ${privilege} (${extra.join(", ")}) ON ${ident(name)} FROM ${role}`);
-    }
-  for (const name of runtimeExecutableFunctions)
-    if ((await client.query(`SELECT to_regprocedure($1) IS NOT NULL AS present`, [name])).rows[0].present)
-      await client.query(`REVOKE EXECUTE ON FUNCTION ${name} FROM ${role}`);
-  return product.length;
-}
-
-async function verify(client, supportsMaintain, scope, executeBefore) {
+async function verify(client, supportsMaintain, executeBefore) {
   const destructive = [...writePrivileges, ...(supportsMaintain ? ["MAINTAIN"] : [])];
   const protectedWrites = await client.query(`
     SELECT namespace.nspname || '.' || relation.relname AS name, privilege.name AS privilege
@@ -316,9 +257,7 @@ async function verify(client, supportsMaintain, scope, executeBefore) {
       CROSS JOIN unnest($3::text[]) AS privilege(name)
      WHERE namespace.nspname = 'identity' AND relation.relkind IN ${relationKinds}
        AND has_table_privilege($1, relation.oid, privilege.name)`,
-    [role, JSON.stringify(scope === "product_dml"
-      ? { ...productIdentityColumns, ...Object.fromEntries(Object.entries(await lockColumns(client)).map(([name, column]) => [name, { UPDATE: [column] }])) }
-      : identityColumns), destructive]);
+    [role, JSON.stringify({ ...productIdentityColumns, ...Object.fromEntries(Object.entries(await lockColumns(client)).map(([name, column]) => [name, { UPDATE: [column] }])) }), destructive]);
   if (identityWrites.rowCount !== 0) fail("runtime_identity_write_scope_too_broad");
   const sequences = await client.query(`
     SELECT relation.relname FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
@@ -326,7 +265,6 @@ async function verify(client, supportsMaintain, scope, executeBefore) {
        AND (has_sequence_privilege($1, relation.oid, 'UPDATE')
             OR (NOT namespace.nspname = ANY($2::text[]) AND has_sequence_privilege($1, relation.oid, 'USAGE')))`, [role, schemas]);
   if (sequences.rowCount !== 0) fail("runtime_sequence_scope_too_broad");
-  if (scope !== "product_dml") return;
   const missing = await client.query(`
     SELECT namespace.nspname || '.' || relation.relname AS name, privilege.name AS privilege
       FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
@@ -363,9 +301,10 @@ async function verify(client, supportsMaintain, scope, executeBefore) {
     if (!listed.has(oid) && !executeBefore.has(oid)) fail("runtime_function_execute_scope_too_broad");
 }
 
-// Global posture checks the tf-apply preflight also makes; run before COMMIT so pre-existing
-// drift is never committed together with the grant. PUBLIC grants count: has_*_privilege(role)
-// includes PUBLIC and inherited privileges.
+// Global posture checks, run before COMMIT so pre-existing drift is never committed together
+// with the grant. The tf-apply preflight repeats them, except the foreign default privileges
+// check, which runs only here. PUBLIC grants count: has_*_privilege(role) includes PUBLIC and
+// inherited privileges.
 async function verifyGlobalPosture(client, supportsMaintain) {
   const destructive = ["TRUNCATE", "REFERENCES", "TRIGGER", ...(supportsMaintain ? ["MAINTAIN"] : [])];
   const destructiveGrants = await client.query(`
@@ -418,7 +357,7 @@ try {
     ssl = { ca, rejectUnauthorized: true, servername: url.hostname };
   }
   const scope = process.env.VAYADA_DB_GRANT_SCOPE;
-  if (!["product_dml", "revoke_product_dml", "inspect_product_dml"].includes(scope)) fail("unknown_grant_scope");
+  if (!["product_dml", "inspect_product_dml"].includes(scope)) fail("unknown_grant_scope");
   if (localFixture && url.username === "vayada_target_prod_user") fail("unexpected_database_host");
   client = new pg.Client({ connectionString: url.toString(), ssl,
     connectionTimeoutMillis: 10_000, statement_timeout: 60_000, query_timeout: 60_000 });
@@ -430,10 +369,8 @@ try {
   const supportsMaintain = version.rows[0].value >= 170000;
   await assertPosture(client);
   const executeBefore = await directExecuteGrants(client);
-  const count = scope === "revoke_product_dml"
-    ? await revokeProductDml(client)
-    : await applyProductDml(client, supportsMaintain);
-  await verify(client, supportsMaintain, scope === "revoke_product_dml" ? scope : "product_dml", executeBefore);
+  const count = await applyProductDml(client, supportsMaintain);
+  await verify(client, supportsMaintain, executeBefore);
   await verifyGlobalPosture(client, supportsMaintain);
   // The inspect scope proves the grant would commit, then leaves the database untouched.
   await client.query(scope === "inspect_product_dml" ? "ROLLBACK" : "COMMIT");
