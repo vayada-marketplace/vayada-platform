@@ -179,6 +179,16 @@ locals {
       host     = "next-affiliate.vayada.com"
       redirect = local.affiliate_earnings_redirect
     }
+    # The auth-gateway smoke (tf-apply, coordinated releases) still probes this gateway's
+    # /auth/session and Google start until apps/api drops the affiliate-dashboard surface
+    # and auth-gateways.json loses its entry. Keeping /auth/* routed also keeps the target
+    # group attached, so ECS can still replace the task.
+    next-affiliate-auth = {
+      priority     = 47
+      host         = "next-affiliate.vayada.com"
+      paths        = ["/auth/*"]
+      target_group = "next-affiliate-dashboard"
+    }
     booking-frontend = {
       priority     = 50
       host         = "*.booking.vayada.com"

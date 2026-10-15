@@ -73,12 +73,15 @@ Next-stack changes must use only the `next-*` hostnames:
 
 VAY-2209 retired both affiliate portals: `affiliate.vayada.com` and
 `next-affiliate.vayada.com` answer with a permanent redirect to
-`https://next-marketplace.vayada.com/earnings` (query dropped). Their ECS services
-keep running unrouted until they are scaled to zero, and are removed 30 days later
-together with the `next-affiliate` DNS records and sign-in settings.
-`affiliate.vayada.com` stays: it is the future host for creator share links
-(`/r/*` to `next-api`), so re-point its redirect when Marketplace gets its final
-hostname.
+`https://next-marketplace.vayada.com/earnings` (query dropped). Only
+`next-affiliate.vayada.com/auth/*` still reaches its service, because the
+auth-gateway smoke probes it until `apps/api` drops the `affiliate-dashboard`
+surface and `auth-gateways.json` loses its entry. The old portal service is
+scaled to zero in Terraform after the redirect is verified; both services are
+removed 30 days later together with the `next-affiliate` DNS records and
+sign-in settings. `affiliate.vayada.com` stays: it is the future host for
+creator share links (`/r/*` to `next-api`), so re-point its redirect when
+Marketplace gets its final hostname.
 
 Before merging platform changes, review `infra/alb.tf`, `infra/route53.tf`,
 `infra/cloudflare.tf`, and `infra/ecs.tf` with `terraform plan`. The plan must
