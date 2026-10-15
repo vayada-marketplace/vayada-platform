@@ -963,11 +963,12 @@ pattern goes on `main` before 0481 is released and needs no re-run. A pattern
 that matches no table is harmless. If 0481 shipped first, the required-DML
 check would fail closed, and a grant re-run would give the writes back.
 Before committing it
-also runs the preflight's global posture checks (no TRUNCATE/REFERENCES/
-TRIGGER/MAINTAIN anywhere, no default privileges for the login from any other
-role or schema, no SECURITY DEFINER EXECUTE, no owned objects, no role
-memberships, PUBLIC grants included), so pre-existing drift is never committed
-together with the grant. The reviewed code and the CA travel in the disposable
+also runs global posture checks (no TRUNCATE/REFERENCES/TRIGGER/MAINTAIN
+anywhere, no default privileges for the login from any other role or schema,
+no SECURITY DEFINER EXECUTE, no owned objects, no role memberships, PUBLIC
+grants included), so pre-existing drift is never committed together with the
+grant. The tf-apply preflight repeats these, except the check for default
+privileges set by other roles or in other schemas: only this grant task makes it. The reviewed code and the CA travel in the disposable
 task definition, not in the run-task override; the plain `preflight` mode uses
 the same path (verified read-only against production on 2026-10-07).
 

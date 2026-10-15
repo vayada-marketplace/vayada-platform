@@ -301,9 +301,10 @@ async function verify(client, supportsMaintain, executeBefore) {
     if (!listed.has(oid) && !executeBefore.has(oid)) fail("runtime_function_execute_scope_too_broad");
 }
 
-// Global posture checks the tf-apply preflight also makes; run before COMMIT so pre-existing
-// drift is never committed together with the grant. PUBLIC grants count: has_*_privilege(role)
-// includes PUBLIC and inherited privileges.
+// Global posture checks, run before COMMIT so pre-existing drift is never committed together
+// with the grant. The tf-apply preflight repeats them, except the foreign default privileges
+// check, which runs only here. PUBLIC grants count: has_*_privilege(role) includes PUBLIC and
+// inherited privileges.
 async function verifyGlobalPosture(client, supportsMaintain) {
   const destructive = ["TRUNCATE", "REFERENCES", "TRIGGER", ...(supportsMaintain ? ["MAINTAIN"] : [])];
   const destructiveGrants = await client.query(`

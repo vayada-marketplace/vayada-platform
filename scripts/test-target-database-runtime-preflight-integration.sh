@@ -315,6 +315,7 @@ boundary_checks() {
 
   run_preflight | grep -F '"status":"PASS"' >/dev/null
 
+  # The fixture already grants UPDATE (resolved_at), so revoking only the grant option restores it.
   docker exec "${database_container}" psql -U postgres -c \
     "GRANT UPDATE (resolved_at) ON pms.channel_operational_alerts TO vayada_next_api_runtime WITH GRANT OPTION" >/dev/null
   expect_failure runtime_column_grant_option_forbidden
@@ -666,9 +667,20 @@ docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d 
 expect_failure runtime_product_dml_posture_partial:6
 docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d postgres -v ON_ERROR_STOP=1 -Atqc \
   "ALTER DEFAULT PRIVILEGES IN SCHEMA booking GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO vayada_next_api_runtime" >/dev/null
+# Sequences created later need the default USAGE, SELECT in every product schema.
+legacy_owner_psql "ALTER DEFAULT PRIVILEGES IN SCHEMA booking REVOKE USAGE, SELECT ON SEQUENCES FROM vayada_next_api_runtime" >/dev/null
+expect_failure runtime_default_privileges_missing
+legacy_owner_psql "ALTER DEFAULT PRIVILEGES IN SCHEMA booking GRANT USAGE, SELECT ON SEQUENCES TO vayada_next_api_runtime" >/dev/null
 owner_psql "GRANT UPDATE ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_narrowed_relation_writable
 owner_psql "REVOKE UPDATE ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+# Append-only tables also reject a column-level UPDATE and a DELETE.
+owner_psql "GRANT UPDATE (id) ON platform.product_audit_events TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_narrowed_relation_writable
+owner_psql "REVOKE UPDATE (id) ON platform.product_audit_events FROM vayada_next_api_runtime" >/dev/null
+owner_psql "GRANT DELETE ON platform.domain_events TO vayada_next_api_runtime" >/dev/null
+expect_failure runtime_narrowed_relation_writable
+owner_psql "REVOKE DELETE ON platform.domain_events FROM vayada_next_api_runtime" >/dev/null
 owner_psql "GRANT DELETE ON hotel_catalog.properties TO vayada_next_api_runtime" >/dev/null
 expect_failure runtime_narrowed_relation_writable
 owner_psql "REVOKE DELETE ON hotel_catalog.properties FROM vayada_next_api_runtime" >/dev/null
