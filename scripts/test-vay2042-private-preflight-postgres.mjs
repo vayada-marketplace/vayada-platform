@@ -58,7 +58,8 @@ test('preflight renews only the exact two roles on a synthetic PostgreSQL restor
   for (const name of [reader, writer])
     await root.query(`ALTER ROLE ${ident(name)} VALID UNTIL '2026-09-28T00:17:57.465Z'`);
   // PostgreSQL checks the renewed VALID UNTIL against its own clock, so renew from real time.
-  const preflightAt = Date.now();
+  // A minute behind it, so the expected expiry still proves the preflight uses the injected clock.
+  const preflightAt = Date.now() - 60_000;
   const result = await runPreflight({ connect, now: () => preflightAt });
   assert.deepEqual(result, { status: 'OK', stage: 'complete', scope: 'isolated-catalog-preflight',
     databases: 10, tables: 83, bound: false, expiresAt: new Date(preflightAt + 86_400_000).toISOString() });
