@@ -174,7 +174,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Pull test images
-        run: bash scripts/ci-pull-images.sh "public.ecr.aws/docker/library/postgres:${{ matrix.postgres }}" public.ecr.aws/docker/library/node:22-bookworm
+        run: bash scripts/ci-pull-images.sh "ghcr.io/vayada-marketplace/ci-postgres:${{ matrix.postgres }}" ghcr.io/vayada-marketplace/ci-node:22-bookworm
       - name: Verify scoped identity grants and denials
         run: bash scripts/test-target-database-identity-runtime-grant.sh "${{ matrix.postgres }}"
 
@@ -190,7 +190,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Pull test images
-        run: bash scripts/ci-pull-images.sh "public.ecr.aws/docker/library/postgres:${{ matrix.postgres }}" public.ecr.aws/docker/library/node:22-bookworm
+        run: bash scripts/ci-pull-images.sh "ghcr.io/vayada-marketplace/ci-postgres:${{ matrix.postgres }}" ghcr.io/vayada-marketplace/ci-node:22-bookworm
       - name: Verify sibling database isolation
         run: bash scripts/test-target-database-cluster-acl.sh "${{ matrix.postgres }}"
 
@@ -206,7 +206,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Pull test images
-        run: bash scripts/ci-pull-images.sh "public.ecr.aws/docker/library/postgres:${{ matrix.postgres }}" public.ecr.aws/docker/library/node:22-bookworm
+        run: bash scripts/ci-pull-images.sh "ghcr.io/vayada-marketplace/ci-postgres:${{ matrix.postgres }}" ghcr.io/vayada-marketplace/ci-node:22-bookworm
       - name: Disable, then drop, the retired hotel setup roles as vayada_admin
         run: bash scripts/test-retire-hotel-setup-database-roles.sh "${{ matrix.postgres }}"
 
@@ -220,7 +220,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
       - name: Pull test images
-        run: bash scripts/ci-pull-images.sh "public.ecr.aws/docker/library/postgres:${{ matrix.postgres }}" public.ecr.aws/docker/library/node:22-bookworm
+        run: bash scripts/ci-pull-images.sh "ghcr.io/vayada-marketplace/ci-postgres:${{ matrix.postgres }}" ghcr.io/vayada-marketplace/ci-node:22-bookworm
       - name: Exercise database role and ACL guard
         run: bash scripts/test-target-database-runtime-preflight-integration.sh "${{ matrix.postgres }}"
 

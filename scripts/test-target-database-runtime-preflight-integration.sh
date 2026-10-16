@@ -30,7 +30,7 @@ docker run --detach --rm \
   --network "${network}" \
   --network-alias vayada-db-preflight \
   --env POSTGRES_PASSWORD=postgres \
-  "public.ecr.aws/docker/library/postgres:${postgres_version}" >/dev/null
+  "ghcr.io/vayada-marketplace/ci-postgres:${postgres_version}" >/dev/null
 
 ready_checks=0
 for _ in {1..60}; do
@@ -262,7 +262,7 @@ SQL
 
 docker run --rm \
   --volume "${node_modules_container}:/work" \
-  --workdir /work public.ecr.aws/docker/library/node:22-bookworm \
+  --workdir /work ghcr.io/vayada-marketplace/ci-node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/target-database-runtime-preflight.mjs" "${work}/preflight.mjs"
 cp "${root}/scripts/grant-target-database-runtime-product-dml.mjs" "${work}/product-dml-grant.mjs"
@@ -281,7 +281,7 @@ run_grant() {
     --env "TARGET_DATABASE_MIGRATION_URL=postgresql://${database_role}:${database_password}@vayada-db-preflight:5432/postgres" \
     --env "VAYADA_AUDIT_GRANT_LOCAL_FIXTURE=${fixture_flag}" \
     --env "VAYADA_DB_GRANT_SCOPE=${grant_scope}" \
-    public.ecr.aws/docker/library/node:22-bookworm node "${grant_file}"
+    ghcr.io/vayada-marketplace/ci-node:22-bookworm node "${grant_file}"
 }
 
 run_preflight() {
@@ -291,7 +291,7 @@ run_preflight() {
     --volume "${work}/preflight.mjs:/work/preflight.mjs:ro" \
     --workdir /work \
     --env "TARGET_DATABASE_URL=postgresql://vayada_next_api_runtime:runtime@${database_container}:5432/postgres" \
-    public.ecr.aws/docker/library/node:22-bookworm node preflight.mjs
+    ghcr.io/vayada-marketplace/ci-node:22-bookworm node preflight.mjs
 }
 
 expect_failure() {
@@ -519,7 +519,7 @@ if ambiguous_tls_output="$(docker run --rm \
   --workdir /work \
   --env 'TARGET_DATABASE_MIGRATION_URL=postgresql://legacy_owner:owner@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require&ssl=0' \
   --env VAYADA_DB_RDS_CA_BUNDLE=test-ca --env VAYADA_DB_GRANT_SCOPE=product_dml \
-  public.ecr.aws/docker/library/node:22-bookworm node product-dml-grant.mjs 2>&1)"; then
+  ghcr.io/vayada-marketplace/ci-node:22-bookworm node product-dml-grant.mjs 2>&1)"; then
   echo "conflicting TLS parameter unexpectedly passed" >&2
   exit 1
 fi
@@ -531,7 +531,7 @@ if override_host_output="$(docker run --rm \
   --workdir /work \
   --env 'TARGET_DATABASE_MIGRATION_URL=postgresql://legacy_owner:owner@vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com:5432/postgres?sslmode=require&host=elsewhere.example.test' \
   --env VAYADA_DB_RDS_CA_BUNDLE=test-ca --env VAYADA_DB_GRANT_SCOPE=product_dml \
-  public.ecr.aws/docker/library/node:22-bookworm node product-dml-grant.mjs 2>&1)"; then
+  ghcr.io/vayada-marketplace/ci-node:22-bookworm node product-dml-grant.mjs 2>&1)"; then
   echo "overridden database host unexpectedly passed" >&2
   exit 1
 fi
