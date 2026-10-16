@@ -52,14 +52,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # Both steps name the same credentials file, so the copy finds the login.
       - name: Log in to ghcr.io
         if: env.MIRROR_PUBLISH == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/containers-auth.json
         run: skopeo login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin <<< "${GITHUB_TOKEN}"
 
       - name: Mirror the image
         env:
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/containers-auth.json
           IMAGE: ${{ matrix.image }}
           TAG: ${{ matrix.tag }}
           PACKAGE: ${{ matrix.package }}
