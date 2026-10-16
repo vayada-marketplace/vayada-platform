@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# VAY-2091: pull each CI test image once, retrying ECR Public's anonymous "Rate exceeded"
-# throttle. The test scripts' `docker run` calls then use the local copy instead of pulling.
+# VAY-2091: pull each CI test image once, with retries. The test scripts' `docker run` calls then
+# use the local copy instead of pulling. The images come from the ghcr.io/vayada-marketplace mirror
+# (VAY-2237, docs/ci-image-mirror.md).
 set -euo pipefail
 
 for image in "$@"; do

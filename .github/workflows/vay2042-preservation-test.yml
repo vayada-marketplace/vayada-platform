@@ -23,7 +23,7 @@ jobs:
         postgres: ['16', '17']
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:${{ matrix.postgres }}
+        image: ghcr.io/vayada-marketplace/ci-postgres:${{ matrix.postgres }}
         env:
           POSTGRES_PASSWORD: fixture
         ports: ['5432:5432']

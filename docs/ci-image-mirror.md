@@ -17,7 +17,7 @@ jobs therefore pull public copies from the organization's GitHub registry (GHCR)
 The copies come from the official Docker images and have the same digests, including every platform.
 The packages are public, so any job, laptop or cloud worker can pull them without logging in.
 
-The CI jobs switch to the mirror in separate VAY-2237 changes, made only after the first run below.
+Point a CI job at a mirror only after its first run (below) has made the package public.
 
 ## How the mirror runs
 
@@ -94,7 +94,7 @@ replace the image names by hand:
 
 The image names appear in:
 
-- `vayada`: `.github/workflows/pr-checks.yml`;
+- `vayada`: `.github/workflows/pr-checks.yml` and `scripts/test-identity-runtime-row-scope.sh`;
 - `vayada-platform`: `.github/workflows/tf-validate.yml`, `.github/workflows/vay2042-*-test.yml` and
   `scripts/test-*.sh`.
 
