@@ -1,0 +1,68 @@
+name: Mirror CI images
+
+# Copies the public images that CI test jobs pull (in vayada and vayada-platform) into public packages
+# under ghcr.io/vayada-marketplace, so those jobs stop pulling anonymously from ECR Public and Docker
+# Hub, whose shared runner IPs keep failing with "toomanyrequests" (VAY-2237). Each tag keeps the
+# upstream digest and every platform. Only main publishes; a pull request that changes the mirror
+# gets a dry run. Runbook: docs/ci-image-mirror.md.
+
+on:
+  schedule:
+    - cron: "23 4 * * 1" # Mondays 04:23 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/mirror-ci-images.yml"
+      - "scripts/mirror-ci-image.sh"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-ci-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: ${{ matrix.image }}:${{ matrix.tag }}
+    # skopeo comes preinstalled on the Ubuntu 24.04 runner image.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      # One image at a time: no two jobs create the same package at once, and a job that fails on one
+      # runner's rate limit can be re-run alone.
+      max-parallel: 1
+      matrix:
+        include:
+          - { image: postgres, tag: 15-alpine, package: ci-postgres }
+          - { image: postgres, tag: 16-alpine, package: ci-postgres }
+          - { image: postgres, tag: 17-alpine, package: ci-postgres }
+          - { image: postgres, tag: "16", package: ci-postgres }
+          - { image: postgres, tag: "17", package: ci-postgres }
+          - { image: node, tag: 22-bookworm, package: ci-node }
+    env:
+      MIRROR_PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Log in to ghcr.io
+        if: env.MIRROR_PUBLISH == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: skopeo login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin <<< "${GITHUB_TOKEN}"
+
+      - name: Mirror the image
+        env:
+          IMAGE: ${{ matrix.image }}
+          TAG: ${{ matrix.tag }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          skopeo --version
+          bash scripts/mirror-ci-image.sh "${IMAGE}" "${TAG}" "${PACKAGE}"
