@@ -311,7 +311,8 @@ locals {
         { name = "PMS_OPERATIONS_SOURCE", value = "target" },
         { name = "CHANNEX_API_BASE_URL", value = "https://app.channex.io" },
         { name = "AIRBNB_IMPORT_ENABLED", value = "true" },
-        { name = "AIRBNB_IMPORT_CALLBACK_ORIGIN", value = "https://next-marketplace.vayada.com" },
+        # VAY-2262: the Airbnb connect/return pages live in Booking Admin now.
+        { name = "AIRBNB_IMPORT_CALLBACK_ORIGIN", value = "https://next-booking-admin.vayada.com" },
         # VAY-2055: only the connection (enable) capability may run here, with the
         # dedicated worker credential; every other durable capability stays paused.
         # VAY-2108: the claimed scope adds booking sync for owned, claimed hotels.
@@ -435,6 +436,8 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-booking-admin"
       environment = [
+        # VAY-2262: serves /setup/airbnb-connect and /setup/airbnb-return (moved from marketplace-web).
+        { name = "AIRBNB_IMPORT_CALLBACK_ENABLED", value = "true" },
         { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTHKIT_LOGIN_ENABLED", value = "true" },
