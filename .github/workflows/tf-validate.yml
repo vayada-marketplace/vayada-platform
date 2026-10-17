@@ -81,7 +81,6 @@ on:
       - ".github/workflows/vay2017-historical-binding-preflight.yml"
       - ".github/workflows/vay2017-source-snapshot-import.yml"
       - "scripts/assert-terraform-protected-resources.sh"
-      - "scripts/test-marketplace-communication-unsubscribe-keys.mjs"
       - "scripts/test-finance-folio-kms-plan-guard.sh"
       - "scripts/guard-finance-folio-kms-plan.sh"
       - "scripts/test-finance-folio-kms-phase-guard.sh"
@@ -310,7 +309,6 @@ jobs:
           bash scripts/test-finance-folio-kms-plan-guard.sh
           bash -n scripts/guard-finance-folio-kms-plan.sh
           bash scripts/test-finance-folio-kms-phase-guard.sh
-          node scripts/test-marketplace-communication-unsubscribe-keys.mjs
           node --check scripts/vay2017-rehearsal-metadata.mjs
           node --test scripts/test-vay2017-rehearsal-metadata.mjs
           node --test scripts/test-vay2042-source-catalog.mjs

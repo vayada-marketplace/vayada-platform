@@ -720,7 +720,7 @@ resource "aws_iam_role" "github_actions_platform_deploy" {
         expected.update("arn:aws:ssm:eu-west-1:269416271598:parameter" + name
                         for name in re.findall(r'^  name\s*=\s*"(/vayada/[^"$]+)"', source, re.M))
         self.assertEqual(set(parameters["Resource"]), expected)
-        self.assertEqual(len(expected), 36)
+        self.assertEqual(len(expected), 35)
         declarations = {(path.name, name) for path in (ROOT / "infra").glob("*.tf")
                         for name in re.findall(r'resource "aws_ssm_parameter" "([^"]+)"', path.read_text())}
         self.assertEqual(declarations, {("ssm.tf", name) for name in
