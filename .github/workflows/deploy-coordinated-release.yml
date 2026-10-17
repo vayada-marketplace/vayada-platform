@@ -33,7 +33,6 @@ on:
           - next-pms-frontend
           - next-booking-frontend
           - next-booking-admin
-          - next-marketplace-frontend
           - next-marketplace-admin
         default: "none"
 
@@ -209,7 +208,6 @@ jobs:
           - next-pms-frontend
           - next-booking-frontend
           - next-booking-admin
-          - next-marketplace-frontend
           - next-marketplace-admin
     environment: next
     runs-on: ubuntu-latest
