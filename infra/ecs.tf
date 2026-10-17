@@ -323,6 +323,7 @@ locals {
         { name = "PMS_CHANNEX_MARKUPS_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_MESSAGING_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_REVIEWS_MODE", value = "mutating" },
+        { name = "PMS_ROOM_TYPE_DELETE_CLEANUP_PROPERTY_IDS", value = join(",", var.pms_room_type_delete_cleanup_property_ids) },
         { name = "FINANCE_SOURCE", value = "target" },
         { name = "AFFILIATE_PUBLIC_SOURCE", value = "target" },
         { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
