@@ -1,9 +1,10 @@
 name: Mirror CI images
 
-# Copies the public images that CI test jobs pull (in vayada and vayada-platform) into public packages
+# Copies the public images that CI test jobs pull (in vayada and vayada-platform) and that the vayada
+# release build pulls (BuildKit, the Dockerfile frontend, the app base images) into public packages
 # under ghcr.io/vayada-marketplace, so those jobs stop pulling anonymously from ECR Public and Docker
-# Hub, whose shared runner IPs keep failing with "toomanyrequests" (VAY-2237). Each tag keeps the
-# upstream digest and every platform. Only main publishes; a pull request that changes the mirror
+# Hub, whose shared runner IPs keep failing with "toomanyrequests" (VAY-2237, VAY-2258). Each tag keeps
+# the upstream digest and every platform. Only main publishes; a pull request that changes the mirror
 # gets a dry run. Runbook: docs/ci-image-mirror.md.
 
 on:
@@ -44,6 +45,18 @@ jobs:
           - { image: postgres, tag: "16", package: ci-postgres }
           - { image: postgres, tag: "17", package: ci-postgres }
           - { image: node, tag: 22-bookworm, package: ci-node }
+          # The vayada release build (build-coordinated-release.yml and the app Dockerfiles), VAY-2258.
+          # `sources` lists where to read an image that is not an official Docker image.
+          - { image: node, tag: 20-alpine, package: ci-node }
+          - { image: node, tag: 24-slim, package: ci-node }
+          - image: moby/buildkit
+            tag: buildx-stable-1
+            package: ci-buildkit
+            sources: public.ecr.aws/vend/moby/buildkit docker.io/moby/buildkit
+          - image: docker/dockerfile
+            tag: "1"
+            package: ci-dockerfile
+            sources: docker.io/docker/dockerfile
     env:
       MIRROR_PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
     steps:
@@ -66,6 +79,8 @@ jobs:
           IMAGE: ${{ matrix.image }}
           TAG: ${{ matrix.tag }}
           PACKAGE: ${{ matrix.package }}
+          SOURCES: ${{ matrix.sources }}
         run: |
           skopeo --version
-          bash scripts/mirror-ci-image.sh "${IMAGE}" "${TAG}" "${PACKAGE}"
+          read -r -a source_repositories <<< "${SOURCES}"
+          bash scripts/mirror-ci-image.sh "${IMAGE}" "${TAG}" "${PACKAGE}" "${source_repositories[@]}"
