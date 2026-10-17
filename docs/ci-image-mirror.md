@@ -17,7 +17,7 @@ organization's GitHub registry (GHCR):
 | `ghcr.io/vayada-marketplace/ci-node:22-bookworm` | `node:22-bookworm` |
 | `ghcr.io/vayada-marketplace/ci-node:20-alpine` | `node:20-alpine` |
 | `ghcr.io/vayada-marketplace/ci-node:24-slim` | `node:24-slim` |
-| `ghcr.io/vayada-marketplace/ci-buildkit:buildx-stable-1` | `moby/buildkit:buildx-stable-1` (ECR Public `public.ecr.aws/vend/moby/buildkit`, then Docker Hub) |
+| `ghcr.io/vayada-marketplace/ci-buildkit:buildx-stable-1` | `moby/buildkit:buildx-stable-1` (ECR Public `public.ecr.aws/vend/moby/buildkit`, then Docker Hub `docker.io/moby/buildkit`; both rate-limit anonymous pulls) |
 | `ghcr.io/vayada-marketplace/ci-dockerfile:1` | `docker/dockerfile:1` (Docker Hub only) |
 
 The copies come from the upstream images and have the same digests, including every platform.
@@ -48,7 +48,28 @@ failures, so look at the Actions tab now and then. GitHub also turns off schedul
 public repository after 60 days without repository activity; turn it back on in the Actions tab.
 
 Mirrored tags follow upstream with a delay of up to a week. To pick up a new upstream release sooner,
-refresh by hand.
+refresh by hand. The `vayada` release build does not follow the tags: it pins digests (next section).
+
+## Digests pinned by the release build
+
+The `vayada` release build pins its four images by digest (`tag@sha256:…`), so a republished mirror
+tag cannot change what ships (VAY-2258):
+
+- `ci-buildkit:buildx-stable-1` in `.github/workflows/build-coordinated-release.yml` (the pre-pull and
+  `driver-opts`);
+- `ci-dockerfile:1` in the `# syntax=` line of `apps/api/Dockerfile`;
+- `ci-node:24-slim` in `apps/api/Dockerfile`;
+- `ci-node:20-alpine` in the Dockerfiles of `apps/pms-web`, `apps/booking-web`, `apps/booking-admin`,
+  `apps/marketplace-web` and `apps/vayada-admin`.
+
+A refresh moves the GHCR tag, but the release build keeps the old digest, including any base-image
+security fixes it lacks, until someone bumps it. To bump:
+
+1. Refresh the mirror (or wait for Monday's run).
+2. Read the new digest from the mirror and check it against upstream (see "Check a mirror against
+   upstream").
+3. In one `vayada` PR, replace the old `@sha256:` value everywhere it appears (`git grep` for the old
+   digest). The release then rebuilds every service that uses it.
 
 ## First run
 
@@ -80,7 +101,8 @@ the digest, and whether the image was copied or unchanged.
 
 - Do not delete "untagged" versions of these packages. Each tag is an index that points to one
   image per platform plus attestations, and those show up as untagged versions. Deleting them breaks
-  every tag that points to them.
+  every tag that points to them. After a refresh, the index the release build pins is itself an
+  untagged version; deleting it breaks every release build.
 - Anyone who can push to `vayada-platform` can change this workflow and publish to these packages.
   PR checks in both repositories run whatever the packages contain, and the `vayada` release build
   runs `ci-buildkit` and `ci-dockerfile` and ships `ci-node:20-alpine` and `ci-node:24-slim` inside
@@ -104,6 +126,10 @@ release build to the mirror, or replace the image names by hand:
 - `ghcr.io/vayada-marketplace/ci-node:` becomes `public.ecr.aws/docker/library/node:`;
 - `ghcr.io/vayada-marketplace/ci-buildkit:` becomes `public.ecr.aws/vend/moby/buildkit:`;
 - `ghcr.io/vayada-marketplace/ci-dockerfile:` becomes `docker/dockerfile:`.
+
+The release build's references also carry `@sha256:`. Upstream keeps serving a digest only as long as
+it holds that image, so either keep the suffix after checking that upstream still serves it, or drop
+it to follow the upstream tag.
 
 The image names appear in:
 
