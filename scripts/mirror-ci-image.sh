@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# VAY-2237: copy one public CI test image into ghcr.io/vayada-marketplace without changing its digest.
+# VAY-2237/VAY-2258: copy one public CI or build image into ghcr.io/vayada-marketplace without changing
+# its digest.
 #
-#   bash scripts/mirror-ci-image.sh IMAGE TAG PACKAGE
+#   bash scripts/mirror-ci-image.sh IMAGE TAG PACKAGE [SOURCE...]
 #   e.g. bash scripts/mirror-ci-image.sh postgres 16-alpine ci-postgres
+#        bash scripts/mirror-ci-image.sh moby/buildkit buildx-stable-1 ci-buildkit \
+#          public.ecr.aws/vend/moby/buildkit docker.io/moby/buildkit
 #
 # Reads the official image IMAGE:TAG from ECR Public first and Docker Hub second (both serve the same
 # digests), then copies it by digest, with every platform, to ghcr.io/vayada-marketplace/PACKAGE:TAG.
+# For an image that is not an official Docker image, the SOURCE repositories are read instead, in order.
 # A mirror that already has the source digest is left alone. Only MIRROR_PUBLISH=true copies (the
 # workflow logs in to ghcr.io first) and then requires the mirror to be pullable without logging in;
 # otherwise this is a dry run that reports what it would do.
@@ -14,13 +18,17 @@
 # more than waiting.
 set -euo pipefail
 
-image="${1:?usage: mirror-ci-image.sh IMAGE TAG PACKAGE}"
-tag="${2:?usage: mirror-ci-image.sh IMAGE TAG PACKAGE}"
-package="${3:?usage: mirror-ci-image.sh IMAGE TAG PACKAGE}"
+image="${1:?usage: mirror-ci-image.sh IMAGE TAG PACKAGE [SOURCE...]}"
+tag="${2:?usage: mirror-ci-image.sh IMAGE TAG PACKAGE [SOURCE...]}"
+package="${3:?usage: mirror-ci-image.sh IMAGE TAG PACKAGE [SOURCE...]}"
+shift 3
 publish="${MIRROR_PUBLISH:-false}"
 read -r -a delays <<< "${MIRROR_RETRY_DELAYS:-15 45 120}"
 
-sources=("public.ecr.aws/docker/library/${image}" "docker.io/library/${image}")
+sources=("$@")
+if ((${#sources[@]} == 0)); then
+  sources=("public.ecr.aws/docker/library/${image}" "docker.io/library/${image}")
+fi
 mirror="ghcr.io/vayada-marketplace/${package}:${tag}"
 
 # A tag's digest is the sha256 of its raw manifest (for these images, the multi-platform index).

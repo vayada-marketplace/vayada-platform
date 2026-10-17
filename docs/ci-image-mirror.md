@@ -1,9 +1,11 @@
 # CI image mirror
 
-CI test jobs in `vayada` and `vayada-platform` start PostgreSQL and Node containers. Anonymous pulls
-from ECR Public and Docker Hub kept failing with `toomanyrequests: Data limit exceeded`. GitHub's
-runners share IP addresses, so other users often use up the anonymous limit first (VAY-2237). Those
-jobs therefore pull public copies from the organization's GitHub registry (GHCR):
+CI test jobs in `vayada` and `vayada-platform` start PostgreSQL and Node containers. The `vayada`
+release build (`build-coordinated-release.yml`) pulls BuildKit, the Dockerfile frontend and the Node
+base images of the app Dockerfiles. Anonymous pulls from ECR Public and Docker Hub kept failing with
+`toomanyrequests: Data limit exceeded`. GitHub's runners share IP addresses, so other users often use
+up the anonymous limit first (VAY-2237, VAY-2258). Those jobs therefore pull public copies from the
+organization's GitHub registry (GHCR):
 
 | Mirror | Copied from |
 |---|---|
@@ -13,8 +15,12 @@ jobs therefore pull public copies from the organization's GitHub registry (GHCR)
 | `ghcr.io/vayada-marketplace/ci-postgres:16` | `postgres:16` |
 | `ghcr.io/vayada-marketplace/ci-postgres:17` | `postgres:17` |
 | `ghcr.io/vayada-marketplace/ci-node:22-bookworm` | `node:22-bookworm` |
+| `ghcr.io/vayada-marketplace/ci-node:20-alpine` | `node:20-alpine` |
+| `ghcr.io/vayada-marketplace/ci-node:24-slim` | `node:24-slim` |
+| `ghcr.io/vayada-marketplace/ci-buildkit:buildx-stable-1` | `moby/buildkit:buildx-stable-1` (ECR Public `public.ecr.aws/vend/moby/buildkit`, then Docker Hub) |
+| `ghcr.io/vayada-marketplace/ci-dockerfile:1` | `docker/dockerfile:1` (Docker Hub only) |
 
-The copies come from the official Docker images and have the same digests, including every platform.
+The copies come from the upstream images and have the same digests, including every platform.
 The packages are public, so any job, laptop or cloud worker can pull them without logging in.
 
 Point a CI job at a mirror only after its first run (below) has made the package public.
@@ -24,7 +30,8 @@ Point a CI job at a mirror only after its first run (below) has made the package
 `.github/workflows/mirror-ci-images.yml` runs `scripts/mirror-ci-image.sh` once per image. It runs
 every Monday at 04:23 UTC and whenever someone starts it by hand. For each image it:
 
-- reads the upstream digest, from ECR Public first and Docker Hub second;
+- reads the upstream digest, from ECR Public first and Docker Hub second (or from the row's
+  `sources`, in order);
 - skips the image if the mirror already has that digest;
 - otherwise copies it by digest with `skopeo copy --all --preserve-digests` and checks the mirror's
   digest afterwards;
@@ -46,7 +53,8 @@ refresh by hand.
 ## First run
 
 1. In the organization's Settings → Packages, "Package creation" must allow **Public**.
-2. Run the workflow on `main`. The first run creates the `ci-postgres` and `ci-node` packages.
+2. Run the workflow on `main`. The first run creates the `ci-postgres` and `ci-node` packages
+   (VAY-2258's first run creates `ci-buildkit` and `ci-dockerfile`).
 3. Open https://github.com/orgs/vayada-marketplace/packages. If a package is private, open its
    **Package settings** and under **Danger Zone** choose **Change visibility** → **Public**.
    The workflow fails with "not pullable without logging in" until the package is public.
@@ -62,7 +70,9 @@ the digest, and whether the image was copied or unchanged.
 ## Add an image
 
 1. Add a row to the workflow's matrix: `image` and `tag` are the official Docker image and tag, and
-   `package` is the GHCR package name (`ci-<image>`).
+   `package` is the GHCR package name (`ci-<image>`). For an image that is not an official Docker
+   image, also set `sources` to the upstream repositories to read, in order, separated by spaces
+   (for example `public.ecr.aws/vend/moby/buildkit docker.io/moby/buildkit`).
 2. Merge, then run the workflow on `main`. For a new package, follow the first-run steps.
 3. Point the CI job at `ghcr.io/vayada-marketplace/<package>:<tag>`.
 
@@ -72,8 +82,9 @@ the digest, and whether the image was copied or unchanged.
   image per platform plus attestations, and those show up as untagged versions. Deleting them breaks
   every tag that points to them.
 - Anyone who can push to `vayada-platform` can change this workflow and publish to these packages.
-  PR checks in both repositories run whatever the packages contain. Review changes to the workflow
-  and script as you would review CI.
+  PR checks in both repositories run whatever the packages contain, and the `vayada` release build
+  runs `ci-buildkit` and `ci-dockerfile` and ships `ci-node:20-alpine` and `ci-node:24-slim` inside
+  every production image. Review changes to the workflow and script as you would review a release.
 
 ## Check a mirror against upstream
 
@@ -86,15 +97,19 @@ The two hashes are the same unless upstream has published a newer image since th
 
 ## If GHCR is unavailable
 
-There is no automatic fallback. Revert the VAY-2237 commits that switched CI to the mirror, or
-replace the image names by hand:
+There is no automatic fallback. Revert the VAY-2237 and VAY-2258 commits that switched CI and the
+release build to the mirror, or replace the image names by hand:
 
 - `ghcr.io/vayada-marketplace/ci-postgres:` becomes `public.ecr.aws/docker/library/postgres:`;
-- `ghcr.io/vayada-marketplace/ci-node:` becomes `public.ecr.aws/docker/library/node:`.
+- `ghcr.io/vayada-marketplace/ci-node:` becomes `public.ecr.aws/docker/library/node:`;
+- `ghcr.io/vayada-marketplace/ci-buildkit:` becomes `public.ecr.aws/vend/moby/buildkit:`;
+- `ghcr.io/vayada-marketplace/ci-dockerfile:` becomes `docker/dockerfile:`.
 
 The image names appear in:
 
-- `vayada`: `.github/workflows/pr-checks.yml` and `scripts/test-identity-runtime-row-scope.sh`;
+- `vayada`: `.github/workflows/pr-checks.yml`, `scripts/test-identity-runtime-row-scope.sh`,
+  `.github/workflows/build-coordinated-release.yml` and the Dockerfiles of `apps/api`, `apps/pms-web`,
+  `apps/booking-web`, `apps/booking-admin`, `apps/marketplace-web` and `apps/vayada-admin`;
 - `vayada-platform`: `.github/workflows/tf-validate.yml`, `.github/workflows/vay2042-*-test.yml` and
   `scripts/test-*.sh`.
 
