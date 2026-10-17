@@ -49,6 +49,8 @@ jobs:
           # `sources` lists where to read an image that is not an official Docker image.
           - { image: node, tag: 20-alpine, package: ci-node }
           - { image: node, tag: 24-slim, package: ci-node }
+          # The vayada.com landing deploy (deploy-landing.yml, apps/landing/Dockerfile), VAY-2265.
+          - { image: node, tag: 24-alpine, package: ci-node }
           - image: moby/buildkit
             tag: buildx-stable-1
             package: ci-buildkit

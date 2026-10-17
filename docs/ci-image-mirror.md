@@ -17,6 +17,7 @@ organization's GitHub registry (GHCR):
 | `ghcr.io/vayada-marketplace/ci-node:22-bookworm` | `node:22-bookworm` |
 | `ghcr.io/vayada-marketplace/ci-node:20-alpine` | `node:20-alpine` |
 | `ghcr.io/vayada-marketplace/ci-node:24-slim` | `node:24-slim` |
+| `ghcr.io/vayada-marketplace/ci-node:24-alpine` | `node:24-alpine` (the vayada.com landing build, VAY-2265) |
 | `ghcr.io/vayada-marketplace/ci-buildkit:buildx-stable-1` | `moby/buildkit:buildx-stable-1` (ECR Public `public.ecr.aws/vend/moby/buildkit`, then Docker Hub `docker.io/moby/buildkit`; both rate-limit anonymous pulls) |
 | `ghcr.io/vayada-marketplace/ci-dockerfile:1` | `docker/dockerfile:1` (Docker Hub only) |
 
@@ -61,6 +62,9 @@ tag cannot change what ships (VAY-2258):
 - `ci-node:24-slim` in `apps/api/Dockerfile`;
 - `ci-node:20-alpine` in the Dockerfiles of `apps/pms-web`, `apps/booking-web`, `apps/booking-admin`,
   `apps/marketplace-web` and `apps/vayada-admin`.
+- `ci-node:24-alpine` in `apps/landing/Dockerfile` and `ci-buildkit:buildx-stable-1` in
+  `.github/workflows/deploy-landing.yml` (VAY-2265; the landing site deploys outside the coordinated
+  release).
 
 A refresh moves the GHCR tag, but the release build keeps the old digest, including any base-image
 security fixes it lacks, until someone bumps it. To bump:
