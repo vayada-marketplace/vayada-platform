@@ -184,8 +184,8 @@ class ContractTests(unittest.TestCase):
         return release.validate_publication(**values)
 
     def test_frozen_fixture_hashes_and_contract_validate(self):
-        self.assertEqual(release.sha256_file(self.manifest_path), "6360c61c601c1c043ce032e2dd2fa22c709204fc45debd026417d09d0be84382")
-        self.assertEqual(release.sha256_file(self.record_path), "96882677caea9450ba1f94c55e3996f32a30098fa90876697c97a73a57bbe16a")
+        self.assertEqual(release.sha256_file(self.manifest_path), "d4b12732362a7022b5d9778b0cecf8308c3a183f7c626da0574fb52edd5741d6")
+        self.assertEqual(release.sha256_file(self.record_path), "10cc9744f41be016b7127aa1284f0d113c0307e99dd634783efd924f8db3bf61")
         manifest, record = self.validate()
         self.assertEqual(manifest["manifestId"], record["manifestId"])
 

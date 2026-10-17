@@ -207,11 +207,11 @@ longer deploy this way: their app-repo deploy workflows are disabled. Each legac
 deploy is an explicit `workflow_dispatch` of `deploy.yml` with an image digest
 and Flamur's go; see [Legacy app deploys](legacy-pms-freeze.md#legacy-app-deploys).
 
-The complete six-service receiver is installed separately in
+The complete five-service receiver (six until the Marketplace removal, VAY-2271) is installed separately in
 `.github/workflows/deploy-coordinated-release.yml` and remains in `legacy`
 ownership mode until VAY-2029 activates it with an exact published manifest.
 It then rejects delayed automatic per-image events for managed next services,
-deploys the API before a parallel five-frontend stage, and persists holds,
+deploys the API before a parallel four-frontend stage, and persists holds,
 checkpoints, desired state, and per-service provenance. See
 [Coordinated next releases](coordinated-releases.md) for the trust contract,
 activation boundary, manual resume, and crash-recovery behavior.

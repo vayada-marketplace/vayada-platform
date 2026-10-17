@@ -260,7 +260,6 @@ jobs:
             next-pms-frontend) expected_repository="vayada-next-pms-frontend" ;;
             next-booking-frontend) expected_repository="vayada-next-booking-frontend" ;;
             next-booking-admin) expected_repository="vayada-next-booking-admin-frontend" ;;
-            next-marketplace-frontend) expected_repository="vayada-next-marketplace-frontend" ;;
             next-marketplace-admin) expected_repository="vayada-next-admin-frontend" ;;
           esac
           if [ -n "$expected_repository" ] && [ "$ECR_REPOSITORY" != "$expected_repository" ]; then
@@ -315,7 +314,7 @@ jobs:
           TASK_FAMILY: ${{ steps.resolve.outputs.task_family }}
         run: |
           set -euo pipefail
-          if [ -z "$ROLLBACK_IMAGE" ] && { [ "$SERVICE" = "next-booking-frontend" ] || [ "$SERVICE" = "next-marketplace-frontend" ]; }; then
+          if [ -z "$ROLLBACK_IMAGE" ] && [ "$SERVICE" = "next-booking-frontend" ]; then
             ROLLBACK_IMAGE="$(
               jq -r --arg name "$TASK_FAMILY" \
                 '.containerDefinitions[] | select(.name == $name) | .image // empty' \
@@ -323,7 +322,7 @@ jobs:
             )"
           fi
           if [ -z "$ROLLBACK_IMAGE" ]; then
-            if [ "$SERVICE" = "next-booking-frontend" ] || [ "$SERVICE" = "next-marketplace-frontend" ]; then
+            if [ "$SERVICE" = "next-booking-frontend" ]; then
               echo "::error::Could not resolve the pre-cutover image for rollback."
               exit 1
             fi

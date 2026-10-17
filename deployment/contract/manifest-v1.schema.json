@@ -74,7 +74,6 @@
         "next-pms-frontend",
         "next-booking-frontend",
         "next-booking-admin",
-        "next-marketplace-frontend",
         "next-marketplace-admin"
       ],
       "properties": {
@@ -101,14 +100,6 @@
           "properties": {
             "ecrRepository": {
               "const": "vayada-next-booking-admin-frontend"
-            }
-          }
-        },
-        "next-marketplace-frontend": {
-          "$ref": "#/$defs/service",
-          "properties": {
-            "ecrRepository": {
-              "const": "vayada-next-marketplace-frontend"
             }
           }
         },
