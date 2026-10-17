@@ -7,15 +7,12 @@ locals {
     "vayada-pms-frontend",
     "vayada-creator-marketplace-backend",
     "vayada-admin-frontend",
-    "vayada-affiliate-dashboard",
     "vayada-api",
     "vayada-next-api",
     "vayada-next-booking-frontend",
     "vayada-next-booking-admin-frontend",
     "vayada-next-pms-frontend",
     "vayada-next-admin-frontend",
-    "vayada-next-marketplace-frontend",
-    "vayada-next-affiliate-dashboard",
   ]
 }
 
