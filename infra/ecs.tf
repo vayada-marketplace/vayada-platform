@@ -200,7 +200,7 @@ locals {
       ]
       secrets = []
     }
-    # VAY-2209: retired. affiliate.vayada.com redirects to Marketplace earnings (alb.tf), so
+    # VAY-2209: retired. affiliate.vayada.com redirects to vayada.com (alb.tf, VAY-2260), so
     # nothing routes here; the service and task definition stay until the 30-day deletion.
     affiliate-dashboard = {
       name           = "vayada-affiliate-dashboard"

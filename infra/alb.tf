@@ -90,9 +90,11 @@ locals {
 
   target_groups = merge(local.base_target_groups, local.staging_pms_target_groups)
 
+  # VAY-2260: the Marketplace is being removed, so the retired affiliate hosts now forward
+  # to the public site instead of the Marketplace earnings page.
   affiliate_earnings_redirect = {
-    host = "next-marketplace.vayada.com"
-    path = "/earnings"
+    host = "vayada.com"
+    path = "/"
   }
 
   base_listener_rules = {
@@ -127,9 +129,9 @@ locals {
       target_group = "pms-frontend"
     }
     # VAY-2209: the standalone affiliate portals are retired. Both hosts send a temporary
-    # (302) redirect to Marketplace earnings and drop the query, so a legacy set-password
-    # token is never forwarded. Not 301: browsers cache that indefinitely, and the target is
-    # a temporary next-* host while affiliate.vayada.com will later serve /r/* share links.
+    # (302) redirect to vayada.com and drop the query, so a legacy set-password token is
+    # never forwarded. Not 301: browsers cache that indefinitely, and both hosts go away
+    # with the Marketplace removal (VAY-2259).
     affiliate = {
       priority = 45
       host     = "affiliate.vayada.com"
