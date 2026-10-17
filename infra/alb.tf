@@ -35,11 +35,6 @@ locals {
       port         = 3001
       health_check = "/"
     }
-    affiliate-dashboard = {
-      name         = "affiliate-dashboard-tg"
-      port         = 3005
-      health_check = "/"
-    }
     next-target-backend = {
       name         = "next-target-backend-tg"
       port         = 8003
@@ -68,16 +63,6 @@ locals {
       port         = 3001
       health_check = "/"
     }
-    next-marketplace-frontend = {
-      name         = "next-mkt-front-tg"
-      port         = 3000
-      health_check = "/api/health"
-    }
-    next-affiliate-dashboard = {
-      name         = "next-affiliate-tg"
-      port         = 3005
-      health_check = "/"
-    }
   }
 
   staging_pms_target_groups = var.enable_staging_pms_runtime ? {
@@ -91,7 +76,9 @@ locals {
   target_groups = merge(local.base_target_groups, local.staging_pms_target_groups)
 
   # VAY-2260: the Marketplace is being removed, so the retired affiliate hosts now forward
-  # to the public site instead of the Marketplace earnings page.
+  # to the public site instead of the Marketplace earnings page. VAY-2271: the Marketplace
+  # host forwards the same way for three months (Flamur's decision); then the three
+  # hosts' DNS records and these rules go.
   affiliate_earnings_redirect = {
     host = "vayada.com"
     path = "/"
@@ -173,24 +160,14 @@ locals {
       target_group = "next-booking-frontend"
     }
     next-marketplace = {
-      priority     = 55
-      host         = "next-marketplace.vayada.com"
-      target_group = "next-marketplace-frontend"
+      priority = 55
+      host     = "next-marketplace.vayada.com"
+      redirect = local.affiliate_earnings_redirect
     }
     next-affiliate = {
       priority = 56
       host     = "next-affiliate.vayada.com"
       redirect = local.affiliate_earnings_redirect
-    }
-    # The auth-gateway smoke (tf-apply, coordinated releases) still probes this gateway's
-    # /auth/session and Google start until apps/api drops the affiliate-dashboard surface
-    # and auth-gateways.json loses its entry. Keeping /auth/* routed also keeps the target
-    # group attached, so ECS can still replace the task.
-    next-affiliate-auth = {
-      priority     = 47
-      host         = "next-affiliate.vayada.com"
-      paths        = ["/auth/*"]
-      target_group = "next-affiliate-dashboard"
     }
     booking-frontend = {
       priority     = 50
