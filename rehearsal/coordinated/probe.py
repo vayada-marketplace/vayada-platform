@@ -5,7 +5,7 @@ import json
 import os
 import urllib.request
 
-SERVICES = {"api", "pms", "booking-web", "booking-admin", "marketplace-web", "marketplace-admin"}
+SERVICES = {"api", "pms", "booking-web", "booking-admin", "marketplace-admin"}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -15,7 +15,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def probe(targets):
     if set(targets) != SERVICES:
-        raise ValueError("Probe requires exactly the six fixture identities")
+        raise ValueError("Probe requires exactly the five fixture identities")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     results = []
     for service, address in sorted(targets.items()):
