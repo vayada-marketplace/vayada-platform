@@ -19,12 +19,13 @@ locals {
     [for contract in local.auth_gateway_contracts_raw : tostring(contract.public_origin)],
   )
   next_frontend_allowed_origins = join(",", local.next_frontend_origins)
+  # VAY-2271: next-affiliate-dashboard and next-marketplace-frontend left the contract
+  # (the Marketplace and affiliate portals are switched off); apps/api treats their
+  # AUTH_*_ORIGIN settings as optional since the A1 release.
   auth_gateway_expected_public_origins = {
-    next-affiliate-dashboard  = "https://next-affiliate.vayada.com"
-    next-booking-admin        = "https://next-booking-admin.vayada.com"
-    next-marketplace-admin    = "https://next-admin.vayada.com"
-    next-marketplace-frontend = "https://next-marketplace.vayada.com"
-    next-pms-frontend         = "https://next-pms.vayada.com"
+    next-booking-admin     = "https://next-booking-admin.vayada.com"
+    next-marketplace-admin = "https://next-admin.vayada.com"
+    next-pms-frontend      = "https://next-pms.vayada.com"
   }
   auth_gateway_enabled_services                 = toset(keys(local.auth_gateway_expected_public_origins))
   auth_gateway_public_origin_environment_name   = "AUTH_PUBLIC_ORIGIN"
@@ -306,7 +307,6 @@ locals {
         { name = "PUBLIC_BOOKABILITY_SOURCE", value = "target" },
         { name = "BOOKING_SETTINGS_SOURCE", value = "target" },
         { name = "BOOKING_RESERVATIONS_SOURCE", value = "target" },
-        { name = "MARKETPLACE_DISCOVERY_SOURCE", value = "target" },
         { name = "MARKETPLACE_ADMIN_SOURCE", value = "target" },
         { name = "PMS_OPERATIONS_SOURCE", value = "target" },
         { name = "CHANNEX_API_BASE_URL", value = "https://app.channex.io" },
@@ -326,7 +326,6 @@ locals {
         { name = "PMS_CHANNEX_REVIEWS_MODE", value = "mutating" },
         { name = "PMS_ROOM_TYPE_DELETE_CLEANUP_PROPERTY_IDS", value = join(",", var.pms_room_type_delete_cleanup_property_ids) },
         { name = "FINANCE_SOURCE", value = "target" },
-        { name = "AFFILIATE_PUBLIC_SOURCE", value = "target" },
         { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
         { name = "BOOKING_WEB_EVENT_SINK", value = "target" },
         { name = "BOOKING_WEB_LEGACY_CHECKOUT_COMMAND_PROXY_ENABLED", value = "false" },
@@ -351,16 +350,12 @@ locals {
         { name = "AUTH_PLATFORM_ADMIN_ORIGIN", value = local.auth_gateway_public_origins_by_surface["platform-admin"] },
         { name = "AUTH_BOOKING_ADMIN_ORIGIN", value = local.auth_gateway_public_origins_by_surface["booking-admin"] },
         { name = "AUTH_PMS_WEB_ORIGIN", value = local.auth_gateway_public_origins_by_surface["pms-web"] },
-        { name = "AUTH_AFFILIATE_DASHBOARD_ORIGIN", value = local.auth_gateway_public_origins_by_surface["affiliate-dashboard"] },
-        { name = "AUTH_MARKETPLACE_WEB_ORIGIN", value = local.auth_gateway_public_origins_by_surface["marketplace-web"] },
         { name = "AUTH_COOKIE_DOMAIN", value = ".vayada.com" },
         { name = "AUTH_COOKIE_SECURE", value = "true" },
         { name = "AUTH_PMS_WEB_SUCCESS_URL", value = "https://next-pms.vayada.com/dashboard" },
         { name = "AUTH_PMS_WEB_LOGOUT_URL", value = "https://next-pms.vayada.com/login" },
         { name = "AUTH_BOOKING_ADMIN_SUCCESS_URL", value = "https://next-booking-admin.vayada.com/dashboard" },
         { name = "AUTH_BOOKING_ADMIN_LOGOUT_URL", value = "https://next-booking-admin.vayada.com/login" },
-        { name = "AUTH_AFFILIATE_DASHBOARD_SUCCESS_URL", value = "https://next-affiliate.vayada.com/dashboard" },
-        { name = "AUTH_AFFILIATE_DASHBOARD_LOGOUT_URL", value = "https://next-affiliate.vayada.com/login" },
         ], var.channex_claimed_scope == "off" ? [] : [
         { name = "PMS_CHANNEX_SCOPE", value = "claimed" },
         { name = "PMS_CHANNEX_OWNED_PROPERTY_IDS", value = join(",", var.channex_owned_property_ids) },
@@ -383,7 +378,6 @@ locals {
         { name = "AUTH_LEGACY_MARKETPLACE_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_BOOKING_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
-        { name = "AUTH_LEGACY_AFFILIATE_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         ], var.finance_expense_worker_secret_mapped ? [
         { name = "FINANCE_EXPENSE_WORKER_DATABASE_URL", valueFrom = "/vayada/prod/target-database-finance-expense-worker-url" },
         ] : [], (var.finance_export_worker_secret_mapped || var.finance_export_worker_enabled) ? [

@@ -76,12 +76,11 @@ VAY-2209 retired both affiliate portals: `affiliate.vayada.com` and
 `https://vayada.com/` (query dropped; VAY-2260 moved the target off the
 Marketplace earnings page because the Marketplace is being removed, VAY-2259).
 It is not a 301 because browsers cache those indefinitely and both hosts go
-away with the Marketplace. Only `next-affiliate.vayada.com/auth/*` still
-reaches its service, because the auth-gateway smoke probes it until `apps/api`
-drops the `affiliate-dashboard` surface and `auth-gateways.json` loses its
-entry. The old portal service is scaled to zero in Terraform; both services,
-the `next-affiliate` DNS records and the sign-in settings are removed in the
-Marketplace removal's platform window.
+away with the Marketplace. Since VAY-2271 neither `next-affiliate-dashboard`
+nor `next-marketplace-frontend` is an auth gateway, so nothing probes their
+`/auth/*` routes any more. The old portal service is scaled to zero in
+Terraform; both services, the `next-affiliate` DNS records and the sign-in
+settings are removed in the Marketplace removal's platform window.
 
 Before merging platform changes, review `infra/alb.tf`, `infra/route53.tf`,
 `infra/cloudflare.tf`, and `infra/ecs.tf` with `terraform plan`. The plan must
