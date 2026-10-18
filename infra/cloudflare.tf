@@ -68,26 +68,6 @@ resource "cloudflare_record" "next_booking_wildcard" {
   proxied = false
 }
 
-resource "cloudflare_record" "next_marketplace" {
-  count = var.enable_cloudflare_dns ? 1 : 0
-
-  zone_id = var.cloudflare_zone_id
-  name    = "next-marketplace"
-  type    = "CNAME"
-  content = data.aws_lb.main.dns_name
-  proxied = false
-}
-
-resource "cloudflare_record" "next_affiliate" {
-  count = var.enable_cloudflare_dns ? 1 : 0
-
-  zone_id = var.cloudflare_zone_id
-  name    = "next-affiliate"
-  type    = "CNAME"
-  content = data.aws_lb.main.dns_name
-  proxied = false
-}
-
 resource "cloudflare_record" "resend_dkim" {
   count = var.enable_cloudflare_dns ? 1 : 0
 
