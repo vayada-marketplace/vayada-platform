@@ -24,8 +24,10 @@ provider "aws" {
 }
 
 locals {
-  prefix   = "vayada-recovery"
-  services = toset(["api", "pms", "booking-web", "booking-admin", "marketplace-web", "marketplace-admin"])
+  prefix = "vayada-recovery"
+  # VAY-2271: marketplace-web left with the Marketplace removal; its parked fixture service,
+  # task definition, log stream and ECR repository (emptied by hand first) are destroyed.
+  services = toset(["api", "pms", "booking-web", "booking-admin", "marketplace-admin"])
   # Official Python multi-platform image, inspected 2026-09-20. Bootstrap only;
   # future fixture releases must use dedicated ECR digests and reviewed provenance.
   image = "docker.io/library/python@sha256:c4634f578a412db396771b61b064c6e546c9d6414c7fb5b1b05d5871f1885f7b"
