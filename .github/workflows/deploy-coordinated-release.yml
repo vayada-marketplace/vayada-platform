@@ -269,8 +269,8 @@ jobs:
   # AUTO_ADMIT_NEXT_API_IMAGES is "true". An automatic event whose API image is not admitted yet
   # skipped reconciliation above. scripts/coordinated_auto_admission.py admits that image only
   # when its source commit passed a full, green merge-queue run of PR Checks, no app
-  # release-train-hold is open and no database migration changed since the last admitted commit;
-  # then this job dispatches the ordinary deploy of the same publication, as an operator does
+  # release-train-hold is open, and neither a database migration nor the PR Checks definition
+  # changed since the last admitted commit; then this job dispatches the ordinary deploy of the same publication, as an operator does
   # after an admission PR. A refused gate leaves the release for a manual admission, as before.
   admit:
     name: Admit the API image automatically
@@ -307,18 +307,31 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(jq -r .sourceSha release-bundle/plan.json)
+          digest=$(jq -r '.services["next-target-backend"].digest' release-bundle/manifest.json)
+          lists=(scripts/next-api-split-compatible-images.txt scripts/next-api-ongoing-export-compatible-images.txt)
+          # Every Terraform Validate suite that reads these lists, as on an admission PR.
+          check_lists() {
+            for list in "${lists[@]}"; do
+              test "$(grep -cxF "$sha $digest" "$list")" = 1 || { echo "::error::$list must list $sha $digest once"; exit 1; }
+            done
+            python3 scripts/test-next-api-split-compatible-image.py
+            python3 -m unittest scripts/test_coordinated_release.py
+            python3 scripts/test-target-database-split-deployment-ready.py
+            python3 scripts/test-finance-export-once.py
+            node --test scripts/test-legacy-migration-oneoff.mjs
+          }
           python3 scripts/coordinated_auto_admission.py append --bundle release-bundle
-          # The admission PR's checks for these files (release.sh runs the same two suites).
-          python3 scripts/test-next-api-split-compatible-image.py
-          python3 -m unittest scripts/test_coordinated_release.py
+          check_lists
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -q -m "[VAY-2287] Admit next-${sha:0:9} to the next-api compatible-image lists" \
-            -m "Automatic admission by deploy run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}: full green merge-queue run, no release hold, no migration." \
-            scripts/next-api-split-compatible-images.txt scripts/next-api-ongoing-export-compatible-images.txt
+            -m "Automatic admission by deploy run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}: full green merge-queue run, no release hold, no migration or test-coverage change." \
+            "${lists[@]}"
           for attempt in 1 2 3; do
             if git push origin HEAD:main; then exit 0; fi
+            # Someone pushed to main meanwhile: replay onto it and check the lists again.
             git pull --rebase origin main
+            check_lists
           done
           echo "::error::Could not push the admission to main"
           exit 1

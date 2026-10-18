@@ -19,6 +19,16 @@ ADMITTED = [(ADMITTED_SHA, "sha256:" + "d" * 64)]
 PLAN = {"order": "new", "sourceSha": SHA, "artifactId": 42, "manifestSha256": "e" * 64, "publishedRecordSha256": "f" * 64}
 
 
+def pr_checks(*extra_suites, drop=(), shards="platform, pms, pricing, hotel-setup"):
+    """A PR Checks workflow shaped like the app's: jobs, matrices, named steps and suite lists."""
+    suites = [f"src/domains/suite{i}.integration.test.ts" for i in range(120) if i not in drop] + list(extra_suites)
+    return "\n".join([
+        "jobs:", "  frontend:", "    steps:", "      - name: Typecheck", "        run: npm run typecheck",
+        "  api_postgres:", "    strategy:", "      matrix:", '        postgres: [16, 17]', f"        shard: [{shards}]",
+        "    steps:", "      - name: Run PMS TypeScript PostgreSQL integration", "        run: >-",
+        "          npm --workspace vayada-api run test --", *(f"          {suite}" for suite in suites), ""])
+
+
 def full_jobs(conclusion="success"):
     names = ["Select checks", "Frontend Test, Typecheck, Lint", "Frontend Build and App Tests",
              "First-Party Auth Contracts", "PMS Web Browser Specs (1/2)", "PMS Web Browser Specs (2/2)",
@@ -40,11 +50,21 @@ class FakeGitHub:
                       "repository": {"full_name": "vayada-marketplace/vayada"}}]
         self.jobs = full_jobs()
         self.holds = []
-        self.comparison = {"status": "ahead", "files": [{"filename": "apps/api/src/server.ts"}]}
+        # Directory listings per commit: the same migrations, PR Checks definition and scripts/ci.
+        self.trees = {commit: {"packages/backend-migration": {"migrations": "m1", "src": "s" + commit[0]},
+                               ".github/workflows": {"pr-checks.yml": "p1", "deploy.yml": "d" + commit[0]},
+                               "scripts/ci": {"pr-checks.mjs": "c1", "pr-checks.test.mjs": "t" + commit[0]}}
+                      for commit in (SHA, ADMITTED_SHA)}
+        self.workflows = {SHA: pr_checks("src/new.integration.test.ts"), ADMITTED_SHA: pr_checks()}
         self.paths = []
 
-    def __call__(self, path):
+    def __call__(self, path, raw=False):
         self.paths.append(path)
+        match = re.fullmatch(r"/contents/\.github/workflows/pr-checks\.yml\?ref=([0-9a-f]{40})", path)
+        if match:
+            assert raw, path
+            return self.workflows[match.group(1)]
+        assert not raw, path
         if path.startswith("/actions/workflows/pr-checks.yml/runs?"):
             self.assert_query(path, event="merge_group", head_sha=SHA, status="success")
             return {"workflow_runs": self.runs}
@@ -55,8 +75,9 @@ class FakeGitHub:
         if path.startswith("/issues?"):
             self.assert_query(path, state="open", labels="release-train-hold")
             return self.holds
-        if path == f"/compare/{ADMITTED_SHA}...{SHA}":
-            return self.comparison
+        match = re.fullmatch(r"/contents/(.+)\?ref=([0-9a-f]{40})", path)
+        if match and match.group(1) in self.trees[match.group(2)]:
+            return [{"name": name, "sha": sha} for name, sha in self.trees[match.group(2)][match.group(1)].items()]
         raise AssertionError(f"unexpected GitHub call {path}")
 
     @staticmethod
@@ -105,20 +126,41 @@ class DecisionTests(unittest.TestCase):
         github.runs = [{**github.runs[0], "id": 3, "run_attempt": 1, "updated_at": "2026-10-18T18:00:00Z"}, github.runs[0]]
         self.assertEqual(self.decide(github), [])
 
-    def test_a_migration_or_history_that_is_not_ahead_refuses(self):
+    def test_a_migration_change_since_the_last_admission_refuses(self):
         github = FakeGitHub()
-        github.comparison["files"].append({"filename": "packages/backend-migration/migrations/0500_new.sql"})
-        self.assertEqual(self.decide(github), [
-            f"database migration changed since {ADMITTED_SHA}: packages/backend-migration/migrations/0500_new.sql"])
-        github.comparison["files"] = [{"filename": "x.sql", "previous_filename": "packages/backend-migration/migrations/0499.sql"}]
-        self.assertEqual(len(self.decide(github)), 1)
-        for status in ("behind", "diverged", "identical"):
+        github.trees[SHA]["packages/backend-migration"]["migrations"] = "changed"
+        self.assertEqual(self.decide(github), [f"packages/backend-migration/migrations changed since {ADMITTED_SHA}"])
+        # Other files next to the migrations may change.
+        github = FakeGitHub()
+        self.assertNotEqual(github.trees[SHA]["packages/backend-migration"]["src"],
+                            github.trees[ADMITTED_SHA]["packages/backend-migration"]["src"])
+        self.assertEqual(self.decide(github), [])
+
+    def test_pr_checks_may_gain_checks_but_not_lose_any(self):
+        workflow = ".github/workflows/pr-checks.yml"
+        cases = {
+            "a dropped suite": (pr_checks(drop=(7,)), [f"{workflow} no longer names test 'src/domains/suite7.integration.test.ts'"]),
+            "a renamed step": (pr_checks().replace("- name: Typecheck", "- name: Types"), [f"{workflow} no longer names step 'Typecheck'"]),
+            "a removed shard": (pr_checks(shards="platform, pms, hotel-setup"), [f"{workflow} no longer names shard 'pricing'"]),
+            "a removed job": (pr_checks().replace("  frontend:\n", ""), [f"{workflow} no longer names job 'frontend'"]),
+            "a changed npm script": (pr_checks().replace("npm run typecheck", "npm run typecheck:fast"),
+                                     [f"{workflow} no longer names run 'npm run typecheck'"]),
+        }
+        for label, (text, expected) in cases.items():
             github = FakeGitHub()
-            github.comparison["status"] = status
-            self.assertEqual(self.decide(github), [f"{SHA} is {status} of the last admitted {ADMITTED_SHA}, not ahead"])
+            github.workflows[SHA] = text
+            self.assertEqual([p.split(" (since")[0] for p in self.decide(github)], expected, label)
         github = FakeGitHub()
-        github.comparison["files"] = [{"filename": f"apps/api/f{i}.ts"} for i in range(300)]
-        self.assertEqual(self.decide(github), ["too many changed files since the last admitted commit to check for migrations"])
+        github.workflows[SHA] = pr_checks("src/a.integration.test.ts", shards="platform, pms, pms-migrations, pricing, hotel-setup")
+        self.assertEqual(self.decide(github), [])
+        github.workflows[ADMITTED_SHA] = "jobs:\n  frontend:\n"
+        self.assertIn(f"{workflow} at {ADMITTED_SHA} names only 1 checks", self.decide(github))
+
+    def test_an_unreadable_or_missing_tree_raises_instead_of_admitting(self):
+        github = FakeGitHub()
+        del github.trees[SHA]["packages/backend-migration"]["migrations"]
+        with self.assertRaisesRegex(ValueError, "migrations is missing"):
+            self.decide(github)
 
     def test_already_admitted_or_not_new_releases_are_left_alone_without_calls(self):
         github = FakeGitHub()
@@ -162,6 +204,25 @@ class BundleAndListTests(unittest.TestCase):
                     admission.main()
                 self.assertEqual(len(admission.entries(split)), 2)
 
+    def test_check_turns_any_error_into_admit_false(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self.bundle(directory)
+            output = Path(directory) / "output"
+            argv = ["coordinated_auto_admission.py", "check", "--bundle", str(bundle)]
+            for env, fetch in (({"COORDINATED_RELEASE_READ_TOKEN": ""}, FakeGitHub()),
+                               ({"COORDINATED_RELEASE_READ_TOKEN": "t"}, mock.Mock(side_effect=RuntimeError("HTTP 502")))):
+                output.write_text("")
+                with mock.patch("sys.argv", argv), mock.patch.dict("os.environ", {**env, "GITHUB_OUTPUT": str(output)}), \
+                        mock.patch.object(admission, "github_fetch", return_value=fetch):
+                    admission.main()
+                self.assertEqual(output.read_text(), "admit=false\n")
+            output.write_text("")
+            with mock.patch("sys.argv", argv), mock.patch.dict("os.environ", {"COORDINATED_RELEASE_READ_TOKEN": "t", "GITHUB_OUTPUT": str(output)}), \
+                    mock.patch.object(admission, "github_fetch", return_value=FakeGitHub()), \
+                    mock.patch.object(admission, "entries", return_value=ADMITTED):
+                admission.main()
+            self.assertEqual(output.read_text(), "admit=true\n")
+
     def test_the_real_lists_parse_as_pairs(self):
         for path in (admission.SPLIT_LIST, admission.ONGOING_EXPORT_LIST):
             for sha, digest in admission.entries(path):
@@ -188,10 +249,14 @@ class WorkflowContractTests(unittest.TestCase):
         job = self.admit_job()
         order = ["Require preparation in this attempt", "ref: main", "name: ${{ env.RELEASE_BUNDLE_ARTIFACT }}",
                  "coordinated_auto_admission.py check --bundle release-bundle",
-                 "coordinated_auto_admission.py append --bundle release-bundle",
                  "python3 scripts/test-next-api-split-compatible-image.py",
                  "python3 -m unittest scripts/test_coordinated_release.py",
-                 "git push origin HEAD:main", "gh workflow run deploy-coordinated-release.yml"]
+                 "python3 scripts/test-target-database-split-deployment-ready.py",
+                 "python3 scripts/test-finance-export-once.py",
+                 "node --test scripts/test-legacy-migration-oneoff.mjs",
+                 "coordinated_auto_admission.py append --bundle release-bundle", "check_lists\n",
+                 "git push origin HEAD:main", "git pull --rebase origin main\n            check_lists",
+                 "gh workflow run deploy-coordinated-release.yml"]
         positions = [job.index(text) for text in order]
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(job.count("if: steps.gates.outputs.admit == 'true'"), 2)

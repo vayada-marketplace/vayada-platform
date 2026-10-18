@@ -8,13 +8,19 @@ the publication: published by the app repository's release workflow from main, w
 and record digests and the source ancestry checked. This admits that image the way the reviewed
 admission PR did (release.sh), only when every gate holds:
 
-  - plan order "new": a stale or repeated release is left alone;
+  - plan order "new": the commit is newer than the accepted desired release (app main is linear,
+    so also newer than the last admitted commit); a stale or repeated release is left alone;
   - the source commit had a green merge-queue run of PR Checks in which every job succeeded and
     none was skipped, with at least MIN_JOBS jobs and both PostgreSQL versions of every leg. The
     queue fast-forwards app main to exactly that commit, so this is the release precheck;
   - no release-train-hold issue is open in the app repository (a manual release owns admission);
-  - the source commit is ahead of the last admitted one, and no database migration changed in
-    between: migrations still ship in a release someone starts.
+  - since the last admitted commit, no database migration changed (migrations still ship in a
+    release someone starts) and pr-checks.yml only gained: every
+    test file, step, job, matrix value and npm script it named is still there. What the queue run
+    tests still covers what the coordinator's release precheck last checked for coverage
+    (precheck-vs-prchecks.py), so a dropped suite cannot pass unnoticed. The selector
+    (scripts/ci/pr-checks.mjs) may change: the queue-run gate above requires every job itself.
+Any error reading GitHub refuses, like a failed gate.
 
   check  --bundle DIR   prints the decision; writes admit=true|false to GITHUB_OUTPUT
   append --bundle DIR   appends "<source sha> <digest>" to the split and ongoing-export lists
@@ -34,13 +40,16 @@ PR_CHECKS = ".github/workflows/pr-checks.yml"
 HOLD_LABEL = "release-train-hold"
 MIN_JOBS = 22
 PG_LEGS = ("platform", "pms", "pricing", "hotel-setup")
-MIGRATIONS = "packages/backend-migration/migrations/"
+# (parent directory, entry): a directory tree or file whose hash must not change between the last
+# admitted commit and the new one.
+UNCHANGED = (("packages/backend-migration", "migrations"),)
 SPLIT_LIST = ROOT / "scripts/next-api-split-compatible-images.txt"
 ONGOING_EXPORT_LIST = ROOT / "scripts/next-api-ongoing-export-compatible-images.txt"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
-Fetch = Callable[[str], Any]
+# fetch(path) returns the decoded JSON reply; fetch(path, raw=True) the file text of a contents path.
+Fetch = Callable[..., Any]
 
 
 def entries(path: Path) -> list[tuple[str, str]]:
@@ -73,8 +82,10 @@ def queue_run_problems(fetch: Fetch, sha: str) -> list[str]:
     if len(jobs) < MIN_JOBS:
         problems.append(f"only {len(jobs)} jobs ran (expected at least {MIN_JOBS})")
     names = {job.get("name") for job in jobs}
+    legs = set(PG_LEGS) | {m.group(1) for name in names
+                           if (m := re.fullmatch(r"TypeScript API PostgreSQL Integration \(PG\d+, ([\w-]+)\)", str(name)))}
     for version in (16, 17):
-        problems += [f"missing PG{version} {leg} leg" for leg in PG_LEGS
+        problems += [f"missing PG{version} {leg} leg" for leg in sorted(legs)
                      if f"TypeScript API PostgreSQL Integration (PG{version}, {leg})" not in names]
         if f"Setup Draft Reset PostgreSQL {version} Integration" not in names:
             problems.append(f"missing PG{version} setup draft reset")
@@ -88,18 +99,37 @@ def open_holds(fetch: Fetch) -> list[str]:
     return [issue.get("html_url", "?") for issue in issues if issue.get("state") == "open" and "pull_request" not in issue]
 
 
+def entry_sha(fetch: Fetch, commit: str, parent: str, name: str) -> str:
+    listing = fetch(f"/contents/{parent}?ref={commit}")
+    if not isinstance(listing, list):
+        raise ValueError(f"{parent} at {commit} is not a directory")
+    shas = [item.get("sha") for item in listing if item.get("name") == name]
+    if len(shas) != 1 or not isinstance(shas[0], str):
+        raise ValueError(f"{parent}/{name} is missing at {commit}")
+    return shas[0]
+
+
+def checks_inventory(workflow: str) -> set[tuple[str, str]]:
+    """What PR Checks names: test files, steps, jobs, matrix values and npm scripts it runs."""
+    found = {("test", m) for m in re.findall(r"[\w./-]+\.(?:test|spec)\.(?:ts|tsx|mjs|js|py)\b", workflow)}
+    found |= {("step", m.strip()) for m in re.findall(r"^\s+- name: (.+)$", workflow, re.M)}
+    found |= {("job", m) for m in re.findall(r"^  ([A-Za-z_][\w-]*):\s*$", workflow, re.M)}
+    for key, items in re.findall(r"^\s+(shard|postgres|app): \[(.+)\]\s*$", workflow, re.M):
+        found |= {(key, item.strip().strip('"')) for item in items.split(",")}
+    found |= {("run", " ".join(m.split())) for m in re.findall(r"^\s+run: (npm run [\w:-]+.*)$", workflow, re.M)}
+    return found
+
+
 def history_problems(fetch: Fetch, admitted: str, sha: str) -> list[str]:
-    """The source commit must be ahead of the last admitted one, with no migration in between."""
-    comparison = fetch(f"/compare/{admitted}...{sha}")
-    if comparison.get("status") != "ahead":
-        return [f"{sha} is {comparison.get('status')} of the last admitted {admitted}, not ahead"]
-    files = comparison.get("files")
-    # GitHub lists at most 300 changed files; a longer list cannot prove the absence of migrations.
-    if not isinstance(files, list) or len(files) >= 300:
-        return ["too many changed files since the last admitted commit to check for migrations"]
-    changed = sorted(f["filename"] for f in files if str(f.get("filename", "")).startswith(MIGRATIONS)
-                     or str(f.get("previous_filename", "")).startswith(MIGRATIONS))
-    return [f"database migration changed since {admitted}: {name}" for name in changed]
+    """What changed since the last admitted commit that a person must release."""
+    problems = [f"{parent}/{name} changed since {admitted}" for parent, name in UNCHANGED
+                if entry_sha(fetch, admitted, parent, name) != entry_sha(fetch, sha, parent, name)]
+    before, after = (checks_inventory(fetch(f"/contents/{PR_CHECKS}?ref={commit}", raw=True))
+                     for commit in (admitted, sha))
+    if len(before) < 100:
+        problems.append(f"{PR_CHECKS} at {admitted} names only {len(before)} checks")
+    problems += [f"{PR_CHECKS} no longer names {kind} {name!r} (since {admitted})" for kind, name in sorted(before - after)]
+    return problems
 
 
 def decide(fetch: Fetch, plan: dict[str, Any], sha: str, digest: str, admitted: list[tuple[str, str]]) -> list[str]:
@@ -122,7 +152,12 @@ def github_fetch(token: str) -> Fetch:
     release = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(release)
     github = release.GitHub(APP_REPOSITORY, token)
-    return lambda path: json.loads(github.request(path))
+
+    def fetch(path: str, raw: bool = False) -> Any:
+        if raw:
+            return github.request(path, accept="application/vnd.github.raw").decode()
+        return json.loads(github.request(path))
+    return fetch
 
 
 def main() -> None:
@@ -140,13 +175,17 @@ def main() -> None:
         print(f"admitted next-{sha[:9]} {digest}")
         return
     token = os.environ.get("COORDINATED_RELEASE_READ_TOKEN", "")
-    if not token:
-        raise SystemExit("COORDINATED_RELEASE_READ_TOKEN is required")
-    problems = decide(github_fetch(token), plan, sha, digest, entries(SPLIT_LIST))
+    try:
+        if not token:
+            raise ValueError("COORDINATED_RELEASE_READ_TOKEN is required")
+        problems = decide(github_fetch(token), plan, sha, digest, entries(SPLIT_LIST))
+    except Exception as error:  # GitHub errors, bounded-response limits, unexpected payloads
+        print(f"::warning title=Automatic admission refused::{error}")
+        problems = [f"could not check the gates: {error}"]
     for problem in problems:
         print(f"not admitting next-{sha[:9]}: {problem}")
     if not problems:
-        print(f"admitting next-{sha[:9]} {digest}: full green merge-queue run, no hold, no migration")
+        print(f"admitting next-{sha[:9]} {digest}: full green merge-queue run, no hold, no migration, PR Checks only gained")
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
             print(f"admit={'false' if problems else 'true'}", file=output)
