@@ -27,7 +27,11 @@ Each service is also listed in `auth_gateway_enabled_services` in `infra/ecs.tf`
 The retired `next-affiliate-dashboard` (`affiliate-dashboard`) and
 `next-marketplace-frontend` (`marketplace-web`) gateways left the contract with
 the Marketplace removal (VAY-2271); the API accepts a missing
-`AUTH_AFFILIATE_DASHBOARD_ORIGIN` / `AUTH_MARKETPLACE_WEB_ORIGIN` since then.
+`AUTH_AFFILIATE_DASHBOARD_ORIGIN` / `AUTH_MARKETPLACE_WEB_ORIGIN` since app
+commit `32dd46483` (first released in `rel-3ade10cf`, next-api task definition
+1282). The next-api task definition no longer sets them, so never roll next-api
+back to an image built before that commit: it would refuse to start with
+"Incomplete auth session config".
 CI rejects malformed or duplicate contracts and service-local declarations of the
 two reserved gateway environment variables. Terraform checks that the
 enabled-service inventory and JSON contracts match exactly, that origins are
