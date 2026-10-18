@@ -49,14 +49,6 @@
       "containerName": "vayada-next-booking-admin",
       "smoke": "auth"
     },
-    "next-marketplace-frontend": {
-      "phase": "frontend",
-      "ecrRepository": "vayada-next-marketplace-frontend",
-      "ecsService": "vayada-next-marketplace-frontend-service",
-      "taskFamily": "vayada-next-marketplace-frontend",
-      "containerName": "vayada-next-marketplace-frontend",
-      "smoke": "auth"
-    },
     "next-marketplace-admin": {
       "phase": "frontend",
       "ecrRepository": "vayada-next-admin-frontend",
