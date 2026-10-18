@@ -9,7 +9,6 @@ locals {
     "vayada-next-pms-frontend-service",
     "vayada-next-booking-frontend-service",
     "vayada-next-booking-admin-service",
-    "vayada-next-marketplace-frontend-service",
     "vayada-next-marketplace-admin-service",
   ])
 
@@ -18,7 +17,6 @@ locals {
     "vayada-next-pms-frontend",
     "vayada-next-booking-frontend",
     "vayada-next-booking-admin-frontend",
-    "vayada-next-marketplace-frontend",
     "vayada-next-admin-frontend",
   ])
 }
@@ -47,6 +45,8 @@ data "aws_iam_policy_document" "github_actions_coordinated_deploy_trust" {
   }
 }
 
+# The description stays as created ("six-service"; five since VAY-2271): the apply role may not call
+# iam:UpdateRoleDescription (coordinated_receiver_management below), so changing it fails tf-apply.
 resource "aws_iam_role" "github_actions_coordinated_deploy" {
   name                 = "vayada-github-actions-coordinated-deploy"
   description          = "Reconcile signed six-service release manifests and scoped SSM deployment state"
