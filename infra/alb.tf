@@ -75,15 +75,6 @@ locals {
 
   target_groups = merge(local.base_target_groups, local.staging_pms_target_groups)
 
-  # VAY-2260: the Marketplace is being removed, so the retired affiliate hosts now forward
-  # to the public site instead of the Marketplace earnings page. VAY-2271: the Marketplace
-  # host forwards the same way for three months (Flamur's decision); then the three
-  # hosts' DNS records and these rules go.
-  affiliate_earnings_redirect = {
-    host = "vayada.com"
-    path = "/"
-  }
-
   base_listener_rules = {
     booking-admin = {
       priority     = 10
@@ -114,15 +105,6 @@ locals {
       priority     = 40
       host         = "pms.vayada.com"
       target_group = "pms-frontend"
-    }
-    # VAY-2209: the standalone affiliate portals are retired. Both hosts send a temporary
-    # (302) redirect to vayada.com and drop the query, so a legacy set-password token is
-    # never forwarded. Not 301: browsers cache that indefinitely, and both hosts go away
-    # with the Marketplace removal (VAY-2259).
-    affiliate = {
-      priority = 45
-      host     = "affiliate.vayada.com"
-      redirect = local.affiliate_earnings_redirect
     }
     booking-root = {
       priority     = 46
@@ -158,16 +140,6 @@ locals {
       priority     = 54
       host         = "*.next-booking.vayada.com"
       target_group = "next-booking-frontend"
-    }
-    next-marketplace = {
-      priority = 55
-      host     = "next-marketplace.vayada.com"
-      redirect = local.affiliate_earnings_redirect
-    }
-    next-affiliate = {
-      priority = 56
-      host     = "next-affiliate.vayada.com"
-      redirect = local.affiliate_earnings_redirect
     }
     booking-frontend = {
       priority     = 50
@@ -219,30 +191,9 @@ resource "aws_lb_listener_rule" "services" {
   listener_arn = data.aws_lb_listener.https.arn
   priority     = each.value.priority
 
-  dynamic "action" {
-    for_each = try(each.value.redirect, null) == null ? [each.value.target_group] : []
-
-    content {
-      type             = "forward"
-      target_group_arn = aws_lb_target_group.services[action.value].arn
-    }
-  }
-
-  dynamic "action" {
-    for_each = try(each.value.redirect, null) == null ? [] : [each.value.redirect]
-
-    content {
-      type = "redirect"
-
-      redirect {
-        protocol    = "HTTPS"
-        port        = "443"
-        host        = action.value.host
-        path        = action.value.path
-        query       = ""
-        status_code = "HTTP_302"
-      }
-    }
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.services[each.value.target_group].arn
   }
 
   condition {

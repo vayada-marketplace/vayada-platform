@@ -63,23 +63,17 @@ a separate cutover ticket says otherwise:
 | `pms-api.vayada.com` | Legacy PMS API |
 | `pms.vayada.com` | Existing PMS Web |
 | `admin.vayada.com` | Existing Vayada Admin |
-| `affiliate.vayada.com` | Temporary (302) redirect to `https://vayada.com/` (VAY-2209 cutover, VAY-2260 target) |
 
 Next-stack changes must use only the `next-*` hostnames:
 `next-api.vayada.com`, `next-pms.vayada.com`, `next-admin.vayada.com`,
 `next-booking-admin.vayada.com`, `next-booking.vayada.com` and
 `*.next-booking.vayada.com`.
 
-VAY-2209 retired both affiliate portals: `affiliate.vayada.com` and
-`next-affiliate.vayada.com` answer with a temporary (302) redirect to
-`https://vayada.com/` (query dropped; VAY-2260 moved the target off the
-Marketplace earnings page because the Marketplace is being removed, VAY-2259).
-It is not a 301 because browsers cache those indefinitely and both hosts go
-away with the Marketplace. VAY-2271 removed both portal services and their
-target groups and gave `next-marketplace.vayada.com` the same 302 to
-`https://vayada.com/`; the three redirects and the `affiliate`,
-`next-affiliate` and `next-marketplace` DNS records stay for three months
-after the switch-off (Flamur, 2026-10-17) and are then deleted.
+`affiliate.vayada.com`, `next-affiliate.vayada.com` and
+`next-marketplace.vayada.com` no longer exist: VAY-2209 retired the affiliate
+portals, and VAY-2271 removed their services, the Marketplace web app, the
+interim 302 redirects to `https://vayada.com/` and the DNS records
+(2026-10-18, Flamur's decision to remove them at once).
 
 Before merging platform changes, review `infra/alb.tf`, `infra/route53.tf`,
 `infra/cloudflare.tf`, and `infra/ecs.tf` with `terraform plan`. The plan must
