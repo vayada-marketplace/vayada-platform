@@ -9,6 +9,7 @@ the Terraform plan shows no change until go-day sets a switch.
 | Terraform variable | Container variable | App default | Freeze value |
 |---|---|---|---|
 | `legacy_pms_scheduler_enabled` | `PMS_SCHEDULER_ENABLED` | `true` | `false` |
+| `legacy_pms_scheduler_job_blocklist` | `PMS_SCHEDULER_JOB_BLOCKLIST` | none | not part of the freeze; set to `["process_affiliate_payouts"]` since VAY-2259 (see below) |
 | `legacy_pms_webhook_mode` | `PMS_LEGACY_WEBHOOK_MODE` | `mutating` | `proxy_to_target` |
 | `legacy_pms_stripe_webhook_mode` | `PMS_LEGACY_STRIPE_WEBHOOK_MODE` | falls back to the line above | unset |
 | `legacy_pms_xendit_webhook_mode` | `PMS_LEGACY_XENDIT_WEBHOOK_MODE` | falls back | unset |
@@ -81,6 +82,36 @@ settings, so without these keys the switches would do nothing.
      `aws ecs describe-task-definition --region eu-west-1 --profile vayada --task-definition "$(aws ecs describe-services --region eu-west-1 --profile vayada --cluster vayada-backend-cluster --services vayada-pms-backend-service --query 'services[0].taskDefinition' --output text)" --query "taskDefinition.containerDefinitions[0].environment"`.
 5. Continue with the target writers and the drain (runbook F3 and F4).
 
+## Affiliate payout job off (VAY-2259, separate from the freeze)
+
+The Marketplace and affiliate program are retired, but the legacy PMS still ran
+`process_affiliate_payouts` on the 1st of every month at 02:00 UTC (Stripe
+transfers to affiliates). It has never paid anyone. `infra/legacy_pms_scheduler_blocklist.auto.tfvars.json`
+sets `legacy_pms_scheduler_job_blocklist` to that one job, so the legacy PMS gets
+`PMS_SCHEDULER_JOB_BLOCKLIST=process_affiliate_payouts` and the other eight jobs
+keep running. It is its own file, so the go-day freeze file and its thaw (R1)
+never touch it.
+
+The app freezes **every** legacy job when the list names a job it does not know,
+so Terraform accepts only the nine ids of `LEGACY_SCHEDULER_JOBS`
+(`apps/pms-api/app/services/scheduler.py`). The fixed-plan billing worker is not
+one of them.
+
+Verify after the apply, read-only, once the `vayada-pms-backend-service` rollout
+has completed with one running task:
+
+- `curl -s https://pms-api.vayada.com/health` shows `scheduler.enabled: true`,
+  `running: true`, `configuration_valid: true`, `active_job_count: 8`,
+  `frozen_job_count: 1`, `unknown_job_count: 0`. `active_job_count: 0` means
+  every job is frozen: roll back at once.
+- The new task logs `Legacy PMS scheduler job frozen: process_affiliate_payouts reason=blocklisted`.
+
+Roll back with a PR that deletes the file (same single replacement, without the
+entry). In an emergency, point the service back at the previous revision with
+`aws ecs update-service --cluster vayada-backend-cluster --service vayada-pms-backend-service --task-definition <previous revision>`
+(a direct production change, needs Flamur's go), then merge that PR anyway:
+otherwise the next `tf-apply.yml` rolls the service forward to the latest revision again.
+
 ## Legacy app deploys
 
 The app repo's legacy deploy workflows (`deploy-pms-api.yml`,
@@ -109,9 +140,10 @@ revision and only swaps the image.
 Open a PR that deletes `infra/legacy_pms_freeze.auto.tfvars.json`. Its plan shows
 the same single replacement, now without the entries. Merge it; `tf-apply.yml`
 rolls the service forward again. With the entries gone, the app defaults return:
-the scheduler runs, webhooks mutate and the Channex manual syncs are legacy-owned.
+the scheduler runs (still without the blocklisted affiliate payout job, whose
+file stays), webhooks mutate and the Channex manual syncs are legacy-owned.
 Providers then deliver the events they held back. Do not write `mutating` or
-`true` explicitly; deleting the file restores today's task definition exactly.
+`true` explicitly; deleting the file restores the pre-freeze task definition exactly.
 
 After the provider handover (runbook H), keep the file. Legacy stays frozen
 until it is retired (VAY-1363).
