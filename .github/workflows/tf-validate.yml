@@ -231,6 +231,7 @@ jobs:
   pricing-bootstrap-identity:
     name: Pricing bootstrap identity (offline plans)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout merge commit and its base
         uses: actions/checkout@v7
@@ -243,7 +244,7 @@ jobs:
         run: |
           set -euo pipefail
           # HEAD is the pull request's merge commit, so HEAD^1 is the base branch tip.
-          changed=$(git diff --name-only HEAD^1 HEAD)
+          changed=$(git diff --name-only --no-renames HEAD^1 HEAD)
           printf '%s\n' "$changed"
           admission_only=false
           if [ -n "$changed" ] && ! grep -qvxE 'scripts/next-api-(split|ongoing-export|channex-claimed)-compatible-images\.txt' <<<"$changed"; then

@@ -685,8 +685,11 @@ resource "aws_iam_role" "github_actions_platform_deploy" {
             attachment = source.split(f'resource "aws_iam_role_policy_attachment" "{name}" {{', 1)[1].split("\n}", 1)[0]
             self.assertIn("depends_on = [aws_iam_role_policy.creation]", attachment)
         workflow = (ROOT / ".github/workflows/tf-validate.yml").read_text()
-        setup = workflow.split("      - name: Setup Terraform\n", 1)[1].split("      - name:", 1)[0]
-        self.assertIn("terraform_wrapper: false", setup)
+        # Validate and the pricing identity job each set up Terraform; neither may use the wrapper.
+        setups = [block.split("      - name:", 1)[0] for block in workflow.split("      - name: Setup Terraform\n")[1:]]
+        self.assertEqual(len(setups), 2)
+        for setup in setups:
+            self.assertIn("terraform_wrapper: false", setup)
 
     def test_ssm_opt_in_is_exact_and_defaults_remain_inactive(self):
         self.assertEqual(self.inspect(decrypt=True), {})
