@@ -424,8 +424,6 @@ locals {
         { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_FRONTEND_URL", value = "https://next-pms.vayada.com" },
-        { name = "NEXT_PUBLIC_MARKETPLACE_API_URL", value = "https://next-api.vayada.com" },
-        { name = "NEXT_PUBLIC_MARKETPLACE_URL", value = "https://next-marketplace.vayada.com" },
         { name = "NEXT_PUBLIC_BOOKING_URL_TEMPLATE", value = "https://{slug}.next-booking.vayada.com" },
         { name = "NEXT_PUBLIC_BOOKING_RESERVATIONS_ENABLED", value = "true" },
       ]

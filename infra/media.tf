@@ -9,7 +9,6 @@ locals {
     "https://admin.vayada.com",
     "https://admin.booking.vayada.com",
     "https://pms.vayada.com",
-    "https://next-marketplace.vayada.com",
     "https://next-admin.vayada.com",
     "https://next-booking-admin.vayada.com",
     "https://next-pms.vayada.com",

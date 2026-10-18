@@ -63,7 +63,6 @@ resource "aws_s3_bucket_cors_configuration" "uploads" {
       "https://*.booking.vayada.com",
       "https://next-admin.vayada.com",
       "https://next-booking-admin.vayada.com",
-      "https://next-marketplace.vayada.com",
       "https://next-pms.vayada.com",
     ]
     expose_headers  = ["ETag"]
