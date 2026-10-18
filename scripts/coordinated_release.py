@@ -190,8 +190,9 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
         fail("Producer repository and branch are immutable in v1")
     if not re.fullmatch(r"[0-9]{12}", str(deployment["accountId"])):
         fail("Deployment accountId must be a 12-digit AWS account")
-    if not isinstance(config["services"], dict) or len(config["services"]) != 6:
-        fail("The v1 physical map must contain exactly six services")
+    # VAY-2271: next-marketplace-frontend left the map with the Marketplace removal.
+    if not isinstance(config["services"], dict) or len(config["services"]) != 5:
+        fail("The v1 physical map must contain exactly five services")
     phases = []
     for key, service in config["services"].items():
         if not SAFE_COMPONENT_RE.fullmatch(key):
@@ -207,8 +208,8 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict[str, Any]:
         for field in ("ecrRepository", "ecsService", "taskFamily", "containerName"):
             if not SAFE_COMPONENT_RE.fullmatch(service[field]):
                 fail(f"Invalid {field} for {key}")
-    if phases.count("api") != 1 or phases.count("frontend") != 5:
-        fail("The v1 physical map must contain one API and five frontends")
+    if phases.count("api") != 1 or phases.count("frontend") != 4:
+        fail("The v1 physical map must contain one API and four frontends")
     return config
 
 
@@ -286,7 +287,7 @@ def validate_manifest(manifest: dict[str, Any], config: dict[str, Any]) -> None:
         barrier_ids.add(barrier_id)
     services = manifest["services"]
     if not isinstance(services, dict) or set(services) != set(config["services"]):
-        fail("Manifest services must exactly match the six configured service keys")
+        fail("Manifest services must exactly match the five configured service keys")
     for key, image in services.items():
         exact_keys(image, {"ecrRepository", "digest", "imageSourceSha"}, f"manifest.services.{key}")
         expected_repo = config["services"][key]["ecrRepository"]
@@ -1212,7 +1213,6 @@ def bootstrap_evidence(aws: Aws, github: GitHub, config: dict[str, Any], key: st
             "next-pms-frontend": "deploy-next-pms-web.yml",
             "next-booking-frontend": "deploy-next-booking-web.yml",
             "next-booking-admin": "deploy-next-booking-admin.yml",
-            "next-marketplace-frontend": "deploy-next-marketplace-web.yml",
             "next-marketplace-admin": "deploy-next-vayada-admin.yml",
         }[key]
         details = aws.json("ecr", "describe-images", "--repository-name",
