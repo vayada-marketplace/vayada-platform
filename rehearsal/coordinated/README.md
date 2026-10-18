@@ -45,10 +45,13 @@ terraform show -json recovery.tfplan > plan.json
 shasum -a 256 recovery.tfplan
 ```
 
-The first plan must contain exactly 28 creates, zero changes and zero deletes:
-one VPC, subnet, internet gateway, route table, route association, security group,
-cluster and log group; five ECR repositories, task definitions and services; one
-execution role and its inline policy. Review resource names, IAM and the exact
+A plan from empty state must contain exactly 31 creates, zero changes and zero
+deletes: one VPC, subnet, internet gateway, route table, route association,
+security group, cluster and log group; five ECR repositories, task definitions
+and services; one execution role and its inline policy; the private runner role
+and its policy (`runner-iam.tf`); the two scenario roles and their policies
+(`scenario-iam.tf`). The September bootstrap had 28: six services, before the
+runner and scenario roles existed. Review resource names, IAM and the exact
 saved-plan hash before explicit apply approval. Do not run the production root,
 use `-target` to mask unrelated changes, or auto-apply on merge.
 
