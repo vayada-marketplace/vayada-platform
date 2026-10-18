@@ -285,6 +285,12 @@ locals {
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", value = "mutating" },
         { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
+        # VAY-2286: the vayada.com contact form posts to POST /api/contact; only that route
+        # answers this origin (no credentials, not in AUTH_ALLOWED_ORIGINS).
+        { name = "CONTACT_INTAKE_ALLOWED_ORIGINS", value = "https://vayada.com" },
+        # VAY-2286: each contact-form message is emailed here (Reply-To: the visitor), through the
+        # booking email provider (RESEND_API_KEY / BOOKING_EMAIL_FROM below). Not a secret.
+        { name = "CONTACT_NOTIFICATION_RECIPIENT", value = "t.schreyer@vayada.com" },
         { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "active_publication" },
         { name = "BOOKING_DOMAIN_RESOLUTION_SOURCE", value = "target" },
