@@ -332,7 +332,8 @@ class RecoverySequenceTests(unittest.TestCase):
         for key in self.config["services"]:
             self.reconcile(key)
         self.finalize()
-        self.assertEqual(len(self.aws.mutations), 6)
+        service_count = len(self.config["services"])
+        self.assertEqual(len(self.aws.mutations), service_count)
         plan = self.prepare("duplicate")
         self.assertEqual(plan["order"], "duplicate")
         self.assertEqual({row["action"] for row in plan["services"].values()}, {"verify"})
@@ -340,8 +341,8 @@ class RecoverySequenceTests(unittest.TestCase):
             self.reconcile(key)
             self.assertEqual(self.state(key, "provenance")["operationId"], "duplicate")
         self.finalize()
-        self.assertEqual(len(self.aws.mutations), 6)
-        self.assertEqual(len(self.smoke_calls), 12)
+        self.assertEqual(len(self.aws.mutations), service_count)
+        self.assertEqual(len(self.smoke_calls), 2 * service_count)
 
     def test_partial_failure_keeps_successes_and_requires_explicit_resume(self):
         original = self.aws.live[self.target]
