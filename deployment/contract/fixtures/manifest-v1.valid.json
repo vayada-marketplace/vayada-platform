@@ -50,11 +50,6 @@
       "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "imageSourceSha": "0000000000000000000000000000000000000000"
     },
-    "next-marketplace-frontend": {
-      "ecrRepository": "vayada-next-marketplace-frontend",
-      "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "imageSourceSha": "0000000000000000000000000000000000000000"
-    },
     "next-marketplace-admin": {
       "ecrRepository": "vayada-next-admin-frontend",
       "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",

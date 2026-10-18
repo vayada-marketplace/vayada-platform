@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "manifestId": "vayada-release/v1/1111111111111111111111111111111111111111/41001/2",
-  "manifestSha256": "6360c61c601c1c043ce032e2dd2fa22c709204fc45debd026417d09d0be84382",
+  "manifestSha256": "d4b12732362a7022b5d9778b0cecf8308c3a183f7c626da0574fb52edd5741d6",
   "candidateArtifactId": 90210,
   "candidateArtifactName": "next-release-candidate-v1-41001-2",
   "producer": {
