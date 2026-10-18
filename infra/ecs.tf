@@ -285,6 +285,9 @@ locals {
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", value = "mutating" },
         { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
+        # VAY-2286: the vayada.com contact form posts to POST /api/contact; only that route
+        # answers this origin (no credentials, not in AUTH_ALLOWED_ORIGINS).
+        { name = "CONTACT_INTAKE_ALLOWED_ORIGINS", value = "https://vayada.com" },
         { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "active_publication" },
         { name = "BOOKING_DOMAIN_RESOLUTION_SOURCE", value = "target" },
