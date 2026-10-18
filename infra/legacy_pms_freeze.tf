@@ -1,12 +1,38 @@
 # VAY-1362: freeze switches for the production legacy PMS (vayada-pms-backend).
 # Every switch defaults to null. A null switch adds nothing to the container, so
-# the task definition stays byte-identical until go-day sets one.
-# See docs/legacy-pms-freeze.md.
+# the task definition stays byte-identical until a switch is set: go-day sets the
+# freeze ones, legacy_pms_scheduler_blocklist.auto.tfvars.json stops the affiliate
+# payout job. See docs/legacy-pms-freeze.md.
 
 variable "legacy_pms_scheduler_enabled" {
   description = "PMS_SCHEDULER_ENABLED on production legacy PMS. null keeps the app default (true); false freezes every legacy scheduler job."
   type        = bool
   default     = null
+}
+
+# The ids mirror LEGACY_SCHEDULER_JOBS in apps/pms-api/app/services/scheduler.py. The app
+# freezes ALL jobs when the list holds an id it does not know, so a typo must fail here.
+variable "legacy_pms_scheduler_job_blocklist" {
+  description = "PMS_SCHEDULER_JOB_BLOCKLIST on production legacy PMS: legacy scheduler jobs to stop while the others keep running. null keeps the app default (none)."
+  type        = list(string)
+  default     = null
+
+  validation {
+    condition = var.legacy_pms_scheduler_job_blocklist == null ? true : (length(var.legacy_pms_scheduler_job_blocklist) > 0 && alltrue([
+      for job in var.legacy_pms_scheduler_job_blocklist : contains([
+        "expire_pending_bookings",
+        "cancel_stale_unpaid_bookings",
+        "cleanup_expired_drafts",
+        "process_property_payouts",
+        "process_affiliate_payouts",
+        "poll_xendit_processing_payouts",
+        "poll_channex_bookings",
+        "full_channex_ari_sync",
+        "advance_calendar_auto_open_windows",
+      ], job)
+    ]))
+    error_message = "legacy_pms_scheduler_job_blocklist must be null or a non-empty list of known legacy PMS scheduler job ids. An unknown id would freeze every legacy job."
+  }
 }
 
 variable "legacy_pms_webhook_mode" {
@@ -80,6 +106,7 @@ locals {
   legacy_pms_freeze_environment = [
     for entry in [
       { name = "PMS_SCHEDULER_ENABLED", value = var.legacy_pms_scheduler_enabled == null ? null : tostring(var.legacy_pms_scheduler_enabled) },
+      { name = "PMS_SCHEDULER_JOB_BLOCKLIST", value = var.legacy_pms_scheduler_job_blocklist == null ? null : join(",", var.legacy_pms_scheduler_job_blocklist) },
       { name = "PMS_LEGACY_WEBHOOK_MODE", value = var.legacy_pms_webhook_mode },
       { name = "PMS_LEGACY_STRIPE_WEBHOOK_MODE", value = var.legacy_pms_stripe_webhook_mode },
       { name = "PMS_LEGACY_XENDIT_WEBHOOK_MODE", value = var.legacy_pms_xendit_webhook_mode },
