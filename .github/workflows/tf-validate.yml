@@ -24,6 +24,8 @@ on:
       - "scripts/coordinated_release.py"
       - "scripts/test_coordinated_release.py"
       - "scripts/test_coordinated_recovery.py"
+      - "scripts/coordinated_auto_admission.py"
+      - "scripts/test_coordinated_auto_admission.py"
       - "scripts/roll-forward-auth-gateways.sh"
       - "scripts/smoke-auth-gateway.sh"
       - "scripts/smoke-next-booking-public.sh"
@@ -241,6 +243,7 @@ jobs:
           python3 -m py_compile scripts/coordinated_release.py
           python3 -m unittest scripts/test_coordinated_release.py -v
           python3 -m unittest scripts/test_coordinated_recovery.py -v
+          python3 -m unittest scripts/test_coordinated_auto_admission.py -v
           bash -n scripts/check-migration-rehearsal-media.sh
           bash scripts/test-migration-rehearsal-media.sh
           node --check scripts/migration-rehearsal-reader-contract.mjs
