@@ -201,22 +201,6 @@ locals {
       ]
       secrets = []
     }
-    # VAY-2209: retired. affiliate.vayada.com redirects to vayada.com (alb.tf, VAY-2260), so
-    # nothing routes here; the service and task definition stay until the 30-day deletion.
-    affiliate-dashboard = {
-      name           = "vayada-affiliate-dashboard"
-      desired_count  = 0
-      container_port = 3005
-      cpu            = 256
-      memory         = 512
-      health_check   = "/"
-      log_group      = "/ecs/vayada-affiliate-dashboard"
-      environment = [
-        { name = "NEXT_PUBLIC_API_URL", value = "https://pms-api.vayada.com" },
-        { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://booking-api.vayada.com" },
-      ]
-      secrets = []
-    }
   }
 
   staging_pms_service = var.enable_staging_pms_runtime ? {
@@ -467,58 +451,25 @@ locals {
       ]
       secrets = []
     }
-    next-marketplace-frontend = {
-      name           = "vayada-next-marketplace-frontend"
-      container_port = 3000
-      cpu            = 256
-      memory         = 512
-      health_check   = "/"
-      log_group      = "/ecs/vayada-next-marketplace-frontend"
-      environment = [
-        { name = "AIRBNB_IMPORT_CALLBACK_ENABLED", value = "true" },
-        { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
-        { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
-        { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-pms.vayada.com" },
-        { name = "NEXT_PUBLIC_BOOKING_ADMIN_URL", value = "https://next-booking-admin.vayada.com" },
-      ]
-      secrets = []
-    }
-    next-affiliate-dashboard = {
-      name           = "vayada-next-affiliate-dashboard"
-      container_port = 3005
-      cpu            = 256
-      memory         = 512
-      health_check   = "/"
-      log_group      = "/ecs/vayada-next-affiliate-dashboard"
-      environment = [
-        { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
-        { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
-        { name = "NEXT_PUBLIC_AUTHKIT_COMPATIBILITY_TOKEN_ENABLED", value = "false" },
-      ]
-      secrets = []
-    }
   }
 
   services = merge(local.base_services, local.staging_pms_service, local.next_services)
 
   # Map from service key to ECR repo name
   ecr_repo_map = {
-    "booking-backend"           = "vayada-booking-backend"
-    "booking-frontend"          = "vayada-booking-frontend"
-    "booking-admin"             = "vayada-booking-admin-frontend"
-    "pms-backend"               = "vayada-pms-backend"
-    "pms-frontend"              = "vayada-pms-frontend"
-    "marketplace-backend"       = "vayada-creator-marketplace-backend"
-    "marketplace-admin"         = "vayada-admin-frontend"
-    "affiliate-dashboard"       = "vayada-affiliate-dashboard"
-    "staging-pms-backend"       = "vayada-pms-backend"
-    "next-target-backend"       = "vayada-next-api"
-    "next-pms-frontend"         = "vayada-next-pms-frontend"
-    "next-booking-frontend"     = "vayada-next-booking-frontend"
-    "next-booking-admin"        = "vayada-next-booking-admin-frontend"
-    "next-marketplace-admin"    = "vayada-next-admin-frontend"
-    "next-marketplace-frontend" = "vayada-next-marketplace-frontend"
-    "next-affiliate-dashboard"  = "vayada-next-affiliate-dashboard"
+    "booking-backend"        = "vayada-booking-backend"
+    "booking-frontend"       = "vayada-booking-frontend"
+    "booking-admin"          = "vayada-booking-admin-frontend"
+    "pms-backend"            = "vayada-pms-backend"
+    "pms-frontend"           = "vayada-pms-frontend"
+    "marketplace-backend"    = "vayada-creator-marketplace-backend"
+    "marketplace-admin"      = "vayada-admin-frontend"
+    "staging-pms-backend"    = "vayada-pms-backend"
+    "next-target-backend"    = "vayada-next-api"
+    "next-pms-frontend"      = "vayada-next-pms-frontend"
+    "next-booking-frontend"  = "vayada-next-booking-frontend"
+    "next-booking-admin"     = "vayada-next-booking-admin-frontend"
+    "next-marketplace-admin" = "vayada-next-admin-frontend"
   }
 }
 

@@ -41,7 +41,6 @@ Lock table: `vayada-terraform-lock` (DynamoDB).
 | PMS Web               | `vayada-pms-frontend`                | `vayada-pms-frontend-service`        | `pms.vayada.com`           |
 | Legacy Marketplace API | `vayada-creator-marketplace-backend` | `vayada-marketplace-backend-service` | `api.vayada.com`           |
 | Marketplace Admin     | `vayada-admin-frontend`              | `vayada-marketplace-admin-service`   | (internal)                 |
-| Affiliate Dashboard   | `vayada-affiliate-dashboard`         | `vayada-affiliate-dashboard-service` | (unrouted, VAY-2209)       |
 | Next PMS Web          | `vayada-next-pms-frontend`           | `vayada-next-pms-frontend-service`   | `next-pms.vayada.com`      |
 | Landing               | `vayada-landing`                     | App Runner                           | (App Runner auto-deploy)   |
 
@@ -68,19 +67,19 @@ a separate cutover ticket says otherwise:
 
 Next-stack changes must use only the `next-*` hostnames:
 `next-api.vayada.com`, `next-pms.vayada.com`, `next-admin.vayada.com`,
-`next-booking-admin.vayada.com`, `next-booking.vayada.com`,
-`*.next-booking.vayada.com` and `next-marketplace.vayada.com`.
+`next-booking-admin.vayada.com`, `next-booking.vayada.com` and
+`*.next-booking.vayada.com`.
 
 VAY-2209 retired both affiliate portals: `affiliate.vayada.com` and
 `next-affiliate.vayada.com` answer with a temporary (302) redirect to
 `https://vayada.com/` (query dropped; VAY-2260 moved the target off the
 Marketplace earnings page because the Marketplace is being removed, VAY-2259).
 It is not a 301 because browsers cache those indefinitely and both hosts go
-away with the Marketplace. Since VAY-2271 neither `next-affiliate-dashboard`
-nor `next-marketplace-frontend` is an auth gateway, so nothing probes their
-`/auth/*` routes any more. The old portal service is scaled to zero in
-Terraform; both services, the `next-affiliate` DNS records and the sign-in
-settings are removed in the Marketplace removal's platform window.
+away with the Marketplace. VAY-2271 removed both portal services and their
+target groups and gave `next-marketplace.vayada.com` the same 302 to
+`https://vayada.com/`; the three redirects and the `affiliate`,
+`next-affiliate` and `next-marketplace` DNS records stay for three months
+after the switch-off (Flamur, 2026-10-17) and are then deleted.
 
 Before merging platform changes, review `infra/alb.tf`, `infra/route53.tf`,
 `infra/cloudflare.tf`, and `infra/ecs.tf` with `terraform plan`. The plan must
@@ -521,7 +520,7 @@ gh workflow run deploy.yml \
   --field environment=production
 ```
 
-Service keys: `booking-backend`, `booking-frontend`, `booking-admin`, `pms-backend`, `pms-frontend`, `marketplace-backend`, `marketplace-admin`, `affiliate-dashboard`.
+Service keys: `booking-backend`, `booking-frontend`, `booking-admin`, `pms-backend`, `pms-frontend`, `marketplace-backend`, `marketplace-admin`.
 
 Parallel next-stack service keys: `next-target-backend`, `next-pms-frontend`.
 `next-target-backend` serves `next-api.vayada.com`; `next-pms-frontend` remains
