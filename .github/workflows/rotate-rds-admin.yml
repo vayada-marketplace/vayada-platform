@@ -36,8 +36,8 @@ jobs:
         run: test "$WORKFLOW_REF" = refs/heads/main
       - name: Check explicit confirmation
         env:
-          MODE: ${{ inputs.mode }}
           CONFIRMATION: ${{ inputs.confirmation }}
+          MODE: ${{ inputs.mode }}
         run: test "$MODE" = check || test "$CONFIRMATION" = "VAY-2038"
       - name: Checkout code
         uses: actions/checkout@v7
