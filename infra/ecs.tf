@@ -163,9 +163,11 @@ locals {
       container_port = 8000
       cpu            = 256
       memory         = 512
-      desired_count  = var.legacy_marketplace_api_desired_count
-      health_check   = "/health"
-      log_group      = "/ecs/vayada-marketplace-backend"
+      # VAY-2259: switched off (api.vayada.com answers 410 at the load balancer). The
+      # service, its variable and secret go in the hard removal.
+      desired_count = 0
+      health_check  = "/health"
+      log_group     = "/ecs/vayada-marketplace-backend"
       environment = [
         # vayada.com = marketing site (contact form + /hotel-creator-network
         # live-data fetch); app.vayada.com = the creator marketplace app.
@@ -194,8 +196,10 @@ locals {
       container_port = 3001
       cpu            = 256
       memory         = 512
-      health_check   = "/"
-      log_group      = "/ecs/vayada-marketplace-admin"
+      # VAY-2259: switched off (admin.vayada.com redirects to next-admin.vayada.com).
+      desired_count = 0
+      health_check  = "/"
+      log_group     = "/ecs/vayada-marketplace-admin"
       environment = [
         { name = "NEXT_PUBLIC_API_URL", value = "https://api.vayada.com" },
       ]
