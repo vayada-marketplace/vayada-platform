@@ -5,8 +5,6 @@ locals {
     "vayada-booking-admin-frontend",
     "vayada-pms-backend",
     "vayada-pms-frontend",
-    "vayada-creator-marketplace-backend",
-    "vayada-admin-frontend",
     "vayada-api",
     "vayada-next-api",
     "vayada-next-booking-frontend",
@@ -14,10 +12,6 @@ locals {
     "vayada-next-pms-frontend",
     "vayada-next-admin-frontend",
   ]
-
-  # VAY-2259: the old Python Marketplace API and the old admin build are retired. Deletable
-  # with their images; a follow-up removes them after the App Runner copy of the admin is gone.
-  ecr_retiring_repos = ["vayada-creator-marketplace-backend", "vayada-admin-frontend"]
 }
 
 resource "aws_ecr_repository" "repos" {
@@ -25,7 +19,7 @@ resource "aws_ecr_repository" "repos" {
 
   name                 = each.value
   image_tag_mutability = "MUTABLE"
-  force_delete         = contains(local.ecr_retiring_repos, each.value)
+  force_delete         = false
 
   image_scanning_configuration {
     scan_on_push = true
