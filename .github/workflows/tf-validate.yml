@@ -133,6 +133,7 @@ on:
       - "scripts/run-vay2042-target-bootstrap.sh"
       - "scripts/test-vay2042-target-runner.mjs"
       - "scripts/test-vay2042-media-infra.mjs"
+      - "scripts/test-next-api-media-role.mjs"
       - "scripts/test-legacy-pms-freeze.mjs"
       - "docs/legacy-pms-freeze.md"
       - "scripts/legacy-migration-oneoff.sh"
@@ -374,6 +375,7 @@ jobs:
           node --test scripts/test-vay2042-source-reader-runner.mjs
           node --test scripts/test-vay2042-target-runner.mjs
           node --test scripts/test-vay2042-media-infra.mjs
+          node --test scripts/test-next-api-media-role.mjs
           node --test scripts/test-legacy-migration-oneoff.mjs
           bash -n scripts/legacy-migration-oneoff.sh
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/test_legacy_readonly_counts.py -v

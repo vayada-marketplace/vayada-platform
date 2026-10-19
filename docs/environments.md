@@ -108,6 +108,8 @@ guarded legacy migration, the role also has read-only object access to
 the `creators/*` and `listings/*` prefixes in `vayada-uploads-prod`, plus
 `vayada-creator-marketplace-images`; it cannot list or mutate either legacy
 bucket. Remove that legacy read access after retirement evidence is accepted.
+The role may also create and read invalidations on the `images.vayada.com`
+CloudFront distribution only, so deleted public media leaves the cache too.
 
 Public media is served at `https://images.vayada.com`. CloudFront signs origin
 requests with Origin Access Control and can read only `public/*`. Its `/public`
@@ -131,7 +133,14 @@ PLATFORM_MEDIA_PUBLIC_PATH_PREFIX=media
 PLATFORM_MEDIA_PUBLIC_CACHE_CONTROL=public, max-age=31536000, immutable
 PLATFORM_MEDIA_PRIVATE_DOWNLOAD_TTL_SECONDS=300
 PLATFORM_MEDIA_PRIVATE_DOWNLOAD_MAX_TTL_SECONDS=900
+PLATFORM_MEDIA_CDN_DISTRIBUTION_ID=<images.vayada.com distribution ID>
+PLATFORM_MEDIA_RETIRED_PURGE_ENABLED=false
 ```
+
+`PLATFORM_MEDIA_RETIRED_PURGE_ENABLED` follows the Terraform variable
+`platform_media_retired_purge_enabled` (default `false`). It switches on the
+one-time VAY-2272 purge of retired Marketplace and creator media; turn it on only
+with Flamur's yes and off again once the purge has finished.
 
 #### Rollout
 

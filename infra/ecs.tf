@@ -237,6 +237,9 @@ locals {
         { name = "PLATFORM_MEDIA_PUBLIC_CACHE_CONTROL", value = "public, max-age=31536000, immutable" },
         { name = "PLATFORM_MEDIA_PRIVATE_DOWNLOAD_TTL_SECONDS", value = "300" },
         { name = "PLATFORM_MEDIA_PRIVATE_DOWNLOAD_MAX_TTL_SECONDS", value = "900" },
+        # VAY-2272: deleted public media is also cleared from the images.vayada.com cache.
+        { name = "PLATFORM_MEDIA_CDN_DISTRIBUTION_ID", value = aws_cloudfront_distribution.private_profile_media.id },
+        { name = "PLATFORM_MEDIA_RETIRED_PURGE_ENABLED", value = tostring(var.platform_media_retired_purge_enabled) },
         { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "mutating" },
         { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
