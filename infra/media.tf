@@ -98,6 +98,42 @@ resource "aws_s3_bucket_lifecycle_configuration" "private_profile_media" {
     }
   }
 
+  # VAY-2272: replaced and deleted media is really gone 30 days later (old versions and the
+  # delete markers they leave behind); current objects never expire.
+  rule {
+    id     = "expire-replaced-public-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "public/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
+
+  rule {
+    id     = "expire-replaced-private-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "private/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
+
   depends_on = [aws_s3_bucket_versioning.private_profile_media]
 }
 
