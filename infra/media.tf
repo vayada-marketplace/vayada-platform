@@ -13,6 +13,12 @@ locals {
   ]
 }
 
+variable "platform_media_retired_purge_enabled" {
+  type        = bool
+  default     = false
+  description = "Run next-api's one-time purge of retired Marketplace and creator media (VAY-2272)."
+}
+
 resource "aws_s3_bucket" "private_profile_media" {
   bucket = local.private_profile_media_bucket_name
 
@@ -318,6 +324,12 @@ resource "aws_iam_role_policy" "next_api_media" {
           "${aws_s3_bucket.uploads.arn}/listings/*",
           "arn:aws:s3:::vayada-creator-marketplace-images/*",
         ]
+      },
+      {
+        Sid      = "InvalidatePublicMediaCache"
+        Effect   = "Allow"
+        Action   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
+        Resource = aws_cloudfront_distribution.private_profile_media.arn
       }
     ]
   })
