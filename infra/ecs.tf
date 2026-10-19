@@ -323,7 +323,6 @@ locals {
         { name = "WORKOS_CLIENT_ID", valueFrom = "/vayada/prod/workos-client-id" },
         { name = "WORKOS_WEBHOOK_SECRET", valueFrom = "/vayada/prod/workos-webhook-secret" },
         { name = "AUTH_COOKIE_SECRET", valueFrom = "/vayada/prod/auth-cookie-secret" },
-        { name = "AUTH_LEGACY_MARKETPLACE_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_BOOKING_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         ], var.finance_expense_worker_secret_mapped ? [
