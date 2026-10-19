@@ -75,6 +75,15 @@ locals {
 
   target_groups = merge(local.base_target_groups, local.staging_pms_target_groups)
 
+  # VAY-2259: the old Python Marketplace (api.vayada.com, admin.vayada.com and the
+  # app.vayada.com App Runner frontend) is switched off. Temporary (302) redirects, so
+  # browsers don't cache them, and the query is dropped. The retired API answers 410.
+  legacy_marketplace_api_retired = {
+    status_code  = "410"
+    content_type = "application/json"
+    message_body = jsonencode({ detail = "This Vayada API has been retired." })
+  }
+
   base_listener_rules = {
     booking-admin = {
       priority     = 10
@@ -82,9 +91,9 @@ locals {
       target_group = "booking-admin"
     }
     admin = {
-      priority     = 15
-      host         = "admin.vayada.com"
-      target_group = "marketplace-admin"
+      priority = 15
+      host     = "admin.vayada.com"
+      redirect = { host = "next-admin.vayada.com", path = "/" }
     }
     booking-api = {
       priority     = 20
@@ -92,9 +101,22 @@ locals {
       target_group = "booking-backend"
     }
     marketplace-api = {
-      priority     = 25
-      host         = "api.vayada.com"
-      target_group = "marketplace-backend"
+      priority       = 25
+      host           = "api.vayada.com"
+      fixed_response = local.legacy_marketplace_api_retired
+    }
+    # The old PMS and old Booking Admin still link here (setup, app switcher). Their
+    # sessions don't carry over, so hotels land on Booking Admin's setup or log-in page.
+    legacy-marketplace-app-setup = {
+      priority = 26
+      host     = "app.vayada.com"
+      paths    = ["/setup", "/setup/*"]
+      redirect = { host = "next-booking-admin.vayada.com", path = "/setup" }
+    }
+    legacy-marketplace-app = {
+      priority = 27
+      host     = "app.vayada.com"
+      redirect = { host = "next-booking-admin.vayada.com", path = "/login" }
     }
     pms-api = {
       priority     = 30
@@ -191,9 +213,44 @@ resource "aws_lb_listener_rule" "services" {
   listener_arn = data.aws_lb_listener.https.arn
   priority     = each.value.priority
 
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.services[each.value.target_group].arn
+  dynamic "action" {
+    for_each = try(each.value.target_group, null) == null ? [] : [each.value.target_group]
+
+    content {
+      type             = "forward"
+      target_group_arn = aws_lb_target_group.services[action.value].arn
+    }
+  }
+
+  dynamic "action" {
+    for_each = try(each.value.redirect, null) == null ? [] : [each.value.redirect]
+
+    content {
+      type = "redirect"
+
+      redirect {
+        protocol    = "HTTPS"
+        port        = "443"
+        host        = action.value.host
+        path        = action.value.path
+        query       = ""
+        status_code = "HTTP_302"
+      }
+    }
+  }
+
+  dynamic "action" {
+    for_each = try(each.value.fixed_response, null) == null ? [] : [each.value.fixed_response]
+
+    content {
+      type = "fixed-response"
+
+      fixed_response {
+        content_type = action.value.content_type
+        message_body = action.value.message_body
+        status_code  = action.value.status_code
+      }
+    }
   }
 
   condition {
