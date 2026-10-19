@@ -115,6 +115,12 @@ origin path maps a viewer request such as `/media/<id>/original_safe/<version>.w
 to `public/media/<id>/original_safe/<version>.webp` in S3. The bucket blocks all
 anonymous access, and CloudFront cannot read `private/*` or `staging/*`.
 
+The bucket is versioned. Abandoned `staging/*` uploads expire after one day. Under
+`public/*` and `private/*`, current objects never expire, but replaced or deleted
+objects stay as old versions for 30 days and are then removed, together with the
+delete markers left behind. After that, a deleted photo or PMS attachment cannot
+be restored.
+
 `next-api` receives the complete media serving contract:
 
 ```text
