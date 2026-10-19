@@ -344,13 +344,18 @@ existence, role-creation ability, and database CONNECT grant authority; it
 does not provision or grant anything.
 
 If the protected marketplace administrator URL and the RDS master password
-diverge, use the manually dispatched `Rotate RDS Administrator` workflow with
-the exact `VAY-2038` confirmation. It runs under the shared
-`production-ecs-mutations` lock, rotates only `vayada-database`, updates only
-`/vayada/prod/db-marketplace-url`, and restarts only the legacy Marketplace API.
-An exact, tagged pending `SecureString` makes interrupted runs retryable and is
-removed only after the service stabilizes. The workflow emits sanitized stage
-codes and never prints the password. Terraform owns the parameter metadata but
+diverge, use the manually dispatched `Rotate RDS Administrator` workflow. Mode
+`check` (the default) validates everything and logs in with the current
+password through a one-off ECS task (`run-target-database-runtime-preflight.sh
+--check-rds-admin-login`, read-only); it changes nothing. Mode `apply` needs the
+exact `VAY-2038` confirmation. It runs under the shared
+`production-ecs-mutations` lock, rotates only `vayada-database`, updates
+`/vayada/prod/db-marketplace-url` and, while it exists, the legacy Marketplace
+API's `/vayada/prod/db-marketplace-url-ssl`. It restarts that API only while its
+desired count is 1 (VAY-2259 switches it off), then proves the new password
+with the same one-off login. An exact, tagged pending `SecureString` makes
+interrupted runs retryable and is removed only after that login passes. The
+workflow emits sanitized stage codes and never prints the password. Terraform owns the parameter metadata but
 ignores its operationally rotated value so a later apply cannot restore an
 older credential. After a successful run, synchronize the repository's
 `TF_VAR_DB_MASTER_PASSWORD` secret from the protected parameter without putting
