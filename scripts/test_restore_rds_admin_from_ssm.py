@@ -2,6 +2,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import subprocess
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -81,7 +82,10 @@ class RestoreRdsAdminTests(unittest.TestCase):
     def test_workflow_uses_production_mutation_lock(self):
         workflow = (ROOT / ".github/workflows/rotate-rds-admin.yml").read_text()
         self.assertIn("group: production-ecs-mutations", workflow)
-        self.assertIn("python3 scripts/restore-rds-admin-from-ssm.py apply", workflow)
+        self.assertIn('python3 scripts/restore-rds-admin-from-ssm.py "$MODE"', workflow)
+        self.assertIn("default: check", workflow)
+        self.assertIn('test "$MODE" = check || test "$CONFIRMATION" = "VAY-2038"', workflow)
+        self.assertNotIn("api.vayada.com", workflow + SCRIPT.read_text())
         self.assertNotIn("TF_VAR_DB_MASTER_PASSWORD", workflow)
 
     def test_terraform_preserves_rotated_value_and_scopes_rds_write(self):
@@ -144,6 +148,42 @@ class RestoreRdsAdminTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.RotationError, "rotation_failed_service_mapping"):
             MODULE.validate(sts, ssm, rds, ecs, recovery=True)
 
+    def test_validate_skips_switched_off_consumer_and_keeps_its_parameter(self):
+        sts, ssm, rds, ecs = trusted_clients()
+        ecs.describe_services.side_effect = None
+        ecs.describe_services.return_value = {"services": [{"status": "ACTIVE", "desiredCount": 0, "deployments": []}]}
+        ssm.describe_parameters.return_value = {"Parameters": [{"Name": MODULE.LEGACY_PARAMETER}]}
+        ssm.get_parameter.side_effect = lambda Name, WithDecryption: {"Parameter": {
+            "Name": Name,
+            "Type": "SecureString",
+            "Value": f"postgresql://{MODULE.MASTER_USER}:legacy@{MODULE.HOST}:5432/postgres?sslmode=require",
+        }}
+        url, consumer_parameter, consumer_url, task_definition, deployment_id = MODULE.validate(
+            sts, ssm, rds, ecs, recovery=False
+        )
+        self.assertEqual(consumer_parameter, MODULE.LEGACY_PARAMETER)
+        self.assertEqual(consumer_url.hostname, MODULE.HOST)
+        self.assertIsNone(task_definition)
+        self.assertIsNone(deployment_id)
+        ecs.describe_task_definition.assert_not_called()
+
+    def test_validate_accepts_deleted_consumer_without_its_parameter(self):
+        sts, ssm, rds, ecs = trusted_clients()
+        ecs.describe_services.side_effect = None
+        ecs.describe_services.return_value = {"services": [], "failures": [{"reason": "MISSING"}]}
+        ssm.describe_parameters.return_value = {"Parameters": []}
+        url, consumer_parameter, consumer_url, task_definition, _ = MODULE.validate(sts, ssm, rds, ecs, recovery=False)
+        self.assertEqual(consumer_parameter, MODULE.PARAMETER)
+        self.assertIs(consumer_url, url)
+        self.assertIsNone(task_definition)
+
+    def test_validate_rejects_unreviewed_consumer_count(self):
+        sts, ssm, rds, ecs = trusted_clients()
+        ecs.describe_services.side_effect = None
+        ecs.describe_services.return_value = {"services": [{"status": "ACTIVE", "desiredCount": 2, "deployments": []}]}
+        with self.assertRaisesRegex(MODULE.RotationError, "rotation_failed_service_validation"):
+            MODULE.validate(sts, ssm, rds, ecs, recovery=False)
+
     def test_pending_metadata_requires_exact_tags(self):
         ssm = Mock()
         ssm.describe_parameters.return_value = {"Parameters": [{
@@ -182,8 +222,8 @@ class RestoreRdsAdminTests(unittest.TestCase):
         )
         secret = "generated-safe-password"
         with patch.object(MODULE.secrets, "token_urlsafe", return_value=secret), patch.object(
-            MODULE, "verify_database_health"
-        ) as health:
+            MODULE, "verify_admin_login"
+        ) as login:
             MODULE.rotate(
                 ssm, rds, ecs, url, consumer_parameter, consumer_url,
                 task_definition, deployment_id, recovery=False,
@@ -196,7 +236,22 @@ class RestoreRdsAdminTests(unittest.TestCase):
             taskDefinition=task_definition,
             forceNewDeployment=True,
         )
-        health.assert_called_once_with()
+        login.assert_called_once_with()
+        ssm.delete_parameter.assert_called_once_with(Name=MODULE.PENDING_PARAMETER)
+
+    def test_rotate_without_consumer_updates_parameters_and_checks_login_only(self):
+        _, ssm, rds, ecs = trusted_clients()
+        url = urlsplit(
+            f"postgresql://{MODULE.MASTER_USER}:legacy@{MODULE.HOST}:5432/postgres?sslmode=require"
+        )
+        with patch.object(MODULE, "load_or_create_pending", return_value="pending-safe-password"), patch.object(
+            MODULE, "verify_admin_login"
+        ) as login:
+            MODULE.rotate(ssm, rds, ecs, url, MODULE.LEGACY_PARAMETER, url, None, None, recovery=False)
+        writes = [call.kwargs["Name"] for call in ssm.put_parameter.call_args_list]
+        self.assertEqual(writes, [MODULE.PARAMETER, MODULE.LEGACY_PARAMETER])
+        ecs.update_service.assert_not_called()
+        login.assert_called_once_with()
         ssm.delete_parameter.assert_called_once_with(Name=MODULE.PENDING_PARAMETER)
 
     def test_rotate_updates_reviewed_legacy_consumer_parameter(self):
@@ -209,7 +264,7 @@ class RestoreRdsAdminTests(unittest.TestCase):
         url = MODULE.connection_url(ssm, MODULE.PARAMETER)
         legacy_url = MODULE.connection_url(ssm, MODULE.LEGACY_PARAMETER)
         with patch.object(MODULE, "load_or_create_pending", return_value="pending-safe-password"), patch.object(
-            MODULE, "verify_database_health"
+            MODULE, "verify_admin_login"
         ):
             MODULE.rotate(
                 ssm, rds, ecs, url, MODULE.LEGACY_PARAMETER, legacy_url,
@@ -265,39 +320,56 @@ class RestoreRdsAdminTests(unittest.TestCase):
             )
         ssm.delete_parameter.assert_not_called()
 
-    def test_database_health_requires_database_connection(self):
-        response = Mock()
-        response.__enter__ = Mock(return_value=response)
-        response.__exit__ = Mock(return_value=False)
-        response.read.return_value = b'{"status":"healthy","database":{"connected":true}}'
-        with patch.object(MODULE, "urlopen", return_value=response):
-            MODULE.verify_database_health()
+    def test_admin_login_requires_the_runner_pass_for_the_master_user(self):
+        passed = subprocess.CompletedProcess(MODULE.ADMIN_LOGIN_CHECK, 0, '{"status": "PASS", "user": "vayada_admin"}\n', "")
+        with patch.object(MODULE.subprocess, "run", return_value=passed) as run:
+            MODULE.verify_admin_login()
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][-1], "--check-rds-admin-login")
+        for result in (
+            subprocess.CompletedProcess(MODULE.ADMIN_LOGIN_CHECK, 1, "", "Runtime preflight task failed"),
+            subprocess.CompletedProcess(MODULE.ADMIN_LOGIN_CHECK, 0, '{"status": "PASS", "user": "other"}\n', ""),
+            subprocess.CompletedProcess(MODULE.ADMIN_LOGIN_CHECK, 0, "not json\n", ""),
+        ):
+            with patch.object(MODULE.subprocess, "run", return_value=result) as run, self.assertRaisesRegex(
+                MODULE.RotationError, "rotation_failed_admin_login"
+            ):
+                MODULE.verify_admin_login()
+            self.assertEqual(run.call_count, 2)
+        with patch.object(MODULE.subprocess, "run", side_effect=subprocess.TimeoutExpired("bash", 900)), \
+                self.assertRaisesRegex(MODULE.RotationError, "rotation_failed_admin_login"):
+            MODULE.verify_admin_login()
 
-    def test_database_health_failure_is_sanitized_and_preserves_pending(self):
+    def test_admin_login_failure_is_sanitized_and_preserves_pending(self):
         _, ssm, rds, ecs = trusted_clients()
         url, consumer_parameter, consumer_url, task_definition, deployment_id = MODULE.validate(
             *trusted_clients(), recovery=False
         )
         with patch.object(MODULE, "load_or_create_pending", return_value="generated-safe-password"), patch.object(
-            MODULE, "verify_database_health", side_effect=MODULE.RotationError("rotation_failed_database_health")
-        ), self.assertRaisesRegex(MODULE.RotationError, "rotation_failed_database_health"):
+            MODULE, "verify_admin_login", side_effect=MODULE.RotationError("rotation_failed_admin_login")
+        ), self.assertRaisesRegex(MODULE.RotationError, "rotation_failed_admin_login"):
             MODULE.rotate(
                 ssm, rds, ecs, url, consumer_parameter, consumer_url,
                 task_definition, deployment_id, recovery=False,
             )
         ssm.delete_parameter.assert_not_called()
 
-    def test_check_never_rotates_or_prints_password(self):
+    def test_check_logs_in_but_never_rotates_or_prints_password(self):
         clients = trusted_clients()
         output = io.StringIO()
         with patch.object(MODULE, "clients", return_value=clients), patch.object(
             MODULE, "pending_metadata", return_value=False
         ), patch.object(sys, "argv", [str(SCRIPT), "check"]), patch.object(
             MODULE, "rotate"
-        ) as rotate, redirect_stdout(output):
+        ) as rotate, patch.object(MODULE, "verify_admin_login") as login, redirect_stdout(output):
             MODULE.main()
         rotate.assert_not_called()
-        self.assertEqual(json.loads(output.getvalue()), {"status": "PASS", "mode": "check", "recovery": False})
+        login.assert_called_once_with()
+        self.assertEqual(json.loads(output.getvalue()), {
+            "status": "PASS", "mode": "check", "recovery": False,
+            "adminLogin": "PASS", "restarts": MODULE.SERVICE,
+        })
+        self.assertNotIn("legacy", output.getvalue())
 
 
 if __name__ == "__main__":

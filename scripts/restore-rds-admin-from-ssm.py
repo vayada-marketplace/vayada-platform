@@ -3,10 +3,10 @@
 
 import argparse
 import json
+import pathlib
 import secrets
+import subprocess
 import sys
-import time
-from urllib.request import Request, urlopen
 from urllib.parse import quote, urlsplit, urlunsplit
 
 
@@ -22,7 +22,10 @@ EXPECTED_CA = "rds-ca-rsa2048-g1"
 CLUSTER = "vayada-backend-cluster"
 SERVICE = "vayada-marketplace-backend-service"
 SERVICE_CONTAINER = "vayada-marketplace-backend"
-DATABASE_HEALTH_URL = "https://api.vayada.com/health/db"
+# VAY-2259: the legacy Marketplace API is being retired, so a one-off ECS task proves the
+# rotated URL logs in instead of polling that API's /health/db.
+ADMIN_LOGIN_CHECK = ("bash", str(pathlib.Path(__file__).with_name("run-target-database-runtime-preflight.sh")),
+                     "--check-rds-admin-login")
 PENDING_TAGS = {
     "Project": "vayada",
     "Environment": "production",
@@ -83,6 +86,11 @@ def connection_url(ssm, name):
     return url
 
 
+def parameter_exists(ssm, name):
+    response = ssm.describe_parameters(ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [name]}])
+    return bool(response["Parameters"])
+
+
 def validate(sts, ssm, rds, ecs, recovery):
     if sts.get_caller_identity()["Account"] != ACCOUNT:
         raise RotationError("rotation_failed_account_validation")
@@ -104,9 +112,16 @@ def validate(sts, ssm, rds, ecs, recovery):
 
     url = connection_url(ssm, PARAMETER)
 
-    service = ecs.describe_services(cluster=CLUSTER, services=[SERVICE])["services"][0]
+    services = ecs.describe_services(cluster=CLUSTER, services=[SERVICE])["services"]
+    if not services or services[0]["status"] != "ACTIVE" or services[0]["desiredCount"] == 0:
+        # VAY-2259: the legacy Marketplace API is off or gone. Nothing to restart, but keep its
+        # parameter in step while it exists so scaling the service back up still logs in.
+        consumer_parameter = LEGACY_PARAMETER if parameter_exists(ssm, LEGACY_PARAMETER) else PARAMETER
+        consumer_url = url if consumer_parameter == PARAMETER else connection_url(ssm, consumer_parameter)
+        return url, consumer_parameter, consumer_url, None, None
+    service = services[0]
     primary = [item for item in service["deployments"] if item["status"] == "PRIMARY"]
-    if service["status"] != "ACTIVE" or service["desiredCount"] != 1 or len(primary) != 1:
+    if service["desiredCount"] != 1 or len(primary) != 1:
         raise RotationError("rotation_failed_service_validation")
     if not recovery and (
         service["runningCount"] != 1
@@ -164,21 +179,17 @@ def run_stage(code, operation):
         raise RotationError(code) from None
 
 
-def verify_database_health():
-    request = Request(DATABASE_HEALTH_URL, headers={"User-Agent": "vayada-rds-rotation/1"})
-    for attempt in range(12):
+def verify_admin_login():
+    # The runner prints only its JSON result; never echo its output (it never holds the password).
+    for _ in range(2):
         try:
-            with urlopen(request, timeout=10) as response:
-                body = response.read(4097)
-            if len(body) <= 4096:
-                payload = json.loads(body)
-                if payload.get("status") == "healthy" and payload.get("database", {}).get("connected") is True:
-                    return
+            result = subprocess.run(ADMIN_LOGIN_CHECK, capture_output=True, text=True, timeout=900, check=False)
+            lines = result.stdout.strip().splitlines()
+            if result.returncode == 0 and lines and json.loads(lines[-1]) == {"status": "PASS", "user": MASTER_USER}:
+                return
         except Exception:
             pass
-        if attempt < 11:
-            time.sleep(5)
-    raise RotationError("rotation_failed_database_health")
+    raise RotationError("rotation_failed_admin_login")
 
 
 def url_with_password(url, password):
@@ -205,6 +216,30 @@ def completed_replacement(ecs, deployment_id, task_definition):
         or primary[0].get("rolloutState") != "COMPLETED"
     ):
         raise RotationError("rotation_failed_service_replacement")
+
+
+def restart_consumer(ecs, task_definition, previous_deployment_id):
+    updated_service = run_stage("rotation_failed_service_update", lambda: ecs.update_service(
+        cluster=CLUSTER, service=SERVICE, taskDefinition=task_definition, forceNewDeployment=True,
+    ))["service"]
+    updated_primary = [item for item in updated_service["deployments"] if item["status"] == "PRIMARY"]
+    if (
+        len(updated_primary) != 1
+        or not updated_primary[0].get("id")
+        or updated_primary[0]["id"] == previous_deployment_id
+        or updated_primary[0].get("taskDefinition") != task_definition
+    ):
+        raise RotationError("rotation_failed_service_update_validation")
+    deployment_id = updated_primary[0]["id"]
+    run_stage("rotation_failed_service_wait", lambda: ecs.get_waiter("services_stable").wait(
+        cluster=CLUSTER,
+        services=[SERVICE],
+        WaiterConfig={"Delay": 15, "MaxAttempts": 80},
+    ))
+    run_stage(
+        "rotation_failed_service_replacement",
+        lambda: completed_replacement(ecs, deployment_id, task_definition),
+    )
 
 
 def rotate(
@@ -241,28 +276,9 @@ def rotate(
             Value=url_with_password(consumer_url, password),
             Overwrite=True,
         ))
-    updated_service = run_stage("rotation_failed_service_update", lambda: ecs.update_service(
-        cluster=CLUSTER, service=SERVICE, taskDefinition=task_definition, forceNewDeployment=True,
-    ))["service"]
-    updated_primary = [item for item in updated_service["deployments"] if item["status"] == "PRIMARY"]
-    if (
-        len(updated_primary) != 1
-        or not updated_primary[0].get("id")
-        or updated_primary[0]["id"] == previous_deployment_id
-        or updated_primary[0].get("taskDefinition") != task_definition
-    ):
-        raise RotationError("rotation_failed_service_update_validation")
-    deployment_id = updated_primary[0]["id"]
-    run_stage("rotation_failed_service_wait", lambda: ecs.get_waiter("services_stable").wait(
-        cluster=CLUSTER,
-        services=[SERVICE],
-        WaiterConfig={"Delay": 15, "MaxAttempts": 80},
-    ))
-    run_stage(
-        "rotation_failed_service_replacement",
-        lambda: completed_replacement(ecs, deployment_id, task_definition),
-    )
-    run_stage("rotation_failed_database_health", verify_database_health)
+    if task_definition is not None:
+        restart_consumer(ecs, task_definition, previous_deployment_id)
+    run_stage("rotation_failed_admin_login", verify_admin_login)
     run_stage("rotation_failed_pending_cleanup", lambda: ssm.delete_parameter(Name=PENDING_PARAMETER))
 
 
@@ -275,14 +291,17 @@ def main():
     url, consumer_parameter, consumer_url, task_definition, previous_deployment_id = validate(
         sts, ssm, rds, ecs, recovery
     )
+    restarted = SERVICE if task_definition is not None else None
     if args.mode == "check":
-        print(json.dumps({"status": "PASS", "mode": "check", "recovery": recovery}))
+        verify_admin_login()
+        print(json.dumps({"status": "PASS", "mode": "check", "recovery": recovery,
+                          "adminLogin": "PASS", "restarts": restarted}))
         return
     rotate(
         ssm, rds, ecs, url, consumer_parameter, consumer_url,
         task_definition, previous_deployment_id, recovery,
     )
-    print(json.dumps({"status": "PASS", "mode": "apply", "instance": INSTANCE, "service": SERVICE}))
+    print(json.dumps({"status": "PASS", "mode": "apply", "instance": INSTANCE, "service": restarted}))
 
 
 if __name__ == "__main__":
