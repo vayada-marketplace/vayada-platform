@@ -809,5 +809,14 @@ fi
 grep -F '"code":"runtime_dml_schema_missing"' <<<"${missing_schema_output}" >/dev/null
 owner_psql "ALTER SCHEMA distribution_hidden RENAME TO distribution" >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
+# A marketplace schema re-created by any other role is never trusted.
+owner_psql "CREATE SCHEMA marketplace" >/dev/null
+expect_failure runtime_schema_usage_missing
+if foreign_schema_output="$(run_grant legacy_owner owner 2>&1)"; then
+  echo "product DML grant accepted a schema owned by another role" >&2; exit 1
+fi
+grep -F '"code":"runtime_dml_owner_required"' <<<"${foreign_schema_output}" >/dev/null
+owner_psql "DROP SCHEMA marketplace" >/dev/null
+run_preflight | grep -F '"posture":"product_dml"' >/dev/null
 
 echo "PostgreSQL ${postgres_version} runtime preflight integration passed"
