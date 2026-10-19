@@ -793,4 +793,21 @@ fi
 grep -F '"code":"unknown_grant_scope"' <<<"${revoke_output}" >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
 
+# VAY-2272: app migration 0499 drops the marketplace schema before P2 removes it from the lists.
+# The grant and the preflight then cover the six product schemas left; any other must still exist.
+legacy_owner_psql "DROP SCHEMA marketplace CASCADE" >/dev/null
+run_grant legacy_owner owner \
+  | grep -F '"schemas":["hotel_catalog","booking","pms","distribution","finance","platform"]' >/dev/null
+run_preflight | grep -F '"posture":"product_dml"' >/dev/null
+[[ "$(owner_psql "SELECT count(*) FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  WHERE n.nspname IN ('hotel_catalog','booking','pms','marketplace','distribution','finance','platform') AND d.defaclobjtype = 'r'")" == 6 ]]
+owner_psql "ALTER SCHEMA distribution RENAME TO distribution_hidden" >/dev/null
+expect_failure runtime_product_schema_missing:distribution
+if missing_schema_output="$(run_grant legacy_owner owner 2>&1)"; then
+  echo "product DML grant accepted a missing product schema" >&2; exit 1
+fi
+grep -F '"code":"runtime_dml_schema_missing"' <<<"${missing_schema_output}" >/dev/null
+owner_psql "ALTER SCHEMA distribution_hidden RENAME TO distribution" >/dev/null
+run_preflight | grep -F '"posture":"product_dml"' >/dev/null
+
 echo "PostgreSQL ${postgres_version} runtime preflight integration passed"

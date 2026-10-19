@@ -39,7 +39,7 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertIn("pg_default_acl", CHECK)
         self.assertIn("acl.defaclrole = $2", CHECK)
         # VAY-2211: no legacy allowlist posture; every product schema needs the default DML grant.
-        self.assertIn("check(coveredSchemas === productSchemas.length, `runtime_product_dml_posture_partial:${coveredSchemas}`)", CHECK)
+        self.assertIn("check(coveredSchemas === activeProductSchemas.length, `runtime_product_dml_posture_partial:${coveredSchemas}`)", CHECK)
         self.assertIn('posture: "product_dml"', CHECK)
         for removed in ("VAYADA_DB_REQUIRE_PRODUCT_DML", "VAYADA_DB_REQUIRE_FOLIO_COMMAND", '"legacy"', "legacyRequiredRelations",
                         "legacyStagedRelations", "legacyRequiredColumns", "legacyStagedColumns", "legacyOptionalReads",
@@ -72,6 +72,14 @@ class RuntimePreflightContractTest(unittest.TestCase):
             "runtime_function_execute_missing",
         ):
             self.assertIn(code, CHECK)
+
+    def test_marketplace_schema_may_be_absent_until_the_lists_drop_it(self) -> None:
+        # VAY-2272: app migration 0499 drops the marketplace schema before P2 removes it from the lists.
+        self.assertEqual(js_list(CHECK, "productSchemas"), js_list(GRANT, "declaredSchemas"))
+        self.assertEqual(js_list(CHECK, "retiringProductSchemas"), ["marketplace"])
+        self.assertEqual(js_list(GRANT, "retiringSchemas"), ["marketplace"])
+        self.assertIn("runtime_product_schema_missing", CHECK)
+        self.assertIn('fail("runtime_dml_schema_missing")', GRANT)
 
     def test_protected_list_matches_the_grant_script(self) -> None:
         for name in ("noRead", "noReadPatterns", "noWrite", "noWritePatterns", "appendOnly", "noDelete", "identityLockOnly"):
