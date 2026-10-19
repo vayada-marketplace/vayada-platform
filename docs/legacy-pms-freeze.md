@@ -105,12 +105,34 @@ has completed with one running task:
   `frozen_job_count: 1`, `unknown_job_count: 0`. `active_job_count: 0` means
   every job is frozen: roll back at once.
 - The new task logs `Legacy PMS scheduler job frozen: process_affiliate_payouts reason=blocklisted`.
+- After the 1st of each month, 02:00 UTC: no `Running job "process_affiliate_payouts"`
+  line in `/ecs/vayada-pms-backend`. Keep legacy PMS rollouts away from that
+  minute: during a rollout the old task still runs its scheduler.
+
+Payout rows still appear: a card or Xendit booking made through an approved
+affiliate's referral link schedules one when it is confirmed, and its commission
+is held back from the hotel payout. With the job off nobody is paid. Turning the
+job back on would not pay those rows either: it only picks up rows scheduled for
+the previous month, so rows from the months it was off stay `scheduled` and need
+a manual decision. Count them monthly with the legacy read-only counts runner
+until the legacy PMS is retired (VAY-1363).
 
 Roll back with a PR that deletes the file (same single replacement, without the
-entry). In an emergency, point the service back at the previous revision with
-`aws ecs update-service --cluster vayada-backend-cluster --service vayada-pms-backend-service --task-definition <previous revision>`
-(a direct production change, needs Flamur's go), then merge that PR anyway:
-otherwise the next `tf-apply.yml` rolls the service forward to the latest revision again.
+entry). Only in an emergency (a direct production change, needs Flamur's go),
+point the service at the newest revision whose environment has no
+`PMS_SCHEDULER_JOB_BLOCKLIST` and whose image is the running digest. In
+October 2026 that is `vayada-pms-backend:211`. **Never** use the revision right
+before the running one: that is Terraform's own revision, which still holds the
+blocklist and runs the floating `:latest` image. After any later legacy deploy
+no such revision exists; use the PR only.
+
+```
+aws ecs update-service --region eu-west-1 --profile vayada --cluster vayada-backend-cluster \
+  --service vayada-pms-backend-service --task-definition vayada-pms-backend:211
+```
+
+Merge the PR anyway afterwards. Otherwise the next `tf-apply.yml` rolls the
+service forward to the latest revision again.
 
 ## Legacy app deploys
 
@@ -132,8 +154,15 @@ digest:
 `platform-mutations-v2` has no required reviewer, so a dispatched deploy runs
 without any further approval. The go comes before the dispatch.
 
-Such a deploy keeps the freeze switches: `deploy.yml` copies the running
-revision and only swaps the image.
+Such a deploy keeps the freeze switches and the job blocklist: `deploy.yml`
+copies the running revision and only swaps the image. So the new image must
+still list `process_affiliate_payouts` in `LEGACY_SCHEDULER_JOBS`. If a pms-api
+change removes or renames that job, the carried-over id becomes unknown and the
+app freezes **all** legacy jobs while `/health` still says `status: ok`. Delete
+`infra/legacy_pms_scheduler_blocklist.auto.tfvars.json` (and the id from the
+validation) before that image goes live. After every legacy PMS deploy, check
+`/health`: `configuration_valid: true` and `active_job_count: 8` (0 only while
+the go-day freeze sets `PMS_SCHEDULER_ENABLED=false`).
 
 ## Thaw or rollback (runbook R1)
 
