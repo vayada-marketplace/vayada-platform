@@ -223,6 +223,55 @@ jobs:
       - name: Exercise database role and ACL guard
         run: bash scripts/test-target-database-runtime-preflight-integration.sh "${{ matrix.postgres }}"
 
+  # The offline Terraform plans of the temporary pricing identity take ~10 min, more than the rest
+  # of Validate together, so they run as their own job alongside it (VAY-2287). The job has no
+  # `needs`, so every pull request lists it from the start (admit-and-deploy.sh counts the checks).
+  # A pull request that only admits next-api images to the compatible-image lists (the release
+  # admission PRs) cannot change what it proves, and skips the plans.
+  pricing-bootstrap-identity:
+    name: Pricing bootstrap identity (offline plans)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout merge commit and its base
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Skip for image admission lists only
+        id: scope
+        run: |
+          set -euo pipefail
+          # HEAD is the pull request's merge commit, so HEAD^1 is the base branch tip.
+          changed=$(git diff --name-only --no-renames HEAD^1 HEAD)
+          printf '%s\n' "$changed"
+          admission_only=false
+          if [ -n "$changed" ] && ! grep -qvxE 'scripts/next-api-(split|ongoing-export|channex-claimed)-compatible-images\.txt' <<<"$changed"; then
+            admission_only=true
+          fi
+          echo "admission_only=$admission_only" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        if: steps.scope.outputs.admission_only != 'true'
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.5"
+          terraform_wrapper: false
+
+      # pricing_bootstrap_approval.guard_saved_plan reads provider selections in infra/.
+      - name: Terraform init (no backend)
+        if: steps.scope.outputs.admission_only != 'true'
+        run: terraform init -backend=false
+        working-directory: infra
+
+      - name: Validate temporary pricing identity without backend or AWS
+        if: steps.scope.outputs.admission_only != 'true'
+        run: |
+          terraform -chdir=infra/pricing-bootstrap-identity init -backend=false
+          terraform -chdir=infra/pricing-bootstrap-identity validate
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_pricing_bootstrap_identity.py
+
   validate:
     name: Validate
     runs-on: ubuntu-latest
@@ -367,9 +416,3 @@ jobs:
       - name: Validate isolated VAY-2043 Terraform root
         run: terraform validate
         working-directory: infra/vay2017-metadata-runner
-
-      - name: Validate temporary pricing identity without backend or AWS
-        run: |
-          terraform -chdir=infra/pricing-bootstrap-identity init -backend=false
-          terraform -chdir=infra/pricing-bootstrap-identity validate
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_pricing_bootstrap_identity.py
