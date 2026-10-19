@@ -244,6 +244,16 @@ case "${mode}" in
       code_file="grant-target-database-identity-runtime.mjs"
     fi
     ;;
+  --check-rds-admin-login)
+    # VAY-2259: the RDS administrator rotation proves the rotated URL logs in (read-only).
+    [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
+    ca_required=true
+    code_file="check-rds-admin-login.mjs"
+    code_in_definition="true"
+    secret_name="TARGET_DATABASE_ADMIN_URL"
+    secret_parameter="/vayada/prod/db-marketplace-url"
+    family="vayada-next-api-db-runtime-preflight"
+    ;;
   --retire-hotel-setup-roles)
     # VAY-2056 step 6a/6c: vayada_admin disables (NOLOGIN, its own grants, sessions), later drops,
     # the retired hotel-setup roles. inspect is read-only; apply must repeat its PLAN fingerprint.

@@ -340,6 +340,24 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
                        '--retire-hotel-setup-roles "$STEP" "$PHASE" "$FROZEN"'):
             self.assertIn(marker, workflow)
 
+    def test_rds_admin_login_check_is_read_only_and_uses_only_the_admin_secret(self) -> None:
+        branch = RUNNER.split('  --check-rds-admin-login)', 1)[1].split('    ;;', 1)[0]
+        for marker in ('[[ "$#" -eq 1 ]]', 'ca_required=true', 'code_file="check-rds-admin-login.mjs"',
+                       'code_in_definition="true"', 'secret_name="TARGET_DATABASE_ADMIN_URL"',
+                       'secret_parameter="/vayada/prod/db-marketplace-url"'):
+            self.assertIn(marker, branch)
+        self.assertNotIn('extra_secret_', branch)
+        local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+                                '--check-rds-admin-login', 'unexpected'], capture_output=True, text=True)
+        self.assertEqual(local.returncode, 2)
+        source = (ROOT / 'scripts/check-rds-admin-login.mjs').read_text()
+        for marker in ('vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com', 'url.search !== "?sslmode=require"',
+                       'url.username !== "vayada_admin"', 'rejectUnauthorized: true',
+                       'status: "PASS", user: result.rows[0].user'):
+            self.assertIn(marker, source)
+        for write in ('INSERT', 'UPDATE', 'DELETE', 'ALTER', 'GRANT', 'DROP', 'CREATE'):
+            self.assertNotIn(write, source)
+
     def test_cleanup_is_scoped_to_dedicated_cluster_and_log_group(self) -> None:
         self.assertIn('cluster="vayada-target-database-runtime-preflight"', RUNNER)
         self.assertIn(
