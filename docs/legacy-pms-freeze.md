@@ -137,7 +137,7 @@ service forward to the latest revision again.
 ## Legacy app deploys
 
 The app repo's legacy deploy workflows (`deploy-pms-api.yml`,
-`deploy-booking-api.yml`, `deploy-marketplace-api.yml`) are disabled in GitHub
+`deploy-booking-api.yml`) are disabled in GitHub
 and stay disabled (Flamur's decision). A legacy change goes live only through an
 explicit `workflow_dispatch` of this repo's `deploy.yml` on `main`, one deploy
 at a time, with Flamur's go for that deploy naming the service and the image
@@ -145,8 +145,8 @@ digest:
 
 | Input | Value |
 |---|---|
-| `service` | `pms-backend`, `booking-backend` or `marketplace-backend` |
-| `ecr_repo` | `vayada-pms-backend`, `vayada-booking-backend` or `vayada-creator-marketplace-backend` |
+| `service` | `pms-backend` or `booking-backend` |
+| `ecr_repo` | `vayada-pms-backend` or `vayada-booking-backend` |
 | `image_sha` | the image's 40-character git SHA tag |
 | `image_digest` | the image's `sha256:` digest; the workflow checks that tag and digest match in ECR |
 | `environment` | `production` |
@@ -195,8 +195,8 @@ until it is retired (VAY-1363).
   row is retried every 30 seconds without limit. Before the Booking API is
   blocked (F1), wait until no such rows remain; otherwise legacy keeps writing
   and the last-write check in the drain never settles.
-- **Booking API and Marketplace API.** They have no freeze switch. Their only
-  lever is `legacy_booking_api_desired_count` / `legacy_marketplace_api_desired_count`.
+- **Booking API.** It has no freeze switch. Its only lever is
+  `legacy_booking_api_desired_count`. (The Marketplace API is retired, VAY-2259.)
 - **Calls rejected before the mode check.** The mode applies after the
   signature or token check. Terraform maps neither `CHANNEX_WEBHOOK_SECRET` nor
   `XENDIT_WEBHOOK_SECRET` on production legacy PMS, so legacy already answers

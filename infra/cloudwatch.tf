@@ -5,8 +5,6 @@ locals {
     "/ecs/vayada-booking-admin",
     "/ecs/vayada-pms-backend",
     "/ecs/vayada-pms-frontend",
-    "/ecs/vayada-marketplace-backend",
-    "/ecs/vayada-marketplace-admin",
     "/ecs/vayada-next-api",
     "/ecs/vayada-next-pms-frontend",
     "/ecs/vayada-next-booking-frontend",

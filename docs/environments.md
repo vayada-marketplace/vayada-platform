@@ -39,10 +39,10 @@ Lock table: `vayada-terraform-lock` (DynamoDB).
 | Booking Admin         | `vayada-booking-admin-frontend`      | `vayada-booking-admin-service`       | `admin.booking.vayada.com` |
 | Legacy PMS API        | `vayada-pms-backend`                 | `vayada-pms-backend-service`         | `pms-api.vayada.com`       |
 | PMS Web               | `vayada-pms-frontend`                | `vayada-pms-frontend-service`        | `pms.vayada.com`           |
-| Legacy Marketplace API | `vayada-creator-marketplace-backend` | `vayada-marketplace-backend-service` | `api.vayada.com`           |
-| Marketplace Admin     | `vayada-admin-frontend`              | `vayada-marketplace-admin-service`   | (internal)                 |
 | Next PMS Web          | `vayada-next-pms-frontend`           | `vayada-next-pms-frontend-service`   | `next-pms.vayada.com`      |
 | Landing               | `vayada-landing`                     | App Runner                           | (App Runner auto-deploy)   |
+
+The old Python Marketplace API and its admin build were retired in VAY-2259: `api.vayada.com` answers 410, `admin.vayada.com` and `app.vayada.com` redirect to `next-admin.vayada.com` and Booking Admin, and their ECS services are gone.
 
 All ECS services run on `vayada-backend-cluster` (Fargate) in `eu-west-1`, fronted by `vayada-backend-alb`. Public `vayada.com` DNS is authoritative in Cloudflare; Route 53 records remain for AWS-side aliases and certificate validation where used. Cloudflare DNS management is gated by `enable_cloudflare_dns`; only enable it after `TF_VAR_CLOUDFLARE_API_TOKEN` is a valid DNS edit token for the `vayada.com` zone.
 
@@ -55,8 +55,8 @@ a separate cutover ticket says otherwise:
 | Hostname | Current routing owner |
 | --- | --- |
 | `vayada.com` | Existing public site routing |
-| `app.vayada.com` | Existing marketplace frontend routing |
-| `api.vayada.com` | Legacy Marketplace API |
+| `app.vayada.com` | 302 to Booking Admin (`/setup*` → `/setup`, else `/login`), VAY-2259 |
+| `api.vayada.com` | 410 at the load balancer (retired Marketplace API), VAY-2259 |
 | `booking-api.vayada.com` | Legacy Booking API |
 | `booking.vayada.com` and `*.booking.vayada.com` | Existing Booking Web |
 | `admin.booking.vayada.com` | Existing Booking Admin |
@@ -194,7 +194,7 @@ only `v1`; creating or importing a future HMAC key never authorizes promotion.
 
    A failed Booking public smoke redeploys the pre-cutover task image automatically.
 
-The legacy backends (`pms-backend`, `booking-backend`, `marketplace-backend`) no
+The legacy backends (`pms-backend`, `booking-backend`) no
 longer deploy this way: their app-repo deploy workflows are disabled. Each legacy
 deploy is an explicit `workflow_dispatch` of `deploy.yml` with an image digest
 and Flamur's go; see [Legacy app deploys](legacy-pms-freeze.md#legacy-app-deploys).
@@ -251,12 +251,12 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/db-pms-url-ssl`         | `pms-api`                          |
 | `/vayada/prod/db-auth-url`            | all APIs                           |
 | `/vayada/prod/db-auth-url-ssl`        | all APIs                           |
-| `/vayada/prod/db-marketplace-url`     | `marketplace-api`                  |
+| `/vayada/prod/db-marketplace-url`     | RDS admin login (rotation, one-off admin tasks) |
 | `/vayada/prod/jwt-secret-key`         | all APIs                           |
 | `/vayada/prod/stripe-secret-key`      | `booking-api`                      |
 | `/vayada/prod/stripe-webhook-secret`  | `booking-api`, `next-api`          |
-| `/vayada/prod/smtp-username`          | `booking-api`, `marketplace-api`   |
-| `/vayada/prod/smtp-password`          | `booking-api`, `marketplace-api`   |
+| `/vayada/prod/smtp-username`          | `booking-api`                      |
+| `/vayada/prod/smtp-password`          | `booking-api`                      |
 | `/vayada/prod/anthropic-api-key`      | `pms-api`                          |
 | `/vayada/prod/channex-api-key`        | `pms-api`                          |
 | `/vayada/prod/firecrawl-api-key`      | `pms-api`                          |
@@ -510,7 +510,7 @@ gh workflow run deploy.yml \
   --field environment=production
 ```
 
-Service keys: `booking-backend`, `booking-frontend`, `booking-admin`, `pms-backend`, `pms-frontend`, `marketplace-backend`, `marketplace-admin`.
+Service keys: `booking-backend`, `booking-frontend`, `booking-admin`, `pms-backend`, `pms-frontend`.
 
 Parallel next-stack service keys: `next-target-backend`, `next-pms-frontend`.
 `next-target-backend` serves `next-api.vayada.com`; `next-pms-frontend` remains

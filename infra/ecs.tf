@@ -158,53 +158,6 @@ locals {
       ]
       secrets = []
     }
-    marketplace-backend = {
-      name           = "vayada-marketplace-backend"
-      container_port = 8000
-      cpu            = 256
-      memory         = 512
-      # VAY-2259: switched off (api.vayada.com answers 410 at the load balancer). The
-      # service, its variable and secret go in the hard removal.
-      desired_count = 0
-      health_check  = "/health"
-      log_group     = "/ecs/vayada-marketplace-backend"
-      environment = [
-        # vayada.com = marketing site (contact form + /hotel-creator-network
-        # live-data fetch); app.vayada.com = the creator marketplace app.
-        # Both also match CORS_ORIGIN_REGEX below; listed explicitly for clarity.
-        { name = "CORS_ORIGINS", value = "https://admin.vayada.com,https://vayada.com,https://app.vayada.com" },
-        { name = "CORS_ORIGIN_REGEX", value = "https://(.*\\.)?vayada\\.com" },
-        { name = "AWS_REGION", value = var.aws_region },
-        { name = "S3_BUCKET_NAME", value = "vayada-uploads-prod" },
-        { name = "SMTP_HOST", value = "email-smtp.eu-west-1.amazonaws.com" },
-        { name = "SMTP_PORT", value = "587" },
-        { name = "SMTP_FROM", value = "noreply@vayada.com" },
-        { name = "ENVIRONMENT", value = "production" },
-        { name = "DEBUG", value = "false" },
-      ]
-      secrets = [
-        { name = "DATABASE_URL", valueFrom = "/vayada/prod/db-marketplace-url" },
-        { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/db-auth-url-ssl" },
-        { name = "PMS_DATABASE_URL", valueFrom = "/vayada/prod/db-pms-url-ssl" },
-        { name = "JWT_SECRET_KEY", valueFrom = "/vayada/prod/jwt-secret-key" },
-        { name = "SMTP_USERNAME", valueFrom = "/vayada/prod/smtp-username" },
-        { name = "SMTP_PASSWORD", valueFrom = "/vayada/prod/smtp-password" },
-      ]
-    }
-    marketplace-admin = {
-      name           = "vayada-marketplace-admin"
-      container_port = 3001
-      cpu            = 256
-      memory         = 512
-      # VAY-2259: switched off (admin.vayada.com redirects to next-admin.vayada.com).
-      desired_count = 0
-      health_check  = "/"
-      log_group     = "/ecs/vayada-marketplace-admin"
-      environment = [
-        { name = "NEXT_PUBLIC_API_URL", value = "https://api.vayada.com" },
-      ]
-      secrets = []
-    }
   }
 
   staging_pms_service = var.enable_staging_pms_runtime ? {
@@ -468,8 +421,6 @@ locals {
     "booking-admin"          = "vayada-booking-admin-frontend"
     "pms-backend"            = "vayada-pms-backend"
     "pms-frontend"           = "vayada-pms-frontend"
-    "marketplace-backend"    = "vayada-creator-marketplace-backend"
-    "marketplace-admin"      = "vayada-admin-frontend"
     "staging-pms-backend"    = "vayada-pms-backend"
     "next-target-backend"    = "vayada-next-api"
     "next-pms-frontend"      = "vayada-next-pms-frontend"
