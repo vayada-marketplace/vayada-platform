@@ -169,14 +169,6 @@ jobs:
               echo "ecs_service=vayada-pms-frontend-service" >> "$GITHUB_OUTPUT"
               echo "task_family=vayada-pms-frontend" >> "$GITHUB_OUTPUT"
               ;;
-            marketplace-backend)
-              echo "ecs_service=vayada-marketplace-backend-service" >> "$GITHUB_OUTPUT"
-              echo "task_family=vayada-marketplace-backend" >> "$GITHUB_OUTPUT"
-              ;;
-            marketplace-admin)
-              echo "ecs_service=vayada-marketplace-admin-service" >> "$GITHUB_OUTPUT"
-              echo "task_family=vayada-marketplace-admin" >> "$GITHUB_OUTPUT"
-              ;;
             next-target-backend)
               echo "ecs_service=vayada-next-api-service" >> "$GITHUB_OUTPUT"
               echo "task_family=vayada-next-api" >> "$GITHUB_OUTPUT"

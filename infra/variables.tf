@@ -172,17 +172,6 @@ variable "legacy_booking_api_desired_count" {
   }
 }
 
-variable "legacy_marketplace_api_desired_count" {
-  description = "Desired ECS task count for the legacy Python Marketplace API service. Keep 1 while api.vayada.com routes to legacy."
-  type        = number
-  default     = 1
-
-  validation {
-    condition     = contains([0, 1], var.legacy_marketplace_api_desired_count)
-    error_message = "legacy_marketplace_api_desired_count must be 0 or 1."
-  }
-}
-
 variable "legacy_pms_api_desired_count" {
   description = "Desired ECS task count for the legacy Python PMS API service. Keep 1 while pms-api.vayada.com routes to legacy."
   type        = number

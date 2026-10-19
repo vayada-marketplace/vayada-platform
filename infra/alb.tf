@@ -25,16 +25,6 @@ locals {
       port         = 3004
       health_check = "/"
     }
-    marketplace-backend = {
-      name         = "marketplace-backend-tg"
-      port         = 8000
-      health_check = "/health"
-    }
-    marketplace-admin = {
-      name         = "marketplace-admin-tg"
-      port         = 3001
-      health_check = "/"
-    }
     next-target-backend = {
       name         = "next-target-backend-tg"
       port         = 8003

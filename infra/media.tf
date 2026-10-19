@@ -5,8 +5,6 @@ locals {
   private_profile_media_origin_id    = "vayada-platform-media-s3"
 
   private_profile_media_upload_origins = [
-    "https://app.vayada.com",
-    "https://admin.vayada.com",
     "https://admin.booking.vayada.com",
     "https://pms.vayada.com",
     "https://next-admin.vayada.com",
