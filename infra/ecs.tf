@@ -279,6 +279,9 @@ locals {
         { name = "PMS_CHANNEX_MESSAGING_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_REVIEWS_MODE", value = "mutating" },
         { name = "PMS_ROOM_TYPE_DELETE_CLEANUP_PROPERTY_IDS", value = join(",", var.pms_room_type_delete_cleanup_property_ids) },
+        # VAY-2247 switch-on, step 1: the server's first run and, with it, the setup checklist API.
+        # Booking Admin's ONBOARDING_V2_ENABLED follows in its own apply once this is live (runbook).
+        { name = "HOTEL_FIRST_RUN_ENABLED", value = "true" },
         { name = "FINANCE_SOURCE", value = "target" },
         { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
         { name = "BOOKING_WEB_EVENT_SINK", value = "target" },
