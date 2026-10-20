@@ -902,8 +902,8 @@ unknown) or `COMMITTED_UNVERIFIED`. Re-run `inspect` after either of the last tw
 
 The ordinary API login `vayada_next_api_runtime` receives ordinary DML on the
 product schemas (`hotel_catalog`, `booking`, `pms`, `marketplace`,
-`distribution`, `finance`, `platform`) plus default privileges for future
-tables, and is denied a short protected list (credential scope tables,
+`distribution`, `finance`, `platform`; `marketplace` only while it exists, see
+below) plus default privileges for future tables, and is denied a short protected list (credential scope tables,
 migration ledger and evidence, worker allowlists, guarded affiliate evidence,
 worker-only Channex and Finance state). On `identity.*` it
 only gains `UPDATE (created_at)` on the six tables the API row-locks (platform
@@ -988,8 +988,13 @@ the same path (verified read-only against production on 2026-10-07).
 
 The runtime preflight (`scripts/target-database-runtime-preflight.mjs`, run by
 every `tf-apply`) requires the product DML posture: the migration owner's
-default privileges must grant the login DML in all seven product schemas, and
+default privileges must grant the login DML in every product schema, and
 anything less fails closed (`runtime_product_dml_posture_partial:<count>`).
+`marketplace` is retiring (VAY-2272): app migration 0499 drops it, so both
+scripts cover the listed schemas that exist and only `marketplace` may be
+absent; any other missing product schema fails closed
+(`runtime_product_schema_missing:<names>`, grant `runtime_dml_schema_missing`).
+P2 removes it from both lists once 0499 is live.
 VAY-2211 removed the legacy allowlist posture; production has reported
 `"posture":"product_dml"` on every `tf-apply` since at least 2026-10-13. The
 preflight asserts that the no-read list, the name patterns and

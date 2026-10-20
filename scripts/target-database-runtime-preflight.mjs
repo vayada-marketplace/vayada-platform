@@ -5,6 +5,10 @@ import pg from "pg";
 const expectedRole = "vayada_next_api_runtime";
 const receipt = "platform.legacy_owner_bootstrap_receipts";
 const productSchemas = ["hotel_catalog", "booking", "pms", "marketplace", "distribution", "finance", "platform"];
+// VAY-2272: migration 0499 drops the marketplace schema. Until it leaves productSchemas, the posture
+// covers the listed schemas that exist; every other listed schema must exist.
+// Keep identical to scripts/grant-target-database-runtime-product-dml.mjs.
+const retiringProductSchemas = ["marketplace"];
 
 // Protected list: keep identical to scripts/grant-target-database-runtime-product-dml.mjs.
 const noRead = [
@@ -220,6 +224,17 @@ try {
     "runtime_schema_create_forbidden",
   );
 
+  const presentSchemas = await client.query(
+    `SELECT nspname FROM pg_namespace WHERE nspname = ANY($1::text[])`,
+    [productSchemas],
+  );
+  const present = new Set(presentSchemas.rows.map((row) => row.nspname));
+  const missingSchemas = productSchemas.filter(
+    (schema) => !present.has(schema) && !retiringProductSchemas.includes(schema),
+  );
+  check(missingSchemas.length === 0, `runtime_product_schema_missing:${missingSchemas.join(",")}`);
+  const activeProductSchemas = productSchemas.filter((schema) => present.has(schema));
+
   // Product DML posture: the migration owner's default privileges cover every product schema.
   const defaults = await client.query(
     `SELECT count(DISTINCT namespace.nspname) AS schemas
@@ -229,10 +244,10 @@ try {
       WHERE namespace.nspname = ANY($1::text[]) AND acl.defaclobjtype = 'r' AND acl.defaclrole = $2
         AND entry.grantee = (SELECT oid FROM pg_roles WHERE rolname = current_user)
         AND entry.privilege_type = 'INSERT'`,
-    [productSchemas, migrationOwner],
+    [activeProductSchemas, migrationOwner],
   );
   const coveredSchemas = Number(defaults.rows[0].schemas);
-  check(coveredSchemas === productSchemas.length, `runtime_product_dml_posture_partial:${coveredSchemas}`);
+  check(coveredSchemas === activeProductSchemas.length, `runtime_product_dml_posture_partial:${coveredSchemas}`);
 
   // Protected list: never readable (table or column, including PUBLIC or inherited grants).
   await requireNoMissing(
@@ -297,7 +312,7 @@ try {
       WHERE ${applicationSchemas} AND sequence.relkind = 'S'
         AND has_sequence_privilege(current_user, sequence.oid, privilege.name)
         AND NOT (privilege.name <> 'UPDATE' AND namespace.nspname = ANY($1::text[]))`,
-    [productSchemas],
+    [activeProductSchemas],
     "runtime_sequence_access_forbidden",
   );
   await requireNoMissing(
@@ -358,7 +373,7 @@ try {
         AND NOT namespace.nspname = ANY($1::text[]) AND namespace.nspname <> 'identity'
         AND (has_table_privilege(current_user, relation.oid, privilege.name)
              OR (privilege.name <> 'DELETE' AND has_any_column_privilege(current_user, relation.oid, privilege.name)))`,
-    [productSchemas],
+    [activeProductSchemas],
     "runtime_unapproved_relation_write_forbidden",
   );
   await requireNoMissing(
@@ -371,7 +386,7 @@ try {
         AND NOT (privilege.name IN ('UPDATE','DELETE') AND format('%I.%I', namespace.nspname, relation.relname) = ANY($4::text[]))
         AND NOT (privilege.name = 'DELETE' AND format('%I.%I', namespace.nspname, relation.relname) = ANY($5::text[]))
         AND NOT has_table_privilege(current_user, relation.oid, privilege.name)`,
-    [...protectedWriteParameters, productSchemas, appendOnly, noDelete, receipt],
+    [...protectedWriteParameters, activeProductSchemas, appendOnly, noDelete, receipt],
     "runtime_product_dml_missing",
   );
   await requireNoMissing(
@@ -394,9 +409,12 @@ try {
       WHERE namespace.nspname = ANY($1::text[]) AND acl.defaclobjtype = 'S' AND acl.defaclrole = $2
         AND entry.grantee = (SELECT oid FROM pg_roles WHERE rolname = current_user)
         AND entry.privilege_type = 'USAGE'`,
-    [productSchemas, migrationOwner],
+    [activeProductSchemas, migrationOwner],
   );
-  check(Number(sequenceDefaults.rows[0].schemas) === productSchemas.length, "runtime_default_privileges_missing");
+  check(
+    Number(sequenceDefaults.rows[0].schemas) === activeProductSchemas.length,
+    "runtime_default_privileges_missing",
+  );
   // The trigger-invoked Channex helpers stay executable (directly, or through PUBLIC where the
   // worker provisioning has not run yet); SECURITY DEFINER EXECUTE was already rejected above.
   await requireNoMissing(

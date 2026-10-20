@@ -4,7 +4,12 @@
 import pg from "pg";
 
 const role = "vayada_next_api_runtime";
-const schemas = ["hotel_catalog", "booking", "pms", "marketplace", "distribution", "finance", "platform"];
+const declaredSchemas = ["hotel_catalog", "booking", "pms", "marketplace", "distribution", "finance", "platform"];
+// VAY-2272: migration 0499 drops the marketplace schema. Until it leaves declaredSchemas, the grant
+// covers the listed schemas that exist (set by assertPosture); every other listed schema must exist.
+// Keep identical to scripts/target-database-runtime-preflight.mjs.
+const retiringSchemas = ["marketplace"];
+let schemas = declaredSchemas;
 const receipt = "platform.legacy_owner_bootstrap_receipts";
 export const noRead = [
   "platform.identity_migration_provenance",
@@ -123,8 +128,11 @@ async function assertPosture(client) {
        AND relation.relowner <> (SELECT oid FROM pg_roles WHERE rolname = current_user)`,
     [schemas, [...identityLockOnly, ...Object.keys(identityColumns)]]);
   if (owned.rowCount !== 0) fail("runtime_dml_owner_required");
-  const found = await client.query(`SELECT count(*) AS n FROM pg_namespace WHERE nspname = ANY($1::text[])`, [schemas]);
-  if (Number(found.rows[0].n) !== schemas.length) fail("runtime_dml_schema_missing");
+  const found = await client.query(`SELECT nspname FROM pg_namespace WHERE nspname = ANY($1::text[])`, [declaredSchemas]);
+  const present = new Set(found.rows.map((row) => row.nspname));
+  if (declaredSchemas.some((schema) => !present.has(schema) && !retiringSchemas.includes(schema)))
+    fail("runtime_dml_schema_missing");
+  schemas = declaredSchemas.filter((schema) => present.has(schema));
 }
 
 // Row locks need UPDATE on one column (platform #240 precedent). The hotel-setup native
