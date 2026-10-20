@@ -393,6 +393,9 @@ locals {
         { name = "NEXT_PUBLIC_PMS_FRONTEND_URL", value = "https://next-pms.vayada.com" },
         { name = "NEXT_PUBLIC_BOOKING_URL_TEMPLATE", value = "https://{slug}.next-booking.vayada.com" },
         { name = "NEXT_PUBLIC_BOOKING_RESERVATIONS_ENABLED", value = "true" },
+        # VAY-2247 switch-on, step 2: /setup opens the new first run (read per request on the server).
+        # Needs next-api's HOTEL_FIRST_RUN_ENABLED live first (step 1).
+        { name = "ONBOARDING_V2_ENABLED", value = "true" },
       ]
       secrets = []
     }
