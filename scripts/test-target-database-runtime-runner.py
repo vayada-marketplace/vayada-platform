@@ -340,6 +340,36 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
                        '--retire-hotel-setup-roles "$STEP" "$PHASE" "$FROZEN"'):
             self.assertIn(marker, workflow)
 
+    def test_affiliate_capture_login_retirement_is_main_only_and_fingerprinted(self) -> None:
+        branch = RUNNER.split('  --retire-affiliate-capture-login)', 1)[1].split('    ;;', 1)[0]
+        for marker in ('"${GITHUB_REF:-}" == refs/heads/main', '"${GITHUB_EVENT_NAME:-}" == workflow_dispatch',
+                       '"$2" == inspect && -z "$3"', '"$2" == apply && "$3" =~ ^[a-f0-9]{64}$',
+                       'code_file="retire-affiliate-capture-login.mjs"', 'code_in_definition="true"',
+                       'secret_name="TARGET_DATABASE_ADMIN_URL"', 'secret_parameter="/vayada/prod/db-marketplace-url"'):
+            self.assertIn(marker, branch)
+        self.assertNotIn('extra_secret_', branch)
+        self.assertIn('elif [[ "${capture_login_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";', RUNNER)
+        self.assertIn('elif [[ "${capture_login_phase}" == "apply" ]]; then vay2017_expected_status="PASS";', RUNNER)
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('GITHUB_')}
+        for args in (['inspect', ''], ['apply', 'a' * 64], ['apply', ''], ['inspect', 'a' * 64], ['other', '']):
+            local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+                                    '--retire-affiliate-capture-login', *args], capture_output=True, text=True, env=environment)
+            self.assertEqual(local.returncode, 2, args)
+        source = (ROOT / 'scripts/retire-affiliate-capture-login.mjs').read_text()
+        for marker in ('MEMBER WITH ADMIN OPTION', 'affiliate_capture_login_plan_changed',
+                       'affiliate_capture_login_still_referenced', 'affiliate_capture_login_foreign_grants',
+                       'affiliate_capture_login_sessions_active', 'affiliate_capture_login_dependencies_remaining',
+                       'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', 'pg_try_advisory_lock', '"01006", "01007"',
+                       'COMMITTED_UNVERIFIED', 'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com',
+                       'url.search !== "?sslmode=require"', 'rejectUnauthorized: true'):
+            self.assertIn(marker, source)
+        self.assertNotIn('DROP OWNED', source)
+        workflow = (ROOT / '.github/workflows/retire-affiliate-capture-login.yml').read_text()
+        for marker in ("if: github.ref == 'refs/heads/main'", 'environment: platform-mutations-v2',
+                       'group: production-ecs-mutations', 'options: [inspect, apply]',
+                       '--retire-affiliate-capture-login "$PHASE" "$FROZEN"'):
+            self.assertIn(marker, workflow)
+
     def test_rds_admin_login_check_is_read_only_and_uses_only_the_admin_secret(self) -> None:
         branch = RUNNER.split('  --check-rds-admin-login)', 1)[1].split('    ;;', 1)[0]
         for marker in ('[[ "$#" -eq 1 ]]', 'ca_required=true', 'code_file="check-rds-admin-login.mjs"',

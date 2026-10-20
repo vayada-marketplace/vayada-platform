@@ -897,6 +897,33 @@ then checks:
 Failures print `FAIL` (nothing changed), `UNCERTAIN` (the commit outcome is
 unknown) or `COMMITTED_UNVERIFIED`. Re-run `inspect` after either of the last two.
 
+#### Retiring the affiliate capture login (VAY-2272)
+
+`vayada_next_affiliate_capture` was made for the affiliate click capture, which
+never went live. App migration 0497 retires the policies and functions it was
+made for. After 0497 is live, `retire-affiliate-capture-login.yml` (main only,
+`platform-mutations-v2`, `production-ecs-mutations` lock) runs
+`run-target-database-runtime-preflight.sh --retire-affiliate-capture-login <phase>
+<fingerprint>`. That is the same disposable task as the hotel-setup role
+retirement, with `retire-affiliate-capture-login.mjs`, connecting as
+`vayada_admin` to `vayada_target_prod`.
+
+- `inspect` is read-only. It prints a `PLAN` with the login, its sessions, the
+  grants `vayada_admin` gave it, other grants, dependencies, a `ready` flag with
+  any blockers and a fingerprint. It is blocked while:
+  - a policy, function or view still names the login as text (before 0497);
+  - anyone but `vayada_admin` granted it something;
+  - it owns an object, a policy role names it, or a dependency remains in
+    another database;
+  - it has a session, a default privilege or memberships it granted;
+  - `vayada_admin` lacks ADMIN OPTION on it.
+- `apply` with that fingerprint recaptures and refuses on any drift. In one
+  transaction it revokes the grants `vayada_admin` gave the login (one
+  `REVOKE ALL` per object; a `REVOKE` that revokes nothing aborts) and drops it,
+  then verifies that it is gone. It never uses `DROP OWNED BY`.
+
+Failures print `FAIL`, `UNCERTAIN` or `COMMITTED_UNVERIFIED`, as above.
+
 ### Target database runtime role: product DML grant (VAY-2054)
 
 The ordinary API login `vayada_next_api_runtime` receives ordinary DML on the
