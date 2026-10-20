@@ -63,7 +63,8 @@ export const identityColumns = {
 };
 // Product DML posture (VAY-2054 follow-up, human decision 2026-10-07): the identity writes the
 // ordinary API makes on product-link tables (Financials module activation, new-hotel Financials
-// default) also work. The link status columns served the retired Marketplace offer access.
+// default) also work. The link status columns served the retired Marketplace offer access; they
+// stay granted until a follow-up narrows them.
 // Keep identical to scripts/target-database-runtime-preflight.mjs.
 export const productIdentityColumns = {
   "identity.product_entitlements": {

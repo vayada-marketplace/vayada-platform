@@ -401,10 +401,7 @@ try {
         AND entry.privilege_type = 'USAGE'`,
     [productSchemas, migrationOwner],
   );
-  check(
-    Number(sequenceDefaults.rows[0].schemas) === productSchemas.length,
-    "runtime_default_privileges_missing",
-  );
+  check(Number(sequenceDefaults.rows[0].schemas) === productSchemas.length, "runtime_default_privileges_missing");
   // The trigger-invoked Channex helpers stay executable (directly, or through PUBLIC where the
   // worker provisioning has not run yet); SECURITY DEFINER EXECUTE was already rejected above.
   await requireNoMissing(

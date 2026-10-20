@@ -84,10 +84,6 @@ CREATE TABLE finance.folio_payment_references (id uuid PRIMARY KEY);
 CREATE TABLE pms.channel_operational_alerts (
   id uuid PRIMARY KEY, resolved_at timestamptz, acknowledged_at timestamptz
 );
-CREATE TABLE finance.affiliate_earning_reconciliation_revisions (id uuid PRIMARY KEY);
-CREATE TABLE finance.affiliate_eligible_earning_revisions (id uuid PRIMARY KEY);
-CREATE TABLE finance.affiliate_earning_allocations (id uuid PRIMARY KEY);
-CREATE TABLE finance.affiliate_earning_allocation_items (id uuid PRIMARY KEY);
 CREATE TABLE platform.external_webhook_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.domain_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.idempotency_keys (id uuid PRIMARY KEY);
@@ -640,7 +636,7 @@ expect_failure runtime_product_dml_missing:1:hotel_catalog.property_setup_step_d
 owner_psql "GRANT INSERT ON hotel_catalog.property_setup_step_drafts TO vayada_next_api_runtime" >/dev/null
 docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d postgres -v ON_ERROR_STOP=1 -Atqc \
   "ALTER DEFAULT PRIVILEGES IN SCHEMA booking REVOKE ALL ON TABLES FROM vayada_next_api_runtime" >/dev/null
-expect_failure runtime_product_dml_posture_partial:6
+expect_failure runtime_product_dml_posture_partial:5
 docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d postgres -v ON_ERROR_STOP=1 -Atqc \
   "ALTER DEFAULT PRIVILEGES IN SCHEMA booking GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO vayada_next_api_runtime" >/dev/null
 # Sequences created later need the default USAGE, SELECT in every product schema.
@@ -782,7 +778,7 @@ owner_psql "ALTER SCHEMA distribution_hidden RENAME TO distribution" >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
 # Applied before 0499, the marketplace schema and its default privileges would still exist: both
 # scripts fail closed instead of granting or accepting writes outside the product schemas.
-legacy_owner_psql "CREATE SCHEMA marketplace" >/dev/null
+owner_psql "CREATE SCHEMA marketplace AUTHORIZATION legacy_owner" >/dev/null
 legacy_owner_psql "ALTER DEFAULT PRIVILEGES IN SCHEMA marketplace GRANT INSERT ON TABLES TO vayada_next_api_runtime" >/dev/null
 if early_grant_output="$(run_grant legacy_owner owner 2>&1)"; then
   echo "product DML grant accepted default privileges outside the product schemas" >&2; exit 1

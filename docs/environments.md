@@ -914,8 +914,7 @@ gains `INSERT (resource_product, resource_type, resource_id)` and
 `UPDATE (metadata)`, `identity.organization_resource_links` gains
 `UPDATE (status, updated_at)`, so Financials module activation and the new-hotel
 Financials default work under the ordinary login (human decision 2026-10-07;
-the link status columns served Marketplace offer access, removed in VAY-2272). The revoke scope restores the
-VAY-965 matrix exactly. The decision and the protected list with reasons live in
+the link status columns served Marketplace offer access, removed in VAY-2272). The decision and the protected list with reasons live in
 the application repo at `engineering/api-runtime-database-role.md`; the
 executable list is `scripts/grant-target-database-runtime-product-dml.mjs`.
 
@@ -990,9 +989,11 @@ default privileges must grant the login DML in every product schema, and
 anything less fails closed (`runtime_product_dml_posture_partial:<count>`).
 Every listed product schema must exist (`runtime_product_schema_missing:<names>`,
 grant `runtime_dml_schema_missing`). App migration 0499 dropped `marketplace`
-(VAY-2272); both lists dropped it after 0499 was live (P2), and a `marketplace`
-schema or default privileges that came back would fail both scripts as writes
-outside the product schemas.
+(VAY-2272); both lists dropped it after 0499 was live (P2). Default privileges
+for the API login in a schema that came back fail the grant
+(`runtime_foreign_default_privileges_forbidden`); in the preflight, such a schema
+fails with `runtime_schema_usage_missing` (no usage) or
+`runtime_unapproved_relation_write_forbidden` (writable tables).
 VAY-2211 removed the legacy allowlist posture; production has reported
 `"posture":"product_dml"` on every `tf-apply` since at least 2026-10-13. The
 preflight asserts that the no-read list, the name patterns and
