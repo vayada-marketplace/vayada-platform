@@ -33,7 +33,7 @@ def full_jobs(conclusion="success"):
     names = ["Select checks", "Frontend Test, Typecheck, Lint", "Frontend Build and App Tests",
              "First-Party Auth Contracts", "PMS Web Browser Specs (1/2)", "PMS Web Browser Specs (2/2)",
              "Booking Web Browser Specs", "Booking Admin Browser Specs", "TypeScript API and Package Unit Suites",
-             "Backend Tests (marketplace-api)", "Backend Tests (booking-api)", "Backend Tests (pms-api)", "Required Checks"]
+             "Backend Tests (booking-api)", "Backend Tests (pms-api)", "Required Checks"]
     for version in (16, 17):
         names += [f"TypeScript API PostgreSQL Integration (PG{version}, {leg})"
                   for leg in ("platform", "pms", "pms-migrations", "pricing", "hotel-setup")]
