@@ -39,7 +39,7 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertIn("pg_default_acl", CHECK)
         self.assertIn("acl.defaclrole = $2", CHECK)
         # VAY-2211: no legacy allowlist posture; every product schema needs the default DML grant.
-        self.assertIn("check(coveredSchemas === activeProductSchemas.length, `runtime_product_dml_posture_partial:${coveredSchemas}`)", CHECK)
+        self.assertIn("check(coveredSchemas === productSchemas.length, `runtime_product_dml_posture_partial:${coveredSchemas}`)", CHECK)
         self.assertIn('posture: "product_dml"', CHECK)
         for removed in ("VAYADA_DB_REQUIRE_PRODUCT_DML", "VAYADA_DB_REQUIRE_FOLIO_COMMAND", '"legacy"', "legacyRequiredRelations",
                         "legacyStagedRelations", "legacyRequiredColumns", "legacyStagedColumns", "legacyOptionalReads",
@@ -73,11 +73,13 @@ class RuntimePreflightContractTest(unittest.TestCase):
         ):
             self.assertIn(code, CHECK)
 
-    def test_marketplace_schema_may_be_absent_until_the_lists_drop_it(self) -> None:
-        # VAY-2272: app migration 0499 drops the marketplace schema before P2 removes it from the lists.
-        self.assertEqual(js_list(CHECK, "productSchemas"), js_list(GRANT, "declaredSchemas"))
-        self.assertEqual(js_list(CHECK, "retiringProductSchemas"), ["marketplace"])
-        self.assertEqual(js_list(GRANT, "retiringSchemas"), ["marketplace"])
+    def test_every_product_schema_must_exist_and_marketplace_is_gone(self) -> None:
+        # VAY-2272: app migration 0499 dropped the marketplace schema; P2 took it off both lists.
+        schemas = ["hotel_catalog", "booking", "pms", "distribution", "finance", "platform"]
+        self.assertEqual(js_list(CHECK, "productSchemas"), schemas)
+        self.assertEqual(js_list(GRANT, "schemas"), schemas)
+        for source in (CHECK, GRANT):
+            self.assertNotIn("retiring", source.lower())
         self.assertIn("runtime_product_schema_missing", CHECK)
         self.assertIn('fail("runtime_dml_schema_missing")', GRANT)
 
@@ -87,11 +89,13 @@ class RuntimePreflightContractTest(unittest.TestCase):
         # VAY-2056: the native hotel-setup scope relations were dropped by app migration 0474.
         for name in ("noRead", "noReadPatterns", "noWrite", "noWritePatterns"):
             self.assertFalse([entry for entry in js_list(CHECK, name) if "hotel_setup" in entry], name)
+        # VAY-2272: app migrations 0498 and 0499 dropped the affiliate program tables and the marketplace schema.
+        for name in ("noRead", "noReadPatterns", "noWrite", "noWritePatterns", "appendOnly", "noDelete"):
+            self.assertFalse([e for e in js_list(CHECK, name) if "affiliate" in e or "marketplace" in e], name)
         for relation in (
             "platform.identity_migration_provenance",
             "platform.legacy_historical_binding_transitions",
             "platform.finance_expense_worker_properties",
-            "marketplace.affiliate_click_quota_windows",
             "pms.inventory_coverage_validation_queue",
         ):
             self.assertIn(relation, js_list(CHECK, "noRead"))
@@ -99,8 +103,6 @@ class RuntimePreflightContractTest(unittest.TestCase):
             "platform.schema_migrations",
             "platform.pricing_runtime_property_scopes",
             "booking.pricing_runtime_effective_property_scopes",
-            "marketplace.affiliate_click_occurrences",
-            "booking.affiliate_original_booking_bindings",
             "finance.expense_generation_dispatches",
             "pms.channex_ari_schedule_sources",
             "platform.channex_management_worker_properties",

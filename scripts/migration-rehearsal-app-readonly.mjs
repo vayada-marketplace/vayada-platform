@@ -11,7 +11,8 @@ import {
 const evidence = "e6f0126a27e293044e510cda9e45131a1f6857952bb8ff967e7088215d7c8337";
 const recipient = "arn:aws:kms:eu-west-1:269416271598:key/fe106dcd-0aa7-44de-a2ad-431dcdb319b5";
 const fingerprint = "arn:aws:kms:eu-west-1:269416271598:key/b16e938e-7aae-4b02-bbaf-261c52fe522b";
-const domains = ["identity", "hotel_catalog", "booking", "pms", "finance", "marketplace", "distribution", "platform", "vayada_migration_evidence"];
+// VAY-2272: app migration 0499 dropped the marketplace schema.
+const domains = ["identity", "hotel_catalog", "booking", "pms", "finance", "distribution", "platform", "vayada_migration_evidence"];
 const digest = (value) => appHash("sha256").update(JSON.stringify(value)).digest("hex");
 
 export function applicationEnvironment(env) {

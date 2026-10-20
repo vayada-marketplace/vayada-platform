@@ -301,7 +301,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
             self.assertNotIn(removed, source)
         for relation in ('platform.identity_migration_provenance',
                          'platform.schema_migrations', 'hotel_catalog.properties', 'booking.pricing_quotes',
-                         'marketplace.affiliate_click_occurrences', 'finance.expense_generation_dispatches',
+                         'finance.expense_generation_dispatches',
                          'platform.finance_expense_worker_properties', 'pms.channex_room_availability_attempts',
                          'platform.legacy_owner_bootstrap_receipts', 'identity.organizations'):
             self.assertIn(f'"{relation}"', source)

@@ -16,7 +16,6 @@ const schemas = [
   "booking",
   "pms",
   "finance",
-  "marketplace",
   "distribution",
   "platform",
 ];

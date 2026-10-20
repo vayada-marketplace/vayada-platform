@@ -124,7 +124,6 @@ class MockDatabase {
               "booking",
               "pms",
               "finance",
-              "marketplace",
               "distribution",
               "platform",
             ].map((nspname) => ({ nspname }));
