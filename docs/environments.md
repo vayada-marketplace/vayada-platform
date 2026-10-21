@@ -897,6 +897,42 @@ then checks:
 Failures print `FAIL` (nothing changed), `UNCERTAIN` (the commit outcome is
 unknown) or `COMMITTED_UNVERIFIED`. Re-run `inspect` after either of the last two.
 
+#### Retiring the affiliate capture login (VAY-2272)
+
+`vayada_next_affiliate_capture` was made for the affiliate click capture, which
+never went live. App migration 0497 retires the policies and functions it was
+made for. After 0497 is live, `retire-affiliate-capture-login.yml` (main only,
+`platform-mutations-v2`, `production-ecs-mutations` lock) runs
+`run-target-database-runtime-preflight.sh --retire-affiliate-capture-login <phase>
+<fingerprint>`. That is the same disposable task as the hotel-setup role
+retirement, with `retire-affiliate-capture-login.mjs`, connecting as
+`vayada_admin` to `vayada_target_prod`.
+
+- `inspect` is read-only. It prints a `PLAN` with the login, its sessions and
+  memberships, the grants `vayada_admin` gave it (`adminGrantList`), every other
+  grant to or by it (`otherGrantList`), its dependencies (`dependencyList`), a
+  `ready` flag with any blockers and a fingerprint. It is blocked while:
+  - a policy, function, view, check constraint, default or trigger still names
+    the login as text (before 0497);
+  - anyone but `vayada_admin` granted it something, or it granted something
+    itself (`otherGrantList` says what and who; its grantor revokes it first);
+  - another role is a member of it, or it granted memberships;
+  - it owns an object, a policy names it as a role, or any dependency remains
+    beyond privileges on tables, columns, routines, schemas and databases, in
+    this database or the shared catalog;
+  - it has a session or a default privilege;
+  - `vayada_admin` lacks ADMIN OPTION on it.
+- `apply` with that fingerprint recaptures and refuses on any drift. In one
+  transaction it revokes the grants `vayada_admin` gave the login (one
+  `REVOKE ALL` per object; a `REVOKE` PostgreSQL warns about aborts) and drops it,
+  then verifies that it is gone. It never uses `DROP OWNED BY`. If `DROP ROLE`
+  still finds a dependency, the run fails with
+  `affiliate_capture_login_dependencies_remaining` and changes nothing.
+- 0497 removed the policy that kept the login's table writes lock-only, so run
+  this soon after W1.
+
+Failures print `FAIL`, `UNCERTAIN` or `COMMITTED_UNVERIFIED`, as above.
+
 ### Target database runtime role: product DML grant (VAY-2054)
 
 The ordinary API login `vayada_next_api_runtime` receives ordinary DML on the
