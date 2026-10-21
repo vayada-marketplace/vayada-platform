@@ -55,7 +55,7 @@ class RunnerTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         probe.probe(targets)
                 else:
-                    self.assertEqual(len(probe.probe(targets)["services"]), 6)
+                    self.assertEqual(len(probe.probe(targets)["services"]), len(probe.SERVICES))
                 self.assertEqual(build.call_args.args[0].proxies, {})
                 self.assertIsInstance(build.call_args.args[1], probe.NoRedirect)
         self.assertIsNone(probe.NoRedirect().redirect_request(None, None, None, None, None, None))

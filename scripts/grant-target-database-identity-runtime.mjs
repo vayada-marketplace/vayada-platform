@@ -31,10 +31,7 @@ const privileges = new Map([
   ["platform.product_audit_events", "SELECT, INSERT"],
 ]);
 const sharedTables = [...privileges.keys()].filter((table) => table.startsWith("platform."));
-const publicReads = new Set([
-  "booking.pricing_runtime_effective_authority_scopes",
-  "booking.pricing_runtime_effective_property_scopes",
-]);
+const publicReads = new Set(["booking.pricing_runtime_effective_property_scopes"]);
 const knownPrivileges = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 const ownerBypass = "(CURRENT_USER <> 'vayada_next_identity_runtime'::name)";
 const expectedPolicies = new Map([
@@ -163,8 +160,8 @@ try {
 
   const publicReadContracts = await client.query(`
     SELECT count(*)::int AS count FROM unnest($1::text[]) item(name)
-    JOIN pg_class c ON c.oid=to_regclass(item.name)
-    WHERE c.relkind='v' AND current_user=pg_get_userbyid(c.relowner)
+    LEFT JOIN pg_class c ON c.oid=to_regclass(item.name)
+    WHERE c.oid IS NULL OR c.relkind='v' AND current_user=pg_get_userbyid(c.relowner)
       AND c.reloptions@>ARRAY['security_barrier=true']::text[]
       AND (SELECT array_agg(acl.privilege_type||':'||acl.is_grantable)
            FROM aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) acl

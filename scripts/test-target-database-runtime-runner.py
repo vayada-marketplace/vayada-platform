@@ -258,12 +258,11 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn(']).get(scope)', provisioner)
 
     def test_runtime_product_dml_modes_use_owner_secret_and_definition_environment(self) -> None:
-        branch = RUNNER.split('  --grant-runtime-product-dml|--revoke-runtime-product-dml|--inspect-runtime-product-dml)', 1)[1].split('    ;;', 1)[0]
+        branch = RUNNER.split('  --grant-runtime-product-dml|--inspect-runtime-product-dml)', 1)[1].split('    ;;', 1)[0]
         self.assertIn('[[ "$#" -eq 1 ]]', branch)
         self.assertIn('code_file="grant-target-database-runtime-product-dml.mjs"', branch)
         self.assertIn('code_in_definition="true"', branch)
         self.assertIn('grant_scope="product_dml"', branch)
-        self.assertIn('grant_scope="revoke_product_dml"', branch)
         self.assertIn('grant_scope="inspect_product_dml"', branch)
         self.assertIn("grep -q 'runtime_product_dml_posture_partial'", branch)
         self.assertIn('secret_name="TARGET_DATABASE_MIGRATION_URL"', branch)
@@ -271,14 +270,21 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertNotIn('extra_secret_', branch)
         self.assertIn('if [[ "$code_in_definition" == true ]]; then', RUNNER)
         self.assertIn('  if [[ "$code_in_definition" == true || "${mode}" == "--audit-financials-readiness"', RUNNER)
-        preflight = RUNNER.split('  preflight|--preflight-runtime-product-dml)', 1)[1].split('    ;;', 1)[0]
-        self.assertIn('product_dml_required="true"', preflight)
+        preflight = RUNNER.split('  preflight)', 1)[1].split('    ;;', 1)[0]
         self.assertIn('code_in_definition="true"', preflight)
-        self.assertIn('{name:"VAYADA_DB_REQUIRE_PRODUCT_DML",value:"1"}', RUNNER)
-        for mode in ('--grant-runtime-product-dml', '--revoke-runtime-product-dml', '--inspect-runtime-product-dml', '--preflight-runtime-product-dml'):
+        # VAY-2211: the legacy posture, its rollback and the product-only preflight flag are gone.
+        for removed in ('product_dml_required', 'VAYADA_DB_REQUIRE_PRODUCT_DML', 'revoke_product_dml',
+                        '--revoke-runtime-product-dml', '--preflight-runtime-product-dml'):
+            self.assertNotIn(removed, RUNNER)
+        for mode in ('--grant-runtime-product-dml', '--inspect-runtime-product-dml', 'preflight'):
             invalid = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'), mode, 'unexpected'],
                                      capture_output=True, text=True)
             self.assertEqual(invalid.returncode, 2, mode)
+        for mode in ('--revoke-runtime-product-dml', '--preflight-runtime-product-dml'):
+            unknown = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'), mode],
+                                     capture_output=True, text=True)
+            self.assertEqual(unknown.returncode, 2, mode)
+            self.assertIn('Unknown mode', unknown.stderr, mode)
         source = (ROOT / 'scripts/grant-target-database-runtime-product-dml.mjs').read_text()
         for marker in ('runtime_dml_owner_required', 'runtime_role_membership_forbidden',
                        'runtime_identity_lock_column_missing', 'runtime_protected_relation_writable',
@@ -289,11 +295,13 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
                        'runtime_security_definer_execute_forbidden', 'verifyGlobalPosture',
                        'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA',
                        'await client.query("BEGIN")', 'ROLLBACK', 'unexpected_database_host', 'rds_ca_missing',
-                       'VAYADA_AUDIT_GRANT_LOCAL_FIXTURE', '"revoke_product_dml"'):
+                       'VAYADA_AUDIT_GRANT_LOCAL_FIXTURE'):
             self.assertIn(marker, source)
+        for removed in ('revoke_product_dml', 'legacyRelations', 'legacyColumns', 'revokeProductDml'):
+            self.assertNotIn(removed, source)
         for relation in ('platform.identity_migration_provenance',
-                         'platform.schema_migrations', 'booking.pricing_authority_heads', 'booking.pricing_quotes',
-                         'marketplace.affiliate_click_occurrences', 'finance.expense_generation_dispatches',
+                         'platform.schema_migrations', 'hotel_catalog.properties', 'booking.pricing_quotes',
+                         'finance.expense_generation_dispatches',
                          'platform.finance_expense_worker_properties', 'pms.channex_room_availability_attempts',
                          'platform.legacy_owner_bootstrap_receipts', 'identity.organizations'):
             self.assertIn(f'"{relation}"', source)
@@ -331,6 +339,102 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
                        'group: production-ecs-mutations', 'options: [disable, drop]', 'options: [inspect, apply]',
                        '--retire-hotel-setup-roles "$STEP" "$PHASE" "$FROZEN"'):
             self.assertIn(marker, workflow)
+
+    def test_affiliate_capture_login_retirement_is_main_only_and_fingerprinted(self) -> None:
+        branch = RUNNER.split('  --retire-affiliate-capture-login)', 1)[1].split('    ;;', 1)[0]
+        for marker in ('"${GITHUB_REF:-}" == refs/heads/main', '"${GITHUB_EVENT_NAME:-}" == workflow_dispatch',
+                       '"$2" == inspect && -z "$3"', '"$2" == apply && "$3" =~ ^[a-f0-9]{64}$',
+                       'code_file="retire-affiliate-capture-login.mjs"', 'code_in_definition="true"',
+                       'secret_name="TARGET_DATABASE_ADMIN_URL"', 'secret_parameter="/vayada/prod/db-marketplace-url"'):
+            self.assertIn(marker, branch)
+        self.assertNotIn('extra_secret_', branch)
+        self.assertIn('elif [[ "${capture_login_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";', RUNNER)
+        self.assertIn('elif [[ "${capture_login_phase}" == "apply" ]]; then vay2017_expected_status="PASS";', RUNNER)
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('GITHUB_')}
+        # Off main every call stops at the first guard, valid arguments included.
+        for args in (['inspect', ''], ['apply', 'a' * 64]):
+            local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+                                    '--retire-affiliate-capture-login', *args], capture_output=True, text=True, env=environment)
+            self.assertEqual(local.returncode, 2, args)
+        # On main, invalid phases, fingerprints and argument counts stop before anything reaches AWS.
+        dispatch = {**environment, 'GITHUB_ACTIONS': 'true', 'GITHUB_REF': 'refs/heads/main',
+                    'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REPOSITORY': 'vayada-marketplace/vayada-platform'}
+        for args in (['apply', ''], ['inspect', 'a' * 64], ['other', ''], ['apply', 'A' * 64], ['inspect']):
+            local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+                                    '--retire-affiliate-capture-login', *args], capture_output=True, text=True, env=dispatch)
+            self.assertEqual(local.returncode, 2, args)
+        source = (ROOT / 'scripts/retire-affiliate-capture-login.mjs').read_text()
+        for marker in ('MEMBER WITH ADMIN OPTION', 'affiliate_capture_login_plan_changed',
+                       'affiliate_capture_login_still_referenced', 'affiliate_capture_login_foreign_grants',
+                       'affiliate_capture_login_sessions_active', 'affiliate_capture_login_dependencies_remaining',
+                       'affiliate_capture_login_has_members', 'affiliate_capture_login_grantor', '"2BP01"',
+                       'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', 'pg_try_advisory_lock', '"01006", "01007"',
+                       'COMMITTED_UNVERIFIED', 'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com',
+                       'url.search !== "?sslmode=require"', 'rejectUnauthorized: true'):
+            self.assertIn(marker, source)
+        self.assertNotIn('DROP OWNED', source)
+        workflow = (ROOT / '.github/workflows/retire-affiliate-capture-login.yml').read_text()
+        for marker in ("if: github.ref == 'refs/heads/main'", 'environment: platform-mutations-v2',
+                       'group: production-ecs-mutations', 'options: [inspect, apply]',
+                       '--retire-affiliate-capture-login "$PHASE" "$FROZEN"'):
+            self.assertIn(marker, workflow)
+
+    def test_api_runtime_timeouts_are_main_only_and_fingerprinted(self) -> None:
+        branch = RUNNER.split('  --set-api-runtime-timeouts)', 1)[1].split('    ;;', 1)[0]
+        for marker in ('"${GITHUB_REF:-}" == refs/heads/main', '"${GITHUB_EVENT_NAME:-}" == workflow_dispatch',
+                       '"$2" == inspect && -z "$3"', '( "$2" == apply || "$2" == rollback ) && "$3" =~ ^[a-f0-9]{64}$',
+                       'code_file="set-api-runtime-timeouts.mjs"', 'code_in_definition="true"',
+                       'secret_name="TARGET_DATABASE_ADMIN_URL"', 'secret_parameter="/vayada/prod/db-marketplace-url"'):
+            self.assertIn(marker, branch)
+        self.assertNotIn('extra_secret_', branch)
+        self.assertIn('elif [[ "${runtime_timeouts_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";', RUNNER)
+        self.assertIn('elif [[ "${runtime_timeouts_phase}" == "apply" || "${runtime_timeouts_phase}" == "rollback" ]]; '
+                      'then vay2017_expected_status="PASS";', RUNNER)
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('GITHUB_')}
+        # Off main every call stops at the first guard, valid arguments included.
+        for args in (['inspect', ''], ['apply', 'a' * 64], ['rollback', 'a' * 64]):
+            local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+                                    '--set-api-runtime-timeouts', *args], capture_output=True, text=True, env=environment)
+            self.assertEqual(local.returncode, 2, args)
+        # On main, invalid phases, fingerprints and argument counts stop before anything reaches AWS.
+        dispatch = {**environment, 'GITHUB_ACTIONS': 'true', 'GITHUB_REF': 'refs/heads/main',
+                    'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REPOSITORY': 'vayada-marketplace/vayada-platform'}
+        for args in (['apply', ''], ['rollback', ''], ['inspect', 'a' * 64], ['other', ''], ['apply', 'A' * 64],
+                     ['inspect']):
+            local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+                                    '--set-api-runtime-timeouts', *args], capture_output=True, text=True, env=dispatch)
+            self.assertEqual(local.returncode, 2, args)
+        source = (ROOT / 'scripts/set-api-runtime-timeouts.mjs').read_text()
+        for marker in ('MEMBER WITH ADMIN OPTION', 'api_runtime_timeouts_plan_changed',
+                       'api_runtime_timeouts_admin_option_missing', 'api_runtime_timeouts_already_applied',
+                       'api_runtime_timeouts_not_applied', 'IN DATABASE', 'lock_timeout: "10s"',
+                       'idle_in_transaction_session_timeout: "10min"', 'COMMITTED_UNVERIFIED',
+                       'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com',
+                       'url.search !== "?sslmode=require"', 'rejectUnauthorized: true'):
+            self.assertIn(marker, source)
+        workflow = (ROOT / '.github/workflows/set-api-runtime-timeouts.yml').read_text()
+        for marker in ("if: github.ref == 'refs/heads/main'", 'environment: platform-mutations-v2',
+                       'group: production-ecs-mutations', 'options: [inspect, apply, rollback]',
+                       '--set-api-runtime-timeouts "$PHASE" "$FROZEN"'):
+            self.assertIn(marker, workflow)
+
+    def test_rds_admin_login_check_is_read_only_and_uses_only_the_admin_secret(self) -> None:
+        branch = RUNNER.split('  --check-rds-admin-login)', 1)[1].split('    ;;', 1)[0]
+        for marker in ('[[ "$#" -eq 1 ]]', 'ca_required=true', 'code_file="check-rds-admin-login.mjs"',
+                       'code_in_definition="true"', 'secret_name="TARGET_DATABASE_ADMIN_URL"',
+                       'secret_parameter="/vayada/prod/db-marketplace-url"'):
+            self.assertIn(marker, branch)
+        self.assertNotIn('extra_secret_', branch)
+        local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+                                '--check-rds-admin-login', 'unexpected'], capture_output=True, text=True)
+        self.assertEqual(local.returncode, 2)
+        source = (ROOT / 'scripts/check-rds-admin-login.mjs').read_text()
+        for marker in ('vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com', 'url.search !== "?sslmode=require"',
+                       'url.username !== "vayada_admin"', 'rejectUnauthorized: true',
+                       'status: "PASS", user: result.rows[0].user'):
+            self.assertIn(marker, source)
+        for write in ('INSERT', 'UPDATE', 'DELETE', 'ALTER', 'GRANT', 'DROP', 'CREATE'):
+            self.assertNotIn(write, source)
 
     def test_cleanup_is_scoped_to_dedicated_cluster_and_log_group(self) -> None:
         self.assertIn('cluster="vayada-target-database-runtime-preflight"', RUNNER)

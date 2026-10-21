@@ -65,7 +65,6 @@ jobs:
           TF_VAR_smtp_username: ${{ secrets.TF_VAR_SMTP_USERNAME }}
           TF_VAR_smtp_password: ${{ secrets.TF_VAR_SMTP_PASSWORD }}
           TF_VAR_resend_api_key: ${{ secrets.TF_VAR_RESEND_API_KEY }}
-          TF_VAR_marketplace_communication_unsubscribe_keys: ${{ secrets.TF_VAR_MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_KEYS }}
           TF_VAR_resend_webhook_secret: ${{ secrets.TF_VAR_RESEND_WEBHOOK_SECRET }}
           TF_VAR_stripe_secret_key: ${{ secrets.TF_VAR_STRIPE_SECRET_KEY }}
           TF_VAR_next_stripe_test_secret_key: ${{ secrets.TF_VAR_NEXT_STRIPE_TEST_SECRET_KEY }}
@@ -74,7 +73,6 @@ jobs:
           TF_VAR_stripe_connect_webhook_secret: ${{ secrets.TF_VAR_STRIPE_CONNECT_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
           TF_VAR_legacy_booking_api_desired_count: ${{ secrets.TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT || '1' }}
-          TF_VAR_legacy_marketplace_api_desired_count: ${{ secrets.TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT || '1' }}
           TF_VAR_legacy_pms_api_desired_count: ${{ secrets.TF_VAR_LEGACY_PMS_API_DESIRED_COUNT || '1' }}
           TF_VAR_enable_staging_pms_runtime: "false" # VAY-794 C1 rehearsal accepted; staging PMS retired
           TF_VAR_target_database_url: ${{ secrets.TF_VAR_TARGET_DATABASE_URL }}
@@ -173,6 +171,13 @@ jobs:
           fi
           rm planned-export-runtime.json
 
+      - name: Require claimed Channex support in the running next-api image
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra show -json tfplan > planned-channex-scope.json
+          python3 scripts/assert-planned-channex-claimed-image.py planned-channex-scope.json current-next-api-running-tasks.json
+          rm planned-channex-scope.json
+
       - name: Preserve installed hotel setup caller
         run: |
           terraform -chdir=infra show -json tfplan > planned-setup-caller.json
@@ -191,7 +196,6 @@ jobs:
           TF_VAR_smtp_username: ${{ secrets.TF_VAR_SMTP_USERNAME }}
           TF_VAR_smtp_password: ${{ secrets.TF_VAR_SMTP_PASSWORD }}
           TF_VAR_resend_api_key: ${{ secrets.TF_VAR_RESEND_API_KEY }}
-          TF_VAR_marketplace_communication_unsubscribe_keys: ${{ secrets.TF_VAR_MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_KEYS }}
           TF_VAR_resend_webhook_secret: ${{ secrets.TF_VAR_RESEND_WEBHOOK_SECRET }}
           TF_VAR_stripe_secret_key: ${{ secrets.TF_VAR_STRIPE_SECRET_KEY }}
           TF_VAR_next_stripe_test_secret_key: ${{ secrets.TF_VAR_NEXT_STRIPE_TEST_SECRET_KEY }}
@@ -200,7 +204,6 @@ jobs:
           TF_VAR_stripe_connect_webhook_secret: ${{ secrets.TF_VAR_STRIPE_CONNECT_WEBHOOK_SECRET }}
           TF_VAR_stripe_platform_account_id: ${{ secrets.TF_VAR_STRIPE_PLATFORM_ACCOUNT_ID }}
           TF_VAR_legacy_booking_api_desired_count: ${{ secrets.TF_VAR_LEGACY_BOOKING_API_DESIRED_COUNT || '1' }}
-          TF_VAR_legacy_marketplace_api_desired_count: ${{ secrets.TF_VAR_LEGACY_MARKETPLACE_API_DESIRED_COUNT || '1' }}
           TF_VAR_legacy_pms_api_desired_count: ${{ secrets.TF_VAR_LEGACY_PMS_API_DESIRED_COUNT || '1' }}
           TF_VAR_enable_staging_pms_runtime: "false" # VAY-794 C1 rehearsal accepted; staging PMS retired
           TF_VAR_target_database_url: ${{ secrets.TF_VAR_TARGET_DATABASE_URL }}
@@ -321,6 +324,99 @@ jobs:
         with:
           task-definition: ${{ steps.render-next-api-task-def.outputs.task-definition }}
           service: vayada-next-api-service
+          cluster: vayada-backend-cluster
+          wait-for-service-stability: true
+
+      # VAY-2247: the next stack's Booking Admin, as next-api above. Its ECS service ignores task
+      # definition changes and coordinated releases clone the serving definition, so without this an
+      # environment change in infra/ecs.tf is registered but never served. Retained while held.
+      - name: Check next-booking-admin task definition drift
+        id: next_booking_admin_task
+        run: |
+          set -euo pipefail
+
+          current_task_definition="$(
+            aws ecs describe-services \
+              --cluster vayada-backend-cluster \
+              --services vayada-next-booking-admin-service \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'services[0].taskDefinition' \
+              --output text
+          )"
+          latest_task_definition="$(
+            aws ecs describe-task-definition \
+              --task-definition vayada-next-booking-admin \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'taskDefinition.taskDefinitionArn' \
+              --output text
+          )"
+
+          echo "current_task_definition=${current_task_definition}" >> "$GITHUB_OUTPUT"
+          echo "latest_task_definition=${latest_task_definition}" >> "$GITHUB_OUTPUT"
+
+          if [ "$current_task_definition" = "$latest_task_definition" ]; then
+            echo "deploy_required=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          hold_active="$(PYTHONPATH=scripts python3 - <<'PY'
+          from coordinated_release import Aws, CommandRunner, active_hold, load_config
+          config = load_config()
+          aws = Aws(CommandRunner(), config)
+          print("true" if active_hold(aws, config, "next-booking-admin") else "false")
+          PY
+          )"
+          if [ "$hold_active" = true ]; then
+            echo "Next Booking Admin deployment remains held; retaining its serving task."
+            echo "deploy_required=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          running_task="$(
+            aws ecs list-tasks \
+              --cluster vayada-backend-cluster \
+              --service-name vayada-next-booking-admin-service \
+              --desired-status RUNNING \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'taskArns[0]' \
+              --output text
+          )"
+          current_digest="$(
+            aws ecs describe-tasks \
+              --cluster vayada-backend-cluster \
+              --tasks "${running_task}" \
+              --region "${{ env.AWS_REGION }}" \
+              --query "tasks[0].containers[?name=='vayada-next-booking-admin'].imageDigest | [0]" \
+              --output text
+          )"
+          test -n "${current_digest}"
+          test "${current_digest}" != "None"
+          echo "current_image=269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-booking-admin-frontend@${current_digest}" >> "$GITHUB_OUTPUT"
+          echo "deploy_required=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download latest next-booking-admin task definition
+        if: steps.next_booking_admin_task.outputs.deploy_required == 'true'
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${{ steps.next_booking_admin_task.outputs.latest_task_definition }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --query taskDefinition > next-booking-admin-task-definition.json
+
+      - name: Render next-booking-admin task definition with current image
+        if: steps.next_booking_admin_task.outputs.deploy_required == 'true'
+        id: render-next-booking-admin-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@6853cfae8c3a7d978fbf68b5a55453395541dfbb
+        with:
+          task-definition: next-booking-admin-task-definition.json
+          container-name: vayada-next-booking-admin
+          image: ${{ steps.next_booking_admin_task.outputs.current_image }}
+
+      - name: Deploy latest next-booking-admin task definition
+        if: steps.next_booking_admin_task.outputs.deploy_required == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a310a830f5c14e583e35d84e4e1ec7dd177c3c9c
+        with:
+          task-definition: ${{ steps.render-next-booking-admin-task-def.outputs.task-definition }}
+          service: vayada-next-booking-admin-service
           cluster: vayada-backend-cluster
           wait-for-service-stability: true
 

@@ -31,6 +31,68 @@ folder, saves the log and returns the exit code.
 Use it on its own only for a standalone extraction, and check that its report's
 `runId` equals the run file's `sourceRunId`.
 
+## Channex handover (VAY-2108)
+
+Per hotel, the audited `target:channex:handover` executor (application
+`packages/backend-migration/src/cli/channexHandover.ts`) runs through the same
+one-off task path, in two steps:
+
+```bash
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh channex-handover-plan <request.json>
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh channex-handover <request.json> CHANNEX_HANDOVER:<action>:<property>:<plan sha256>
+```
+
+The request file holds exactly one action for one hotel:
+
+| `action` | Fields besides `action`, `property` and `approvalRef` (printable ASCII, 3–200 characters) |
+|---|---|
+| `activate` | `legacyDisabledAt` (ISO 8601 with `Z` or an offset) and `legacyReadbackFile`, a non-empty regular file (not a symlink) in the evidence folder holding the legacy-disable readback. The script passes its SHA-256 to the CLI. |
+| `revoke` | `reason` (printable ASCII, 3–500 characters) |
+| `open-sales`, `close-sales` | none |
+
+`approvalRef` and `reason` must not start with `@` or `-`.
+
+- **Plan:** the CLI's own dry run in a read-only transaction. The task uses the
+  digest of the single running `vayada-next-api` task, which must be listed in
+  `scripts/next-api-split-compatible-images.txt`. Its definition holds only the
+  migration secret (`/vayada/prod/target-database-url`, pinned to
+  `vayada_target_prod_user` @ `vayada_target_prod`), the pinned RDS CA and TLS
+  preload, no task role, and the family `vayada-channex-handover-oneoff`.
+  - The script saves `channex-handover-<action>-<property>-plan.json` (0600).
+    It holds the CLI's plan and the CLI's `planSha256`, plus the script's
+    binding: the request SHA-256, the exact CLI arguments (including the
+    readback SHA-256), the image digest, the network, the cluster, and the
+    SHA-256s of this script, its task launcher and the TLS preload.
+  - The plan SHA-256 is SHA-256 of `<CLI plan sha>:<binding sha>`. A re-plan on
+    another image, network or code therefore gives a new plan SHA, and an older
+    go no longer matches.
+  - It prints the plan SHA and the line to run after the go.
+- **Go:** Flamur names that plan SHA-256 in
+  `CHANNEX_HANDOVER:<action>:<property>:<plan sha>`.
+- **Apply:**
+  - Before any AWS call, the script refuses a go for another plan or a changed
+    request.
+  - It then recomputes the binding from the live service. It refuses unless the
+    plan SHA it gets is the one the go names ("Re-plan and get a new go").
+  - It passes `--apply <CLI plan sha>`. The CLI re-plans under row locks and
+    refuses `plan_changed` on any difference, so the approval reference, the
+    readback and every other input stay exactly as approved.
+- **Result:** `channex-handover-<action>-<property>-result.json` is written
+  only when the CLI exits 0 and prints exactly one JSON line with
+  `applied: true` for the CLI plan SHA. A `CHANNEX_HANDOVER_COMPLETE` line, when
+  printed, must name the same action, hotel and CLI plan SHA. The CLI's JSON
+  line must stay under 16 KB, because Docker splits longer log lines. A longer
+  line fails closed with "no plan recorded".
+  - The folder then refuses that action for that hotel again: use a new folder.
+  - If the script is interrupted, `watch <task-arn>` saves the log. Never rerun
+    the apply blindly: inspect the log, then re-plan.
+- **Not a migration command:** handover runs never use a run file. The generic
+  `<command> <run-file>` path refuses `target:channex:handover:*`, and handover
+  runs refuse to start while any one-off migration or handover task is running.
+- **Provider access:** none. `open-sales`/`close-sales` only change the hotel's
+  offer targets in the database; the claimed Channex worker then pushes the
+  change. No step deletes or disables a Channex property.
+
 ## What one call does
 
 1. **Before any AWS call, it checks the inputs:**
@@ -44,7 +106,7 @@ Use it on its own only for a standalone extraction, and check that its report's
    overrides `AWS_ENDPOINT_URL*`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`
    and `AWS_CA_BUNDLE`, and
    requires the `vayada` profile to resolve to account `269416271598`. It refuses if a
-   one-off migration task is still running.
+   one-off migration or Channex handover task is still running.
 3. **It registers one disposable task definition.** The family is
    `vayada-legacy-migration-oneoff-target` or `-source`. That is never the
    `vayada-next-api` family, so `tf-apply` will not roll a service onto it.
@@ -167,7 +229,7 @@ completed deployment.
 | | Booking: `/vayada/prod/db-booking-url`, which must be `vayada_booking_user` @ `vayada_booking_db`. |
 | | Target: `/vayada/prod/target-database-url`, which must be `vayada_target_prod_user` @ `vayada_target_prod`. |
 | | **Every connection:** host `vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com` and port 5432 are pinned too. TLS is verified against that CA, including the hostname (verify-full). |
-| Read-only, aggregates only | **Transaction:** every statement runs inside `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`, with `standard_conforming_strings` forced on, a 15 s statement timeout and a 1 s lock timeout. **Printed legacy blocks:** each column of the top-level SELECT list is either a reviewed label or exactly one aggregate with nothing after it but a cast: `count(…)` (optionally with one `FILTER (WHERE …)`), `bool_or(…)` (a boolean), `min`/`max` of a reviewed label or of the reviewed numeric settings `free_cancellation_days` and `markup_pct`, or `min`/`max(<*_at, *_date, check_in or check_out column>)` cast to `date` or `timestamp`. The reviewed label columns are `label`, `stripe_billing_status`, `billing_active_plan`, `currency`, `hotel_id` and `payment_provider`, optionally inside `coalesce(…, '<text>')`. It may also hold the hotel identity labels `<h>.id`, `<h>.name` and `<h>.slug`, where `<h>` is a legacy hotels table (`hotels` in PMS, `booking_hotels` in Booking), or its alias, written directly after `FROM` or `JOIN` in the top-level query (aliases inside subqueries do not count). Those table names may appear only there, as `<table>.<column>`, or as an output column name (`AS hotels`): no other table, subquery or CTE may take either name, neither may be schema-qualified, and neither may take a column alias list (`hotels h(a, name)`). **Printed columns come only from base tables and literal lists:** the top-level `FROM` may not contain derived tables (`FROM (…)`, parenthesised joins, `ROWS FROM`) or `LATERAL`. Every CTE must be a `VALUES` list of literals (strings, numbers, `NULL`/`TRUE`/`FALSE`, simple casts), and `WITH RECURSIVE` is refused. `GROUP BY` may use only positions and those labels. Top-level `UNION`, `INTERSECT` and `EXCEPT` are refused, so every printed row comes from the checked list. At most 50 rows. **Target checks:** each 6c `SELECT` (the file's own `BEGIN`/`ROLLBACK` are dropped) runs as `SELECT count(*) AS rows_found FROM (…)` and must return exactly that one value, so no target row is printed. **Errors:** only a code or the exception type is printed. |
+| Read-only, aggregates only | **Transaction:** every statement runs inside `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`, with `standard_conforming_strings` forced on, a 15 s statement timeout and a 1 s lock timeout. **Printed legacy blocks:** each column of the top-level SELECT list is either a reviewed label or exactly one aggregate with nothing after it but a cast: `count(…)` (optionally with one `FILTER (WHERE …)`), `bool_or(…)` (a boolean), `min`/`max` of a reviewed label, of the reviewed numeric settings `free_cancellation_days`, `markup_pct`, `partial_refund_cancel_window_days` and `partial_refund_amount_percent`, of `jsonb_array_length(<x>.partial_refund_tiers)`, or of one refund tier's `(<x>.partial_refund_tiers -> N ->> 'min_days_before_check_in'|'refund_percent')` cast to a number, or `min`/`max(<*_at, *_date, check_in or check_out column>)` cast to `date` or `timestamp`. The reviewed label columns are `label`, `stripe_billing_status`, `billing_active_plan`, `currency`, `hotel_id`, `payment_provider`, `flexible_cancellation_type` and `custom_domain` (a public booking hostname), optionally inside `coalesce(…, '<text>')`. It may also hold the hotel identity labels `<h>.id`, `<h>.name` and `<h>.slug`, where `<h>` is a legacy hotels table (`hotels` in PMS, `booking_hotels` in Booking), or its alias, written directly after `FROM` or `JOIN` in the top-level query (aliases inside subqueries do not count). Those table names may appear only there, as `<table>.<column>`, or as an output column name (`AS hotels`): no other table, subquery or CTE may take either name, neither may be schema-qualified, and neither may take a column alias list (`hotels h(a, name)`). **Printed columns come only from base tables and literal lists:** the top-level `FROM` may not contain derived tables (`FROM (…)`, parenthesised joins, `ROWS FROM`) or `LATERAL`. Every CTE must be a `VALUES` list of literals (strings, numbers, `NULL`/`TRUE`/`FALSE`, simple casts), and `WITH RECURSIVE` is refused. `GROUP BY` may use only positions and those labels. Top-level `UNION`, `INTERSECT` and `EXCEPT` are refused, so every printed row comes from the checked list. At most 50 rows. **Target checks:** each 6c `SELECT` (the file's own `BEGIN`/`ROLLBACK` are dropped) runs as `SELECT count(*) AS rows_found FROM (…)` and must return exactly that one value, so no target row is printed. **Errors:** only a code or the exception type is printed. |
 | Least privilege, no new IAM | No task role. The execution role is the existing `ecsTaskExecutionRole`. Logs go to the existing `/ecs/vayada-pms-backend` group. No Terraform. All definitions are deregistered and deleted afterwards. |
 | Dry-run / plan mode | `readonly-counts-plan` makes only read-only AWS calls. It prints every statement exactly as it will run, with its database and user, and each task's image, role, secret and log group. It also prints the network, the cluster, the code and SQL SHA-256s and the plan SHA-256, and saves all of it to `readonly-counts-plan.txt`. The plan SHA covers all definitions, the network configuration, the cluster and the code SHA. The run refuses unless the go names it. |
 | Only SELECT | One `SELECT`/`WITH` per block or check. **Only allow-listed functions may be called:** printed blocks `count`, `max`, `min`, `bool_or`, `coalesce`; counted target checks `count`, `trunc` and `jsonb_array_elements` (they print only a row count). Every other function is refused, including schema-qualified calls and calls disguised as CTE names. Also refused: write keywords, row locks, `SELECT … INTO`, comments, quoted identifiers, `U&`, `$` (dollar quotes and parameters) and `E'…'` strings. Inside an ordinary string literal, `$` and `"` are plain characters (jsonpath and regex patterns). Because `standard_conforming_strings` is on, the server reads every literal exactly as the checker does. String concatenation (`\|\|`) is refused everywhere, with no exception. Checked locally (`python3 -I`) before any AWS call and again in the task. |
@@ -231,5 +293,5 @@ That adds roughly 1.5–2.5 hours: the copy restore, a second migration run,
 smoke and approval. It moves the window from about 3.5–4.5 hours to about
 5–7 hours, so OTA closeouts are needed.
 
-Tests: `node --test scripts/test-legacy-migration-oneoff.mjs` and
+Tests: `node --test scripts/test-legacy-migration-oneoff.mjs` (including the Channex handover modes) and
 `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/test_legacy_readonly_counts.py`.

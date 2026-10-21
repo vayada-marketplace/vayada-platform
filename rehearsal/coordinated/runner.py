@@ -40,7 +40,7 @@ def inspect():
     require(identity["Account"] == ACCOUNT, "Unexpected AWS account")
     names = [f"vayada-recovery-{key}" for key in sorted(SERVICES)]
     response = aws("ecs", "describe-services", "--cluster", CLUSTER, "--services", *names)
-    require(not response.get("failures") and len(response["services"]) == 6, "Missing fixture services")
+    require(not response.get("failures") and len(response["services"]) == len(SERVICES), "Missing fixture services")
     targets, evidence = {}, []
     for service in response["services"]:
         name = service["serviceName"]

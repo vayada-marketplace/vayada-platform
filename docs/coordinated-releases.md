@@ -4,7 +4,7 @@ Status: receiver and control-state support; automatic ownership remains disabled
 until VAY-2029 completes integrated verification and activation.
 
 `Deploy coordinated next release` consumes the versioned contract mirrored in
-`deployment/contract`. It reconciles the API and five active next frontends as
+`deployment/contract`. It reconciles the API and four active next frontends as
 one release while retaining the shared `production-ecs-mutations` lock for the
 whole workflow run. Terraform, legacy deployment jobs, manual operations, and
 rollback therefore cannot mutate production ECS concurrently with any API or
@@ -24,13 +24,13 @@ accepts only:
   exact trusted publisher run; that run may still be active on first dispatch
   or may have failed only after durable upload for a later redispatch;
 - byte-exact manifest and published-record SHA-256 values;
-- the exact six service keys, approved repositories, and immutable digests in
+- the exact five service keys, approved repositories, and immutable digests in
   the v1 manifest, plus an ECR `next-<imageSourceSha>` tag on each digest.
 
 The `next` environment must provide `COORDINATED_RELEASE_READ_TOKEN` with
 read-only Actions access to `vayada-marketplace/vayada`. The deployment jobs use
 `vayada-github-actions-coordinated-deploy`, whose AWS policy is limited to the
-six physical ECS services, six ECR repositories, existing task roles, and the
+five physical ECS services, five ECR repositories, existing task roles, and the
 control-state prefix.
 
 ## Runtime state
@@ -46,7 +46,7 @@ Small JSON records live under
 | `services/<key>/hold`              | active/cleared durable manual or rollback hold                     |
 | `checkpoints/<barrier>`            | evidence-bound checkpoint acknowledgment                           |
 | `checkpoint-obligations`           | unresolved barriers retained even when successors omit them        |
-| `checkpoint-completions/<barrier>` | proof that all six checkpoint services completed and were verified |
+| `checkpoint-completions/<barrier>` | proof that all five checkpoint services completed and were verified |
 | `operations/<run>/<key>`           | prepared target, captured rollback target, and result              |
 
 Terraform does not own these values. It owns only the role and policy that can
@@ -60,7 +60,7 @@ The prepare job validates the publication, verifies source ancestry, checks
 barriers and holds, confirms every digest in ECR, and compares every desired
 digest to live ECS. It writes `desired-release` before any ECS mutation. A
 delayed older or divergent ordinary release cannot replace it. Duplicate runs
-remain useful: they observe all six live services and repair an earlier partial
+remain useful: they observe all five live services and repair an earlier partial
 failure, including a carried-forward image. A newer manifest must name the
 retained desired manifest and source as its immediate predecessor, so a lost or
 delayed intermediate release cannot silently skip its checkpoint obligations.
@@ -70,9 +70,19 @@ require both all-service checkpoint completion and the evidence acknowledgment.
 The API job runs first. It captures the live task definition before mutation,
 waits for ECS stability, checks public API health, and writes provenance only
 after observing the desired digest. API failure prevents frontend jobs. The
-five frontend jobs then run as a fail-fast-disabled matrix, retaining auth
+four frontend jobs then run as a fail-fast-disabled matrix, retaining auth
 gateway and public Booking smoke checks. One frontend failure does not roll
 back a healthy API or cancel unrelated frontend jobs.
+
+Automatic `repository_dispatch` events usually arrive before the reviewed
+admission PR lists the release's next-api digest in
+`scripts/next-api-split-compatible-images.txt`. Such a run still prepares in
+full (publication validation, desired state, checkpoint obligations), then
+prints a notice and skips the API, frontend, and finalize jobs instead of
+failing at the split launcher guard; it mutates no ECS service. Admit the
+image, then dispatch `operation=ordinary` with the artifact ID and hashes from
+the run summary. Manual dispatches never take this path: an unadmitted API
+image still fails the API job.
 
 No-op services still run smoke and refresh manifest-bound provenance. If a
 runner stops after ECS mutation but before state write, rerunning the same
@@ -119,7 +129,7 @@ next service writes a durable hold before mutation. Its supported automatic
 rollback also writes a hold first. The isolated maps canary continues using its
 separate physical services and lock.
 
-After the locked `activate` operation switches batch mode, queued or delayed automatic per-image events for the six
+After the locked `activate` operation switches batch mode, queued or delayed automatic per-image events for the five
 managed services fail before ECS mutation. Named manual recovery remains
 available and held. Terraform Apply retains `production-ecs-mutations`; its
 task-definition roll-forward preserves the current image and never clears
@@ -169,7 +179,7 @@ with receiver desired state would reject both valid sequences.
 Receiver ordering uses desired-source ancestry and still rejects divergent
 history and a different manifest for an already accepted source. The previous
 build source must also be an ancestor of the candidate. Trusted producer
-publications contain all six service images and cumulative append-only barriers;
+publications contain all five service images and cumulative append-only barriers;
 the receiver merges retained checkpoint obligations and checks acknowledgments
 and completion before accepting the next desired release. Coalescing does not
 acknowledge a barrier or authorize skipping a required checkpoint deployment.

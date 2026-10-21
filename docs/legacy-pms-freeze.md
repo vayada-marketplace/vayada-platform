@@ -9,6 +9,7 @@ the Terraform plan shows no change until go-day sets a switch.
 | Terraform variable | Container variable | App default | Freeze value |
 |---|---|---|---|
 | `legacy_pms_scheduler_enabled` | `PMS_SCHEDULER_ENABLED` | `true` | `false` |
+| `legacy_pms_scheduler_job_blocklist` | `PMS_SCHEDULER_JOB_BLOCKLIST` | none | not part of the freeze; set to `["process_affiliate_payouts"]` since VAY-2259 (see below) |
 | `legacy_pms_webhook_mode` | `PMS_LEGACY_WEBHOOK_MODE` | `mutating` | `proxy_to_target` |
 | `legacy_pms_stripe_webhook_mode` | `PMS_LEGACY_STRIPE_WEBHOOK_MODE` | falls back to the line above | unset |
 | `legacy_pms_xendit_webhook_mode` | `PMS_LEGACY_XENDIT_WEBHOOK_MODE` | falls back | unset |
@@ -62,8 +63,10 @@ settings, so without these keys the switches would do nothing.
    about a mistyped key and then leaves that switch unset. A merge applies the
    whole root, so nothing else may merge to `main` between this plan and the
    merge.
-3. Merge it. Merging is the apply: `tf-apply.yml` waits for approval on the
-   `platform-mutations-v2` environment, registers the new revision, and then
+3. Merge it only with the freeze go. Merging is the apply: `tf-apply.yml` starts
+   at once on the `platform-mutations-v2` environment, which admits only `main`
+   and has no required reviewer, so nothing in GitHub waits for an approval. It
+   registers the new revision, and then
    (step "Check production PMS task definition drift") rolls
    `vayada-pms-backend-service` onto it. It keeps the image that is running now
    and waits for the service to be stable. If the workflow fails before that
@@ -79,17 +82,97 @@ settings, so without these keys the switches would do nothing.
      `aws ecs describe-task-definition --region eu-west-1 --profile vayada --task-definition "$(aws ecs describe-services --region eu-west-1 --profile vayada --cluster vayada-backend-cluster --services vayada-pms-backend-service --query 'services[0].taskDefinition' --output text)" --query "taskDefinition.containerDefinitions[0].environment"`.
 5. Continue with the target writers and the drain (runbook F3 and F4).
 
-App image deploys during the freeze keep the switches: `deploy.yml` copies the
-running revision and only swaps the image.
+## Affiliate payout job off (VAY-2259, separate from the freeze)
+
+The Marketplace and affiliate program are retired, but the legacy PMS still ran
+`process_affiliate_payouts` on the 1st of every month at 02:00 UTC (Stripe
+transfers to affiliates). It has never paid anyone. `infra/legacy_pms_scheduler_blocklist.auto.tfvars.json`
+sets `legacy_pms_scheduler_job_blocklist` to that one job, so the legacy PMS gets
+`PMS_SCHEDULER_JOB_BLOCKLIST=process_affiliate_payouts` and the other eight jobs
+keep running. It is its own file, so the go-day freeze file and its thaw (R1)
+never touch it.
+
+The app freezes **every** legacy job when the list names a job it does not know,
+so Terraform accepts only the nine ids of `LEGACY_SCHEDULER_JOBS`
+(`apps/pms-api/app/services/scheduler.py`). The fixed-plan billing worker is not
+one of them.
+
+Verify after the apply, read-only, once the `vayada-pms-backend-service` rollout
+has completed with one running task:
+
+- `curl -s https://pms-api.vayada.com/health` shows `scheduler.enabled: true`,
+  `running: true`, `configuration_valid: true`, `active_job_count: 8`,
+  `frozen_job_count: 1`, `unknown_job_count: 0`. `active_job_count: 0` means
+  every job is frozen: roll back at once.
+- The new task logs `Legacy PMS scheduler job frozen: process_affiliate_payouts reason=blocklisted`.
+- After the 1st of each month, 02:00 UTC: no `Running job "process_affiliate_payouts"`
+  line in `/ecs/vayada-pms-backend`. Keep legacy PMS rollouts away from that
+  minute: during a rollout the old task still runs its scheduler.
+
+Payout rows still appear: a card or Xendit booking made through an approved
+affiliate's referral link schedules one when it is confirmed, and its commission
+is held back from the hotel payout. With the job off nobody is paid. Turning the
+job back on would not pay those rows either: it only picks up rows scheduled for
+the previous month, so rows from the months it was off stay `scheduled` and need
+a manual decision. Count them monthly with the legacy read-only counts runner
+until the legacy PMS is retired (VAY-1363).
+
+Roll back with a PR that deletes the file (same single replacement, without the
+entry). Only in an emergency (a direct production change, needs Flamur's go),
+point the service at the newest revision whose environment has no
+`PMS_SCHEDULER_JOB_BLOCKLIST` and whose image is the running digest. In
+October 2026 that is `vayada-pms-backend:211`. **Never** use the revision right
+before the running one: that is Terraform's own revision, which still holds the
+blocklist and runs the floating `:latest` image. After any later legacy deploy
+no such revision exists; use the PR only.
+
+```
+aws ecs update-service --region eu-west-1 --profile vayada --cluster vayada-backend-cluster \
+  --service vayada-pms-backend-service --task-definition vayada-pms-backend:211
+```
+
+Merge the PR anyway afterwards. Otherwise the next `tf-apply.yml` rolls the
+service forward to the latest revision again.
+
+## Legacy app deploys
+
+The app repo's legacy deploy workflows (`deploy-pms-api.yml`,
+`deploy-booking-api.yml`) are disabled in GitHub
+and stay disabled (Flamur's decision). A legacy change goes live only through an
+explicit `workflow_dispatch` of this repo's `deploy.yml` on `main`, one deploy
+at a time, with Flamur's go for that deploy naming the service and the image
+digest:
+
+| Input | Value |
+|---|---|
+| `service` | `pms-backend` or `booking-backend` |
+| `ecr_repo` | `vayada-pms-backend` or `vayada-booking-backend` |
+| `image_sha` | the image's 40-character git SHA tag |
+| `image_digest` | the image's `sha256:` digest; the workflow checks that tag and digest match in ECR |
+| `environment` | `production` |
+
+`platform-mutations-v2` has no required reviewer, so a dispatched deploy runs
+without any further approval. The go comes before the dispatch.
+
+Such a deploy keeps the freeze switches and the job blocklist: `deploy.yml`
+copies the running revision and only swaps the image. So the new image must
+still list `process_affiliate_payouts` in `LEGACY_SCHEDULER_JOBS`. If a pms-api
+change removes or renames that job, the carried-over id becomes unknown and the
+app freezes **all** legacy jobs while `/health` still says `status: ok`. Delete
+`infra/legacy_pms_scheduler_blocklist.auto.tfvars.json` (and the id from the
+validation) before that image goes live. After every legacy PMS deploy, check
+`/health`: `configuration_valid: true` and `active_job_count: 8` (0 only while
+the go-day freeze sets `PMS_SCHEDULER_ENABLED=false`).
 
 ## Thaw or rollback (runbook R1)
 
 Open a PR that deletes `infra/legacy_pms_freeze.auto.tfvars.json`. Its plan shows
 the same single replacement, now without the entries. Merge it; `tf-apply.yml`
 rolls the service forward again. With the entries gone, the app defaults return:
-the scheduler runs, webhooks mutate and the Channex manual syncs are legacy-owned.
+the scheduler runs (still without the blocklisted affiliate payout job, whose
+file stays), webhooks mutate and the Channex manual syncs are legacy-owned.
 Providers then deliver the events they held back. Do not write `mutating` or
-`true` explicitly; deleting the file restores today's task definition exactly.
+`true` explicitly; deleting the file restores the pre-freeze task definition exactly.
 
 After the provider handover (runbook H), keep the file. Legacy stays frozen
 until it is retired (VAY-1363).
@@ -112,8 +195,8 @@ until it is retired (VAY-1363).
   row is retried every 30 seconds without limit. Before the Booking API is
   blocked (F1), wait until no such rows remain; otherwise legacy keeps writing
   and the last-write check in the drain never settles.
-- **Booking API and Marketplace API.** They have no freeze switch. Their only
-  lever is `legacy_booking_api_desired_count` / `legacy_marketplace_api_desired_count`.
+- **Booking API.** It has no freeze switch. Its only lever is
+  `legacy_booking_api_desired_count`. (The Marketplace API is retired, VAY-2259.)
 - **Calls rejected before the mode check.** The mode applies after the
   signature or token check. Terraform maps neither `CHANNEX_WEBHOOK_SECRET` nor
   `XENDIT_WEBHOOK_SECRET` on production legacy PMS, so legacy already answers

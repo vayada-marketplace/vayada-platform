@@ -25,25 +25,13 @@ locals {
       port         = 3004
       health_check = "/"
     }
-    marketplace-backend = {
-      name         = "marketplace-backend-tg"
-      port         = 8000
-      health_check = "/health"
-    }
-    marketplace-admin = {
-      name         = "marketplace-admin-tg"
-      port         = 3001
-      health_check = "/"
-    }
-    affiliate-dashboard = {
-      name         = "affiliate-dashboard-tg"
-      port         = 3005
-      health_check = "/"
-    }
     next-target-backend = {
       name         = "next-target-backend-tg"
       port         = 8003
       health_check = "/health"
+      # VAY-2084: a stopped next-api task held its slot for the default 300s drain, which
+      # delayed the replacement by about 4 minutes. Requests are short, so 30s is enough.
+      deregistration_delay = 30
     }
     next-pms-frontend = {
       name         = "next-pms-frontend-tg"
@@ -65,16 +53,6 @@ locals {
       port         = 3001
       health_check = "/"
     }
-    next-marketplace-frontend = {
-      name         = "next-mkt-front-tg"
-      port         = 3000
-      health_check = "/api/health"
-    }
-    next-affiliate-dashboard = {
-      name         = "next-affiliate-tg"
-      port         = 3005
-      health_check = "/"
-    }
   }
 
   staging_pms_target_groups = var.enable_staging_pms_runtime ? {
@@ -87,6 +65,15 @@ locals {
 
   target_groups = merge(local.base_target_groups, local.staging_pms_target_groups)
 
+  # VAY-2259: the old Python Marketplace (api.vayada.com, admin.vayada.com and the
+  # app.vayada.com App Runner frontend) is switched off. Temporary (302) redirects, so
+  # browsers don't cache them, and the query is dropped. The retired API answers 410.
+  legacy_marketplace_api_retired = {
+    status_code  = "410"
+    content_type = "application/json"
+    message_body = jsonencode({ detail = "This Vayada API has been retired." })
+  }
+
   base_listener_rules = {
     booking-admin = {
       priority     = 10
@@ -94,9 +81,9 @@ locals {
       target_group = "booking-admin"
     }
     admin = {
-      priority     = 15
-      host         = "admin.vayada.com"
-      target_group = "marketplace-admin"
+      priority = 15
+      host     = "admin.vayada.com"
+      redirect = { host = "next-admin.vayada.com", path = "/" }
     }
     booking-api = {
       priority     = 20
@@ -104,9 +91,22 @@ locals {
       target_group = "booking-backend"
     }
     marketplace-api = {
-      priority     = 25
-      host         = "api.vayada.com"
-      target_group = "marketplace-backend"
+      priority       = 25
+      host           = "api.vayada.com"
+      fixed_response = local.legacy_marketplace_api_retired
+    }
+    # The old PMS and old Booking Admin still link here (setup, app switcher). Their
+    # sessions don't carry over, so hotels land on Booking Admin's setup or log-in page.
+    legacy-marketplace-app-setup = {
+      priority = 26
+      host     = "app.vayada.com"
+      paths    = ["/setup", "/setup/*"]
+      redirect = { host = "next-booking-admin.vayada.com", path = "/setup" }
+    }
+    legacy-marketplace-app = {
+      priority = 27
+      host     = "app.vayada.com"
+      redirect = { host = "next-booking-admin.vayada.com", path = "/login" }
     }
     pms-api = {
       priority     = 30
@@ -117,11 +117,6 @@ locals {
       priority     = 40
       host         = "pms.vayada.com"
       target_group = "pms-frontend"
-    }
-    affiliate = {
-      priority     = 45
-      host         = "affiliate.vayada.com"
-      target_group = "affiliate-dashboard"
     }
     booking-root = {
       priority     = 46
@@ -158,16 +153,6 @@ locals {
       host         = "*.next-booking.vayada.com"
       target_group = "next-booking-frontend"
     }
-    next-marketplace = {
-      priority     = 55
-      host         = "next-marketplace.vayada.com"
-      target_group = "next-marketplace-frontend"
-    }
-    next-affiliate = {
-      priority     = 56
-      host         = "next-affiliate.vayada.com"
-      target_group = "next-affiliate-dashboard"
-    }
     booking-frontend = {
       priority     = 50
       host         = "*.booking.vayada.com"
@@ -189,11 +174,12 @@ locals {
 resource "aws_lb_target_group" "services" {
   for_each = local.target_groups
 
-  name        = each.value.name
-  port        = each.value.port
-  protocol    = "HTTP"
-  vpc_id      = var.vpc_id
-  target_type = "ip"
+  name                 = each.value.name
+  port                 = each.value.port
+  protocol             = "HTTP"
+  vpc_id               = var.vpc_id
+  target_type          = "ip"
+  deregistration_delay = try(each.value.deregistration_delay, 300)
 
   health_check {
     enabled             = true
@@ -217,9 +203,44 @@ resource "aws_lb_listener_rule" "services" {
   listener_arn = data.aws_lb_listener.https.arn
   priority     = each.value.priority
 
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.services[each.value.target_group].arn
+  dynamic "action" {
+    for_each = try(each.value.target_group, null) == null ? [] : [each.value.target_group]
+
+    content {
+      type             = "forward"
+      target_group_arn = aws_lb_target_group.services[action.value].arn
+    }
+  }
+
+  dynamic "action" {
+    for_each = try(each.value.redirect, null) == null ? [] : [each.value.redirect]
+
+    content {
+      type = "redirect"
+
+      redirect {
+        protocol    = "HTTPS"
+        port        = "443"
+        host        = action.value.host
+        path        = action.value.path
+        query       = ""
+        status_code = "HTTP_302"
+      }
+    }
+  }
+
+  dynamic "action" {
+    for_each = try(each.value.fixed_response, null) == null ? [] : [each.value.fixed_response]
+
+    content {
+      type = "fixed-response"
+
+      fixed_response {
+        content_type = action.value.content_type
+        message_body = action.value.message_body
+        status_code  = action.value.status_code
+      }
+    }
   }
 
   condition {

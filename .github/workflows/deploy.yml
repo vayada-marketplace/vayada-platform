@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       service:
-        description: "Service key (e.g. affiliate-dashboard)"
+        description: "Service key (e.g. pms-frontend)"
         required: true
       ecr_repo:
-        description: "ECR repository name (e.g. vayada-affiliate-dashboard)"
+        description: "ECR repository name (e.g. vayada-pms-frontend)"
         required: true
       image_sha:
         description: "Full 40-char git SHA of the image to deploy"
@@ -64,6 +64,11 @@ on:
         required: false
         type: boolean
         default: false
+      channex_staging_booking:
+        description: "Pull-only claimed booking sync for the synthetic property on staging Channex (VAY-2108)"
+        required: false
+        type: boolean
+        default: false
       channex_worker_state:
         description: "Preserve worker state, or pause/resume on the current canary image"
         required: false
@@ -78,11 +83,6 @@ on:
         description: "Target environment"
         required: true
         default: production
-      adaptive_onboarding:
-        description: "Next Marketplace adaptive onboarding runtime flag"
-        type: choice
-        options: [preserve, enabled, disabled]
-        default: preserve
       operation_reason:
         description: "Required reason when manually mutating a coordinated next service"
         required: false
@@ -114,14 +114,6 @@ jobs:
         run: test "$WORKFLOW_REF" = refs/heads/main
       - name: Checkout code
         uses: actions/checkout@v7
-
-      - name: Validate adaptive onboarding scope
-        env:
-          ADAPTIVE_ONBOARDING: ${{ inputs.adaptive_onboarding }}
-          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
-          ENVIRONMENT: ${{ inputs.environment }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: python3 scripts/set-adaptive-onboarding.py --validate-only
 
       - name: Validate Channex worker state scope
         env:
@@ -177,18 +169,6 @@ jobs:
               echo "ecs_service=vayada-pms-frontend-service" >> "$GITHUB_OUTPUT"
               echo "task_family=vayada-pms-frontend" >> "$GITHUB_OUTPUT"
               ;;
-            marketplace-backend)
-              echo "ecs_service=vayada-marketplace-backend-service" >> "$GITHUB_OUTPUT"
-              echo "task_family=vayada-marketplace-backend" >> "$GITHUB_OUTPUT"
-              ;;
-            marketplace-admin)
-              echo "ecs_service=vayada-marketplace-admin-service" >> "$GITHUB_OUTPUT"
-              echo "task_family=vayada-marketplace-admin" >> "$GITHUB_OUTPUT"
-              ;;
-            affiliate-dashboard)
-              echo "ecs_service=vayada-affiliate-dashboard-service" >> "$GITHUB_OUTPUT"
-              echo "task_family=vayada-affiliate-dashboard" >> "$GITHUB_OUTPUT"
-              ;;
             next-target-backend)
               echo "ecs_service=vayada-next-api-service" >> "$GITHUB_OUTPUT"
               echo "task_family=vayada-next-api" >> "$GITHUB_OUTPUT"
@@ -208,14 +188,6 @@ jobs:
             next-marketplace-admin)
               echo "ecs_service=vayada-next-marketplace-admin-service" >> "$GITHUB_OUTPUT"
               echo "task_family=vayada-next-marketplace-admin" >> "$GITHUB_OUTPUT"
-              ;;
-            next-marketplace-frontend)
-              echo "ecs_service=vayada-next-marketplace-frontend-service" >> "$GITHUB_OUTPUT"
-              echo "task_family=vayada-next-marketplace-frontend" >> "$GITHUB_OUTPUT"
-              ;;
-            next-affiliate-dashboard)
-              echo "ecs_service=vayada-next-affiliate-dashboard-service" >> "$GITHUB_OUTPUT"
-              echo "task_family=vayada-next-affiliate-dashboard" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "Unknown service: $SERVICE"
@@ -268,7 +240,6 @@ jobs:
             next-pms-frontend) expected_repository="vayada-next-pms-frontend" ;;
             next-booking-frontend) expected_repository="vayada-next-booking-frontend" ;;
             next-booking-admin) expected_repository="vayada-next-booking-admin-frontend" ;;
-            next-marketplace-frontend) expected_repository="vayada-next-marketplace-frontend" ;;
             next-marketplace-admin) expected_repository="vayada-next-admin-frontend" ;;
           esac
           if [ -n "$expected_repository" ] && [ "$ECR_REPOSITORY" != "$expected_repository" ]; then
@@ -323,7 +294,7 @@ jobs:
           TASK_FAMILY: ${{ steps.resolve.outputs.task_family }}
         run: |
           set -euo pipefail
-          if [ -z "$ROLLBACK_IMAGE" ] && { [ "$SERVICE" = "next-booking-frontend" ] || [ "$SERVICE" = "next-marketplace-frontend" ]; }; then
+          if [ -z "$ROLLBACK_IMAGE" ] && [ "$SERVICE" = "next-booking-frontend" ]; then
             ROLLBACK_IMAGE="$(
               jq -r --arg name "$TASK_FAMILY" \
                 '.containerDefinitions[] | select(.name == $name) | .image // empty' \
@@ -331,7 +302,7 @@ jobs:
             )"
           fi
           if [ -z "$ROLLBACK_IMAGE" ]; then
-            if [ "$SERVICE" = "next-booking-frontend" ] || [ "$SERVICE" = "next-marketplace-frontend" ]; then
+            if [ "$SERVICE" = "next-booking-frontend" ]; then
               echo "::error::Could not resolve the pre-cutover image for rollback."
               exit 1
             fi
@@ -430,16 +401,6 @@ jobs:
           container-name: ${{ steps.resolve.outputs.task_family }}
           image: ${{ steps.resolve-rollback.outputs.image_uri }}
 
-      - name: Set adaptive onboarding on deployment task
-        env:
-          ADAPTIVE_ONBOARDING: ${{ inputs.adaptive_onboarding }}
-          SERVICE: ${{ github.event.client_payload.service || inputs.service }}
-          ENVIRONMENT: ${{ inputs.environment }}
-          EVENT_NAME: ${{ github.event_name }}
-          TASK_DEFINITION: ${{ steps.render-task-def.outputs.task-definition }}
-          CURRENT_TASK_DEFINITION: task-definition.json
-        run: python3 scripts/set-adaptive-onboarding.py
-
       - name: Keep next API Channex processing paused
         env:
           SERVICE: ${{ github.event.client_payload.service || inputs.service }}
@@ -511,6 +472,7 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
           CHANNEX_WORKER_DATABASE: ${{ inputs.channex_worker_database }}
           CHANNEX_STAGING: ${{ inputs.channex_staging }}
+          CHANNEX_STAGING_BOOKING: ${{ inputs.channex_staging_booking }}
           ACTIVATE_GUEST: ${{ inputs.activate_guest }}
         run: bash scripts/validate-channex-worker-state.sh
 
@@ -533,6 +495,7 @@ jobs:
           ROOM_CLOSURE: ${{ inputs.room_closure }}
           CHANNEX_STAGING_ALERTS: ${{ inputs.channex_staging_alerts }}
           CHANNEX_STAGING_NO_SHOW: ${{ inputs.channex_staging_no_show }}
+          CHANNEX_STAGING_BOOKING: ${{ inputs.channex_staging_booking }}
           CHANNEX_WORKER_STATE: ${{ inputs.channex_worker_state }}
         run: |
           set -euo pipefail
@@ -553,6 +516,7 @@ jobs:
           if [ "$ROOM_CLOSURE" = true ]; then args+=(--room-closure); fi
           if [ "$CHANNEX_STAGING_ALERTS" = true ]; then args+=(--channex-staging-alerts); fi
           if [ "$CHANNEX_STAGING_NO_SHOW" = true ]; then args+=(--channex-staging-no-show); fi
+          if [ "$CHANNEX_STAGING_BOOKING" = true ]; then args+=(--channex-staging-booking); fi
           if [ "$SERVICE" = next-maps-canary-remove ]; then args+=(--remove); fi
           if [ "$ACTIVATE_GUEST" = true ]; then args+=(--activate-guest); fi
           python3 scripts/deploy-next-maps-canary.py "${args[@]}"

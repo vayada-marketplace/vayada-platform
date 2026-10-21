@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 const freezeTf = new URL('../infra/legacy_pms_freeze.tf', import.meta.url);
+const blocklistTfvars = new URL('../infra/legacy_pms_scheduler_blocklist.auto.tfvars.json', import.meta.url);
 const ecsTf = readFileSync(new URL('../infra/ecs.tf', import.meta.url), 'utf8');
 const doc = readFileSync(new URL('../docs/legacy-pms-freeze.md', import.meta.url), 'utf8');
 
@@ -50,9 +51,18 @@ test('the documented go-day freeze file sets exactly the four freeze entries', (
   });
 });
 
+test('the checked-in blocklist file stops only the affiliate payout job', () => {
+  const blocklistFile = JSON.parse(readFileSync(blocklistTfvars, 'utf8'));
+  assert.deepEqual(Object.keys(blocklistFile), ['legacy_pms_scheduler_job_blocklist']);
+  assert.deepEqual(evaluate(blocklistFile), {
+    environment: [{ name: 'PMS_SCHEDULER_JOB_BLOCKLIST', value: 'process_affiliate_payouts' }],
+  });
+});
+
 test('every switch maps to the exact legacy PMS setting name', () => {
   assert.deepEqual(evaluate({
     legacy_pms_scheduler_enabled: true,
+    legacy_pms_scheduler_job_blocklist: ['process_affiliate_payouts', 'poll_channex_bookings'],
     legacy_pms_webhook_mode: 'mutating',
     legacy_pms_stripe_webhook_mode: 'proxy_to_target',
     legacy_pms_xendit_webhook_mode: 'proxy_to_target',
@@ -61,6 +71,7 @@ test('every switch maps to the exact legacy PMS setting name', () => {
     legacy_pms_channex_admin_manual_ari_sync_mode: 'read-only',
   }).environment.map(({ name, value }) => `${name}=${value}`), [
     'PMS_SCHEDULER_ENABLED=true',
+    'PMS_SCHEDULER_JOB_BLOCKLIST=process_affiliate_payouts,poll_channex_bookings',
     'PMS_LEGACY_WEBHOOK_MODE=mutating',
     'PMS_LEGACY_STRIPE_WEBHOOK_MODE=proxy_to_target',
     'PMS_LEGACY_XENDIT_WEBHOOK_MODE=proxy_to_target',
@@ -70,8 +81,13 @@ test('every switch maps to the exact legacy PMS setting name', () => {
   ]);
 });
 
-test('unknown modes and the event-dropping ack-only mode are rejected', () => {
+test('unknown modes, unknown job ids and the event-dropping ack-only mode are rejected', () => {
   for (const vars of [
+    // The app freezes every legacy job when the blocklist names a job it does not know.
+    { legacy_pms_scheduler_job_blocklist: [] },
+    { legacy_pms_scheduler_job_blocklist: [''] },
+    { legacy_pms_scheduler_job_blocklist: ['process_affiliate_payout'] },
+    { legacy_pms_scheduler_job_blocklist: ['process_affiliate_payouts', 'sync_fixed_plan_subscription_prices'] },
     { legacy_pms_webhook_mode: '' },
     { legacy_pms_webhook_mode: 'ack_only_with_receipt' },
     { legacy_pms_stripe_webhook_mode: 'ack_only_with_receipt' },

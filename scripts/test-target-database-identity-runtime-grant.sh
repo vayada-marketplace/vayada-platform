@@ -21,7 +21,7 @@ docker network create "${network}" >/dev/null
 docker volume create "${modules}" >/dev/null
 docker run --detach --rm --name "${database}" --network "${network}" \
   --network-alias vayada-identity-grant-db --env POSTGRES_PASSWORD=postgres \
-  "public.ecr.aws/docker/library/postgres:${version}" >/dev/null
+  "ghcr.io/vayada-marketplace/ci-postgres:${version}" >/dev/null
 for _ in {1..30}; do
   docker exec "${database}" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
   sleep 1
@@ -69,12 +69,8 @@ CREATE TABLE booking.guest_bookings (id integer PRIMARY KEY);
 CREATE TABLE hotel_catalog.properties (id integer PRIMARY KEY);
 CREATE VIEW booking.pricing_runtime_effective_property_scopes
   WITH (security_barrier = true) AS SELECT id AS property_id FROM booking.guest_bookings WHERE false;
-CREATE VIEW booking.pricing_runtime_effective_authority_scopes
-  WITH (security_barrier = true) AS SELECT id AS property_id FROM booking.guest_bookings WHERE false;
-REVOKE ALL ON booking.pricing_runtime_effective_property_scopes,
-  booking.pricing_runtime_effective_authority_scopes FROM PUBLIC;
-GRANT SELECT ON booking.pricing_runtime_effective_property_scopes,
-  booking.pricing_runtime_effective_authority_scopes TO PUBLIC;
+REVOKE ALL ON booking.pricing_runtime_effective_property_scopes FROM PUBLIC;
+GRANT SELECT ON booking.pricing_runtime_effective_property_scopes TO PUBLIC;
 ALTER TABLE platform.external_webhook_events ENABLE ROW LEVEL SECURITY;
 CREATE POLICY identity_runtime_scope ON platform.external_webhook_events TO PUBLIC
   USING (current_user <> 'vayada_next_identity_runtime' OR provider = 'workos');
@@ -105,7 +101,7 @@ CREATE POLICY identity_runtime_scope ON platform.dead_letter_events TO PUBLIC
 RESET ROLE;
 SQL
 
-docker run --rm --volume "${modules}:/work" --workdir /work public.ecr.aws/docker/library/node:22-bookworm \
+docker run --rm --volume "${modules}:/work" --workdir /work ghcr.io/vayada-marketplace/ci-node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
 cp "${root}/scripts/grant-target-database-identity-runtime.mjs" "${work}/grant.mjs"
 cp "${root}/scripts/provision-target-database-identity-runtime.mjs" "${work}/provision.mjs"
@@ -123,7 +119,7 @@ run_provision() {
     --env "FINANCE_EXPORT_WORKER_DATABASE_URL=postgresql://vayada_next_finance_export_worker:export@vayada-identity-grant-db:5432/postgres" \
     --env "VAYADA_IDENTITY_PROVISION_FORCE_LOGIN_FAILURE=${force_failure}" \
     --env "VAYADA_IDENTITY_PROVISION_FORCE_MARKER_MISMATCH=${force_marker_mismatch}" \
-    public.ecr.aws/docker/library/node:22-bookworm node provision.mjs
+    ghcr.io/vayada-marketplace/ci-node:22-bookworm node provision.mjs
 }
 if output="$(run_provision 2>&1)"; then
   echo 'identity role provision unexpectedly allowed template database access' >&2
@@ -176,7 +172,7 @@ run_grant() {
     --volume "${work}/grant.mjs:/work/grant.mjs:ro" --workdir /work \
     --env "TARGET_DATABASE_MIGRATION_URL=postgresql://${user}:${password}@vayada-identity-grant-db:5432/postgres" \
     --env "VAYADA_IDENTITY_GRANT_LOCAL_FIXTURE=${fixture}" \
-    public.ecr.aws/docker/library/node:22-bookworm node grant.mjs
+    ghcr.io/vayada-marketplace/ci-node:22-bookworm node grant.mjs
 }
 expect_grant_failure() {
   local code="$1"
@@ -241,15 +237,15 @@ expect_grant_failure identity_public_read_contract_unsafe
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c 'REVOKE SELECT ON booking.pricing_runtime_effective_property_scopes FROM vayada_next_identity_runtime' >/dev/null
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
-  -c 'GRANT SELECT ON booking.pricing_runtime_effective_authority_scopes TO vayada_next_identity_runtime WITH GRANT OPTION' >/dev/null
+  -c 'GRANT SELECT ON booking.pricing_runtime_effective_property_scopes TO vayada_next_identity_runtime WITH GRANT OPTION' >/dev/null
 expect_grant_failure identity_public_read_contract_unsafe
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
-  -c 'REVOKE SELECT ON booking.pricing_runtime_effective_authority_scopes FROM vayada_next_identity_runtime' >/dev/null
+  -c 'REVOKE SELECT ON booking.pricing_runtime_effective_property_scopes FROM vayada_next_identity_runtime' >/dev/null
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
-  -c 'GRANT SELECT (property_id) ON booking.pricing_runtime_effective_authority_scopes TO vayada_next_identity_runtime' >/dev/null
+  -c 'GRANT SELECT (property_id) ON booking.pricing_runtime_effective_property_scopes TO vayada_next_identity_runtime' >/dev/null
 expect_grant_failure identity_public_read_contract_unsafe
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
-  -c 'REVOKE SELECT (property_id) ON booking.pricing_runtime_effective_authority_scopes FROM vayada_next_identity_runtime' >/dev/null
+  -c 'REVOKE SELECT (property_id) ON booking.pricing_runtime_effective_property_scopes FROM vayada_next_identity_runtime' >/dev/null
 
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c "CREATE POLICY finance_expense_worker_scope ON platform.jobs AS RESTRICTIVE TO PUBLIC USING (current_user <> 'vayada_next_finance_expense_worker')" >/dev/null
@@ -270,7 +266,6 @@ SELECT id FROM identity.staff_invitations WHERE id = 1 FOR UPDATE;
 UPDATE platform.external_webhook_events SET provider = 'workos' WHERE id = 1;
 SELECT id FROM hotel_catalog.properties WHERE id = 1;
 SELECT count(*) FROM booking.pricing_runtime_effective_property_scopes;
-SELECT count(*) FROM booking.pricing_runtime_effective_authority_scopes;
 INSERT INTO platform.jobs (id, queue_name, job_type, resource_product, resource_type)
   VALUES (1, 'pms-inbox', 'pms.inbox.assignment.reconcile', 'pms', 'inbox_assignment');
 SQL
@@ -320,4 +315,25 @@ expect_grant_failure identity_role_existing_privilege_too_broad
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c 'REVOKE SELECT ON booking.guest_booking_view FROM vayada_next_identity_runtime; CREATE SEQUENCE booking.guest_booking_seq; GRANT USAGE ON SEQUENCE booking.guest_booking_seq TO vayada_next_identity_runtime' >/dev/null
 expect_grant_failure identity_role_existing_sequence_privilege
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'REVOKE USAGE ON SEQUENCE booking.guest_booking_seq FROM vayada_next_identity_runtime; DROP VIEW booking.guest_booking_view' >/dev/null
+
+# VAY-2079: app migration 0475 dropped the authority-scope view, so it is no longer a public read.
+# A view recreated under that name and readable by the role is an unexpected privilege.
+docker exec -i "${database}" psql -U postgres -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+SET ROLE legacy_owner;
+CREATE VIEW booking.pricing_runtime_effective_authority_scopes
+  WITH (security_barrier = true) AS SELECT id AS property_id FROM booking.guest_bookings WHERE false;
+REVOKE ALL ON booking.pricing_runtime_effective_authority_scopes FROM PUBLIC;
+GRANT SELECT ON booking.pricing_runtime_effective_authority_scopes TO PUBLIC;
+SQL
+expect_grant_failure identity_role_existing_privilege_too_broad
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'DROP VIEW booking.pricing_runtime_effective_authority_scopes' >/dev/null
+run_grant | grep -F '"status":"PASS"' >/dev/null
+# A dropped public-read view grants nothing, so the grant passes without it (the remaining
+# property-scope view is dropped the same way later).
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'DROP VIEW booking.pricing_runtime_effective_property_scopes' >/dev/null
+run_grant | grep -F '"status":"PASS"' >/dev/null
 echo "identity runtime grant contract passed (PostgreSQL ${version})"

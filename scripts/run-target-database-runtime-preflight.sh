@@ -26,7 +26,6 @@ log_group="/ecs/vayada-next-api"
 helper_file=""
 financials_readiness_property=""
 financials_readiness_image_digest=""
-product_dml_required="false"
 code_in_definition="false"
 vay2017_source_sha=""
 vay2017_execution_id=""
@@ -35,18 +34,21 @@ vay2017_source_import_phase=""
 role_retirement_step=""
 role_retirement_phase=""
 role_retirement_frozen=""
+capture_login_phase=""
+capture_login_frozen=""
+runtime_timeouts_phase=""
+runtime_timeouts_frozen=""
 case "${mode}" in
-  preflight|--preflight-runtime-product-dml)
+  preflight)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
-    [[ "${mode}" == "--preflight-runtime-product-dml" ]] && product_dml_required="true"
     code_file="target-database-runtime-preflight.mjs"
     code_in_definition="true"
     secret_name="TARGET_DATABASE_URL"
     secret_parameter="/vayada/prod/target-database-runtime-url"
     family="vayada-next-api-db-runtime-preflight"
     ;;
-  --grant-runtime-product-dml|--revoke-runtime-product-dml|--inspect-runtime-product-dml)
-    # VAY-2054: the one reviewed grant set for the ordinary API login, its dry run and its rollback.
+  --grant-runtime-product-dml|--inspect-runtime-product-dml)
+    # VAY-2054: the one reviewed grant set for the ordinary API login and its dry run.
     [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
     # Granting before the posture-aware preflight is on main would fail every tf-apply.
     grep -q 'runtime_product_dml_posture_partial' "$(dirname "${BASH_SOURCE[0]}")/target-database-runtime-preflight.mjs" || {
@@ -56,7 +58,6 @@ case "${mode}" in
     code_file="grant-target-database-runtime-product-dml.mjs"
     code_in_definition="true"
     grant_scope="product_dml"
-    [[ "${mode}" == "--revoke-runtime-product-dml" ]] && grant_scope="revoke_product_dml"
     [[ "${mode}" == "--inspect-runtime-product-dml" ]] && grant_scope="inspect_product_dml"
     secret_name="TARGET_DATABASE_MIGRATION_URL"
     secret_parameter="/vayada/prod/target-database-url"
@@ -247,6 +248,16 @@ case "${mode}" in
       code_file="grant-target-database-identity-runtime.mjs"
     fi
     ;;
+  --check-rds-admin-login)
+    # VAY-2259: the RDS administrator rotation proves the rotated URL logs in (read-only).
+    [[ "$#" -eq 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
+    ca_required=true
+    code_file="check-rds-admin-login.mjs"
+    code_in_definition="true"
+    secret_name="TARGET_DATABASE_ADMIN_URL"
+    secret_parameter="/vayada/prod/db-marketplace-url"
+    family="vayada-next-api-db-runtime-preflight"
+    ;;
   --retire-hotel-setup-roles)
     # VAY-2056 step 6a/6c: vayada_admin disables (NOLOGIN, its own grants, sessions), later drops,
     # the retired hotel-setup roles. inspect is read-only; apply must repeat its PLAN fingerprint.
@@ -263,6 +274,39 @@ case "${mode}" in
     role_retirement_step="$2"
     role_retirement_phase="$3"
     role_retirement_frozen="$4"
+    ;;
+  --retire-affiliate-capture-login)
+    # VAY-2272: vayada_admin drops vayada_next_affiliate_capture once app migration 0497 is live.
+    # inspect is read-only; apply must repeat its PLAN fingerprint.
+    [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main &&
+       "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_REPOSITORY:-}" == vayada-marketplace/vayada-platform &&
+       "$#" -eq 3 ]] || exit 2
+    [[ ( "$2" == inspect && -z "$3" ) || ( "$2" == apply && "$3" =~ ^[a-f0-9]{64}$ ) ]] || exit 2
+    ca_required=true
+    code_file="retire-affiliate-capture-login.mjs"
+    code_in_definition="true"
+    secret_name="TARGET_DATABASE_ADMIN_URL"
+    secret_parameter="/vayada/prod/db-marketplace-url"
+    family="vayada-next-api-db-runtime-preflight"
+    capture_login_phase="$2"
+    capture_login_frozen="$3"
+    ;;
+  --set-api-runtime-timeouts)
+    # VAY-2247: vayada_admin sets (apply) or resets (rollback) lock_timeout and
+    # idle_in_transaction_session_timeout for vayada_next_api_runtime in vayada_target_prod.
+    # inspect is read-only; apply and rollback must repeat its PLAN fingerprint.
+    [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main &&
+       "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_REPOSITORY:-}" == vayada-marketplace/vayada-platform &&
+       "$#" -eq 3 ]] || exit 2
+    [[ ( "$2" == inspect && -z "$3" ) || ( ( "$2" == apply || "$2" == rollback ) && "$3" =~ ^[a-f0-9]{64}$ ) ]] || exit 2
+    ca_required=true
+    code_file="set-api-runtime-timeouts.mjs"
+    code_in_definition="true"
+    secret_name="TARGET_DATABASE_ADMIN_URL"
+    secret_parameter="/vayada/prod/db-marketplace-url"
+    family="vayada-next-api-db-runtime-preflight"
+    runtime_timeouts_phase="$2"
+    runtime_timeouts_frozen="$3"
     ;;
   *) echo "Unknown mode: ${mode}" >&2; exit 2 ;;
 esac
@@ -312,9 +356,11 @@ else
 fi
 overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg name "${container}" \
   --arg helper "${helper_payload}" --arg ca "${ca_payload}" --arg scope "${grant_scope}" --arg provision_scope "${provision_scope}" --arg finance_property "${finance_property}" --arg export_property "${export_property}" --arg export_id "${export_id}" --arg export_ongoing "${export_ongoing}" --arg channex_property "${channex_property}" --arg channex_scope "${channex_scope}" --arg financials_readiness_property "${financials_readiness_property}" \
-  --arg product_dml_required "${product_dml_required}" --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
+  --arg vay2017_phase "${vay2017_phase}" --arg vay2017_source_sha "${vay2017_source_sha}" --arg vay2017_execution_id "${vay2017_execution_id}" \
   --arg vay2017_source_import_phase "${vay2017_source_import_phase}" \
   --arg role_retirement_step "${role_retirement_step}" --arg role_retirement_phase "${role_retirement_phase}" --arg role_retirement_frozen "${role_retirement_frozen}" \
+  --arg capture_login_phase "${capture_login_phase}" --arg capture_login_frozen "${capture_login_frozen}" \
+  --arg runtime_timeouts_phase "${runtime_timeouts_phase}" --arg runtime_timeouts_frozen "${runtime_timeouts_frozen}" \
   --arg github_actions "${GITHUB_ACTIONS:-}" --arg github_ref "${GITHUB_REF:-}" \
   --arg vay2017_signing_key_id "${VAY2017_PREFLIGHT_SIGNING_KEY_ID:-}" --arg vay2017_input "${VAY2017_PREFLIGHT_INPUT_GZIP_BASE64:-}" --arg vay2017_signature "${VAY2017_PREFLIGHT_SIGNATURE:-}" --arg vay2017_public_key "${VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64:-}" --arg vay2017_principal "${CHANNEX_ADOPTION_EXECUTION_PRINCIPAL:-}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
@@ -322,7 +368,6 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $helper == "" then [] else [{name:"VAYADA_DB_RUNTIME_PREFLIGHT_HELPER",value:$helper}] end) +
       (if $ca == "" then [] else [{name:"VAYADA_DB_RDS_CA_BUNDLE_GZIP",value:$ca}] end) +
       (if $scope == "" then [] else [{name:"VAYADA_DB_GRANT_SCOPE",value:$scope}] end) +
-      (if $product_dml_required == "true" then [{name:"VAYADA_DB_REQUIRE_PRODUCT_DML",value:"1"}] else [] end) +
       (if $provision_scope == "" then [] else [{name:"VAYADA_DB_PROVISION_SCOPE",value:$provision_scope}] end) +
       (if $finance_property == "" then [] else [{name:"FINANCE_EXPENSE_WORKER_PROPERTY_ID",value:$finance_property}] end) +
       (if $export_property == "" then [] else [{name:"FINANCE_EXPORT_WORKER_PROPERTY_ID",value:$export_property}] end) +
@@ -336,6 +381,12 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
       (if $role_retirement_step == "" then [] else [{name:"VAYADA_HOTEL_SETUP_ROLES_STEP",value:$role_retirement_step},
         {name:"VAYADA_HOTEL_SETUP_ROLES_PHASE",value:$role_retirement_phase},
         {name:"VAYADA_HOTEL_SETUP_ROLES_FROZEN",value:$role_retirement_frozen},
+        {name:"GITHUB_ACTIONS",value:$github_actions},{name:"GITHUB_REF",value:$github_ref}] end) +
+      (if $capture_login_phase == "" then [] else [{name:"VAYADA_AFFILIATE_CAPTURE_LOGIN_PHASE",value:$capture_login_phase},
+        {name:"VAYADA_AFFILIATE_CAPTURE_LOGIN_FROZEN",value:$capture_login_frozen},
+        {name:"GITHUB_ACTIONS",value:$github_actions},{name:"GITHUB_REF",value:$github_ref}] end) +
+      (if $runtime_timeouts_phase == "" then [] else [{name:"VAYADA_API_RUNTIME_TIMEOUTS_PHASE",value:$runtime_timeouts_phase},
+        {name:"VAYADA_API_RUNTIME_TIMEOUTS_FROZEN",value:$runtime_timeouts_frozen},
         {name:"GITHUB_ACTIONS",value:$github_actions},{name:"GITHUB_REF",value:$github_ref}] end) +
       (if $vay2017_source_import_phase == "extract" then [{name:"SOURCE_ATTESTATION_OWNER",value:"vay2017_source_attestor_20260929"}] else [] end) +
       (if $vay2017_source_sha == "" then [] else [{name:"VAY2017_PREFLIGHT_SOURCE_SHA",value:$vay2017_source_sha}] end) +
@@ -468,6 +519,10 @@ elif [[ "${vay2017_source_import_phase}" == "extract" ]]; then vay2017_expected_
 elif [[ "${vay2017_source_import_phase}" == "cleanup" ]]; then vay2017_expected_status="clean";
 elif [[ "${role_retirement_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";
 elif [[ "${role_retirement_phase}" == "apply" ]]; then vay2017_expected_status="PASS";
+elif [[ "${capture_login_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";
+elif [[ "${capture_login_phase}" == "apply" ]]; then vay2017_expected_status="PASS";
+elif [[ "${runtime_timeouts_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";
+elif [[ "${runtime_timeouts_phase}" == "apply" || "${runtime_timeouts_phase}" == "rollback" ]]; then vay2017_expected_status="PASS";
 fi
 task="$(aws ecs describe-tasks --cluster "${cluster}" --tasks "${task_arn}" --region "${region}" \
   --query 'tasks[0].{exitCode:containers[0].exitCode,reason:stoppedReason}' --output json)"

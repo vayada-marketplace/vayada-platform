@@ -5,15 +5,18 @@ locals {
   private_profile_media_origin_id    = "vayada-platform-media-s3"
 
   private_profile_media_upload_origins = [
-    "https://app.vayada.com",
-    "https://admin.vayada.com",
     "https://admin.booking.vayada.com",
     "https://pms.vayada.com",
-    "https://next-marketplace.vayada.com",
     "https://next-admin.vayada.com",
     "https://next-booking-admin.vayada.com",
     "https://next-pms.vayada.com",
   ]
+}
+
+variable "platform_media_retired_purge_enabled" {
+  type        = bool
+  default     = false
+  description = "Run next-api's one-time purge of retired Marketplace and creator media (VAY-2272)."
 }
 
 resource "aws_s3_bucket" "private_profile_media" {
@@ -98,6 +101,42 @@ resource "aws_s3_bucket_lifecycle_configuration" "private_profile_media" {
 
     abort_incomplete_multipart_upload {
       days_after_initiation = 1
+    }
+  }
+
+  # VAY-2272: replaced and deleted media is really gone 30 days later (old versions and the
+  # delete markers they leave behind); current objects never expire.
+  rule {
+    id     = "expire-replaced-public-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "public/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
+
+  rule {
+    id     = "expire-replaced-private-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "private/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+
+    expiration {
+      expired_object_delete_marker = true
     }
   }
 
@@ -321,6 +360,12 @@ resource "aws_iam_role_policy" "next_api_media" {
           "${aws_s3_bucket.uploads.arn}/listings/*",
           "arn:aws:s3:::vayada-creator-marketplace-images/*",
         ]
+      },
+      {
+        Sid      = "InvalidatePublicMediaCache"
+        Effect   = "Allow"
+        Action   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
+        Resource = aws_cloudfront_distribution.private_profile_media.arn
       }
     ]
   })

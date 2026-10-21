@@ -3,9 +3,15 @@ name: Rotate RDS Administrator
 on:
   workflow_dispatch:
     inputs:
-      confirmation:
-        description: "Type VAY-2038 to approve the production RDS administrator rotation"
+      mode:
+        description: "check logs in with the current password and changes nothing; apply rotates"
+        type: choice
+        options: [check, apply]
+        default: check
         required: true
+      confirmation:
+        description: "For apply only: type VAY-2038 to approve the production RDS administrator rotation"
+        required: false
 
 permissions:
   id-token: write
@@ -31,7 +37,8 @@ jobs:
       - name: Check explicit confirmation
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
-        run: test "$CONFIRMATION" = "VAY-2038"
+          MODE: ${{ inputs.mode }}
+        run: test "$MODE" = check || test "$CONFIRMATION" = "VAY-2038"
       - name: Checkout code
         uses: actions/checkout@v7
         with:
@@ -43,5 +50,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - name: Install pinned AWS SDK
         run: python3 -m pip install --disable-pip-version-check boto3==1.42.14
-      - name: Rotate RDS and restart its reviewed runtime consumer
-        run: python3 scripts/restore-rds-admin-from-ssm.py apply
+      - name: Check, or rotate the RDS administrator password, and prove the admin login
+        env:
+          MODE: ${{ inputs.mode }}
+        run: python3 scripts/restore-rds-admin-from-ssm.py "$MODE"

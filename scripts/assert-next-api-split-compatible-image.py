@@ -21,6 +21,11 @@ def fail(message: str) -> None:
     raise SystemExit(f"next-api split launcher guard failed: {message}")
 
 
+def is_admitted(digest: str) -> bool:
+    """Whether a reviewed admission lists the digest as split-launcher compatible."""
+    return digest in COMPATIBLE_IMAGES.values()
+
+
 def main() -> None:
     if len(sys.argv) != 6:
         fail("usage: <service> <repository> <digest> <ecr-image-details.json> <current-task.json>")
@@ -36,7 +41,7 @@ def main() -> None:
     matches = [item for item in details if item.get("imageDigest") == digest]
     if len(matches) != 1:
         fail("ECR did not return exactly one matching image")
-    if digest not in COMPATIBLE_IMAGES.values():
+    if not is_admitted(digest):
         fail("digest has no reviewed immutable split-launcher attestation")
     current = json.loads(Path(sys.argv[5]).read_text())
     current = current.get("taskDefinition", current)
@@ -64,6 +69,11 @@ def main() -> None:
         supported = dict(line.split() for line in Path(__file__).with_name("next-api-ongoing-export-compatible-images.txt").read_text().splitlines() if line.strip() and not line.startswith("#"))
         if digest not in supported.values():
             fail("disable ongoing exports before deploying an older image")
+    # VAY-2108: an image that predates the claimed Channex scope refuses it at startup.
+    if any(e.get("name") == "PMS_CHANNEX_SCOPE" for e in environment):
+        claimed = dict(line.split() for line in Path(__file__).with_name("next-api-channex-claimed-compatible-images.txt").read_text().splitlines() if line.strip() and not line.startswith("#"))
+        if digest not in claimed.values():
+            fail("set channex_claimed_scope off before deploying an image without claimed Channex support")
     print("next-api split launcher guard passed")
 
 

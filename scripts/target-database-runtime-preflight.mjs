@@ -1,17 +1,17 @@
 // Runtime database role preflight for the ordinary API login (TARGET_DATABASE_URL).
-// Accepts two postures (VAY-2054): the legacy allowlist, and product DML with a protected list.
+// Requires the product DML posture with a protected list (VAY-2054); VAY-2211 removed the legacy allowlist.
 import pg from "pg";
 
 const expectedRole = "vayada_next_api_runtime";
 const receipt = "platform.legacy_owner_bootstrap_receipts";
-const productSchemas = ["hotel_catalog", "booking", "pms", "marketplace", "distribution", "finance", "platform"];
+// Keep identical to scripts/grant-target-database-runtime-product-dml.mjs.
+const productSchemas = ["hotel_catalog", "booking", "pms", "distribution", "finance", "platform"];
 
 // Protected list: keep identical to scripts/grant-target-database-runtime-product-dml.mjs.
 const noRead = [
   "platform.identity_migration_provenance",
   "platform.legacy_historical_binding_transitions", "platform.finance_expense_worker_properties",
-  "platform.finance_export_worker_properties", "marketplace.affiliate_click_quota_windows",
-  "pms.inventory_coverage_validation_queue",
+  "platform.finance_export_worker_properties", "pms.inventory_coverage_validation_queue",
 ];
 const noReadPatterns = [
   "^platform\\.(identity_migration_|legacy_historical_binding_)",
@@ -21,30 +21,23 @@ const noWrite = [
   "platform.schema_migrations", "platform.pricing_runtime_property_scopes",
   "platform.channex_management_worker_properties", "platform.legacy_owner_approval_records",
   "platform.legacy_owner_approval_revocations",
-  "booking.pricing_runtime_effective_authority_scopes", "booking.pricing_runtime_effective_property_scopes",
-  "marketplace.affiliate_click_occurrences", "booking.affiliate_click_contexts",
-  "booking.affiliate_click_admissions", "booking.affiliate_original_booking_bindings",
+  "booking.pricing_runtime_effective_property_scopes",
   "finance.expense_generation_dispatches", "pms.channex_room_availability_attempts",
   "pms.channex_room_availability_receipts", "pms.channex_room_availability_reconciliation_attestations",
   "pms.channex_ari_schedule_sources", "pms.channel_sync_status",
-  "booking.affiliate_referral_production_preflight_revocations",
 ];
 const noWritePatterns = [
-  "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|identity_migration_)",
-  "^pms\\.channex_room_availability_", "^pms\\.channex_ari_schedule_",
-  "^(marketplace|booking)\\.affiliate_click_", "^finance\\.expense_generation_",
+  "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|channex_management_worker_|identity_migration_)",
+  "^pms\\.channex_room_availability_", "^pms\\.channex_ari_schedule_", "^pms\\.channex_offer_ari_deliver",
+  "^finance\\.expense_generation_",
 ];
 const appendOnly = [
   "platform.product_audit_events", "platform.domain_events", "booking.addon_revenue_evidence",
   "pms.channex_offer_ari_receipts", "pms.channex_offer_create_receipts", "pms.channex_offer_target_versions",
   "finance.commission_rate_changes", "distribution.external_api_usage_events",
-  "finance.affiliate_percentage_policy_approvals", "booking.pricing_quotes",
+  "booking.pricing_quotes",
 ];
-// Pricing authority (VAY-2057): the revisions keep UPDATE only because the API locks them
-// FOR SHARE together with the heads; the append-only trigger rejects real updates.
-const noDelete = [
-  "hotel_catalog.properties", "booking.pricing_authority_heads", "booking.pricing_authority_revisions",
-];
+const noDelete = ["hotel_catalog.properties"];
 // Trigger-invoked Channex helpers the Channex management worker provisioning revokes from
 // PUBLIC; the API's product writes PERFORM them through triggers (VAY-2054 follow-up).
 // Keep identical to scripts/grant-target-database-runtime-product-dml.mjs.
@@ -78,38 +71,6 @@ const productIdentityColumns = {
     UPDATE: [...identityColumns["identity.organization_resource_links"].UPDATE, "status", "updated_at"],
   },
 };
-// Legacy allowlist posture (before the product DML grant). Removed by a follow-up once production
-// has switched; until then plain preflight accepts both postures so tf-apply never breaks.
-// One deliberate tightening applies to both postures: the no-read list, name patterns and the
-// evidence schema are unreadable (pms.inventory_coverage_validation_queue was only read-exempt before).
-const legacyRequiredRelations = {
-  "booking.guest_bookings": ["SELECT", "INSERT", "UPDATE", "DELETE"],
-  "finance.payments": ["SELECT", "INSERT", "UPDATE"],
-  "platform.external_webhook_events": ["SELECT", "INSERT", "UPDATE"],
-  "platform.idempotency_keys": ["SELECT", "INSERT", "UPDATE", "DELETE"],
-  "platform.product_audit_events": ["SELECT", "INSERT"],
-  "pms.channel_connections": ["SELECT", "INSERT", "UPDATE"],
-};
-const legacyStagedRelations = {
-  "finance.folios": ["INSERT"], "finance.folio_revisions": ["INSERT"], "finance.folio_lines": ["INSERT"],
-  "finance.folio_payment_references": ["INSERT"], "finance.expense_categories": ["INSERT"],
-  "finance.expenses": ["INSERT"], "finance.recurring_expense_rules": ["INSERT"],
-  "platform.domain_events": ["INSERT"], "platform.jobs": ["INSERT"],
-};
-const legacyRequiredColumns = { "hotel_catalog.properties": { UPDATE: ["id"] } };
-const legacyStagedColumns = {
-  ...identityColumns,
-  "hotel_catalog.organization_setup_track_intents": {
-    INSERT: ["organization_id", "selected_tracks", "revision"], UPDATE: ["selected_tracks", "revision", "updated_at"],
-  },
-  "finance.billing_entitlements": { UPDATE: ["id"] }, "booking.booking_settings": { INSERT: ["property_id"] },
-  "marketplace.marketplace_hotel_profiles": {
-    INSERT: ["property_id", "organization_id", "source_system", "source_hotel_profile_id"], UPDATE: ["property_id"],
-  },
-  "finance.folios": { UPDATE: ["id"] }, "pms.channel_operational_alerts": { UPDATE: ["resolved_at"] },
-};
-// Readable but not required by the legacy posture (granted after the split).
-const legacyOptionalReads = ["platform.channex_management_worker_properties", "platform.pricing_runtime_property_scopes"];
 
 const applicationSchemas = `
   nspname NOT IN ('pg_catalog', 'information_schema')
@@ -256,7 +217,15 @@ try {
     "runtime_schema_create_forbidden",
   );
 
-  // Posture detection from the migration owner's default privileges in the product schemas.
+  const presentSchemas = await client.query(
+    `SELECT nspname FROM pg_namespace WHERE nspname = ANY($1::text[])`,
+    [productSchemas],
+  );
+  const present = new Set(presentSchemas.rows.map((row) => row.nspname));
+  const missingSchemas = productSchemas.filter((schema) => !present.has(schema));
+  check(missingSchemas.length === 0, `runtime_product_schema_missing:${missingSchemas.join(",")}`);
+
+  // Product DML posture: the migration owner's default privileges cover every product schema.
   const defaults = await client.query(
     `SELECT count(DISTINCT namespace.nspname) AS schemas
        FROM pg_default_acl AS acl
@@ -268,15 +237,7 @@ try {
     [productSchemas, migrationOwner],
   );
   const coveredSchemas = Number(defaults.rows[0].schemas);
-  check(
-    coveredSchemas === 0 || coveredSchemas === productSchemas.length,
-    `runtime_product_dml_posture_partial:${coveredSchemas}`,
-  );
-  const posture = coveredSchemas === 0 ? "legacy" : "product_dml";
-  check(
-    process.env.VAYADA_DB_REQUIRE_PRODUCT_DML !== "1" || posture === "product_dml",
-    "runtime_product_dml_required",
-  );
+  check(coveredSchemas === productSchemas.length, `runtime_product_dml_posture_partial:${coveredSchemas}`);
 
   // Protected list: never readable (table or column, including PUBLIC or inherited grants).
   await requireNoMissing(
@@ -340,8 +301,8 @@ try {
        CROSS JOIN (VALUES ('USAGE'),('SELECT'),('UPDATE')) AS privilege(name)
       WHERE ${applicationSchemas} AND sequence.relkind = 'S'
         AND has_sequence_privilege(current_user, sequence.oid, privilege.name)
-        AND NOT ($1 AND privilege.name <> 'UPDATE' AND namespace.nspname = ANY($2::text[]))`,
-    [posture === "product_dml", productSchemas],
+        AND NOT (privilege.name <> 'UPDATE' AND namespace.nspname = ANY($1::text[]))`,
+    [productSchemas],
     "runtime_sequence_access_forbidden",
   );
   await requireNoMissing(
@@ -362,174 +323,95 @@ try {
     "runtime_type_access_missing",
   );
 
-  if (posture === "legacy") {
-    await requireNoMissing(
-      client,
-      `SELECT requirement.relation, privilege.name
-         FROM jsonb_each($1::jsonb) AS requirement(relation, privileges)
-         CROSS JOIN LATERAL jsonb_array_elements_text(requirement.privileges) AS privilege(name)
-         LEFT JOIN pg_class AS relation ON relation.oid = to_regclass(requirement.relation)
-        WHERE relation.oid IS NULL OR NOT has_table_privilege(current_user, relation.oid, privilege.name)`,
-      [JSON.stringify(legacyRequiredRelations)],
-      "runtime_relation_access_missing",
-    );
-    await requireNoMissing(
-      client,
-      `SELECT requirement.relation, privilege.name, column_name.name
-         FROM jsonb_each($1::jsonb) AS requirement(relation, privileges)
-         CROSS JOIN LATERAL jsonb_each(requirement.privileges) AS privilege(name, columns)
-         CROSS JOIN LATERAL jsonb_array_elements_text(privilege.columns) AS column_name(name)
-         LEFT JOIN pg_class AS relation ON relation.oid = to_regclass(requirement.relation)
-        WHERE relation.oid IS NULL
-           OR NOT has_column_privilege(current_user, relation.oid, column_name.name, privilege.name)`,
-      [JSON.stringify(legacyRequiredColumns)],
-      "runtime_column_access_missing",
-    );
-    const allowedRelations = JSON.stringify({ ...legacyRequiredRelations, ...legacyStagedRelations });
-    const allowedColumns = JSON.stringify({ ...legacyRequiredColumns, ...legacyStagedColumns });
-    await requireNoMissing(
-      client,
-      `WITH allowed AS (
-         SELECT requirement.relation, privilege.name
-           FROM jsonb_each($1::jsonb) AS requirement(relation, privileges)
-           CROSS JOIN LATERAL jsonb_array_elements_text(requirement.privileges) AS privilege(name)
-          WHERE privilege.name IN ('INSERT','UPDATE','DELETE')
-       )
-       SELECT namespace.nspname, relation.relname, privilege.name
-         FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-         CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('DELETE')) AS privilege(name)
-        WHERE ${applicationSchemas} AND relation.relkind IN ${relationKinds} AND relation.oid <> $2::regclass
-          AND has_table_privilege(current_user, relation.oid, privilege.name)
-          AND NOT EXISTS (
-            SELECT 1 FROM allowed
-             WHERE allowed.relation = format('%I.%I', namespace.nspname, relation.relname)
-               AND allowed.name = privilege.name)`,
-      [allowedRelations, receipt],
-      "runtime_unapproved_relation_write_forbidden",
-    );
-    await requireNoMissing(
-      client,
-      `WITH allowed AS (
-         SELECT requirement.relation, privilege.name
-           FROM jsonb_each($1::jsonb) AS requirement(relation, privileges)
-           CROSS JOIN LATERAL jsonb_array_elements_text(requirement.privileges) AS privilege(name)
-          WHERE privilege.name IN ('INSERT','UPDATE','REFERENCES')
-       ), allowed_columns AS (
-         SELECT requirement.relation, privilege.name, column_name.name AS column_name
-           FROM jsonb_each($3::jsonb) AS requirement(relation, privileges)
-           CROSS JOIN LATERAL jsonb_each(requirement.privileges) AS privilege(name, columns)
-           CROSS JOIN LATERAL jsonb_array_elements_text(privilege.columns) AS column_name(name)
-       )
-       SELECT namespace.nspname, relation.relname, attribute.attname, privilege.name
-         FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-         JOIN pg_attribute AS attribute ON attribute.attrelid = relation.oid
-         CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('REFERENCES')) AS privilege(name)
-        WHERE ${applicationSchemas} AND attribute.attnum > 0 AND NOT attribute.attisdropped
-          AND relation.oid <> $2::regclass
-          AND has_column_privilege(current_user, relation.oid, attribute.attname, privilege.name)
-          AND NOT EXISTS (
-            SELECT 1 FROM allowed
-             WHERE allowed.relation = format('%I.%I', namespace.nspname, relation.relname)
-               AND allowed.name = privilege.name)
-          AND NOT EXISTS (
-            SELECT 1 FROM allowed_columns
-             WHERE allowed_columns.relation = format('%I.%I', namespace.nspname, relation.relname)
-               AND allowed_columns.name = privilege.name
-               AND allowed_columns.column_name = attribute.attname)`,
-      [allowedRelations, receipt, allowedColumns],
-      "runtime_unapproved_relation_column_write_forbidden",
-    );
-  } else {
-    // Product DML posture (VAY-2054).
-    check(Number(role.rows[0].memberships) === 0, "runtime_role_membership_forbidden");
-    // Row locks need UPDATE on one column (platform #240 precedent): the audit timestamp,
-    // because the hotel-setup native preflights pin the policy and trigger posture of these tables.
-    const lockColumns = await client.query(
-      `SELECT relation.name, attribute.attname
-         FROM unnest($1::text[]) AS relation(name)
-         JOIN pg_attribute AS attribute ON attribute.attrelid = to_regclass(relation.name)
-          AND attribute.attname = $2 AND attribute.attnum > 0 AND NOT attribute.attisdropped`,
-      [identityLockOnly, identityLockColumn],
-    );
-    check(lockColumns.rowCount === identityLockOnly.length, "runtime_identity_lock_column_missing");
-    await requireNoMissing(
-      client,
-      `SELECT relation.relname, attribute.attname, privilege.name
-         FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-         JOIN pg_attribute AS attribute ON attribute.attrelid = relation.oid AND attribute.attnum > 0 AND NOT attribute.attisdropped
-         CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('REFERENCES')) AS privilege(name)
-         LEFT JOIN jsonb_each($1::jsonb) AS allowed(relation, privileges) ON allowed.relation = 'identity.' || relation.relname
-        WHERE namespace.nspname = 'identity' AND relation.relkind IN ${relationKinds}
-          AND has_column_privilege(current_user, relation.oid, attribute.attname, privilege.name)
-          AND NOT coalesce(allowed.privileges -> privilege.name ? attribute.attname, false)
-       UNION ALL
-       SELECT relation.relname, NULL, privilege.name
-         FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-         CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('DELETE')) AS privilege(name)
-        WHERE namespace.nspname = 'identity' AND relation.relkind IN ${relationKinds}
-          AND has_table_privilege(current_user, relation.oid, privilege.name)`,
-      [JSON.stringify({ ...productIdentityColumns, ...Object.fromEntries(lockColumns.rows.map((row) => [row.name, { UPDATE: [row.attname] }])) })],
-      "runtime_identity_write_scope_too_broad",
-    );
-    await requireNoMissing(
-      client,
-      `SELECT namespace.nspname, relation.relname, privilege.name
-         FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-         CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('DELETE'),('REFERENCES')) AS privilege(name)
-        WHERE ${applicationSchemas} AND relation.relkind IN ${relationKinds}
-          AND NOT namespace.nspname = ANY($1::text[]) AND namespace.nspname <> 'identity'
-          AND (has_table_privilege(current_user, relation.oid, privilege.name)
-               OR (privilege.name <> 'DELETE' AND has_any_column_privilege(current_user, relation.oid, privilege.name)))`,
-      [productSchemas],
-      "runtime_unapproved_relation_write_forbidden",
-    );
-    await requireNoMissing(
-      client,
-      `SELECT namespace.nspname, relation.relname, privilege.name
-         FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-         CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE')) AS privilege(name)
-        WHERE namespace.nspname = ANY($3::text[]) AND relation.relkind IN ${relationKinds}
-          AND relation.oid <> $6::regclass AND NOT ${protectedWriteFilter}
-          AND NOT (privilege.name IN ('UPDATE','DELETE') AND format('%I.%I', namespace.nspname, relation.relname) = ANY($4::text[]))
-          AND NOT (privilege.name = 'DELETE' AND format('%I.%I', namespace.nspname, relation.relname) = ANY($5::text[]))
-          AND NOT has_table_privilege(current_user, relation.oid, privilege.name)`,
-      [...protectedWriteParameters, productSchemas, appendOnly, noDelete, receipt],
-      "runtime_product_dml_missing",
-    );
-    await requireNoMissing(
-      client,
-      `SELECT relation.name FROM unnest($1::text[]) AS relation(name)
-        WHERE has_table_privilege(current_user, to_regclass(relation.name), 'UPDATE')
-           OR has_table_privilege(current_user, to_regclass(relation.name), 'DELETE')
-           OR has_any_column_privilege(current_user, to_regclass(relation.name), 'UPDATE')
-       UNION ALL
-       SELECT relation.name FROM unnest($2::text[]) AS relation(name)
-        WHERE has_table_privilege(current_user, to_regclass(relation.name), 'DELETE')`,
-      [appendOnly, noDelete],
-      "runtime_narrowed_relation_writable",
-    );
-    const sequenceDefaults = await client.query(
-      `SELECT count(DISTINCT namespace.nspname) AS schemas
-         FROM pg_default_acl AS acl
-         JOIN pg_namespace AS namespace ON namespace.oid = acl.defaclnamespace
-         CROSS JOIN LATERAL aclexplode(acl.defaclacl) AS entry
-        WHERE namespace.nspname = ANY($1::text[]) AND acl.defaclobjtype = 'S' AND acl.defaclrole = $2
-          AND entry.grantee = (SELECT oid FROM pg_roles WHERE rolname = current_user)
-          AND entry.privilege_type = 'USAGE'`,
-      [productSchemas, migrationOwner],
-    );
-    check(Number(sequenceDefaults.rows[0].schemas) === productSchemas.length, "runtime_default_privileges_missing");
-    // The trigger-invoked Channex helpers stay executable (directly, or through PUBLIC where the
-    // worker provisioning has not run yet); SECURITY DEFINER EXECUTE was already rejected above.
-    await requireNoMissing(
-      client,
-      `SELECT fn.name FROM unnest($1::text[]) AS fn(name)
-         LEFT JOIN pg_proc AS procedure ON procedure.oid = to_regprocedure(fn.name)
-        WHERE procedure.oid IS NULL OR NOT has_function_privilege(current_user, procedure.oid, 'EXECUTE')`,
-      [runtimeExecutableFunctions],
-      "runtime_function_execute_missing",
-    );
-  }
+  // Product DML posture (VAY-2054).
+  check(Number(role.rows[0].memberships) === 0, "runtime_role_membership_forbidden");
+  // Row locks need UPDATE on one column (platform #240 precedent): the audit timestamp,
+  // because the hotel-setup native preflights pin the policy and trigger posture of these tables.
+  const lockColumns = await client.query(
+    `SELECT relation.name, attribute.attname
+       FROM unnest($1::text[]) AS relation(name)
+       JOIN pg_attribute AS attribute ON attribute.attrelid = to_regclass(relation.name)
+        AND attribute.attname = $2 AND attribute.attnum > 0 AND NOT attribute.attisdropped`,
+    [identityLockOnly, identityLockColumn],
+  );
+  check(lockColumns.rowCount === identityLockOnly.length, "runtime_identity_lock_column_missing");
+  await requireNoMissing(
+    client,
+    `SELECT relation.relname, attribute.attname, privilege.name
+       FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+       JOIN pg_attribute AS attribute ON attribute.attrelid = relation.oid AND attribute.attnum > 0 AND NOT attribute.attisdropped
+       CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('REFERENCES')) AS privilege(name)
+       LEFT JOIN jsonb_each($1::jsonb) AS allowed(relation, privileges) ON allowed.relation = 'identity.' || relation.relname
+      WHERE namespace.nspname = 'identity' AND relation.relkind IN ${relationKinds}
+        AND has_column_privilege(current_user, relation.oid, attribute.attname, privilege.name)
+        AND NOT coalesce(allowed.privileges -> privilege.name ? attribute.attname, false)
+     UNION ALL
+     SELECT relation.relname, NULL, privilege.name
+       FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+       CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('DELETE')) AS privilege(name)
+      WHERE namespace.nspname = 'identity' AND relation.relkind IN ${relationKinds}
+        AND has_table_privilege(current_user, relation.oid, privilege.name)`,
+    [JSON.stringify({ ...productIdentityColumns, ...Object.fromEntries(lockColumns.rows.map((row) => [row.name, { UPDATE: [row.attname] }])) })],
+    "runtime_identity_write_scope_too_broad",
+  );
+  await requireNoMissing(
+    client,
+    `SELECT namespace.nspname, relation.relname, privilege.name
+       FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+       CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('DELETE'),('REFERENCES')) AS privilege(name)
+      WHERE ${applicationSchemas} AND relation.relkind IN ${relationKinds}
+        AND NOT namespace.nspname = ANY($1::text[]) AND namespace.nspname <> 'identity'
+        AND (has_table_privilege(current_user, relation.oid, privilege.name)
+             OR (privilege.name <> 'DELETE' AND has_any_column_privilege(current_user, relation.oid, privilege.name)))`,
+    [productSchemas],
+    "runtime_unapproved_relation_write_forbidden",
+  );
+  await requireNoMissing(
+    client,
+    `SELECT namespace.nspname, relation.relname, privilege.name
+       FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+       CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE')) AS privilege(name)
+      WHERE namespace.nspname = ANY($3::text[]) AND relation.relkind IN ${relationKinds}
+        AND relation.oid <> $6::regclass AND NOT ${protectedWriteFilter}
+        AND NOT (privilege.name IN ('UPDATE','DELETE') AND format('%I.%I', namespace.nspname, relation.relname) = ANY($4::text[]))
+        AND NOT (privilege.name = 'DELETE' AND format('%I.%I', namespace.nspname, relation.relname) = ANY($5::text[]))
+        AND NOT has_table_privilege(current_user, relation.oid, privilege.name)`,
+    [...protectedWriteParameters, productSchemas, appendOnly, noDelete, receipt],
+    "runtime_product_dml_missing",
+  );
+  await requireNoMissing(
+    client,
+    `SELECT relation.name FROM unnest($1::text[]) AS relation(name)
+      WHERE has_table_privilege(current_user, to_regclass(relation.name), 'UPDATE')
+         OR has_table_privilege(current_user, to_regclass(relation.name), 'DELETE')
+         OR has_any_column_privilege(current_user, to_regclass(relation.name), 'UPDATE')
+     UNION ALL
+     SELECT relation.name FROM unnest($2::text[]) AS relation(name)
+      WHERE has_table_privilege(current_user, to_regclass(relation.name), 'DELETE')`,
+    [appendOnly, noDelete],
+    "runtime_narrowed_relation_writable",
+  );
+  const sequenceDefaults = await client.query(
+    `SELECT count(DISTINCT namespace.nspname) AS schemas
+       FROM pg_default_acl AS acl
+       JOIN pg_namespace AS namespace ON namespace.oid = acl.defaclnamespace
+       CROSS JOIN LATERAL aclexplode(acl.defaclacl) AS entry
+      WHERE namespace.nspname = ANY($1::text[]) AND acl.defaclobjtype = 'S' AND acl.defaclrole = $2
+        AND entry.grantee = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+        AND entry.privilege_type = 'USAGE'`,
+    [productSchemas, migrationOwner],
+  );
+  check(Number(sequenceDefaults.rows[0].schemas) === productSchemas.length, "runtime_default_privileges_missing");
+  // The trigger-invoked Channex helpers stay executable (directly, or through PUBLIC where the
+  // worker provisioning has not run yet); SECURITY DEFINER EXECUTE was already rejected above.
+  await requireNoMissing(
+    client,
+    `SELECT fn.name FROM unnest($1::text[]) AS fn(name)
+       LEFT JOIN pg_proc AS procedure ON procedure.oid = to_regprocedure(fn.name)
+      WHERE procedure.oid IS NULL OR NOT has_function_privilege(current_user, procedure.oid, 'EXECUTE')`,
+    [runtimeExecutableFunctions],
+    "runtime_function_execute_missing",
+  );
 
   // Receipt table: the API reads only owner_user_ids.
   const tablePrivileges = await client.query(
@@ -574,9 +456,8 @@ try {
        FROM pg_class AS relation JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
       WHERE ${applicationSchemas} AND relation.relkind IN ${relationKinds}
         AND relation.oid <> $3::regclass AND NOT ${protectedReadFilter}
-        AND NOT ($4 AND format('%I.%I', namespace.nspname, relation.relname) = ANY($5::text[]))
         AND NOT has_table_privilege(current_user, relation.oid, 'SELECT')`,
-    [...protectedReadParameters, receipt, posture === "legacy", legacyOptionalReads],
+    [...protectedReadParameters, receipt],
     "runtime_relation_read_missing",
   );
 
@@ -584,7 +465,7 @@ try {
     JSON.stringify({
       status: "PASS",
       runtimeRole: expectedRole,
-      posture,
+      posture: "product_dml",
       receiptOwnerSeparated: true,
       runtimePrivilegeMatrixChecked: true,
     }),

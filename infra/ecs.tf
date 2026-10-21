@@ -19,12 +19,13 @@ locals {
     [for contract in local.auth_gateway_contracts_raw : tostring(contract.public_origin)],
   )
   next_frontend_allowed_origins = join(",", local.next_frontend_origins)
+  # VAY-2271: next-affiliate-dashboard and next-marketplace-frontend left the contract
+  # (the Marketplace and affiliate portals are switched off); apps/api treats their
+  # AUTH_*_ORIGIN settings as optional since the A1 release.
   auth_gateway_expected_public_origins = {
-    next-affiliate-dashboard  = "https://next-affiliate.vayada.com"
-    next-booking-admin        = "https://next-booking-admin.vayada.com"
-    next-marketplace-admin    = "https://next-admin.vayada.com"
-    next-marketplace-frontend = "https://next-marketplace.vayada.com"
-    next-pms-frontend         = "https://next-pms.vayada.com"
+    next-booking-admin     = "https://next-booking-admin.vayada.com"
+    next-marketplace-admin = "https://next-admin.vayada.com"
+    next-pms-frontend      = "https://next-pms.vayada.com"
   }
   auth_gateway_enabled_services                 = toset(keys(local.auth_gateway_expected_public_origins))
   auth_gateway_public_origin_environment_name   = "AUTH_PUBLIC_ORIGIN"
@@ -157,62 +158,6 @@ locals {
       ]
       secrets = []
     }
-    marketplace-backend = {
-      name           = "vayada-marketplace-backend"
-      container_port = 8000
-      cpu            = 256
-      memory         = 512
-      desired_count  = var.legacy_marketplace_api_desired_count
-      health_check   = "/health"
-      log_group      = "/ecs/vayada-marketplace-backend"
-      environment = [
-        # vayada.com = marketing site (contact form + /hotel-creator-network
-        # live-data fetch); app.vayada.com = the creator marketplace app.
-        # Both also match CORS_ORIGIN_REGEX below; listed explicitly for clarity.
-        { name = "CORS_ORIGINS", value = "https://admin.vayada.com,https://vayada.com,https://app.vayada.com" },
-        { name = "CORS_ORIGIN_REGEX", value = "https://(.*\\.)?vayada\\.com" },
-        { name = "AWS_REGION", value = var.aws_region },
-        { name = "S3_BUCKET_NAME", value = "vayada-uploads-prod" },
-        { name = "SMTP_HOST", value = "email-smtp.eu-west-1.amazonaws.com" },
-        { name = "SMTP_PORT", value = "587" },
-        { name = "SMTP_FROM", value = "noreply@vayada.com" },
-        { name = "ENVIRONMENT", value = "production" },
-        { name = "DEBUG", value = "false" },
-      ]
-      secrets = [
-        { name = "DATABASE_URL", valueFrom = "/vayada/prod/db-marketplace-url" },
-        { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/db-auth-url-ssl" },
-        { name = "PMS_DATABASE_URL", valueFrom = "/vayada/prod/db-pms-url-ssl" },
-        { name = "JWT_SECRET_KEY", valueFrom = "/vayada/prod/jwt-secret-key" },
-        { name = "SMTP_USERNAME", valueFrom = "/vayada/prod/smtp-username" },
-        { name = "SMTP_PASSWORD", valueFrom = "/vayada/prod/smtp-password" },
-      ]
-    }
-    marketplace-admin = {
-      name           = "vayada-marketplace-admin"
-      container_port = 3001
-      cpu            = 256
-      memory         = 512
-      health_check   = "/"
-      log_group      = "/ecs/vayada-marketplace-admin"
-      environment = [
-        { name = "NEXT_PUBLIC_API_URL", value = "https://api.vayada.com" },
-      ]
-      secrets = []
-    }
-    affiliate-dashboard = {
-      name           = "vayada-affiliate-dashboard"
-      container_port = 3005
-      cpu            = 256
-      memory         = 512
-      health_check   = "/"
-      log_group      = "/ecs/vayada-affiliate-dashboard"
-      environment = [
-        { name = "NEXT_PUBLIC_API_URL", value = "https://pms-api.vayada.com" },
-        { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://booking-api.vayada.com" },
-      ]
-      secrets = []
-    }
   }
 
   staging_pms_service = var.enable_staging_pms_runtime ? {
@@ -270,8 +215,11 @@ locals {
       memory         = 1024
       task_role_arn  = aws_iam_role.next_api_media.arn
       health_check   = "/health"
-      log_group      = "/ecs/vayada-next-api"
-      environment = [
+      # VAY-2084: startup waits up to 120s for the database before migrating; don't let ALB
+      # health checks replace a task that is still waiting.
+      health_check_grace_period_seconds = 180
+      log_group                         = "/ecs/vayada-next-api"
+      environment = concat([
         { name = "HOST", value = "0.0.0.0" },
         { name = "PORT", value = "8003" },
         { name = "NODE_ENV", value = "production" },
@@ -289,35 +237,52 @@ locals {
         { name = "PLATFORM_MEDIA_PUBLIC_CACHE_CONTROL", value = "public, max-age=31536000, immutable" },
         { name = "PLATFORM_MEDIA_PRIVATE_DOWNLOAD_TTL_SECONDS", value = "300" },
         { name = "PLATFORM_MEDIA_PRIVATE_DOWNLOAD_MAX_TTL_SECONDS", value = "900" },
+        # VAY-2272: deleted public media is also cleared from the images.vayada.com cache.
+        { name = "PLATFORM_MEDIA_CDN_DISTRIBUTION_ID", value = aws_cloudfront_distribution.private_profile_media.id },
+        { name = "PLATFORM_MEDIA_RETIRED_PURGE_ENABLED", value = tostring(var.platform_media_retired_purge_enabled) },
         { name = "STRIPE_WEBHOOK_INTAKE_MODE", value = "mutating" },
         { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", value = "mutating" },
         { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
+        # VAY-2286: the vayada.com contact form posts to POST /api/contact; only that route
+        # answers this origin (no credentials, not in AUTH_ALLOWED_ORIGINS).
+        { name = "CONTACT_INTAKE_ALLOWED_ORIGINS", value = "https://vayada.com" },
+        # VAY-2286: each contact-form message is emailed here (Reply-To: the visitor), through the
+        # booking email provider (RESEND_API_KEY / BOOKING_EMAIL_FROM below). Not a secret.
+        { name = "CONTACT_NOTIFICATION_RECIPIENT", value = "t.schreyer@vayada.com" },
+        # VAY-2205: the daily card check (pricing-v2 card payments and refunds against Stripe) emails
+        # its differences here, at most once a day. The VAY-2088 stale-prices alert uses the same
+        # address. Sent through the booking email provider (RESEND_API_KEY / BOOKING_EMAIL_FROM). Not a secret.
+        { name = "PRICING_PUBLICATION_FRESHNESS_ALERT_EMAIL", value = "t.schreyer@vayada.com" },
         { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
-        { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "target" },
+        { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "active_publication" },
         { name = "BOOKING_DOMAIN_RESOLUTION_SOURCE", value = "target" },
         { name = "PUBLIC_BOOKABILITY_SOURCE", value = "target" },
         { name = "BOOKING_SETTINGS_SOURCE", value = "target" },
         { name = "BOOKING_RESERVATIONS_SOURCE", value = "target" },
-        { name = "MARKETPLACE_DISCOVERY_SOURCE", value = "target" },
         { name = "MARKETPLACE_ADMIN_SOURCE", value = "target" },
         { name = "PMS_OPERATIONS_SOURCE", value = "target" },
         { name = "CHANNEX_API_BASE_URL", value = "https://app.channex.io" },
         { name = "AIRBNB_IMPORT_ENABLED", value = "true" },
-        { name = "AIRBNB_IMPORT_CALLBACK_ORIGIN", value = "https://next-marketplace.vayada.com" },
+        # VAY-2262: the Airbnb connect/return pages live in Booking Admin now.
+        { name = "AIRBNB_IMPORT_CALLBACK_ORIGIN", value = "https://next-booking-admin.vayada.com" },
         # VAY-2055: only the connection (enable) capability may run here, with the
         # dedicated worker credential; every other durable capability stays paused.
+        # VAY-2108: the claimed scope adds booking sync for owned, claimed hotels.
         { name = "PMS_CHANNEX_WORKER_ENABLED", value = tostring(var.channex_connection_worker_enabled) },
         { name = "PMS_CHANNEX_CONNECTION_MODE", value = var.channex_connection_worker_enabled ? "mutating" : "observe_only" },
         { name = "PMS_CHANNEX_PROVISIONING_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_ARI_SYNC_MODE", value = "observe_only" },
-        { name = "PMS_CHANNEX_BOOKING_SYNC_MODE", value = "observe_only" },
+        { name = "PMS_CHANNEX_BOOKING_SYNC_MODE", value = var.channex_claimed_scope == "off" ? "observe_only" : "mutating" },
         { name = "PMS_CHANNEX_MARKUPS_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_MESSAGING_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_REVIEWS_MODE", value = "mutating" },
+        { name = "PMS_ROOM_TYPE_DELETE_CLEANUP_PROPERTY_IDS", value = join(",", var.pms_room_type_delete_cleanup_property_ids) },
+        # VAY-2247 switch-on, step 1: the server's first run and, with it, the setup checklist API.
+        # Booking Admin's ONBOARDING_V2_ENABLED follows in its own apply once this is live (runbook).
+        { name = "HOTEL_FIRST_RUN_ENABLED", value = "true" },
         { name = "FINANCE_SOURCE", value = "target" },
-        { name = "AFFILIATE_PUBLIC_SOURCE", value = "target" },
         { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
         { name = "BOOKING_WEB_EVENT_SINK", value = "target" },
         { name = "BOOKING_WEB_LEGACY_CHECKOUT_COMMAND_PROXY_ENABLED", value = "false" },
@@ -326,7 +291,6 @@ locals {
         { name = "REPLACEMENT_PRICING_CARD_ACCEPTANCE_ENABLED", value = "true" },
         { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
         { name = "BOOKING_EMAIL_FROM", value = "Vayada Bookings <bookings@vayada.com>" },
-        { name = "MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_CURRENT_KEY_VERSION", value = var.marketplace_communication_unsubscribe_current_key_version },
         { name = "WORKOS_AUDIENCE", value = var.workos_audience },
         { name = "WORKOS_ISSUER", value = var.workos_issuer },
         { name = "WORKOS_JWKS_URL", value = var.workos_jwks_url },
@@ -344,17 +308,17 @@ locals {
         { name = "AUTH_PLATFORM_ADMIN_ORIGIN", value = local.auth_gateway_public_origins_by_surface["platform-admin"] },
         { name = "AUTH_BOOKING_ADMIN_ORIGIN", value = local.auth_gateway_public_origins_by_surface["booking-admin"] },
         { name = "AUTH_PMS_WEB_ORIGIN", value = local.auth_gateway_public_origins_by_surface["pms-web"] },
-        { name = "AUTH_AFFILIATE_DASHBOARD_ORIGIN", value = local.auth_gateway_public_origins_by_surface["affiliate-dashboard"] },
-        { name = "AUTH_MARKETPLACE_WEB_ORIGIN", value = local.auth_gateway_public_origins_by_surface["marketplace-web"] },
         { name = "AUTH_COOKIE_DOMAIN", value = ".vayada.com" },
         { name = "AUTH_COOKIE_SECURE", value = "true" },
         { name = "AUTH_PMS_WEB_SUCCESS_URL", value = "https://next-pms.vayada.com/dashboard" },
         { name = "AUTH_PMS_WEB_LOGOUT_URL", value = "https://next-pms.vayada.com/login" },
         { name = "AUTH_BOOKING_ADMIN_SUCCESS_URL", value = "https://next-booking-admin.vayada.com/dashboard" },
         { name = "AUTH_BOOKING_ADMIN_LOGOUT_URL", value = "https://next-booking-admin.vayada.com/login" },
-        { name = "AUTH_AFFILIATE_DASHBOARD_SUCCESS_URL", value = "https://next-affiliate.vayada.com/dashboard" },
-        { name = "AUTH_AFFILIATE_DASHBOARD_LOGOUT_URL", value = "https://next-affiliate.vayada.com/login" },
-      ]
+        ], var.channex_claimed_scope == "off" ? [] : [
+        { name = "PMS_CHANNEX_SCOPE", value = "claimed" },
+        { name = "PMS_CHANNEX_OWNED_PROPERTY_IDS", value = join(",", var.channex_owned_property_ids) },
+        { name = "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE", value = "target-owned" },
+      ])
       secrets = concat([
         { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-runtime-url" },
         { name = "TARGET_DATABASE_MIGRATION_URL", valueFrom = "/vayada/prod/target-database-url" },
@@ -364,15 +328,12 @@ locals {
         { name = "STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/stripe-secret-key" },
         { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/stripe-webhook-secret" },
         { name = "RESEND_API_KEY", valueFrom = "/vayada/prod/resend-api-key" },
-        { name = "MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_KEYS_JSON", valueFrom = "/vayada/prod/marketplace-communication-unsubscribe-signing-keys" },
         { name = "WORKOS_API_KEY", valueFrom = "/vayada/prod/workos-api-key" },
         { name = "WORKOS_CLIENT_ID", valueFrom = "/vayada/prod/workos-client-id" },
         { name = "WORKOS_WEBHOOK_SECRET", valueFrom = "/vayada/prod/workos-webhook-secret" },
         { name = "AUTH_COOKIE_SECRET", valueFrom = "/vayada/prod/auth-cookie-secret" },
-        { name = "AUTH_LEGACY_MARKETPLACE_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_BOOKING_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
-        { name = "AUTH_LEGACY_AFFILIATE_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         ], var.finance_expense_worker_secret_mapped ? [
         { name = "FINANCE_EXPENSE_WORKER_DATABASE_URL", valueFrom = "/vayada/prod/target-database-finance-expense-worker-url" },
         ] : [], (var.finance_export_worker_secret_mapped || var.finance_export_worker_enabled) ? [
@@ -425,6 +386,8 @@ locals {
       health_check   = "/"
       log_group      = "/ecs/vayada-next-booking-admin"
       environment = [
+        # VAY-2262: serves /setup/airbnb-connect and /setup/airbnb-return (moved from marketplace-web).
+        { name = "AIRBNB_IMPORT_CALLBACK_ENABLED", value = "true" },
         { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_AUTHKIT_LOGIN_ENABLED", value = "true" },
@@ -433,10 +396,11 @@ locals {
         { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-api.vayada.com" },
         { name = "NEXT_PUBLIC_PMS_FRONTEND_URL", value = "https://next-pms.vayada.com" },
-        { name = "NEXT_PUBLIC_MARKETPLACE_API_URL", value = "https://next-api.vayada.com" },
-        { name = "NEXT_PUBLIC_MARKETPLACE_URL", value = "https://next-marketplace.vayada.com" },
         { name = "NEXT_PUBLIC_BOOKING_URL_TEMPLATE", value = "https://{slug}.next-booking.vayada.com" },
         { name = "NEXT_PUBLIC_BOOKING_RESERVATIONS_ENABLED", value = "true" },
+        # VAY-2247 switch-on, step 2: /setup opens the new first run (read per request on the server).
+        # Needs next-api's HOTEL_FIRST_RUN_ENABLED live first (step 1).
+        { name = "ONBOARDING_V2_ENABLED", value = "true" },
       ]
       secrets = []
     }
@@ -460,59 +424,23 @@ locals {
       ]
       secrets = []
     }
-    next-marketplace-frontend = {
-      name           = "vayada-next-marketplace-frontend"
-      container_port = 3000
-      cpu            = 256
-      memory         = 512
-      health_check   = "/"
-      log_group      = "/ecs/vayada-next-marketplace-frontend"
-      environment = [
-        { name = "HOTEL_SETUP_ADAPTIVE_SHELL_ENABLED", value = "true" },
-        { name = "AIRBNB_IMPORT_CALLBACK_ENABLED", value = "true" },
-        { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
-        { name = "NEXT_PUBLIC_PLATFORM_MEDIA_API_URL", value = "https://next-api.vayada.com" },
-        { name = "NEXT_PUBLIC_PMS_URL", value = "https://next-pms.vayada.com" },
-        { name = "NEXT_PUBLIC_BOOKING_ADMIN_URL", value = "https://next-booking-admin.vayada.com" },
-      ]
-      secrets = []
-    }
-    next-affiliate-dashboard = {
-      name           = "vayada-next-affiliate-dashboard"
-      container_port = 3005
-      cpu            = 256
-      memory         = 512
-      health_check   = "/"
-      log_group      = "/ecs/vayada-next-affiliate-dashboard"
-      environment = [
-        { name = "NEXT_PUBLIC_API_URL", value = "https://next-api.vayada.com" },
-        { name = "NEXT_PUBLIC_AUTH_API_URL", value = "https://next-api.vayada.com" },
-        { name = "NEXT_PUBLIC_AUTHKIT_COMPATIBILITY_TOKEN_ENABLED", value = "false" },
-      ]
-      secrets = []
-    }
   }
 
   services = merge(local.base_services, local.staging_pms_service, local.next_services)
 
   # Map from service key to ECR repo name
   ecr_repo_map = {
-    "booking-backend"           = "vayada-booking-backend"
-    "booking-frontend"          = "vayada-booking-frontend"
-    "booking-admin"             = "vayada-booking-admin-frontend"
-    "pms-backend"               = "vayada-pms-backend"
-    "pms-frontend"              = "vayada-pms-frontend"
-    "marketplace-backend"       = "vayada-creator-marketplace-backend"
-    "marketplace-admin"         = "vayada-admin-frontend"
-    "affiliate-dashboard"       = "vayada-affiliate-dashboard"
-    "staging-pms-backend"       = "vayada-pms-backend"
-    "next-target-backend"       = "vayada-next-api"
-    "next-pms-frontend"         = "vayada-next-pms-frontend"
-    "next-booking-frontend"     = "vayada-next-booking-frontend"
-    "next-booking-admin"        = "vayada-next-booking-admin-frontend"
-    "next-marketplace-admin"    = "vayada-next-admin-frontend"
-    "next-marketplace-frontend" = "vayada-next-marketplace-frontend"
-    "next-affiliate-dashboard"  = "vayada-next-affiliate-dashboard"
+    "booking-backend"        = "vayada-booking-backend"
+    "booking-frontend"       = "vayada-booking-frontend"
+    "booking-admin"          = "vayada-booking-admin-frontend"
+    "pms-backend"            = "vayada-pms-backend"
+    "pms-frontend"           = "vayada-pms-frontend"
+    "staging-pms-backend"    = "vayada-pms-backend"
+    "next-target-backend"    = "vayada-next-api"
+    "next-pms-frontend"      = "vayada-next-pms-frontend"
+    "next-booking-frontend"  = "vayada-next-booking-frontend"
+    "next-booking-admin"     = "vayada-next-booking-admin-frontend"
+    "next-marketplace-admin" = "vayada-next-admin-frontend"
   }
 }
 
@@ -602,6 +530,16 @@ resource "aws_ecs_task_definition" "services" {
     }
 
     precondition {
+      condition     = each.key != "next-target-backend" || var.channex_claimed_scope == "off" || var.channex_connection_worker_enabled
+      error_message = "The claimed Channex scope requires the enabled, preflighted connection worker."
+    }
+
+    precondition {
+      condition     = each.key != "next-target-backend" || (var.channex_claimed_scope == "off") == (length(var.channex_owned_property_ids) == 0)
+      error_message = "The claimed Channex scope needs at least one owned property, and owned properties need the claimed scope."
+    }
+
+    precondition {
       condition = (
         each.key != "next-target-backend" ||
         (
@@ -682,6 +620,8 @@ resource "aws_ecs_service" "services" {
   task_definition = aws_ecs_task_definition.services[each.key].arn
   desired_count   = try(each.value.desired_count, 1)
   launch_type     = "FARGATE"
+
+  health_check_grace_period_seconds = try(each.value.health_check_grace_period_seconds, null)
 
   network_configuration {
     subnets          = var.subnet_ids

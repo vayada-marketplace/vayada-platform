@@ -39,11 +39,10 @@ Lock table: `vayada-terraform-lock` (DynamoDB).
 | Booking Admin         | `vayada-booking-admin-frontend`      | `vayada-booking-admin-service`       | `admin.booking.vayada.com` |
 | Legacy PMS API        | `vayada-pms-backend`                 | `vayada-pms-backend-service`         | `pms-api.vayada.com`       |
 | PMS Web               | `vayada-pms-frontend`                | `vayada-pms-frontend-service`        | `pms.vayada.com`           |
-| Legacy Marketplace API | `vayada-creator-marketplace-backend` | `vayada-marketplace-backend-service` | `api.vayada.com`           |
-| Marketplace Admin     | `vayada-admin-frontend`              | `vayada-marketplace-admin-service`   | (internal)                 |
-| Affiliate Dashboard   | `vayada-affiliate-dashboard`         | `vayada-affiliate-dashboard-service` | `affiliate.vayada.com`     |
 | Next PMS Web          | `vayada-next-pms-frontend`           | `vayada-next-pms-frontend-service`   | `next-pms.vayada.com`      |
 | Landing               | `vayada-landing`                     | App Runner                           | (App Runner auto-deploy)   |
+
+The old Python Marketplace API and its admin build were retired in VAY-2259: `api.vayada.com` answers 410, `admin.vayada.com` and `app.vayada.com` redirect to `next-admin.vayada.com` and Booking Admin, and their ECS services are gone.
 
 All ECS services run on `vayada-backend-cluster` (Fargate) in `eu-west-1`, fronted by `vayada-backend-alb`. Public `vayada.com` DNS is authoritative in Cloudflare; Route 53 records remain for AWS-side aliases and certificate validation where used. Cloudflare DNS management is gated by `enable_cloudflare_dns`; only enable it after `TF_VAR_CLOUDFLARE_API_TOKEN` is a valid DNS edit token for the `vayada.com` zone.
 
@@ -56,21 +55,25 @@ a separate cutover ticket says otherwise:
 | Hostname | Current routing owner |
 | --- | --- |
 | `vayada.com` | Existing public site routing |
-| `app.vayada.com` | Existing marketplace frontend routing |
-| `api.vayada.com` | Legacy Marketplace API |
+| `app.vayada.com` | 302 to Booking Admin (`/setup*` → `/setup`, else `/login`), VAY-2259 |
+| `api.vayada.com` | 410 at the load balancer (retired Marketplace API), VAY-2259 |
 | `booking-api.vayada.com` | Legacy Booking API |
 | `booking.vayada.com` and `*.booking.vayada.com` | Existing Booking Web |
 | `admin.booking.vayada.com` | Existing Booking Admin |
 | `pms-api.vayada.com` | Legacy PMS API |
 | `pms.vayada.com` | Existing PMS Web |
 | `admin.vayada.com` | Existing Vayada Admin |
-| `affiliate.vayada.com` | Existing Affiliate Dashboard |
 
 Next-stack changes must use only the `next-*` hostnames:
 `next-api.vayada.com`, `next-pms.vayada.com`, `next-admin.vayada.com`,
-`next-booking-admin.vayada.com`, `next-booking.vayada.com`,
-`*.next-booking.vayada.com`, `next-marketplace.vayada.com`, and
-`next-affiliate.vayada.com`.
+`next-booking-admin.vayada.com`, `next-booking.vayada.com` and
+`*.next-booking.vayada.com`.
+
+`affiliate.vayada.com`, `next-affiliate.vayada.com` and
+`next-marketplace.vayada.com` no longer exist: VAY-2209 retired the affiliate
+portals, and VAY-2271 removed their services, the Marketplace web app, the
+interim 302 redirects to `https://vayada.com/` and the DNS records
+(2026-10-18, Flamur's decision to remove them at once).
 
 Before merging platform changes, review `infra/alb.tf`, `infra/route53.tf`,
 `infra/cloudflare.tf`, and `infra/ecs.tf` with `terraform plan`. The plan must
@@ -105,12 +108,20 @@ guarded legacy migration, the role also has read-only object access to
 the `creators/*` and `listings/*` prefixes in `vayada-uploads-prod`, plus
 `vayada-creator-marketplace-images`; it cannot list or mutate either legacy
 bucket. Remove that legacy read access after retirement evidence is accepted.
+The role may also create and read invalidations on the `images.vayada.com`
+CloudFront distribution only, so deleted public media leaves the cache too.
 
 Public media is served at `https://images.vayada.com`. CloudFront signs origin
 requests with Origin Access Control and can read only `public/*`. Its `/public`
 origin path maps a viewer request such as `/media/<id>/original_safe/<version>.webp`
 to `public/media/<id>/original_safe/<version>.webp` in S3. The bucket blocks all
 anonymous access, and CloudFront cannot read `private/*` or `staging/*`.
+
+The bucket is versioned. Abandoned `staging/*` uploads expire after one day. Under
+`public/*` and `private/*`, current objects never expire, but replaced or deleted
+objects stay as old versions for 30 days and are then removed, together with the
+delete markers left behind. After that, a deleted photo or PMS attachment cannot
+be restored.
 
 `next-api` receives the complete media serving contract:
 
@@ -122,7 +133,16 @@ PLATFORM_MEDIA_PUBLIC_PATH_PREFIX=media
 PLATFORM_MEDIA_PUBLIC_CACHE_CONTROL=public, max-age=31536000, immutable
 PLATFORM_MEDIA_PRIVATE_DOWNLOAD_TTL_SECONDS=300
 PLATFORM_MEDIA_PRIVATE_DOWNLOAD_MAX_TTL_SECONDS=900
+PLATFORM_MEDIA_CDN_DISTRIBUTION_ID=<images.vayada.com distribution ID>
+PLATFORM_MEDIA_RETIRED_PURGE_ENABLED=false
 ```
+
+`PLATFORM_MEDIA_RETIRED_PURGE_ENABLED` follows the Terraform variable
+`platform_media_retired_purge_enabled` (default `false`). It switches on the
+one-time VAY-2272 purge of retired Marketplace and creator media; turn it on only
+with Flamur's yes and off again once the purge has finished.
+`infra/platform_media_retired_purge.auto.tfvars.json` sets it for the purge
+(`true`); the switch-off PR sets it back to `false`.
 
 #### Rollout
 
@@ -191,11 +211,16 @@ only `v1`; creating or importing a future HMAC key never authorizes promotion.
 
    A failed Booking public smoke redeploys the pre-cutover task image automatically.
 
-The complete six-service receiver is installed separately in
+The legacy backends (`pms-backend`, `booking-backend`) no
+longer deploy this way: their app-repo deploy workflows are disabled. Each legacy
+deploy is an explicit `workflow_dispatch` of `deploy.yml` with an image digest
+and Flamur's go; see [Legacy app deploys](legacy-pms-freeze.md#legacy-app-deploys).
+
+The complete five-service receiver (six until the Marketplace removal, VAY-2271) is installed separately in
 `.github/workflows/deploy-coordinated-release.yml` and remains in `legacy`
 ownership mode until VAY-2029 activates it with an exact published manifest.
 It then rejects delayed automatic per-image events for managed next services,
-deploys the API before a parallel five-frontend stage, and persists holds,
+deploys the API before a parallel four-frontend stage, and persists holds,
 checkpoints, desired state, and per-service provenance. See
 [Coordinated next releases](coordinated-releases.md) for the trust contract,
 activation boundary, manual resume, and crash-recovery behavior.
@@ -243,12 +268,12 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/db-pms-url-ssl`         | `pms-api`                          |
 | `/vayada/prod/db-auth-url`            | all APIs                           |
 | `/vayada/prod/db-auth-url-ssl`        | all APIs                           |
-| `/vayada/prod/db-marketplace-url`     | `marketplace-api`                  |
+| `/vayada/prod/db-marketplace-url`     | RDS admin login (rotation, one-off admin tasks) |
 | `/vayada/prod/jwt-secret-key`         | all APIs                           |
 | `/vayada/prod/stripe-secret-key`      | `booking-api`                      |
 | `/vayada/prod/stripe-webhook-secret`  | `booking-api`, `next-api`          |
-| `/vayada/prod/smtp-username`          | `booking-api`, `marketplace-api`   |
-| `/vayada/prod/smtp-password`          | `booking-api`, `marketplace-api`   |
+| `/vayada/prod/smtp-username`          | `booking-api`                      |
+| `/vayada/prod/smtp-password`          | `booking-api`                      |
 | `/vayada/prod/anthropic-api-key`      | `pms-api`                          |
 | `/vayada/prod/channex-api-key`        | `pms-api`                          |
 | `/vayada/prod/firecrawl-api-key`      | `pms-api`                          |
@@ -260,7 +285,6 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/workos-client-id`       | `next-api`                         |
 | `/vayada/prod/workos-webhook-secret`  | `next-api`                         |
 | `/vayada/prod/auth-cookie-secret`     | `next-api`                         |
-| `/vayada/prod/marketplace-communication-unsubscribe-signing-keys` | `next-api` |
 
 The `next-api` task maps those SSM parameters to the backend's runtime
 environment as:
@@ -274,8 +298,6 @@ environment as:
 | `WORKOS_WEBHOOK_SECRET` | `/vayada/prod/workos-webhook-secret` |
 | `AUTH_COOKIE_SECRET` | `/vayada/prod/auth-cookie-secret` |
 | `STRIPE_WEBHOOK_SECRET` | `/vayada/prod/stripe-webhook-secret` |
-| `MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_CURRENT_KEY_VERSION` | Terraform variable committed as the active version identifier |
-| `MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_KEYS_JSON` | `/vayada/prod/marketplace-communication-unsubscribe-signing-keys` |
 | `WORKOS_AUDIENCE`, `WORKOS_ISSUER`, `WORKOS_JWKS_URL` | Terraform variables from matching GitHub Actions secrets |
 
 The existing `target-database-url` remains the migration-owner credential and
@@ -339,13 +361,17 @@ existence, role-creation ability, and database CONNECT grant authority; it
 does not provision or grant anything.
 
 If the protected marketplace administrator URL and the RDS master password
-diverge, use the manually dispatched `Rotate RDS Administrator` workflow with
-the exact `VAY-2038` confirmation. It runs under the shared
+diverge, use the manually dispatched `Rotate RDS Administrator` workflow. Mode
+`check` (the default) validates everything and logs in with the current
+password through a one-off ECS task (`run-target-database-runtime-preflight.sh
+--check-rds-admin-login`, read-only); it changes nothing. Mode `apply` needs the
+exact `VAY-2038` confirmation. It runs under the shared
 `production-ecs-mutations` lock, rotates only `vayada-database`, updates only
-`/vayada/prod/db-marketplace-url`, and restarts only the legacy Marketplace API.
-An exact, tagged pending `SecureString` makes interrupted runs retryable and is
-removed only after the service stabilizes. The workflow emits sanitized stage
-codes and never prints the password. Terraform owns the parameter metadata but
+`/vayada/prod/db-marketplace-url`, then proves the new password with the same
+one-off login. Nothing restarts: the legacy Marketplace API that used to consume
+the URL is deleted (VAY-2259). An exact, tagged pending `SecureString` makes
+interrupted runs retryable and is removed only after that login passes. The
+workflow emits sanitized stage codes and never prints the password. Terraform owns the parameter metadata but
 ignores its operationally rotated value so a later apply cannot restore an
 older credential. After a successful run, synchronize the repository's
 `TF_VAR_DB_MASTER_PASSWORD` secret from the protected parameter without putting
@@ -382,13 +408,7 @@ Set the required GitHub Actions repository secrets before merging or applying a
 live `next-api` task definition: `TF_VAR_TARGET_DATABASE_URL`,
 `TF_VAR_WORKOS_API_KEY`, `TF_VAR_WORKOS_WEBHOOK_SECRET`,
 `TF_VAR_WORKOS_AUDIENCE`, `TF_VAR_WORKOS_ISSUER`, `TF_VAR_WORKOS_JWKS_URL`,
-`TF_VAR_AUTH_COOKIE_SECRET`,
-`TF_VAR_MARKETPLACE_COMMUNICATION_UNSUBSCRIBE_KEYS`.
-
-The unsubscribe key-set secret is a JSON object from key version to canonical
-base64url secret. Keep older versions in the object until every token they
-signed has expired; rotate by adding a new key first, then changing the current
-version identifier in a reviewed Terraform change.
+`TF_VAR_AUTH_COOKIE_SECRET`.
 
 ### Transactional email delivery
 
@@ -506,7 +526,7 @@ gh workflow run deploy.yml \
   --field environment=production
 ```
 
-Service keys: `booking-backend`, `booking-frontend`, `booking-admin`, `pms-backend`, `pms-frontend`, `marketplace-backend`, `marketplace-admin`, `affiliate-dashboard`.
+Service keys: `booking-backend`, `booking-frontend`, `booking-admin`, `pms-backend`, `pms-frontend`.
 
 Parallel next-stack service keys: `next-target-backend`, `next-pms-frontend`.
 `next-target-backend` serves `next-api.vayada.com`; `next-pms-frontend` remains
@@ -879,13 +899,81 @@ then checks:
 Failures print `FAIL` (nothing changed), `UNCERTAIN` (the commit outcome is
 unknown) or `COMMITTED_UNVERIFIED`. Re-run `inspect` after either of the last two.
 
+#### Retiring the affiliate capture login (VAY-2272)
+
+`vayada_next_affiliate_capture` was made for the affiliate click capture, which
+never went live. App migration 0497 retires the policies and functions it was
+made for. After 0497 is live, `retire-affiliate-capture-login.yml` (main only,
+`platform-mutations-v2`, `production-ecs-mutations` lock) runs
+`run-target-database-runtime-preflight.sh --retire-affiliate-capture-login <phase>
+<fingerprint>`. That is the same disposable task as the hotel-setup role
+retirement, with `retire-affiliate-capture-login.mjs`, connecting as
+`vayada_admin` to `vayada_target_prod`.
+
+- `inspect` is read-only. It prints a `PLAN` with the login, its sessions and
+  memberships, the grants `vayada_admin` gave it (`adminGrantList`), every other
+  grant to or by it (`otherGrantList`), its dependencies (`dependencyList`), a
+  `ready` flag with any blockers and a fingerprint. It is blocked while:
+  - a policy, function, view, check constraint, default or trigger still names
+    the login as text (before 0497);
+  - anyone but `vayada_admin` granted it something, or it granted something
+    itself (`otherGrantList` says what and who; its grantor revokes it first);
+  - another role is a member of it, or it granted memberships;
+  - it owns an object, a policy names it as a role, or any dependency remains
+    beyond privileges on tables, columns, routines, schemas and databases, in
+    this database or the shared catalog;
+  - it has a session or a default privilege;
+  - `vayada_admin` lacks ADMIN OPTION on it.
+- `apply` with that fingerprint recaptures and refuses on any drift. In one
+  transaction it revokes the grants `vayada_admin` gave the login (one
+  `REVOKE ALL` per object; a `REVOKE` PostgreSQL warns about aborts) and drops it,
+  then verifies that it is gone. It never uses `DROP OWNED BY`. If `DROP ROLE`
+  still finds a dependency, the run fails with
+  `affiliate_capture_login_dependencies_remaining` and changes nothing.
+- 0497 removed the policy that kept the login's table writes lock-only, so run
+  this soon after W1.
+
+Failures print `FAIL`, `UNCERTAIN` or `COMMITTED_UNVERIFIED`, as above.
+
+#### API runtime login timeouts (VAY-2247)
+
+After the 2026-10-21 incident, where two reads waited on each other's locks forever, Flamur approved two
+defaults for `vayada_next_api_runtime` in `vayada_target_prod`:
+- `lock_timeout = 10s`: a statement gives up a lock wait after 10 s. The API answers `409 busy_try_again`;
+  the app PR that adds that answer goes live first.
+- `idle_in_transaction_session_timeout = 10min`: a safety net for a connection stuck in an open transaction.
+  Nothing legitimate idles that long. 60 s needs app fixes first.
+
+`set-api-runtime-timeouts.yml` (main only, `platform-mutations-v2`, `production-ecs-mutations` lock) runs
+`run-target-database-runtime-preflight.sh --set-api-runtime-timeouts <phase> <fingerprint>`. This is the same
+disposable task as the login retirements, with `set-api-runtime-timeouts.mjs`, connecting as `vayada_admin`.
+
+- `inspect` is read-only. Its `PLAN` shows:
+  - the login, with `adminOption`;
+  - the two settings now (`current`) and what apply sets (`desired`);
+  - role-wide defaults for them (`roleWide`, which this database's defaults override);
+  - the login's other defaults in this database (`otherDatabaseDefaults`);
+  - its live sessions;
+  - `readyToApply` / `readyToRollback` with their blockers;
+  - a fingerprint (sessions are shown, not fingerprinted).
+
+  It is blocked while the login is missing, elevated or unable to log in, or while `vayada_admin` lacks
+  ADMIN OPTION on it. Apply is blocked when both are already set, rollback when neither is.
+- `apply` with that fingerprint recaptures, refuses on any drift, runs `ALTER ROLE … IN DATABASE
+  vayada_target_prod SET` for both in one transaction and verifies. `rollback` does the same with `RESET`.
+- Only new sessions pick the defaults up. The API's pools close idle connections after 30 s, so within minutes
+  and without a deploy. `SET LOCAL` values in the app (150 ms–5 s) still win inside their transactions.
+- If `vayada_admin` lacks ADMIN OPTION, the fallback is the login setting its own defaults
+  (`ALTER ROLE CURRENT_USER IN DATABASE … SET`), which PostgreSQL allows for any role.
+
+Failures print `FAIL`, `UNCERTAIN` or `COMMITTED_UNVERIFIED`, as above.
+
 ### Target database runtime role: product DML grant (VAY-2054)
 
 The ordinary API login `vayada_next_api_runtime` receives ordinary DML on the
-product schemas (`hotel_catalog`, `booking`, `pms`, `marketplace`,
-`distribution`, `finance`, `platform`) plus default privileges for future
-tables, and is denied a short protected list (credential scope tables,
-migration ledger and evidence, worker allowlists, guarded affiliate evidence,
+product schemas (`hotel_catalog`, `booking`, `pms`, `distribution`, `finance`,
+`platform`; VAY-2272 dropped `marketplace`) plus default privileges for future tables, and is denied a short protected list (credential scope tables,
+migration ledger and evidence, worker allowlists,
 worker-only Channex and Finance state). On `identity.*` it
 only gains `UPDATE (created_at)` on the six tables the API row-locks (platform
 #240 precedent: PostgreSQL needs an `UPDATE` privilege on one column for
@@ -895,10 +983,9 @@ posture. On the two product-link tables the VAY-965 setup-track column matrix
 is extended for the product posture only: `identity.product_entitlements`
 gains `INSERT (resource_product, resource_type, resource_id)` and
 `UPDATE (metadata)`, `identity.organization_resource_links` gains
-`UPDATE (status, updated_at)`, so Financials module activation, the new-hotel
-Financials default and marketplace offer operator grant/archive work under the
-ordinary login (human decision 2026-10-07). The revoke scope restores the
-VAY-965 matrix exactly. The decision and the protected list with reasons live in
+`UPDATE (status, updated_at)`, so Financials module activation and the new-hotel
+Financials default work under the ordinary login (human decision 2026-10-07;
+the link status columns served Marketplace offer access, removed in VAY-2272). The decision and the protected list with reasons live in
 the application repo at `engineering/api-runtime-database-role.md`; the
 executable list is `scripts/grant-target-database-runtime-product-dml.mjs`.
 
@@ -928,10 +1015,10 @@ Apply from the operator lane (`--profile vayada`):
 ```bash
 scripts/run-target-database-runtime-preflight.sh --inspect-runtime-product-dml   # dry run: applies, verifies, rolls back
 scripts/run-target-database-runtime-preflight.sh --grant-runtime-product-dml
-scripts/run-target-database-runtime-preflight.sh --preflight-runtime-product-dml
+scripts/run-target-database-runtime-preflight.sh preflight
 ```
 
-The three modes refuse to start unless the posture-aware preflight is in the
+The two grant modes refuse to start unless the posture-aware preflight is in the
 same checkout, so they cannot run from a `main` that would fail the next
 `tf-apply`.
 
@@ -946,23 +1033,42 @@ protected-class table; the preflight names the relation. Run it again also
 after a change to the protected list or the narrowings in this script (VAY-2057
 released the pricing authority and quote tables): until then the preflight
 reports `runtime_product_dml_missing` for the released relations and the next
-`tf-apply` fails. Before committing it
-also runs the preflight's global posture checks (no TRUNCATE/REFERENCES/
-TRIGGER/MAINTAIN anywhere, no default privileges for the login from any other
-role or schema, no SECURITY DEFINER EXECUTE, no owned objects, no role
-memberships, PUBLIC grants included), so pre-existing drift is never committed
-together with the grant. The reviewed code and the CA travel in the disposable
+`tf-apply` fails. A newly protected relation fails the other way:
+VAY-2108 protects every `platform.channex_management_worker_*` table (the
+owner-managed Channex worker scope, which the schema-wide grant had left
+writable for `platform.channex_management_worker_operations`), and until the
+re-run the preflight reports `runtime_protected_relation_write_forbidden`.
+It also protects the worker-only Channex offer ARI delivery evidence
+(`pms.channex_offer_ari_deliver*`, app migration 0481). 0481 revokes the API
+login's writes in the same transaction that creates the tables, so this
+pattern goes on `main` before 0481 is released and needs no re-run. A pattern
+that matches no table is harmless. If 0481 shipped first, the required-DML
+check would fail closed, and a grant re-run would give the writes back.
+Before committing it
+also runs global posture checks (no TRUNCATE/REFERENCES/TRIGGER/MAINTAIN
+anywhere, no default privileges for the login from any other role or schema,
+no SECURITY DEFINER EXECUTE, no owned objects, no role memberships, PUBLIC
+grants included), so pre-existing drift is never committed together with the
+grant. The tf-apply preflight repeats these, except the check for default
+privileges set by other roles or in other schemas: only this grant task makes it. The reviewed code and the CA travel in the disposable
 task definition, not in the run-task override; the plain `preflight` mode uses
 the same path (verified read-only against production on 2026-10-07).
 
 The runtime preflight (`scripts/target-database-runtime-preflight.mjs`, run by
-every `tf-apply`) detects the posture from the migration owner's default
-privileges in the seven product schemas. With none it asserts the legacy
-allowlist as before, with one deliberate tightening that applies to both
-postures: the no-read list, the name patterns and `vayada_migration_evidence`
-are unreadable (`pms.inventory_coverage_validation_queue` was only exempt from
-the required reads before); production passed this read-only on 2026-10-07.
-With all seven it asserts the product DML posture:
+every `tf-apply`) requires the product DML posture: the migration owner's
+default privileges must grant the login DML in every product schema, and
+anything less fails closed (`runtime_product_dml_posture_partial:<count>`).
+Every listed product schema must exist (`runtime_product_schema_missing:<names>`,
+grant `runtime_dml_schema_missing`). App migration 0499 dropped `marketplace`
+(VAY-2272); both lists dropped it after 0499 was live (P2). Default privileges
+for the API login in a schema that came back fail the grant
+(`runtime_foreign_default_privileges_forbidden`); in the preflight, such a schema
+fails with `runtime_schema_usage_missing` (no usage) or
+`runtime_unapproved_relation_write_forbidden` (writable tables).
+VAY-2211 removed the legacy allowlist posture; production has reported
+`"posture":"product_dml"` on every `tf-apply` since at least 2026-10-13. The
+preflight asserts that the no-read list, the name patterns and
+`vayada_migration_evidence` are unreadable, and that
 every non-protected product relation has `SELECT, INSERT, UPDATE, DELETE`
 (`runtime_product_dml_missing`), the protected list and name patterns are not
 writable (`runtime_protected_relation_write_forbidden`) or readable
@@ -977,16 +1083,12 @@ writes stay within the extended product-link column matrix plus that lock column
 writable, sequences allow at most `USAGE, SELECT`, the login has no role
 memberships, and the two trigger-invoked Channex helpers are executable
 (`runtime_function_execute_missing`, directly or through PUBLIC where the worker
-provisioning has not run). A partial state fails closed
-(`runtime_product_dml_posture_partial`). `--preflight-runtime-product-dml`
-refuses the legacy posture (`runtime_product_dml_required`). A follow-up removes
-the legacy branch once production has switched.
+provisioning has not run).
 
-Rollback: `scripts/run-target-database-runtime-preflight.sh --revoke-runtime-product-dml`
-revokes the schema-wide DML and default privileges, revokes `EXECUTE` on the
-two Channex helpers, and restores the legacy allowlist (table and column grants)
-so the legacy preflight posture passes again. It does not change application
-migrations.
+There is no rollback to the legacy allowlist: VAY-2211 removed the
+`--revoke-runtime-product-dml` mode, because the preflight now rejects that
+posture and every `tf-apply` would fail. Fix a wrong grant forward by changing
+the reviewed lists in the grant script and re-running `--grant-runtime-product-dml`.
 
 ### Hotel setup on the ordinary API login (VAY-2056)
 

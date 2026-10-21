@@ -35,15 +35,19 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertIn("receipt_columns_writable", CHECK)
         self.assertIn("SELECT owner_user_ids", CHECK)
 
-    def test_both_postures_are_detected_from_default_privileges_and_fail_closed(self) -> None:
+    def test_product_posture_is_required_from_default_privileges_and_fails_closed(self) -> None:
         self.assertIn("pg_default_acl", CHECK)
         self.assertIn("acl.defaclrole = $2", CHECK)
-        self.assertIn('posture = coveredSchemas === 0 ? "legacy" : "product_dml"', CHECK)
-        self.assertIn('VAYADA_DB_REQUIRE_PRODUCT_DML', CHECK)
-        self.assertNotIn('VAYADA_DB_REQUIRE_FOLIO_COMMAND', CHECK)
+        # VAY-2211: no legacy allowlist posture; every product schema needs the default DML grant.
+        self.assertIn("check(coveredSchemas === productSchemas.length, `runtime_product_dml_posture_partial:${coveredSchemas}`)", CHECK)
+        self.assertIn('posture: "product_dml"', CHECK)
+        for removed in ("VAYADA_DB_REQUIRE_PRODUCT_DML", "VAYADA_DB_REQUIRE_FOLIO_COMMAND", '"legacy"', "legacyRequiredRelations",
+                        "legacyStagedRelations", "legacyRequiredColumns", "legacyStagedColumns", "legacyOptionalReads",
+                        "runtime_product_dml_required", "runtime_relation_access_missing", "runtime_column_access_missing",
+                        "runtime_unapproved_relation_column_write_forbidden"):
+            self.assertNotIn(removed, CHECK)
         for code in (
             "runtime_product_dml_posture_partial",
-            "runtime_product_dml_required",
             "runtime_product_dml_missing",
             "runtime_narrowed_relation_writable",
             "runtime_identity_lock_column_missing",
@@ -55,9 +59,6 @@ class RuntimePreflightContractTest(unittest.TestCase):
             "runtime_protected_relation_column_write_forbidden",
             "runtime_column_grant_option_forbidden",
             "runtime_unapproved_relation_write_forbidden",
-            "runtime_unapproved_relation_column_write_forbidden",
-            "runtime_relation_access_missing",
-            "runtime_column_access_missing",
             "runtime_schema_usage_missing",
             "runtime_relation_read_missing",
             "runtime_type_access_missing",
@@ -71,11 +72,16 @@ class RuntimePreflightContractTest(unittest.TestCase):
             "runtime_function_execute_missing",
         ):
             self.assertIn(code, CHECK)
-        # The legacy allowlist is still asserted exactly until the follow-up removes it.
-        self.assertIn('"booking.guest_bookings": ["SELECT", "INSERT", "UPDATE", "DELETE"]', CHECK)
-        self.assertIn('"platform.product_audit_events": ["SELECT", "INSERT"]', CHECK)
-        self.assertIn('"platform.jobs": ["INSERT"]', CHECK)
-        self.assertIn('"hotel_catalog.properties": { UPDATE: ["id"] }', CHECK)
+
+    def test_every_product_schema_must_exist_and_marketplace_is_gone(self) -> None:
+        # VAY-2272: app migration 0499 dropped the marketplace schema; P2 took it off both lists.
+        schemas = ["hotel_catalog", "booking", "pms", "distribution", "finance", "platform"]
+        self.assertEqual(js_list(CHECK, "productSchemas"), schemas)
+        self.assertEqual(js_list(GRANT, "schemas"), schemas)
+        for source in (CHECK, GRANT):
+            self.assertNotIn("retiring", source.lower())
+        self.assertIn("runtime_product_schema_missing", CHECK)
+        self.assertIn('fail("runtime_dml_schema_missing")', GRANT)
 
     def test_protected_list_matches_the_grant_script(self) -> None:
         for name in ("noRead", "noReadPatterns", "noWrite", "noWritePatterns", "appendOnly", "noDelete", "identityLockOnly"):
@@ -83,36 +89,44 @@ class RuntimePreflightContractTest(unittest.TestCase):
         # VAY-2056: the native hotel-setup scope relations were dropped by app migration 0474.
         for name in ("noRead", "noReadPatterns", "noWrite", "noWritePatterns"):
             self.assertFalse([entry for entry in js_list(CHECK, name) if "hotel_setup" in entry], name)
+        # VAY-2272: app migrations 0498 and 0499 dropped the affiliate program tables and the marketplace schema.
+        for name in ("noRead", "noReadPatterns", "noWrite", "noWritePatterns", "appendOnly", "noDelete"):
+            self.assertFalse([e for e in js_list(CHECK, name) if "affiliate" in e or "marketplace" in e], name)
         for relation in (
             "platform.identity_migration_provenance",
             "platform.legacy_historical_binding_transitions",
             "platform.finance_expense_worker_properties",
-            "marketplace.affiliate_click_quota_windows",
             "pms.inventory_coverage_validation_queue",
         ):
             self.assertIn(relation, js_list(CHECK, "noRead"))
         for relation in (
             "platform.schema_migrations",
             "platform.pricing_runtime_property_scopes",
-            "booking.pricing_runtime_effective_authority_scopes",
             "booking.pricing_runtime_effective_property_scopes",
-            "marketplace.affiliate_click_occurrences",
-            "booking.affiliate_original_booking_bindings",
             "finance.expense_generation_dispatches",
             "pms.channex_ari_schedule_sources",
             "platform.channex_management_worker_properties",
         ):
             self.assertIn(relation, js_list(CHECK, "noWrite"))
+        # VAY-2108: every owner-managed Channex worker scope table, including later ones, is protected.
+        patterns = [pattern.replace("\\\\", "\\") for pattern in js_list(CHECK, "noWritePatterns")]
+        for relation in ("platform.channex_management_worker_operations", "platform.channex_management_worker_properties"):
+            self.assertTrue(any(re.search(pattern, relation) for pattern in patterns), relation)
+        self.assertFalse(any(re.search(pattern, "platform.channex_webhook_events") for pattern in patterns))
+        # VAY-2108 app migration 0481: worker-only offer ARI delivery evidence; the API's own receipts stay append-only.
+        for relation in ("pms.channex_offer_ari_deliveries", "pms.channex_offer_ari_delivery_dates", "pms.channex_offer_ari_delivery_receipts"):
+            self.assertTrue(any(re.search(pattern, relation) for pattern in patterns), relation)
+        self.assertFalse(any(re.search(pattern, "pms.channex_offer_ari_receipts") for pattern in patterns))
         self.assertIn("platform.product_audit_events", js_list(CHECK, "appendOnly"))
         self.assertIn("platform.domain_events", js_list(CHECK, "appendOnly"))
-        # Pricing on the ordinary login (VAY-2057): table-level narrowings instead of protection.
-        for relation in ("booking.pricing_authority_heads", "booking.pricing_authority_revisions", "booking.pricing_quotes"):
-            self.assertNotIn(relation, js_list(CHECK, "noWrite"))
-        self.assertNotIn("^booking\\\\.pricing_authority_", js_list(CHECK, "noWritePatterns"))
+        # Pricing quotes on the ordinary login (VAY-2057): append-only, not protected.
+        self.assertNotIn("booking.pricing_quotes", js_list(CHECK, "noWrite"))
         self.assertIn("booking.pricing_quotes", js_list(CHECK, "appendOnly"))
-        self.assertEqual(js_list(CHECK, "noDelete"), [
-            "hotel_catalog.properties", "booking.pricing_authority_heads", "booking.pricing_authority_revisions",
-        ])
+        # VAY-2079: app migration 0475 dropped the pricing authority tables and view.
+        self.assertEqual(js_list(CHECK, "noDelete"), ["hotel_catalog.properties"])
+        self.assertEqual(js_list(GRANT, "noDelete"), ["hotel_catalog.properties"])
+        for name in ("noWrite", "noDelete", "appendOnly"):
+            self.assertFalse([r for r in js_list(GRANT, name) if "pricing_authority" in r or "authority_scopes" in r], name)
         self.assertEqual(len(js_list(CHECK, "identityLockOnly")), 6)
         # Trigger-invoked Channex helpers revoked from PUBLIC by the worker provisioning (VAY-2054 follow-up).
         self.assertEqual(js_list(CHECK, "runtimeExecutableFunctions"), js_list(GRANT, "runtimeExecutableFunctions"))
@@ -122,7 +136,6 @@ class RuntimePreflightContractTest(unittest.TestCase):
         ])
         self.assertIn("runtime_function_security_definer", GRANT)
         self.assertIn("runtime_function_execute_scope_too_broad", GRANT)
-        self.assertIn("REVOKE EXECUTE ON FUNCTION ${name} FROM ${role}", GRANT)
         self.assertLess(CHECK.index('"runtime_security_definer_execute_forbidden"'),
                         CHECK.index('"runtime_function_execute_missing"'))
         for name in ("identityColumns", "productIdentityColumns"):
@@ -131,7 +144,6 @@ class RuntimePreflightContractTest(unittest.TestCase):
         for column in ('"resource_product", "resource_type", "resource_id"', '"metadata"', '"status", "updated_at"'):
             self.assertIn(column, extended)
         self.assertIn("productIdentityColumns, ...Object.fromEntries(lockColumns.rows", CHECK)
-        self.assertIn("...identityColumns,\n", CHECK)  # legacy staged columns stay on the VAY-965 matrix
         self.assertIn("'vayada_migration_evidence'", CHECK)
         self.assertIn('const identityLockColumn = "created_at"', CHECK)
         self.assertNotIn("pg_policy", CHECK)
@@ -144,7 +156,7 @@ class RuntimePreflightContractTest(unittest.TestCase):
         self.assertGreater(CHECK.rindex('"runtime_relation_read_missing"'),
                            CHECK.index('check(writableColumns.rowCount'))
         self.assertLess(CHECK.index('"runtime_protected_relation_read_forbidden"'),
-                        CHECK.index('posture === "legacy") {'))
+                        CHECK.index('"runtime_role_membership_forbidden"'))
 
 
 if __name__ == "__main__":

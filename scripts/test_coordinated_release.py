@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import textwrap
+import types
 import tempfile
 import unittest
 import zipfile
@@ -183,8 +184,8 @@ class ContractTests(unittest.TestCase):
         return release.validate_publication(**values)
 
     def test_frozen_fixture_hashes_and_contract_validate(self):
-        self.assertEqual(release.sha256_file(self.manifest_path), "6360c61c601c1c043ce032e2dd2fa22c709204fc45debd026417d09d0be84382")
-        self.assertEqual(release.sha256_file(self.record_path), "96882677caea9450ba1f94c55e3996f32a30098fa90876697c97a73a57bbe16a")
+        self.assertEqual(release.sha256_file(self.manifest_path), "d4b12732362a7022b5d9778b0cecf8308c3a183f7c626da0574fb52edd5741d6")
+        self.assertEqual(release.sha256_file(self.record_path), "10cc9744f41be016b7127aa1284f0d113c0307e99dd634783efd924f8db3bf61")
         manifest, record = self.validate()
         self.assertEqual(manifest["manifestId"], record["manifestId"])
 
@@ -896,14 +897,26 @@ class ActivationTests(unittest.TestCase):
 
 class TerraformHoldTests(unittest.TestCase):
     def test_actual_drift_step_retains_active_hold_and_fails_closed(self):
+        self.assert_drift_step_retains_active_hold('next-api', 'next-target-backend')
+
+    def test_next_booking_admin_drift_step_retains_active_hold_and_fails_closed(self):
+        # VAY-2247: the next stack's Booking Admin rolls forward Terraform's revision the same way.
+        self.assert_drift_step_retains_active_hold('next-booking-admin', 'next-booking-admin')
+
+    def assert_drift_step_retains_active_hold(self, step_service, service):
         workflow = (ROOT / '.github/workflows/tf-apply.yml').read_text()
-        step = workflow.split('      - name: Check next-api task definition drift\n', 1)[1]
+        step = workflow.split(f'      - name: Check {step_service} task definition drift\n', 1)[1]
         script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('\n      - name:', 1)[0])
         script = script.replace('${{ env.AWS_REGION }}', 'eu-west-1')
         config = release.load_config()
-        hold = release.write_hold(mock.Mock(), config, 'next-target-backend', {
-            'taskDefinitionArn': 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1178',
-            'image': '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@sha256:' + 'a' * 64,
+        physical = config['services'][service]
+        self.assertIn(f"--services {physical['ecsService']}", script)
+        self.assertIn(f"--task-definition {physical['taskFamily']}", script)
+        self.assertIn(f"active_hold(aws, config, \"{service}\")", script)
+        self.assertIn(f"/{physical['ecrRepository']}@", script)
+        hold = release.write_hold(mock.Mock(), config, service, {
+            'taskDefinitionArn': f"arn:aws:ecs:eu-west-1:269416271598:task-definition/{physical['taskFamily']}:1178",
+            'image': f"269416271598.dkr.ecr.eu-west-1.amazonaws.com/{physical['ecrRepository']}@sha256:" + 'a' * 64,
         }, reason='reviewed installation', operation_id='test-hold', manifest_id=None)
         cleared = dict(hold, status='cleared', clearedAt=release.iso_now(),
                        clearedByOperationId='test-clear', resumedManifestId='test-resume')
@@ -1028,6 +1041,117 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("options: [ordinary, resume, activate, verify]", deployment)
         self.assertIn("needs.prepare.result == 'success' && inputs.operation != 'verify'", deployment)
         self.assertIn("published_record_sha256", deployment)
+
+    @staticmethod
+    def deployment_job(workflow: str, job: str) -> str:
+        # Extract only the named job; nested YAML keys have at least four spaces.
+        return re.split(r"\n  [a-z]+:\n", workflow.split(f"\n  {job}:\n", 1)[1])[0]
+
+    def test_unadmitted_dispatch_image_skips_without_failure_or_aws_calls(self):
+        workflow = (ROOT / ".github/workflows/deploy-coordinated-release.yml").read_text()
+        prepare = self.deployment_job(workflow, "prepare")
+        self.assertIn("auto_skip: ${{ steps.admission.outputs.auto_skip }}", prepare)
+        step = prepare.split("      - name: Check automatic API image admission\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("id: admission", step)
+        self.assertIn("if: github.event_name == 'repository_dispatch'", step)
+        # The decision uses the manifest only after preparation validated and captured it.
+        self.assertLess(prepare.index("coordinated_release.py prepare"), prepare.index("id: admission"))
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        admitted = [line.split()[1] for line in (ROOT / "scripts/next-api-split-compatible-images.txt").read_text().splitlines()
+                    if line.strip() and not line.startswith("#")][-1]
+        unadmitted = "sha256:" + "7" * 64
+        manifest = json.loads((ROOT / "deployment/contract/fixtures/manifest-v1.valid.json").read_text())
+        plan = {"artifactId": 42, "manifestSha256": "a" * 64, "publishedRecordSha256": "b" * 64}
+        for digest, expected in ((unadmitted, "true"), (admitted, "false"), ("sha256:bad", None), (None, None)):
+            with self.subTest(digest=digest), tempfile.TemporaryDirectory() as directory:
+                directory = Path(directory)
+                (directory / "scripts").symlink_to(ROOT / "scripts")
+                (directory / "bin").mkdir()
+                for tool in ("aws", "terraform"):
+                    stub = directory / "bin" / tool
+                    stub.write_text(f'#!/bin/sh\necho {tool} "$@" >> "$CALL_LOG"\nexit 1\n')
+                    stub.chmod(0o755)
+                bundle = directory / "release-bundle"
+                bundle.mkdir()
+                if digest is not None:
+                    manifest["services"]["next-target-backend"]["digest"] = digest
+                    (bundle / "manifest.json").write_text(json.dumps(manifest))
+                (bundle / "plan.json").write_text(json.dumps(plan))
+                before = {path.name: path.read_bytes() for path in bundle.iterdir()}
+                output, summary, calls = (directory / name for name in ("output", "summary", "calls"))
+                for path in (output, summary, calls):
+                    path.write_text("")
+                env = dict(os.environ, PATH=str(directory / "bin") + os.pathsep + os.environ["PATH"],
+                           GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary), CALL_LOG=str(calls),
+                           PYTHONDONTWRITEBYTECODE="1")
+                result = subprocess.run(["bash", "-e", "-c", script], cwd=directory, env=env,
+                                        capture_output=True, text=True, timeout=15)
+                self.assertEqual(calls.read_text(), "")
+                self.assertEqual({path.name: path.read_bytes() for path in bundle.iterdir()}, before)
+                if expected is None:
+                    # Fail closed: no decision means downstream jobs keep today's guarded path.
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn("auto_skip", output.read_text())
+                    continue
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output.read_text(), f"auto_skip={expected}\n")
+                notice = (f"Image {digest} not admitted yet; skipping automatic deploy. "
+                          "Admit it and dispatch operation=ordinary.")
+                if expected == "true":
+                    self.assertIn("::notice title=Automatic deploy skipped::" + notice, result.stdout)
+                    self.assertIn(notice, summary.read_text())
+                    self.assertIn("- `artifactId`: `42`", summary.read_text())
+                else:
+                    self.assertNotIn("not admitted", result.stdout)
+                    self.assertEqual(summary.read_text(), "")
+
+    def test_reconcile_jobs_skip_only_for_unadmitted_dispatch_images(self):
+        workflow = (ROOT / ".github/workflows/deploy-coordinated-release.yml").read_text()
+        prepare = self.deployment_job(workflow, "prepare")
+        validate = prepare.split("      - name: Validate publication, ancestry, state, barriers and live targets\n", 1)[1]
+        validate = validate.split("\n      - ", 1)[0]
+        # Preparation, with all its validation and state checks, runs unconditionally for both events.
+        self.assertNotIn("if:", validate)
+        self.assertNotIn("auto_skip", validate)
+        self.assertIn('python3 scripts/coordinated_release.py prepare "${arguments[@]}"', validate)
+        self.assertIn("--service next-target-backend", self.deployment_job(workflow, "api"))
+        gate = " && needs.prepare.outputs.auto_skip != 'true'"
+        today = {
+            "api": "${{ needs.prepare.result == 'success' && inputs.operation != 'verify' }}",
+            "frontends": "needs.api.result == 'success'",
+            "finalize": "always() && needs.prepare.result == 'success' && inputs.operation != 'verify'",
+        }
+
+        def evaluate(condition, *, operation, auto_skip, prepare_result, api_result):
+            expression = condition.removeprefix("${{").removesuffix("}}").strip()
+            self.assertRegex(expression, r"^[a-z_.' =!&()]+$")
+            expression = expression.replace("&&", " and ").replace("always()", "True")
+            needs = types.SimpleNamespace(
+                prepare=types.SimpleNamespace(result=prepare_result,
+                                              outputs=types.SimpleNamespace(auto_skip=auto_skip)),
+                api=types.SimpleNamespace(result=api_result))
+            context = {"needs": needs, "inputs": types.SimpleNamespace(operation=operation)}
+            return eval(expression, {"__builtins__": {}}, context)
+
+        for job, original in today.items():
+            body = self.deployment_job(workflow, job)
+            self.assertIn("prepare", re.search(r"^    needs: (.+)$", body, re.M).group(1))
+            condition = re.search(r"^    if: (.+)$", body, re.M).group(1)
+            self.assertEqual(condition, original.replace(" }}", gate + " }}") if "${{" in original else original + gate)
+            for prepare_result in ("success", "failure"):
+                for api_result in ("success", "failure", "skipped"):
+                    with self.subTest(job=job, prepare=prepare_result, api=api_result):
+                        states = {"prepare_result": prepare_result, "api_result": api_result}
+                        # workflow_dispatch never runs the admission step, so auto_skip is empty
+                        # and every operation keeps exactly today's job conditions.
+                        for operation in ("ordinary", "resume", "activate", "verify"):
+                            self.assertEqual(evaluate(condition, operation=operation, auto_skip="", **states),
+                                             evaluate(original, operation=operation, auto_skip="", **states))
+                        # repository_dispatch has no inputs; an admitted image keeps today's path.
+                        self.assertEqual(evaluate(condition, operation="", auto_skip="false", **states),
+                                         evaluate(original, operation="", auto_skip="false", **states))
+                        # An unadmitted image skips every reconcile and finalize job.
+                        self.assertFalse(evaluate(condition, operation="", auto_skip="true", **states))
 
 
 if __name__ == "__main__":

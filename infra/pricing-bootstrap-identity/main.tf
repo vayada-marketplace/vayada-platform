@@ -73,8 +73,7 @@ locals {
     "jwt-secret-key", "smtp-username", "smtp-password", "stripe-secret-key", "stripe-webhook-secret",
     "stripe-connect-webhook-secret", "cloudflare-api-token", "channex-api-key", "next-channex-webhook-token",
     "anthropic-api-key", "firecrawl-api-key", "target-database-url", "workos-api-key", "workos-webhook-secret",
-    "auth-cookie-secret", "resend-api-key", "marketplace-communication-unsubscribe-signing-keys",
-    "resend-webhook-secret", "db-marketplace-url"
+    "auth-cookie-secret", "resend-api-key", "resend-webhook-secret", "db-marketplace-url"
     ] : "vayada/prod/${name}"], [for name in [
     "pms-database-url", "pms-auth-database-url", "pms-booking-engine-database-url", "pms-jwt-secret-key",
     "pms-smtp-username", "pms-smtp-password", "pms-stripe-secret-key", "pms-stripe-webhook-secret",

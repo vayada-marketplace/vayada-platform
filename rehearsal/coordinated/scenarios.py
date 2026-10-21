@@ -52,7 +52,7 @@ def inventory():
     fixture.require(fixture.aws("sts", "get-caller-identity")["Account"] == fixture.ACCOUNT, "Wrong account")
     response = fixture.aws("ecs", "describe-services", "--cluster", fixture.CLUSTER,
                            "--services", *[f"vayada-recovery-{key}" for key in SERVICES])
-    fixture.require(not response.get("failures") and len(response["services"]) == 6, "Missing fixtures")
+    fixture.require(not response.get("failures") and len(response["services"]) == len(SERVICES), "Missing fixtures")
     result = {}
     for service in response["services"]:
         key = service["serviceName"].removeprefix("vayada-recovery-")

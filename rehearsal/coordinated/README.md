@@ -9,16 +9,17 @@ account other than `269416271598`; region is fixed to `eu-west-1`.
 ## Initial resources and capacity
 
 - Dedicated `vayada-coordinated-recovery` ECS cluster and VPC/subnet/routes.
-- Six `vayada-recovery-*` services: api, pms, booking-web, booking-admin,
-  marketplace-web and marketplace-admin. Each has one 0.25-vCPU, 512-MiB Fargate
-  task: total 1.5 vCPU, 3 GiB and six public IPv4 addresses while running.
+- Five `vayada-recovery-*` services: api, pms, booking-web, booking-admin and
+  marketplace-admin (marketplace-web was removed with the Marketplace, VAY-2271).
+  Each has one 0.25-vCPU, 512-MiB Fargate task: total 1.25 vCPU, 2.5 GiB and
+  five public IPv4 addresses while running.
 - No public ingress. Port 8080 is reachable only between fixture tasks using
   the fixture security group. HTTPS egress supports image pulls and logging;
   no VPC peering, production target groups, listeners or DNS are added.
-- One execution role can pull only the six fixture ECR repositories and write
+- One execution role can pull only the five fixture ECR repositories and write
   only fixture logs. ECR authentication itself requires the standard wildcard
   token permission. Containers have no task role, secrets or database access.
-- Six immutable-tag ECR repositories for subsequent fixture releases. Initial
+- Five immutable-tag ECR repositories for subsequent fixture releases. Initial
   tasks use a digest-pinned official Python image from Docker Hub. Bootstrap
   depends on that public registry's availability/rate limits; no app image is
   substituted if pulling fails.
@@ -44,10 +45,13 @@ terraform show -json recovery.tfplan > plan.json
 shasum -a 256 recovery.tfplan
 ```
 
-The first plan must contain exactly 28 creates, zero changes and zero deletes:
-one VPC, subnet, internet gateway, route table, route association, security group,
-cluster and log group; six ECR repositories, task definitions and services; one
-execution role and its inline policy. Review resource names, IAM and the exact
+A plan from empty state must contain exactly 31 creates, zero changes and zero
+deletes: one VPC, subnet, internet gateway, route table, route association,
+security group, cluster and log group; five ECR repositories, task definitions
+and services; one execution role and its inline policy; the private runner role
+and its policy (`runner-iam.tf`); the two scenario roles and their policies
+(`scenario-iam.tf`). The September bootstrap had 28: six services, before the
+runner and scenario roles existed. Review resource names, IAM and the exact
 saved-plan hash before explicit apply approval. Do not run the production root,
 use `-target` to mask unrelated changes, or auto-apply on merge.
 
@@ -57,11 +61,11 @@ Only after approval for the exact reviewed commit and saved plan:
 terraform apply recovery.tfplan
 ```
 
-An apply starts six billed tasks and public addresses. After the rehearsal,
+An apply starts five billed tasks and public addresses. After the rehearsal,
 produce a separately reviewed shutdown plan; preserve logs, images and runtime
 control evidence until acceptance. There is no automated resource destruction.
 
-VAY-2029 was accepted on 2026-09-26. The six services are now parked at
+VAY-2029 was accepted on 2026-09-26. The services are now parked at
 `desired_count = 0`, which stops the billed tasks and their public addresses.
 The network, images, logs and roles are kept. The runner and scenarios require
 one steady task per service, so set the count back to 1 through a reviewed plan
@@ -69,7 +73,7 @@ before rehearsing again.
 
 ## Private preflight runner
 
-`runner.py` defaults to read-only inspection. It checks the six exact service
+`runner.py` defaults to read-only inspection. It checks the five exact service
 identities, approved subnet/security group, bootstrap image/command/environment,
 execution role, absence of a task role/secrets, and healthy task identities.
 Physical network IDs are pinned to the approved bootstrap; replacing the network
@@ -77,7 +81,7 @@ requires a reviewed runner update.
 
 `--run` additionally requires the `vayada-recovery-runner` assumed role. It
 registers and starts one non-root, read-only probe task inside the fixture
-network. That task checks all six private endpoints' service and bootstrap
+network. That task checks all five private endpoints' service and bootstrap
 revision identities. Redirects and environment proxies are disabled. The role
 is main-only, allows only the probe task family in the fixture cluster and the
 fixture execution role, and explicitly denies service and SSM state mutations.
@@ -93,7 +97,7 @@ gh workflow run probe-recovery-environment.yml \
 The manual workflow holds the existing global ECS mutation lock. It uploads
 90-day evidence only on success and marks recovery scenarios `not-run`. AWS CLI
 calls have 45-second subprocess limits; task polling is bounded to 240 seconds,
-with cleanup of the exact launched task on timeout/error. The probe's six HTTP
+with cleanup of the exact launched task on timeout/error. The probe's five HTTP
 requests each have a five-second timeout. Unexpected cancellation during AWS
 launch may prevent collecting the task ARN: inspect the fixture cluster before
 retrying. Probe task definitions and logs remain as evidence; no tasks loop or
