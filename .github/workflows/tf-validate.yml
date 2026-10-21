@@ -58,9 +58,12 @@ on:
       - "scripts/test-retire-hotel-setup-database-roles.sh"
       - "scripts/retire-affiliate-capture-login.mjs"
       - "scripts/test-retire-affiliate-capture-login.sh"
+      - "scripts/set-api-runtime-timeouts.mjs"
+      - "scripts/test-set-api-runtime-timeouts.sh"
       - "scripts/ci-pull-images.sh"
       - ".github/workflows/retire-hotel-setup-database-roles.yml"
       - ".github/workflows/retire-affiliate-capture-login.yml"
+      - ".github/workflows/set-api-runtime-timeouts.yml"
       - "scripts/restore-rds-admin-from-ssm.py"
       - "scripts/test_restore_rds_admin_from_ssm.py"
       - "scripts/inspect-target-database-identity-role.mjs"
@@ -233,6 +236,22 @@ jobs:
       - name: Drop the affiliate capture login as vayada_admin
         run: bash scripts/test-retire-affiliate-capture-login.sh "${{ matrix.postgres }}"
 
+  api-runtime-timeouts:
+    name: API runtime login timeouts (PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        postgres: ["16", "17"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Pull test images
+        run: bash scripts/ci-pull-images.sh "ghcr.io/vayada-marketplace/ci-postgres:${{ matrix.postgres }}" ghcr.io/vayada-marketplace/ci-node:22-bookworm
+      - name: Set and reset the API runtime login's timeouts as vayada_admin
+        run: bash scripts/test-set-api-runtime-timeouts.sh "${{ matrix.postgres }}"
+
   target-database-runtime-preflight:
     name: Runtime database preflight (PostgreSQL ${{ matrix.postgres }})
     runs-on: ubuntu-latest
@@ -369,6 +388,7 @@ jobs:
           node --check scripts/harden-target-database-cluster-acl.mjs
           node --check scripts/retire-hotel-setup-database-roles.mjs
           node --check scripts/retire-affiliate-capture-login.mjs
+          node --check scripts/set-api-runtime-timeouts.mjs
           python3 -m unittest scripts/test_restore_rds_admin_from_ssm.py
           node --check scripts/inspect-target-database-identity-role.mjs
           node --check scripts/check-rds-admin-login.mjs
@@ -376,6 +396,7 @@ jobs:
           bash -n scripts/test-target-database-cluster-acl.sh
           bash -n scripts/test-retire-hotel-setup-database-roles.sh
           bash -n scripts/test-retire-affiliate-capture-login.sh
+          bash -n scripts/test-set-api-runtime-timeouts.sh
           python3 scripts/test-target-database-identity-secret.py
           python3 scripts/test-target-database-runtime-preflight.py
           python3 scripts/test-target-database-runtime-runner.py
