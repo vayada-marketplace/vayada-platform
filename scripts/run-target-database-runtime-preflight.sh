@@ -36,6 +36,8 @@ role_retirement_phase=""
 role_retirement_frozen=""
 capture_login_phase=""
 capture_login_frozen=""
+runtime_timeouts_phase=""
+runtime_timeouts_frozen=""
 case "${mode}" in
   preflight)
     [[ "$#" -le 1 ]] || { echo "Unexpected arguments." >&2; exit 2; }
@@ -289,6 +291,23 @@ case "${mode}" in
     capture_login_phase="$2"
     capture_login_frozen="$3"
     ;;
+  --set-api-runtime-timeouts)
+    # VAY-2247: vayada_admin sets (apply) or resets (rollback) lock_timeout and
+    # idle_in_transaction_session_timeout for vayada_next_api_runtime in vayada_target_prod.
+    # inspect is read-only; apply and rollback must repeat its PLAN fingerprint.
+    [[ "${GITHUB_ACTIONS:-}" == true && "${GITHUB_REF:-}" == refs/heads/main &&
+       "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_REPOSITORY:-}" == vayada-marketplace/vayada-platform &&
+       "$#" -eq 3 ]] || exit 2
+    [[ ( "$2" == inspect && -z "$3" ) || ( ( "$2" == apply || "$2" == rollback ) && "$3" =~ ^[a-f0-9]{64}$ ) ]] || exit 2
+    ca_required=true
+    code_file="set-api-runtime-timeouts.mjs"
+    code_in_definition="true"
+    secret_name="TARGET_DATABASE_ADMIN_URL"
+    secret_parameter="/vayada/prod/db-marketplace-url"
+    family="vayada-next-api-db-runtime-preflight"
+    runtime_timeouts_phase="$2"
+    runtime_timeouts_frozen="$3"
+    ;;
   *) echo "Unknown mode: ${mode}" >&2; exit 2 ;;
 esac
 if [[ "${ca_required}" == true ]]; then
@@ -341,6 +360,7 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
   --arg vay2017_source_import_phase "${vay2017_source_import_phase}" \
   --arg role_retirement_step "${role_retirement_step}" --arg role_retirement_phase "${role_retirement_phase}" --arg role_retirement_frozen "${role_retirement_frozen}" \
   --arg capture_login_phase "${capture_login_phase}" --arg capture_login_frozen "${capture_login_frozen}" \
+  --arg runtime_timeouts_phase "${runtime_timeouts_phase}" --arg runtime_timeouts_frozen "${runtime_timeouts_frozen}" \
   --arg github_actions "${GITHUB_ACTIONS:-}" --arg github_ref "${GITHUB_REF:-}" \
   --arg vay2017_signing_key_id "${VAY2017_PREFLIGHT_SIGNING_KEY_ID:-}" --arg vay2017_input "${VAY2017_PREFLIGHT_INPUT_GZIP_BASE64:-}" --arg vay2017_signature "${VAY2017_PREFLIGHT_SIGNATURE:-}" --arg vay2017_public_key "${VAY2017_PREFLIGHT_PUBLIC_KEY_BASE64:-}" --arg vay2017_principal "${CHANNEX_ADOPTION_EXECUTION_PRINCIPAL:-}" \
   '{containerOverrides:[{name:$name,command:["node","--eval",$bootstrap],
@@ -364,6 +384,9 @@ overrides="$(jq -cn --arg bootstrap "${bootstrap}" --arg code "${payload}" --arg
         {name:"GITHUB_ACTIONS",value:$github_actions},{name:"GITHUB_REF",value:$github_ref}] end) +
       (if $capture_login_phase == "" then [] else [{name:"VAYADA_AFFILIATE_CAPTURE_LOGIN_PHASE",value:$capture_login_phase},
         {name:"VAYADA_AFFILIATE_CAPTURE_LOGIN_FROZEN",value:$capture_login_frozen},
+        {name:"GITHUB_ACTIONS",value:$github_actions},{name:"GITHUB_REF",value:$github_ref}] end) +
+      (if $runtime_timeouts_phase == "" then [] else [{name:"VAYADA_API_RUNTIME_TIMEOUTS_PHASE",value:$runtime_timeouts_phase},
+        {name:"VAYADA_API_RUNTIME_TIMEOUTS_FROZEN",value:$runtime_timeouts_frozen},
         {name:"GITHUB_ACTIONS",value:$github_actions},{name:"GITHUB_REF",value:$github_ref}] end) +
       (if $vay2017_source_import_phase == "extract" then [{name:"SOURCE_ATTESTATION_OWNER",value:"vay2017_source_attestor_20260929"}] else [] end) +
       (if $vay2017_source_sha == "" then [] else [{name:"VAY2017_PREFLIGHT_SOURCE_SHA",value:$vay2017_source_sha}] end) +
@@ -498,6 +521,8 @@ elif [[ "${role_retirement_phase}" == "inspect" ]]; then vay2017_expected_status
 elif [[ "${role_retirement_phase}" == "apply" ]]; then vay2017_expected_status="PASS";
 elif [[ "${capture_login_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";
 elif [[ "${capture_login_phase}" == "apply" ]]; then vay2017_expected_status="PASS";
+elif [[ "${runtime_timeouts_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";
+elif [[ "${runtime_timeouts_phase}" == "apply" || "${runtime_timeouts_phase}" == "rollback" ]]; then vay2017_expected_status="PASS";
 fi
 task="$(aws ecs describe-tasks --cluster "${cluster}" --tasks "${task_arn}" --region "${region}" \
   --query 'tasks[0].{exitCode:containers[0].exitCode,reason:stoppedReason}' --output json)"

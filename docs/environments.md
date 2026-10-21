@@ -935,13 +935,45 @@ retirement, with `retire-affiliate-capture-login.mjs`, connecting as
 
 Failures print `FAIL`, `UNCERTAIN` or `COMMITTED_UNVERIFIED`, as above.
 
+#### API runtime login timeouts (VAY-2247)
+
+After the 2026-10-21 incident, where two reads waited on each other's locks forever, Flamur approved two
+defaults for `vayada_next_api_runtime` in `vayada_target_prod`:
+- `lock_timeout = 10s`: a statement gives up a lock wait after 10 s. The API answers `409 busy_try_again`;
+  the app PR that adds that answer goes live first.
+- `idle_in_transaction_session_timeout = 10min`: a safety net for a connection stuck in an open transaction.
+  Nothing legitimate idles that long. 60 s needs app fixes first.
+
+`set-api-runtime-timeouts.yml` (main only, `platform-mutations-v2`, `production-ecs-mutations` lock) runs
+`run-target-database-runtime-preflight.sh --set-api-runtime-timeouts <phase> <fingerprint>`. This is the same
+disposable task as the login retirements, with `set-api-runtime-timeouts.mjs`, connecting as `vayada_admin`.
+
+- `inspect` is read-only. Its `PLAN` shows:
+  - the login, with `adminOption`;
+  - the two settings now (`current`) and what apply sets (`desired`);
+  - role-wide defaults for them (`roleWide`, which this database's defaults override);
+  - the login's other defaults in this database (`otherDatabaseDefaults`);
+  - its live sessions;
+  - `readyToApply` / `readyToRollback` with their blockers;
+  - a fingerprint (sessions are shown, not fingerprinted).
+
+  It is blocked while the login is missing, elevated or unable to log in, or while `vayada_admin` lacks
+  ADMIN OPTION on it. Apply is blocked when both are already set, rollback when neither is.
+- `apply` with that fingerprint recaptures, refuses on any drift, runs `ALTER ROLE … IN DATABASE
+  vayada_target_prod SET` for both in one transaction and verifies. `rollback` does the same with `RESET`.
+- Only new sessions pick the defaults up. The API's pools close idle connections after 30 s, so within minutes
+  and without a deploy. `SET LOCAL` values in the app (150 ms–5 s) still win inside their transactions.
+- If `vayada_admin` lacks ADMIN OPTION, the fallback is the login setting its own defaults
+  (`ALTER ROLE CURRENT_USER IN DATABASE … SET`), which PostgreSQL allows for any role.
+
+Failures print `FAIL`, `UNCERTAIN` or `COMMITTED_UNVERIFIED`, as above.
+
 ### Target database runtime role: product DML grant (VAY-2054)
 
 The ordinary API login `vayada_next_api_runtime` receives ordinary DML on the
-product schemas (`hotel_catalog`, `booking`, `pms`, `marketplace`,
-`distribution`, `finance`, `platform`; `marketplace` only while it exists, see
-below) plus default privileges for future tables, and is denied a short protected list (credential scope tables,
-migration ledger and evidence, worker allowlists, guarded affiliate evidence,
+product schemas (`hotel_catalog`, `booking`, `pms`, `distribution`, `finance`,
+`platform`; VAY-2272 dropped `marketplace`) plus default privileges for future tables, and is denied a short protected list (credential scope tables,
+migration ledger and evidence, worker allowlists,
 worker-only Channex and Finance state). On `identity.*` it
 only gains `UPDATE (created_at)` on the six tables the API row-locks (platform
 #240 precedent: PostgreSQL needs an `UPDATE` privilege on one column for
@@ -951,10 +983,9 @@ posture. On the two product-link tables the VAY-965 setup-track column matrix
 is extended for the product posture only: `identity.product_entitlements`
 gains `INSERT (resource_product, resource_type, resource_id)` and
 `UPDATE (metadata)`, `identity.organization_resource_links` gains
-`UPDATE (status, updated_at)`, so Financials module activation, the new-hotel
-Financials default and marketplace offer operator grant/archive work under the
-ordinary login (human decision 2026-10-07). The revoke scope restores the
-VAY-965 matrix exactly. The decision and the protected list with reasons live in
+`UPDATE (status, updated_at)`, so Financials module activation and the new-hotel
+Financials default work under the ordinary login (human decision 2026-10-07;
+the link status columns served Marketplace offer access, removed in VAY-2272). The decision and the protected list with reasons live in
 the application repo at `engineering/api-runtime-database-role.md`; the
 executable list is `scripts/grant-target-database-runtime-product-dml.mjs`.
 
@@ -1027,11 +1058,13 @@ The runtime preflight (`scripts/target-database-runtime-preflight.mjs`, run by
 every `tf-apply`) requires the product DML posture: the migration owner's
 default privileges must grant the login DML in every product schema, and
 anything less fails closed (`runtime_product_dml_posture_partial:<count>`).
-`marketplace` is retiring (VAY-2272): app migration 0499 drops it, so both
-scripts cover the listed schemas that exist and only `marketplace` may be
-absent; any other missing product schema fails closed
-(`runtime_product_schema_missing:<names>`, grant `runtime_dml_schema_missing`).
-P2 removes it from both lists once 0499 is live.
+Every listed product schema must exist (`runtime_product_schema_missing:<names>`,
+grant `runtime_dml_schema_missing`). App migration 0499 dropped `marketplace`
+(VAY-2272); both lists dropped it after 0499 was live (P2). Default privileges
+for the API login in a schema that came back fail the grant
+(`runtime_foreign_default_privileges_forbidden`); in the preflight, such a schema
+fails with `runtime_schema_usage_missing` (no usage) or
+`runtime_unapproved_relation_write_forbidden` (writable tables).
 VAY-2211 removed the legacy allowlist posture; production has reported
 `"posture":"product_dml"` on every `tf-apply` since at least 2026-10-13. The
 preflight asserts that the no-read list, the name patterns and

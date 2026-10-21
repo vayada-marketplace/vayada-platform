@@ -301,7 +301,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
             self.assertNotIn(removed, source)
         for relation in ('platform.identity_migration_provenance',
                          'platform.schema_migrations', 'hotel_catalog.properties', 'booking.pricing_quotes',
-                         'marketplace.affiliate_click_occurrences', 'finance.expense_generation_dispatches',
+                         'finance.expense_generation_dispatches',
                          'platform.finance_expense_worker_properties', 'pms.channex_room_availability_attempts',
                          'platform.legacy_owner_bootstrap_receipts', 'identity.organizations'):
             self.assertIn(f'"{relation}"', source)
@@ -377,6 +377,45 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         for marker in ("if: github.ref == 'refs/heads/main'", 'environment: platform-mutations-v2',
                        'group: production-ecs-mutations', 'options: [inspect, apply]',
                        '--retire-affiliate-capture-login "$PHASE" "$FROZEN"'):
+            self.assertIn(marker, workflow)
+
+    def test_api_runtime_timeouts_are_main_only_and_fingerprinted(self) -> None:
+        branch = RUNNER.split('  --set-api-runtime-timeouts)', 1)[1].split('    ;;', 1)[0]
+        for marker in ('"${GITHUB_REF:-}" == refs/heads/main', '"${GITHUB_EVENT_NAME:-}" == workflow_dispatch',
+                       '"$2" == inspect && -z "$3"', '( "$2" == apply || "$2" == rollback ) && "$3" =~ ^[a-f0-9]{64}$',
+                       'code_file="set-api-runtime-timeouts.mjs"', 'code_in_definition="true"',
+                       'secret_name="TARGET_DATABASE_ADMIN_URL"', 'secret_parameter="/vayada/prod/db-marketplace-url"'):
+            self.assertIn(marker, branch)
+        self.assertNotIn('extra_secret_', branch)
+        self.assertIn('elif [[ "${runtime_timeouts_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";', RUNNER)
+        self.assertIn('elif [[ "${runtime_timeouts_phase}" == "apply" || "${runtime_timeouts_phase}" == "rollback" ]]; '
+                      'then vay2017_expected_status="PASS";', RUNNER)
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('GITHUB_')}
+        # Off main every call stops at the first guard, valid arguments included.
+        for args in (['inspect', ''], ['apply', 'a' * 64], ['rollback', 'a' * 64]):
+            local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+                                    '--set-api-runtime-timeouts', *args], capture_output=True, text=True, env=environment)
+            self.assertEqual(local.returncode, 2, args)
+        # On main, invalid phases, fingerprints and argument counts stop before anything reaches AWS.
+        dispatch = {**environment, 'GITHUB_ACTIONS': 'true', 'GITHUB_REF': 'refs/heads/main',
+                    'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REPOSITORY': 'vayada-marketplace/vayada-platform'}
+        for args in (['apply', ''], ['rollback', ''], ['inspect', 'a' * 64], ['other', ''], ['apply', 'A' * 64],
+                     ['inspect']):
+            local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+                                    '--set-api-runtime-timeouts', *args], capture_output=True, text=True, env=dispatch)
+            self.assertEqual(local.returncode, 2, args)
+        source = (ROOT / 'scripts/set-api-runtime-timeouts.mjs').read_text()
+        for marker in ('MEMBER WITH ADMIN OPTION', 'api_runtime_timeouts_plan_changed',
+                       'api_runtime_timeouts_admin_option_missing', 'api_runtime_timeouts_already_applied',
+                       'api_runtime_timeouts_not_applied', 'IN DATABASE', 'lock_timeout: "10s"',
+                       'idle_in_transaction_session_timeout: "10min"', 'COMMITTED_UNVERIFIED',
+                       'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com',
+                       'url.search !== "?sslmode=require"', 'rejectUnauthorized: true'):
+            self.assertIn(marker, source)
+        workflow = (ROOT / '.github/workflows/set-api-runtime-timeouts.yml').read_text()
+        for marker in ("if: github.ref == 'refs/heads/main'", 'environment: platform-mutations-v2',
+                       'group: production-ecs-mutations', 'options: [inspect, apply, rollback]',
+                       '--set-api-runtime-timeouts "$PHASE" "$FROZEN"'):
             self.assertIn(marker, workflow)
 
     def test_rds_admin_login_check_is_read_only_and_uses_only_the_admin_secret(self) -> None:

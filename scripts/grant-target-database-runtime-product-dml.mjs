@@ -4,18 +4,13 @@
 import pg from "pg";
 
 const role = "vayada_next_api_runtime";
-const declaredSchemas = ["hotel_catalog", "booking", "pms", "marketplace", "distribution", "finance", "platform"];
-// VAY-2272: migration 0499 drops the marketplace schema. Until it leaves declaredSchemas, the grant
-// covers the listed schemas that exist (set by assertPosture); every other listed schema must exist.
 // Keep identical to scripts/target-database-runtime-preflight.mjs.
-const retiringSchemas = ["marketplace"];
-let schemas = declaredSchemas;
+const schemas = ["hotel_catalog", "booking", "pms", "distribution", "finance", "platform"];
 const receipt = "platform.legacy_owner_bootstrap_receipts";
 export const noRead = [
   "platform.identity_migration_provenance",
   "platform.legacy_historical_binding_transitions", "platform.finance_expense_worker_properties",
-  "platform.finance_export_worker_properties", "marketplace.affiliate_click_quota_windows",
-  "pms.inventory_coverage_validation_queue",
+  "platform.finance_export_worker_properties", "pms.inventory_coverage_validation_queue",
 ];
 export const noReadPatterns = [
   "^platform\\.(identity_migration_|legacy_historical_binding_)",
@@ -26,24 +21,21 @@ export const noWrite = [
   "platform.channex_management_worker_properties", "platform.legacy_owner_approval_records",
   "platform.legacy_owner_approval_revocations",
   "booking.pricing_runtime_effective_property_scopes",
-  "marketplace.affiliate_click_occurrences", "booking.affiliate_click_contexts",
-  "booking.affiliate_click_admissions", "booking.affiliate_original_booking_bindings",
   "finance.expense_generation_dispatches", "pms.channex_room_availability_attempts",
   "pms.channex_room_availability_receipts", "pms.channex_room_availability_reconciliation_attestations",
   "pms.channex_ari_schedule_sources", "pms.channel_sync_status",
-  "booking.affiliate_referral_production_preflight_revocations",
 ];
 export const noWritePatterns = [
   "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|channex_management_worker_|identity_migration_)",
   "^pms\\.channex_room_availability_", "^pms\\.channex_ari_schedule_", "^pms\\.channex_offer_ari_deliver",
-  "^(marketplace|booking)\\.affiliate_click_", "^finance\\.expense_generation_",
+  "^finance\\.expense_generation_",
 ];
 // Insert-only evidence: the API never updates or deletes it (pricing quotes also have an append-only trigger).
 export const appendOnly = [
   "platform.product_audit_events", "platform.domain_events", "booking.addon_revenue_evidence",
   "pms.channex_offer_ari_receipts", "pms.channex_offer_create_receipts", "pms.channex_offer_target_versions",
   "finance.commission_rate_changes", "distribution.external_api_usage_events",
-  "finance.affiliate_percentage_policy_approvals", "booking.pricing_quotes",
+  "booking.pricing_quotes",
 ];
 export const noDelete = ["hotel_catalog.properties"];
 // Trigger-invoked Channex helpers (app migrations 0167 and 0314, invoker rights) that the
@@ -69,9 +61,10 @@ export const identityColumns = {
     UPDATE: ["id"],
   },
 };
-// Product DML posture (VAY-2054 follow-up, human decision 2026-10-07): the three identity
-// writes the ordinary API makes on product-link tables (Financials module activation,
-// new-hotel Financials default, marketplace offer operator grant/archive) also work.
+// Product DML posture (VAY-2054 follow-up, human decision 2026-10-07): the identity writes the
+// ordinary API makes on product-link tables (Financials module activation, new-hotel Financials
+// default) also work. The link status columns served the retired Marketplace offer access; they
+// stay granted until a follow-up narrows them.
 // Keep identical to scripts/target-database-runtime-preflight.mjs.
 export const productIdentityColumns = {
   "identity.product_entitlements": {
@@ -128,11 +121,8 @@ async function assertPosture(client) {
        AND relation.relowner <> (SELECT oid FROM pg_roles WHERE rolname = current_user)`,
     [schemas, [...identityLockOnly, ...Object.keys(identityColumns)]]);
   if (owned.rowCount !== 0) fail("runtime_dml_owner_required");
-  const found = await client.query(`SELECT nspname FROM pg_namespace WHERE nspname = ANY($1::text[])`, [declaredSchemas]);
-  const present = new Set(found.rows.map((row) => row.nspname));
-  if (declaredSchemas.some((schema) => !present.has(schema) && !retiringSchemas.includes(schema)))
-    fail("runtime_dml_schema_missing");
-  schemas = declaredSchemas.filter((schema) => present.has(schema));
+  const found = await client.query(`SELECT count(*) AS n FROM pg_namespace WHERE nspname = ANY($1::text[])`, [schemas]);
+  if (Number(found.rows[0].n) !== schemas.length) fail("runtime_dml_schema_missing");
 }
 
 // Row locks need UPDATE on one column (platform #240 precedent). The hotel-setup native

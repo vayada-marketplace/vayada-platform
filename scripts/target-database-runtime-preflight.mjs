@@ -4,18 +4,14 @@ import pg from "pg";
 
 const expectedRole = "vayada_next_api_runtime";
 const receipt = "platform.legacy_owner_bootstrap_receipts";
-const productSchemas = ["hotel_catalog", "booking", "pms", "marketplace", "distribution", "finance", "platform"];
-// VAY-2272: migration 0499 drops the marketplace schema. Until it leaves productSchemas, the posture
-// covers the listed schemas that exist; every other listed schema must exist.
 // Keep identical to scripts/grant-target-database-runtime-product-dml.mjs.
-const retiringProductSchemas = ["marketplace"];
+const productSchemas = ["hotel_catalog", "booking", "pms", "distribution", "finance", "platform"];
 
 // Protected list: keep identical to scripts/grant-target-database-runtime-product-dml.mjs.
 const noRead = [
   "platform.identity_migration_provenance",
   "platform.legacy_historical_binding_transitions", "platform.finance_expense_worker_properties",
-  "platform.finance_export_worker_properties", "marketplace.affiliate_click_quota_windows",
-  "pms.inventory_coverage_validation_queue",
+  "platform.finance_export_worker_properties", "pms.inventory_coverage_validation_queue",
 ];
 const noReadPatterns = [
   "^platform\\.(identity_migration_|legacy_historical_binding_)",
@@ -26,23 +22,20 @@ const noWrite = [
   "platform.channex_management_worker_properties", "platform.legacy_owner_approval_records",
   "platform.legacy_owner_approval_revocations",
   "booking.pricing_runtime_effective_property_scopes",
-  "marketplace.affiliate_click_occurrences", "booking.affiliate_click_contexts",
-  "booking.affiliate_click_admissions", "booking.affiliate_original_booking_bindings",
   "finance.expense_generation_dispatches", "pms.channex_room_availability_attempts",
   "pms.channex_room_availability_receipts", "pms.channex_room_availability_reconciliation_attestations",
   "pms.channex_ari_schedule_sources", "pms.channel_sync_status",
-  "booking.affiliate_referral_production_preflight_revocations",
 ];
 const noWritePatterns = [
   "^platform\\.(production_|source_extraction_|legacy_|channex_adoption_|channex_management_worker_|identity_migration_)",
   "^pms\\.channex_room_availability_", "^pms\\.channex_ari_schedule_", "^pms\\.channex_offer_ari_deliver",
-  "^(marketplace|booking)\\.affiliate_click_", "^finance\\.expense_generation_",
+  "^finance\\.expense_generation_",
 ];
 const appendOnly = [
   "platform.product_audit_events", "platform.domain_events", "booking.addon_revenue_evidence",
   "pms.channex_offer_ari_receipts", "pms.channex_offer_create_receipts", "pms.channex_offer_target_versions",
   "finance.commission_rate_changes", "distribution.external_api_usage_events",
-  "finance.affiliate_percentage_policy_approvals", "booking.pricing_quotes",
+  "booking.pricing_quotes",
 ];
 const noDelete = ["hotel_catalog.properties"];
 // Trigger-invoked Channex helpers the Channex management worker provisioning revokes from
@@ -229,11 +222,8 @@ try {
     [productSchemas],
   );
   const present = new Set(presentSchemas.rows.map((row) => row.nspname));
-  const missingSchemas = productSchemas.filter(
-    (schema) => !present.has(schema) && !retiringProductSchemas.includes(schema),
-  );
+  const missingSchemas = productSchemas.filter((schema) => !present.has(schema));
   check(missingSchemas.length === 0, `runtime_product_schema_missing:${missingSchemas.join(",")}`);
-  const activeProductSchemas = productSchemas.filter((schema) => present.has(schema));
 
   // Product DML posture: the migration owner's default privileges cover every product schema.
   const defaults = await client.query(
@@ -244,10 +234,10 @@ try {
       WHERE namespace.nspname = ANY($1::text[]) AND acl.defaclobjtype = 'r' AND acl.defaclrole = $2
         AND entry.grantee = (SELECT oid FROM pg_roles WHERE rolname = current_user)
         AND entry.privilege_type = 'INSERT'`,
-    [activeProductSchemas, migrationOwner],
+    [productSchemas, migrationOwner],
   );
   const coveredSchemas = Number(defaults.rows[0].schemas);
-  check(coveredSchemas === activeProductSchemas.length, `runtime_product_dml_posture_partial:${coveredSchemas}`);
+  check(coveredSchemas === productSchemas.length, `runtime_product_dml_posture_partial:${coveredSchemas}`);
 
   // Protected list: never readable (table or column, including PUBLIC or inherited grants).
   await requireNoMissing(
@@ -312,7 +302,7 @@ try {
       WHERE ${applicationSchemas} AND sequence.relkind = 'S'
         AND has_sequence_privilege(current_user, sequence.oid, privilege.name)
         AND NOT (privilege.name <> 'UPDATE' AND namespace.nspname = ANY($1::text[]))`,
-    [activeProductSchemas],
+    [productSchemas],
     "runtime_sequence_access_forbidden",
   );
   await requireNoMissing(
@@ -373,7 +363,7 @@ try {
         AND NOT namespace.nspname = ANY($1::text[]) AND namespace.nspname <> 'identity'
         AND (has_table_privilege(current_user, relation.oid, privilege.name)
              OR (privilege.name <> 'DELETE' AND has_any_column_privilege(current_user, relation.oid, privilege.name)))`,
-    [activeProductSchemas],
+    [productSchemas],
     "runtime_unapproved_relation_write_forbidden",
   );
   await requireNoMissing(
@@ -386,7 +376,7 @@ try {
         AND NOT (privilege.name IN ('UPDATE','DELETE') AND format('%I.%I', namespace.nspname, relation.relname) = ANY($4::text[]))
         AND NOT (privilege.name = 'DELETE' AND format('%I.%I', namespace.nspname, relation.relname) = ANY($5::text[]))
         AND NOT has_table_privilege(current_user, relation.oid, privilege.name)`,
-    [...protectedWriteParameters, activeProductSchemas, appendOnly, noDelete, receipt],
+    [...protectedWriteParameters, productSchemas, appendOnly, noDelete, receipt],
     "runtime_product_dml_missing",
   );
   await requireNoMissing(
@@ -409,12 +399,9 @@ try {
       WHERE namespace.nspname = ANY($1::text[]) AND acl.defaclobjtype = 'S' AND acl.defaclrole = $2
         AND entry.grantee = (SELECT oid FROM pg_roles WHERE rolname = current_user)
         AND entry.privilege_type = 'USAGE'`,
-    [activeProductSchemas, migrationOwner],
+    [productSchemas, migrationOwner],
   );
-  check(
-    Number(sequenceDefaults.rows[0].schemas) === activeProductSchemas.length,
-    "runtime_default_privileges_missing",
-  );
+  check(Number(sequenceDefaults.rows[0].schemas) === productSchemas.length, "runtime_default_privileges_missing");
   // The trigger-invoked Channex helpers stay executable (directly, or through PUBLIC where the
   // worker provisioning has not run yet); SECURITY DEFINER EXECUTE was already rejected above.
   await requireNoMissing(
