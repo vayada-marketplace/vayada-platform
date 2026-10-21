@@ -58,13 +58,12 @@ CREATE SCHEMA app AUTHORIZATION legacy_owner;
 CREATE SCHEMA booking AUTHORIZATION legacy_owner;
 CREATE SCHEMA finance AUTHORIZATION legacy_owner;
 CREATE SCHEMA pms AUTHORIZATION legacy_owner;
-CREATE SCHEMA marketplace AUTHORIZATION legacy_owner;
 CREATE SCHEMA hotel_catalog AUTHORIZATION legacy_owner;
 CREATE SCHEMA distribution AUTHORIZATION legacy_owner;
 CREATE SCHEMA identity AUTHORIZATION legacy_owner;
 CREATE SCHEMA vayada_migration_evidence AUTHORIZATION legacy_owner;
-REVOKE ALL ON SCHEMA identity, platform, app, booking, finance, pms, marketplace, hotel_catalog, distribution, vayada_migration_evidence FROM PUBLIC;
-GRANT USAGE ON SCHEMA identity, platform, app, booking, finance, pms, marketplace, hotel_catalog, distribution, vayada_migration_evidence
+REVOKE ALL ON SCHEMA identity, platform, app, booking, finance, pms, hotel_catalog, distribution, vayada_migration_evidence FROM PUBLIC;
+GRANT USAGE ON SCHEMA identity, platform, app, booking, finance, pms, hotel_catalog, distribution, vayada_migration_evidence
   TO vayada_next_api_runtime;
 
 SET ROLE legacy_owner;
@@ -85,22 +84,12 @@ CREATE TABLE finance.folio_payment_references (id uuid PRIMARY KEY);
 CREATE TABLE pms.channel_operational_alerts (
   id uuid PRIMARY KEY, resolved_at timestamptz, acknowledged_at timestamptz
 );
-CREATE TABLE finance.affiliate_earning_reconciliation_revisions (id uuid PRIMARY KEY);
-CREATE TABLE finance.affiliate_eligible_earning_revisions (id uuid PRIMARY KEY);
-CREATE TABLE finance.affiliate_earning_allocations (id uuid PRIMARY KEY);
-CREATE TABLE finance.affiliate_earning_allocation_items (id uuid PRIMARY KEY);
 CREATE TABLE platform.external_webhook_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.domain_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.idempotency_keys (id uuid PRIMARY KEY);
 CREATE TABLE platform.product_audit_events (id uuid PRIMARY KEY);
 CREATE TABLE platform.jobs (id uuid PRIMARY KEY);
 CREATE TABLE pms.channel_connections (id uuid PRIMARY KEY);
-CREATE TABLE marketplace.affiliate_links (id uuid PRIMARY KEY);
-CREATE TABLE marketplace.affiliate_agreement_lifecycle_events (id uuid PRIMARY KEY);
-CREATE TABLE marketplace.affiliate_click_occurrences (id uuid PRIMARY KEY);
-CREATE TABLE marketplace.affiliate_discrepancy_claims (id uuid PRIMARY KEY);
-CREATE TABLE marketplace.affiliate_discrepancy_resolutions (id uuid PRIMARY KEY);
-CREATE TABLE marketplace.affiliate_click_quota_windows (link_id uuid PRIMARY KEY, consumed integer);
 CREATE TABLE hotel_catalog.organization_setup_track_intents (
   organization_id uuid PRIMARY KEY, selected_tracks text[], revision integer, updated_at timestamptz
 );
@@ -118,14 +107,7 @@ INSERT INTO identity.organization_resource_links (organization_id, product, reso
   VALUES ('00000000-0000-4000-8000-00000000aa01', 'marketplace', 'marketplace_offer', 'offer-1', 'operator', 'active');
 CREATE TABLE finance.billing_entitlements (id uuid DEFAULT gen_random_uuid(), billing_status text);
 CREATE TABLE booking.booking_settings (property_id uuid PRIMARY KEY, published boolean DEFAULT false);
-CREATE TABLE marketplace.marketplace_hotel_profiles (
-  property_id uuid PRIMARY KEY, organization_id uuid, source_system text, source_hotel_profile_id text,
-  status text DEFAULT 'draft'
-);
 CREATE TABLE hotel_catalog.properties (id uuid PRIMARY KEY, profile_revision integer NOT NULL DEFAULT 1);
-CREATE TABLE booking.affiliate_click_contexts (id uuid PRIMARY KEY);
-CREATE TABLE booking.affiliate_click_admissions (id uuid PRIMARY KEY);
-CREATE TABLE booking.affiliate_original_booking_bindings (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_records (id uuid PRIMARY KEY);
 CREATE TABLE platform.legacy_owner_approval_revocations (id uuid PRIMARY KEY);
 CREATE TABLE platform.identity_migration_provenance (id uuid PRIMARY KEY);
@@ -160,7 +142,6 @@ CREATE TABLE finance.expense_generation_dispatches (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_room_availability_attempts (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_ari_schedule_sources (id uuid PRIMARY KEY);
 CREATE TABLE pms.channel_sync_status (id uuid PRIMARY KEY);
-CREATE TABLE booking.affiliate_referral_production_preflight_revocations (id uuid PRIMARY KEY);
 CREATE TABLE pms.channex_offer_create_receipts (id uuid PRIMARY KEY);
 CREATE TABLE booking.pricing_authority_future (id uuid PRIMARY KEY);
 CREATE SEQUENCE booking.fixture_sequence;
@@ -237,7 +218,7 @@ GRANT SELECT ON platform.jobs TO vayada_next_api_runtime;
 GRANT SELECT, UPDATE (id) ON hotel_catalog.properties TO vayada_next_api_runtime;
 GRANT SELECT ON hotel_catalog.organization_setup_track_intents, identity.product_entitlements,
   identity.organization_resource_links, finance.billing_entitlements,
-  booking.booking_settings, marketplace.marketplace_hotel_profiles TO vayada_next_api_runtime;
+  booking.booking_settings TO vayada_next_api_runtime;
 GRANT SELECT ON platform.legacy_owner_approval_records,
   platform.legacy_owner_approval_revocations TO vayada_next_api_runtime;
 GRANT SELECT ON platform.schema_migrations, distribution.public_room_offer_snapshots, platform.outbox_events, platform.job_attempts,
@@ -246,7 +227,6 @@ GRANT SELECT ON platform.schema_migrations, distribution.public_room_offer_snaps
   booking.pricing_quotes,
   finance.expense_generation_dispatches, pms.channex_room_availability_attempts,
   pms.channex_ari_schedule_sources, pms.channel_sync_status, pms.channex_offer_create_receipts,
-  booking.affiliate_referral_production_preflight_revocations,
   booking.pricing_authority_future, identity.organizations, identity.users,
   identity.organization_memberships, identity.role_permission_grants,
   identity.membership_property_assignments, identity.organization_roles TO vayada_next_api_runtime;
@@ -323,14 +303,6 @@ boundary_checks() {
     "REVOKE GRANT OPTION FOR UPDATE (resolved_at) ON pms.channel_operational_alerts FROM vayada_next_api_runtime" >/dev/null
   run_preflight | grep -F '"status":"PASS"' >/dev/null
   run_preflight | grep -F '"status":"PASS"' >/dev/null
-
-  for quota_read in 'SELECT' 'SELECT (link_id)'; do
-    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-      "GRANT ${quota_read} ON marketplace.affiliate_click_quota_windows TO vayada_next_api_runtime" >/dev/null
-    expect_failure runtime_protected_relation_read_forbidden
-    docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
-      "REVOKE ${quota_read} ON marketplace.affiliate_click_quota_windows FROM vayada_next_api_runtime" >/dev/null
-  done
 
   for privilege in 'SELECT' 'SELECT (id)'; do
     docker exec "${database_container}" psql -U postgres -v ON_ERROR_STOP=1 -c \
@@ -664,7 +636,7 @@ expect_failure runtime_product_dml_missing:1:hotel_catalog.property_setup_step_d
 owner_psql "GRANT INSERT ON hotel_catalog.property_setup_step_drafts TO vayada_next_api_runtime" >/dev/null
 docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d postgres -v ON_ERROR_STOP=1 -Atqc \
   "ALTER DEFAULT PRIVILEGES IN SCHEMA booking REVOKE ALL ON TABLES FROM vayada_next_api_runtime" >/dev/null
-expect_failure runtime_product_dml_posture_partial:6
+expect_failure runtime_product_dml_posture_partial:5
 docker exec -e PGPASSWORD=owner "${database_container}" psql -U legacy_owner -d postgres -v ON_ERROR_STOP=1 -Atqc \
   "ALTER DEFAULT PRIVILEGES IN SCHEMA booking GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO vayada_next_api_runtime" >/dev/null
 # Sequences created later need the default USAGE, SELECT in every product schema.
@@ -731,7 +703,6 @@ legacy_owner_psql "CREATE TABLE booking.created_after_grant (id uuid PRIMARY KEY
 runtime_psql "INSERT INTO booking.created_after_grant(id) VALUES ('00000000-0000-4000-8000-00000000010d')" >/dev/null
 [[ "$(runtime_psql "SELECT count(*) FROM booking.created_after_grant")" == 1 ]]
 legacy_owner_psql "DROP TABLE booking.created_after_grant" >/dev/null
-expect_runtime_denied "INSERT INTO booking.affiliate_referral_production_preflight_revocations(id) VALUES ('00000000-0000-4000-8000-00000000010e')"
 [[ "$(runtime_psql "SELECT name FROM identity.organizations WHERE id = '00000000-0000-4000-8000-00000000aa01' FOR SHARE")" == fixture ]]
 [[ "$(runtime_psql "SELECT name FROM identity.organizations WHERE id = '00000000-0000-4000-8000-00000000aa01' FOR UPDATE")" == fixture ]]
 expect_runtime_denied "UPDATE identity.organizations SET name = 'changed' WHERE id = '00000000-0000-4000-8000-00000000aa01'"
@@ -760,7 +731,6 @@ expect_runtime_denied "INSERT INTO platform.identity_migration_provenance(id) VA
 expect_runtime_denied "SELECT count(*) FROM platform.identity_migration_provenance"
 expect_runtime_denied "INSERT INTO platform.production_cutover_runs(id) VALUES ('00000000-0000-4000-8000-000000000105')"
 expect_runtime_denied "INSERT INTO platform.schema_migrations(name) VALUES ('9999')"
-expect_runtime_denied "INSERT INTO marketplace.affiliate_click_occurrences(id) VALUES ('00000000-0000-4000-8000-000000000106')"
 expect_runtime_denied "INSERT INTO finance.expense_generation_dispatches(id) VALUES ('00000000-0000-4000-8000-000000000107')"
 expect_runtime_denied "INSERT INTO pms.channel_sync_status(id) VALUES ('00000000-0000-4000-8000-00000000010a')"
 expect_runtime_denied "INSERT INTO platform.channex_management_worker_operations(operation_type) VALUES ('enable')"
@@ -784,7 +754,7 @@ expect_runtime_denied "SELECT setval('booking.fixture_sequence', 1)"
 expect_runtime_denied "SELECT authority_payload FROM platform.legacy_owner_bootstrap_receipts LIMIT 0"
 runtime_psql "SELECT owner_user_ids FROM platform.legacy_owner_bootstrap_receipts LIMIT 0" >/dev/null
 [[ "$(owner_psql "SELECT count(*) FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
-  WHERE n.nspname IN ('hotel_catalog','booking','pms','marketplace','distribution','finance','platform') AND d.defaclobjtype = 'r'")" == 7 ]]
+  WHERE n.nspname IN ('hotel_catalog','booking','pms','distribution','finance','platform') AND d.defaclobjtype = 'r'")" == 6 ]]
 
 # VAY-2211: the revoke-to-legacy scope is gone.
 if revoke_output="$(run_grant legacy_owner owner 1 revoke_product_dml 2>&1)"; then
@@ -793,14 +763,11 @@ fi
 grep -F '"code":"unknown_grant_scope"' <<<"${revoke_output}" >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
 
-# VAY-2272: app migration 0499 drops the marketplace schema before P2 removes it from the lists.
-# The grant and the preflight then cover the six product schemas left; any other must still exist.
-legacy_owner_psql "DROP SCHEMA marketplace CASCADE" >/dev/null
+# VAY-2272: app migration 0499 dropped the marketplace schema and P2 took it off both lists. The
+# grant and the preflight cover the six product schemas; a missing one fails both.
 run_grant legacy_owner owner \
   | grep -F '"schemas":["hotel_catalog","booking","pms","distribution","finance","platform"]' >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
-[[ "$(owner_psql "SELECT count(*) FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
-  WHERE n.nspname IN ('hotel_catalog','booking','pms','marketplace','distribution','finance','platform') AND d.defaclobjtype = 'r'")" == 6 ]]
 owner_psql "ALTER SCHEMA distribution RENAME TO distribution_hidden" >/dev/null
 expect_failure runtime_product_schema_missing:distribution
 if missing_schema_output="$(run_grant legacy_owner owner 2>&1)"; then
@@ -809,14 +776,18 @@ fi
 grep -F '"code":"runtime_dml_schema_missing"' <<<"${missing_schema_output}" >/dev/null
 owner_psql "ALTER SCHEMA distribution_hidden RENAME TO distribution" >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
-# A marketplace schema re-created by any other role is never trusted.
-owner_psql "CREATE SCHEMA marketplace" >/dev/null
-expect_failure runtime_schema_usage_missing
-if foreign_schema_output="$(run_grant legacy_owner owner 2>&1)"; then
-  echo "product DML grant accepted a schema owned by another role" >&2; exit 1
+# Applied before 0499, the marketplace schema and its default privileges would still exist: both
+# scripts fail closed instead of granting or accepting writes outside the product schemas.
+owner_psql "CREATE SCHEMA marketplace AUTHORIZATION legacy_owner" >/dev/null
+legacy_owner_psql "ALTER DEFAULT PRIVILEGES IN SCHEMA marketplace GRANT INSERT ON TABLES TO vayada_next_api_runtime" >/dev/null
+if early_grant_output="$(run_grant legacy_owner owner 2>&1)"; then
+  echo "product DML grant accepted default privileges outside the product schemas" >&2; exit 1
 fi
-grep -F '"code":"runtime_dml_owner_required"' <<<"${foreign_schema_output}" >/dev/null
-owner_psql "DROP SCHEMA marketplace" >/dev/null
+grep -F '"code":"runtime_foreign_default_privileges_forbidden"' <<<"${early_grant_output}" >/dev/null
+legacy_owner_psql "GRANT USAGE ON SCHEMA marketplace TO vayada_next_api_runtime" >/dev/null
+legacy_owner_psql "CREATE TABLE marketplace.marketplace_hotel_profiles (property_id uuid PRIMARY KEY)" >/dev/null
+expect_failure runtime_unapproved_relation_write_forbidden
+legacy_owner_psql "DROP SCHEMA marketplace CASCADE" >/dev/null
 run_preflight | grep -F '"posture":"product_dml"' >/dev/null
 
 echo "PostgreSQL ${postgres_version} runtime preflight integration passed"
