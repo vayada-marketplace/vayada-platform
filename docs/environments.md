@@ -141,6 +141,8 @@ PLATFORM_MEDIA_RETIRED_PURGE_ENABLED=false
 `platform_media_retired_purge_enabled` (default `false`). It switches on the
 one-time VAY-2272 purge of retired Marketplace and creator media; turn it on only
 with Flamur's yes and off again once the purge has finished.
+`infra/platform_media_retired_purge.auto.tfvars.json` sets it for the purge
+(`true`); the switch-off PR sets it back to `false`.
 
 #### Rollout
 
