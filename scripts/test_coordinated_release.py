@@ -897,14 +897,26 @@ class ActivationTests(unittest.TestCase):
 
 class TerraformHoldTests(unittest.TestCase):
     def test_actual_drift_step_retains_active_hold_and_fails_closed(self):
+        self.assert_drift_step_retains_active_hold('next-api', 'next-target-backend')
+
+    def test_next_booking_admin_drift_step_retains_active_hold_and_fails_closed(self):
+        # VAY-2247: the next stack's Booking Admin rolls forward Terraform's revision the same way.
+        self.assert_drift_step_retains_active_hold('next-booking-admin', 'next-booking-admin')
+
+    def assert_drift_step_retains_active_hold(self, step_service, service):
         workflow = (ROOT / '.github/workflows/tf-apply.yml').read_text()
-        step = workflow.split('      - name: Check next-api task definition drift\n', 1)[1]
+        step = workflow.split(f'      - name: Check {step_service} task definition drift\n', 1)[1]
         script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('\n      - name:', 1)[0])
         script = script.replace('${{ env.AWS_REGION }}', 'eu-west-1')
         config = release.load_config()
-        hold = release.write_hold(mock.Mock(), config, 'next-target-backend', {
-            'taskDefinitionArn': 'arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-next-api:1178',
-            'image': '269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@sha256:' + 'a' * 64,
+        physical = config['services'][service]
+        self.assertIn(f"--services {physical['ecsService']}", script)
+        self.assertIn(f"--task-definition {physical['taskFamily']}", script)
+        self.assertIn(f"active_hold(aws, config, \"{service}\")", script)
+        self.assertIn(f"/{physical['ecrRepository']}@", script)
+        hold = release.write_hold(mock.Mock(), config, service, {
+            'taskDefinitionArn': f"arn:aws:ecs:eu-west-1:269416271598:task-definition/{physical['taskFamily']}:1178",
+            'image': f"269416271598.dkr.ecr.eu-west-1.amazonaws.com/{physical['ecrRepository']}@sha256:" + 'a' * 64,
         }, reason='reviewed installation', operation_id='test-hold', manifest_id=None)
         cleared = dict(hold, status='cleared', clearedAt=release.iso_now(),
                        clearedByOperationId='test-clear', resumedManifestId='test-resume')

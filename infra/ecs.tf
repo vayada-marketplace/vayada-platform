@@ -251,6 +251,10 @@ locals {
         # VAY-2286: each contact-form message is emailed here (Reply-To: the visitor), through the
         # booking email provider (RESEND_API_KEY / BOOKING_EMAIL_FROM below). Not a secret.
         { name = "CONTACT_NOTIFICATION_RECIPIENT", value = "t.schreyer@vayada.com" },
+        # VAY-2205: the daily card check (pricing-v2 card payments and refunds against Stripe) emails
+        # its differences here, at most once a day. The VAY-2088 stale-prices alert uses the same
+        # address. Sent through the booking email provider (RESEND_API_KEY / BOOKING_EMAIL_FROM). Not a secret.
+        { name = "PRICING_PUBLICATION_FRESHNESS_ALERT_EMAIL", value = "t.schreyer@vayada.com" },
         { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "active_publication" },
         { name = "BOOKING_DOMAIN_RESOLUTION_SOURCE", value = "target" },
@@ -275,6 +279,9 @@ locals {
         { name = "PMS_CHANNEX_MESSAGING_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_REVIEWS_MODE", value = "mutating" },
         { name = "PMS_ROOM_TYPE_DELETE_CLEANUP_PROPERTY_IDS", value = join(",", var.pms_room_type_delete_cleanup_property_ids) },
+        # VAY-2247 switch-on, step 1: the server's first run and, with it, the setup checklist API.
+        # Booking Admin's ONBOARDING_V2_ENABLED follows in its own apply once this is live (runbook).
+        { name = "HOTEL_FIRST_RUN_ENABLED", value = "true" },
         { name = "FINANCE_SOURCE", value = "target" },
         { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
         { name = "BOOKING_WEB_EVENT_SINK", value = "target" },
@@ -389,6 +396,9 @@ locals {
         { name = "NEXT_PUBLIC_PMS_FRONTEND_URL", value = "https://next-pms.vayada.com" },
         { name = "NEXT_PUBLIC_BOOKING_URL_TEMPLATE", value = "https://{slug}.next-booking.vayada.com" },
         { name = "NEXT_PUBLIC_BOOKING_RESERVATIONS_ENABLED", value = "true" },
+        # VAY-2247 switch-on, step 2: /setup opens the new first run (read per request on the server).
+        # Needs next-api's HOTEL_FIRST_RUN_ENABLED live first (step 1).
+        { name = "ONBOARDING_V2_ENABLED", value = "true" },
       ]
       secrets = []
     }
