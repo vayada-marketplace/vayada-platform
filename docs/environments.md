@@ -933,6 +933,39 @@ retirement, with `retire-affiliate-capture-login.mjs`, connecting as
 
 Failures print `FAIL`, `UNCERTAIN` or `COMMITTED_UNVERIFIED`, as above.
 
+#### API runtime login timeouts (VAY-2247)
+
+After the 2026-10-21 incident, where two reads waited on each other's locks forever, Flamur approved two
+defaults for `vayada_next_api_runtime` in `vayada_target_prod`:
+- `lock_timeout = 10s`: a statement gives up a lock wait after 10 s. The API answers `409 busy_try_again`;
+  the app PR that adds that answer goes live first.
+- `idle_in_transaction_session_timeout = 10min`: a safety net for a connection stuck in an open transaction.
+  Nothing legitimate idles that long. 60 s needs app fixes first.
+
+`set-api-runtime-timeouts.yml` (main only, `platform-mutations-v2`, `production-ecs-mutations` lock) runs
+`run-target-database-runtime-preflight.sh --set-api-runtime-timeouts <phase> <fingerprint>`. This is the same
+disposable task as the login retirements, with `set-api-runtime-timeouts.mjs`, connecting as `vayada_admin`.
+
+- `inspect` is read-only. Its `PLAN` shows:
+  - the login, with `adminOption`;
+  - the two settings now (`current`) and what apply sets (`desired`);
+  - role-wide defaults for them (`roleWide`, which this database's defaults override);
+  - the login's other defaults in this database (`otherDatabaseDefaults`);
+  - its live sessions;
+  - `readyToApply` / `readyToRollback` with their blockers;
+  - a fingerprint (sessions are shown, not fingerprinted).
+
+  It is blocked while the login is missing, elevated or unable to log in, or while `vayada_admin` lacks
+  ADMIN OPTION on it. Apply is blocked when both are already set, rollback when neither is.
+- `apply` with that fingerprint recaptures, refuses on any drift, runs `ALTER ROLE … IN DATABASE
+  vayada_target_prod SET` for both in one transaction and verifies. `rollback` does the same with `RESET`.
+- Only new sessions pick the defaults up. The API's pools close idle connections after 30 s, so within minutes
+  and without a deploy. `SET LOCAL` values in the app (150 ms–5 s) still win inside their transactions.
+- If `vayada_admin` lacks ADMIN OPTION, the fallback is the login setting its own defaults
+  (`ALTER ROLE CURRENT_USER IN DATABASE … SET`), which PostgreSQL allows for any role.
+
+Failures print `FAIL`, `UNCERTAIN` or `COMMITTED_UNVERIFIED`, as above.
+
 ### Target database runtime role: product DML grant (VAY-2054)
 
 The ordinary API login `vayada_next_api_runtime` receives ordinary DML on the

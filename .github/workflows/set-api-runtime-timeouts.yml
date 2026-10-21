@@ -1,0 +1,38 @@
+name: Set the API runtime login's lock and idle-transaction timeouts (VAY-2247, after the busy-retry app PR is live)
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: inspect is read-only and prints the PLAN fingerprint; apply sets both, rollback resets both, each needs that exact fingerprint
+        type: choice
+        options: [inspect, apply, rollback]
+        required: true
+      expected_fingerprint:
+        description: Empty for inspect; the PLAN fingerprint for apply or rollback
+        required: false
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: production-ecs-mutations
+  queue: max
+jobs:
+  timeouts:
+    if: github.ref == 'refs/heads/main'
+    environment: platform-mutations-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-platform-deploy
+          aws-region: eu-west-1
+      - name: Inspect, apply or roll back the API runtime login's timeouts as vayada_admin
+        env:
+          PHASE: ${{ inputs.phase }}
+          FROZEN: ${{ inputs.expected_fingerprint }}
+        run: |
+          bash scripts/run-target-database-runtime-preflight.sh --set-api-runtime-timeouts "$PHASE" "$FROZEN"
