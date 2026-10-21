@@ -351,14 +351,23 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         self.assertIn('elif [[ "${capture_login_phase}" == "inspect" ]]; then vay2017_expected_status="PLAN";', RUNNER)
         self.assertIn('elif [[ "${capture_login_phase}" == "apply" ]]; then vay2017_expected_status="PASS";', RUNNER)
         environment = {key: value for key, value in os.environ.items() if not key.startswith('GITHUB_')}
-        for args in (['inspect', ''], ['apply', 'a' * 64], ['apply', ''], ['inspect', 'a' * 64], ['other', '']):
+        # Off main every call stops at the first guard, valid arguments included.
+        for args in (['inspect', ''], ['apply', 'a' * 64]):
             local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
                                     '--retire-affiliate-capture-login', *args], capture_output=True, text=True, env=environment)
+            self.assertEqual(local.returncode, 2, args)
+        # On main, invalid phases, fingerprints and argument counts stop before anything reaches AWS.
+        dispatch = {**environment, 'GITHUB_ACTIONS': 'true', 'GITHUB_REF': 'refs/heads/main',
+                    'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REPOSITORY': 'vayada-marketplace/vayada-platform'}
+        for args in (['apply', ''], ['inspect', 'a' * 64], ['other', ''], ['apply', 'A' * 64], ['inspect']):
+            local = subprocess.run(['bash', str(ROOT / 'scripts/run-target-database-runtime-preflight.sh'),
+                                    '--retire-affiliate-capture-login', *args], capture_output=True, text=True, env=dispatch)
             self.assertEqual(local.returncode, 2, args)
         source = (ROOT / 'scripts/retire-affiliate-capture-login.mjs').read_text()
         for marker in ('MEMBER WITH ADMIN OPTION', 'affiliate_capture_login_plan_changed',
                        'affiliate_capture_login_still_referenced', 'affiliate_capture_login_foreign_grants',
                        'affiliate_capture_login_sessions_active', 'affiliate_capture_login_dependencies_remaining',
+                       'affiliate_capture_login_has_members', 'affiliate_capture_login_grantor', '"2BP01"',
                        'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', 'pg_try_advisory_lock', '"01006", "01007"',
                        'COMMITTED_UNVERIFIED', 'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com',
                        'url.search !== "?sslmode=require"', 'rejectUnauthorized: true'):

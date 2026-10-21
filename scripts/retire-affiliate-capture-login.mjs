@@ -45,24 +45,30 @@ const capture = async (client) => {
            admin_option AS admin, inherit_option AS inherit, set_option AS set
       FROM pg_auth_members WHERE roleid = ANY($1::oid[]) OR member = ANY($1::oid[]) OR grantor = ANY($1::oid[])
      ORDER BY 1, 2, 3`, [oids])).rows;
+  // Grants to the login, and any it gave itself (those would block the drop).
   const grants = (await client.query(`
     SELECT * FROM (
       SELECT CASE WHEN c.relkind = 'S' THEN 'sequence' ELSE 'relation' END AS kind, c.oid::regclass::text AS object,
-             '' AS "column", a.grantee::regrole::text AS grantee, a.grantor::regrole::text AS grantor, a.privilege_type AS privilege
-        FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a WHERE a.grantee = ANY($1::oid[])
+             '' AS "column", a.grantee::regrole::text AS grantee, a.grantor::regrole::text AS grantor, a.privilege_type AS privilege,
+             a.is_grantable AS grantable
+        FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a WHERE a.grantee = ANY($1::oid[]) OR a.grantor = ANY($1::oid[])
       UNION ALL
-      SELECT 'column', c.oid::regclass::text, t.attname::text, a.grantee::regrole::text, a.grantor::regrole::text, a.privilege_type
+      SELECT 'column', c.oid::regclass::text, t.attname::text, a.grantee::regrole::text, a.grantor::regrole::text, a.privilege_type,
+             a.is_grantable
         FROM pg_attribute t JOIN pg_class c ON c.oid = t.attrelid CROSS JOIN LATERAL aclexplode(t.attacl) a
-       WHERE a.grantee = ANY($1::oid[])
+       WHERE a.grantee = ANY($1::oid[]) OR a.grantor = ANY($1::oid[])
       UNION ALL
-      SELECT 'routine', p.oid::regprocedure::text, '', a.grantee::regrole::text, a.grantor::regrole::text, a.privilege_type
-        FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) a WHERE a.grantee = ANY($1::oid[])
+      SELECT 'routine', p.oid::regprocedure::text, '', a.grantee::regrole::text, a.grantor::regrole::text, a.privilege_type,
+             a.is_grantable
+        FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) a WHERE a.grantee = ANY($1::oid[]) OR a.grantor = ANY($1::oid[])
       UNION ALL
-      SELECT 'schema', quote_ident(n.nspname), '', a.grantee::regrole::text, a.grantor::regrole::text, a.privilege_type
-        FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a WHERE a.grantee = ANY($1::oid[])
+      SELECT 'schema', quote_ident(n.nspname), '', a.grantee::regrole::text, a.grantor::regrole::text, a.privilege_type,
+             a.is_grantable
+        FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a WHERE a.grantee = ANY($1::oid[]) OR a.grantor = ANY($1::oid[])
       UNION ALL
-      SELECT 'database', quote_ident(d.datname), '', a.grantee::regrole::text, a.grantor::regrole::text, a.privilege_type
-        FROM pg_database d CROSS JOIN LATERAL aclexplode(d.datacl) a WHERE a.grantee = ANY($1::oid[])
+      SELECT 'database', quote_ident(d.datname), '', a.grantee::regrole::text, a.grantor::regrole::text, a.privilege_type,
+             a.is_grantable
+        FROM pg_database d CROSS JOIN LATERAL aclexplode(d.datacl) a WHERE a.grantee = ANY($1::oid[]) OR a.grantor = ANY($1::oid[])
     ) entries ORDER BY 1, 2, 3, 4, 5, 6`, [oids])).rows;
   // pg_shdepend covers every database of the cluster: grants made elsewhere, ownership, policy roles.
   const dependencies = (await client.query(`
@@ -71,13 +77,18 @@ const capture = async (client) => {
       FROM pg_shdepend d
      WHERE d.refclassid = 'pg_authid'::regclass AND d.refobjid = ANY($1::oid[])
      GROUP BY 1, 2, 3, 4 ORDER BY 1, 3, 4`, [oids])).rows;
-  // A policy, function or view that names the login as text is invisible to pg_shdepend. Until app
-  // migration 0497 has run, two 0416 policies still do.
+  // Text that names the login is invisible to pg_shdepend, and a pg_has_role on a dropped role
+  // fails every caller. Until app migration 0497 has run, two 0416 policies still name it.
   const references = (await client.query(`
     SELECT (SELECT count(*)::int FROM pg_policy p
              WHERE concat(pg_get_expr(p.polqual, p.polrelid), pg_get_expr(p.polwithcheck, p.polrelid)) LIKE '%' || $1 || '%')
-         + (SELECT count(*)::int FROM pg_proc p WHERE p.prosrc LIKE '%' || $1 || '%')
+         + (SELECT count(*)::int FROM pg_proc p
+             WHERE p.prosrc LIKE '%' || $1 || '%'
+                OR (p.prokind IN ('f', 'p') AND p.prosqlbody IS NOT NULL AND pg_get_functiondef(p.oid) LIKE '%' || $1 || '%'))
          + (SELECT count(*)::int FROM pg_class c WHERE c.relkind IN ('v', 'm') AND pg_get_viewdef(c.oid) LIKE '%' || $1 || '%')
+         + (SELECT count(*)::int FROM pg_constraint k WHERE k.contype = 'c' AND pg_get_constraintdef(k.oid) LIKE '%' || $1 || '%')
+         + (SELECT count(*)::int FROM pg_attrdef d WHERE pg_get_expr(d.adbin, d.adrelid) LIKE '%' || $1 || '%')
+         + (SELECT count(*)::int FROM pg_trigger t WHERE NOT t.tgisinternal AND pg_get_triggerdef(t.oid) LIKE '%' || $1 || '%')
          AS count`, [login])).rows[0].count;
   const defaults = (await client.query(`
     SELECT count(*)::int AS count FROM pg_default_acl d
@@ -86,6 +97,10 @@ const capture = async (client) => {
   return { identity, roles, memberships, grants, dependencies, references, defaults };
 };
 
+// The only dependencies apply removes: privileges on tables (and their columns), routines, schemas and
+// databases, in this database or the shared catalog.
+const revocable = new Set(["pg_class", "pg_proc", "pg_namespace", "pg_database"]);
+const toLogin = (grant) => grant.grantee === login;
 const blockersFor = (state) => {
   const blockers = [];
   const { roles, memberships, grants, dependencies, references, defaults } = state;
@@ -95,9 +110,15 @@ const blockersFor = (state) => {
   if (!role.adminOption) blockers.push("affiliate_capture_login_admin_option_missing");
   if (role.sessions > 0) blockers.push("affiliate_capture_login_sessions_active");
   if (memberships.some((edge) => edge.grantor === login)) blockers.push("affiliate_capture_login_grant_memberships");
+  // A role that is a member of the login would silently lose its privileges (vayada_admin's own
+  // creator grant goes with the drop).
+  if (memberships.some((edge) => edge.role === login && edge.member !== admin))
+    blockers.push("affiliate_capture_login_has_members");
   // Only vayada_admin's own grants can be revoked here; anything else needs its grantor first.
-  if (grants.some((grant) => grant.grantor !== admin)) blockers.push("affiliate_capture_login_foreign_grants");
-  if (dependencies.some((row) => !row.here || row.type !== "a")) blockers.push("affiliate_capture_login_dependencies_remaining");
+  if (grants.some((grant) => toLogin(grant) && grant.grantor !== admin)) blockers.push("affiliate_capture_login_foreign_grants");
+  if (grants.some((grant) => grant.grantor === login)) blockers.push("affiliate_capture_login_grantor");
+  if (dependencies.some((row) => !row.here || row.type !== "a" || !revocable.has(row.class)))
+    blockers.push("affiliate_capture_login_dependencies_remaining");
   if (defaults) blockers.push("affiliate_capture_login_default_privileges");
   if (references) blockers.push("affiliate_capture_login_still_referenced");
   return blockers;
@@ -107,13 +128,18 @@ const summarize = (state) => ({
   login: state.roles[0]
     ? { name: login, canLogin: state.roles[0].canLogin, sessions: state.roles[0].sessions }
     : null,
-  memberships: state.memberships.length,
+  memberships: state.memberships.map(({ role, member, grantor }) => [role, member, grantor]),
   // The exact grants apply revokes before the drop, so an operator can see (and restore) them.
   adminGrantList: state.grants
-    .filter((grant) => grant.grantor === admin)
+    .filter((grant) => toLogin(grant) && grant.grantor === admin)
     .map(({ kind, object, column, privilege }) => [kind, object, column, privilege]),
-  otherGrants: state.grants.filter((grant) => grant.grantor !== admin).length,
+  otherGrants: state.grants.filter((grant) => toLogin(grant) && grant.grantor !== admin).length,
+  // What blocks the drop, in full, so its grantor can remove it first.
+  otherGrantList: state.grants
+    .filter((grant) => !toLogin(grant) || grant.grantor !== admin)
+    .map(({ kind, object, column, grantee, grantor, privilege }) => [kind, object, column, grantee, grantor, privilege]),
   dependencies: state.dependencies.reduce((total, row) => total + row.count, 0),
+  dependencyList: state.dependencies.map(({ dbid, class: kind, type, count }) => [dbid, kind, type, count]),
   references: state.references,
   blockers: blockersFor(state),
 });
@@ -153,7 +179,8 @@ try {
     connectionTimeoutMillis: 10_000, query_timeout: 20_000,
   });
   client.on("error", () => {});
-  // A REVOKE that revokes nothing is a drifted plan: refuse it.
+  // PostgreSQL warns (01006, 01007) when a REVOKE or GRANT could not change what it was asked to:
+  // a drifted plan, so refuse it.
   let drift = false;
   client.on("notice", (notice) => { if (["01006", "01007"].includes(notice.code)) drift = true; });
   stage = "connect";
@@ -175,8 +202,8 @@ try {
     if (frozen !== fingerprint) fail("affiliate_capture_login_plan_changed");
     if (plan.blockers.length) fail(plan.blockers[0]);
     stage = "revoke";
-    // One REVOKE ALL per object: a second one for another privilege row would revoke nothing.
-    for (const statement of new Set(before.grants.map(revokeStatement))) await client.query(statement);
+    // One REVOKE ALL per object; on a table it also clears that table's column privileges.
+    for (const statement of new Set(before.grants.filter(toLogin).map(revokeStatement))) await client.query(statement);
     if (drift) fail("affiliate_capture_login_revoke_drift");
     stage = "drop";
     await client.query(`DROP ROLE ${quote(login)}`);
@@ -194,7 +221,9 @@ try {
   }
 } catch (error) {
   await client?.query("ROLLBACK").catch(() => undefined);
-  const code = error?.retirementCode ?? "affiliate_capture_login_unavailable";
+  // 2BP01: DROP ROLE found a dependency the plan did not foresee; nothing changed.
+  const code = error?.retirementCode ??
+    (error?.code === "2BP01" ? "affiliate_capture_login_dependencies_remaining" : "affiliate_capture_login_unavailable");
   console.error(JSON.stringify({
     status: committed ? "COMMITTED_UNVERIFIED" : commitAttempted ? "UNCERTAIN" : "FAIL",
     scope, phase, code, stage, sqlState: /^[A-Z0-9]{5}$/.test(error?.code ?? "") ? error.code : null,

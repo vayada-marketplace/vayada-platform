@@ -57,8 +57,15 @@ GRANT USAGE ON SCHEMA hotel_catalog TO ${login}, vayada_admin;
 GRANT EXECUTE ON FUNCTION hotel_catalog.capture() TO ${login};
 GRANT SELECT, UPDATE ON hotel_catalog.property_slugs TO vayada_admin WITH GRANT OPTION;
 SQL
-# Two privileges vayada_admin gave on one table: apply revokes them with one statement.
-sql vayada_target_prod vayada_admin <<<"GRANT SELECT, UPDATE ON hotel_catalog.property_slugs TO ${login};"
+# What vayada_admin gave the login: table and column privileges, and its own schema and routine.
+sql vayada_target_prod vayada_admin <<SQL
+GRANT SELECT, UPDATE ON hotel_catalog.property_slugs TO ${login};
+GRANT SELECT (slug) ON hotel_catalog.property_slugs TO ${login};
+CREATE SCHEMA capture_tools;
+CREATE FUNCTION capture_tools.ping() RETURNS int LANGUAGE sql AS 'SELECT 1';
+GRANT USAGE ON SCHEMA capture_tools TO ${login};
+GRANT EXECUTE ON FUNCTION capture_tools.ping() TO ${login};
+SQL
 
 docker run --rm --volume "${modules}:/work" --workdir /work ghcr.io/vayada-marketplace/ci-node:22-bookworm \
   sh -c 'npm init -y >/dev/null && npm install --silent --no-audit --no-fund pg@8.16.3'
@@ -85,17 +92,42 @@ field '.blockers[]' "${plan}" | grep -Fx affiliate_capture_login_still_reference
 field '.blockers[]' "${plan}" | grep -Fx affiliate_capture_login_foreign_grants >/dev/null
 expect_fail apply "$(field .fingerprint "${plan}")" | grep -F '"status":"FAIL"' >/dev/null
 
-# What 0497 does as the migration owner (and the owner's last grants), then plan again.
+# Exactly what 0497 does as the migration owner: the owner's schema grant stays, and the plan names it.
 sql vayada_target_prod vayada_target_prod_user <<SQL
 ALTER POLICY affiliate_capture_compat ON hotel_catalog.property_slugs RENAME TO property_slugs_existing_access;
 DROP POLICY affiliate_capture_destination_lock_only ON hotel_catalog.property_slugs;
 DROP FUNCTION hotel_catalog.capture();
-REVOKE ALL ON SCHEMA hotel_catalog FROM ${login};
 SQL
 plan="$(run inspect)"
+[[ "$(field .ready "${plan}")" == false && "$(field .references "${plan}")" == 0 ]]
+field '.blockers[]' "${plan}" | grep -Fx affiliate_capture_login_foreign_grants >/dev/null
+field '.otherGrantList[] | @tsv' "${plan}" |
+  grep -F "schema	hotel_catalog		${login}	vayada_target_prod_user	USAGE" >/dev/null
+# Its grantor revokes it.
+sql vayada_target_prod vayada_target_prod_user <<<"REVOKE ALL ON SCHEMA hotel_catalog FROM ${login};"
+
+# A role that is a member of the login, or a policy that names it as a role, blocks the drop.
+sql vayada_target_prod vayada_admin <<SQL
+CREATE ROLE vayada_capture_member NOLOGIN;
+GRANT ${login} TO vayada_capture_member;
+SQL
+sql vayada_target_prod vayada_target_prod_user <<<"CREATE POLICY capture_reader ON hotel_catalog.property_slugs TO ${login} USING (true);"
+plan="$(run inspect)"
+field '.blockers[]' "${plan}" | grep -Fx affiliate_capture_login_has_members >/dev/null
+field '.blockers[]' "${plan}" | grep -Fx affiliate_capture_login_dependencies_remaining >/dev/null
+sql vayada_target_prod vayada_admin <<SQL
+REVOKE ${login} FROM vayada_capture_member;
+DROP ROLE vayada_capture_member;
+SQL
+sql vayada_target_prod vayada_target_prod_user <<<"DROP POLICY capture_reader ON hotel_catalog.property_slugs;"
+
+plan="$(run inspect)"
 [[ "$(field .ready "${plan}")" == true && "$(field .otherGrants "${plan}")" == 0 ]]
-field '.adminGrantList[] | @tsv' "${plan}" | grep -F "database	vayada_target_prod		CONNECT" >/dev/null
-field '.adminGrantList[] | @tsv' "${plan}" | grep -F "relation	hotel_catalog.property_slugs		UPDATE" >/dev/null
+for entry in "database	vayada_target_prod		CONNECT" "relation	hotel_catalog.property_slugs		UPDATE" \
+             "column	hotel_catalog.property_slugs	slug	SELECT" "schema	capture_tools		USAGE" \
+             "routine	capture_tools.ping()		EXECUTE"; do
+  field '.adminGrantList[] | @tsv' "${plan}" | grep -F "${entry}" >/dev/null
+done
 frozen="$(field .fingerprint "${plan}")"
 expect_fail apply "$(printf '%064d' 0)" | grep -F '"code":"affiliate_capture_login_plan_changed"' >/dev/null
 sql vayada_target_prod vayada_admin <<<"GRANT TEMPORARY ON DATABASE vayada_target_prod TO ${login};"
@@ -123,8 +155,9 @@ plan="$(run inspect)"
 result="$(run apply "$(field .fingerprint "${plan}")")"
 [[ "$(field .status "${result}")" == PASS && "$(field .login "${result}")" == null ]]
 [[ "$(sql postgres <<<"SELECT count(*) FROM pg_roles WHERE rolname = '${login}'")" == 0 ]]
-# The renamed policy that every login reads through stays.
+# The renamed policy that every login reads through stays, and so do vayada_admin's own objects.
 [[ "$(sql vayada_target_prod <<<"SELECT count(*) FROM pg_policy WHERE polname = 'property_slugs_existing_access'")" == 1 ]]
+[[ "$(sql vayada_target_prod <<<"SELECT count(*) FROM pg_proc WHERE proname = 'ping' AND pronamespace = 'capture_tools'::regnamespace")" == 1 ]]
 plan="$(run inspect)"
 field '.blockers[]' "${plan}" | grep -Fx affiliate_capture_login_already_retired >/dev/null
 echo "affiliate capture login retirement passed on PostgreSQL ${version}"
