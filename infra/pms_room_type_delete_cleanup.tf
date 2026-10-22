@@ -2,7 +2,7 @@
 # future nights and takes the room type out of the operating calendar in one step, when no
 # booking, hold, channel mapping or limit stops it (apps/api PMS_ROOM_TYPE_DELETE_CLEANUP_PROPERTY_IDS,
 # vayada #3346-#3351, live since rel-69ac5202). Empty keeps today's Delete; ["*"] turns it on for
-# every property. Rolled out one property first; widened to "*" only after that check.
+# every property. Rolled out at Sri Journeys first (#553), then widened to "*".
 variable "pms_room_type_delete_cleanup_property_ids" {
   type        = list(string)
   default     = []
