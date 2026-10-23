@@ -126,6 +126,18 @@ data "aws_iam_policy_document" "github_actions_coordinated_deploy" {
       "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/vayada/prod/coordinated-deployments/v1/*",
     ]
   }
+
+  # VAY-2311: the release train's verify step counts "42501", "permission denied" and
+  # level >= 50 lines in the next-api log after a deploy. Read-only, that one log group.
+  statement {
+    sid     = "ReadNextApiLogsForReleaseVerification"
+    effect  = "Allow"
+    actions = ["logs:FilterLogEvents"]
+    resources = [
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/ecs/vayada-next-api",
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/ecs/vayada-next-api:*",
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "github_actions_coordinated_deploy" {
