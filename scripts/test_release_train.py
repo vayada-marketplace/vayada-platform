@@ -54,7 +54,7 @@ class RequestTests(unittest.TestCase):
             "published_record_sha256": "d" * 64, "summary": "resume",
         }})
         self.assertTrue(no_flag["dryRun"])
-        self.assertEqual(no_flag["admission"], "pr")
+        self.assertEqual(no_flag["admission"], "push")
 
     def test_malformed_requests_are_refused(self):
         bad = [
@@ -147,6 +147,27 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn(DIGEST, self.remote_list(train.LISTS[0]))
         self.assertEqual(self.remote_list(train.LISTS[0]).count(DIGEST), 1)
         self.assertEqual(train.run_list_tests.call_count, 2)
+
+    def test_push_mode_works_from_a_shallow_checkout_while_main_moves(self):
+        # The admit job checks out main at depth 1, as actions/checkout does by default.
+        shallow = self.directory / "shallow"
+        run_git(self.directory, "clone", "-q", "--depth", "1", f"file://{self.remote}", str(shallow))
+        self.assertEqual(run_git(shallow, "rev-parse", "--is-shallow-repository").strip(), "true")
+        other = self.directory / "other"
+        run_git(self.directory, "clone", "-q", str(self.remote), str(other))
+
+        def someone_pushes(root):
+            if train.run_list_tests.call_count == 1:
+                (other / "README").write_text("moved\n")
+                run_git(other, "add", ".")
+                run_git(other, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "moved")
+                run_git(other, "push", "-q", "origin", "HEAD:main")
+
+        train.run_list_tests.side_effect = someone_pushes
+        train.admit(self.request, DIGEST, root=shallow, run_url="u", wait_minutes=1)
+        self.assertEqual(run_git(self.remote, "show", "main:README"), "moved\n")
+        for name in train.LISTS:
+            self.assertEqual(self.remote_list(name).count(DIGEST), 1)
 
     def test_pr_mode_pushes_a_branch_and_waits_for_a_person_to_merge_it(self):
         request = {**self.request, "admission": "pr"}
@@ -385,7 +406,7 @@ class WorkflowTests(unittest.TestCase):
     def test_triggers_and_defaults(self):
         self.assertIn("repository_dispatch:\n    types: [release-train]", self.workflow)
         self.assertRegex(self.workflow, r"dry_run:\n(?:        .+\n)*?        default: true\n")
-        self.assertRegex(self.workflow, r"admission:\n(?:        .+\n)*?        default: pr\n")
+        self.assertRegex(self.workflow, r"admission:\n(?:        .+\n)*?        default: push\n")
         self.assertIn("group: release-train-deploy\n  cancel-in-progress: false", self.workflow)
         self.assertIn("permissions:\n  contents: read\n", self.workflow)
 
@@ -398,7 +419,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contents: write", admit)
         self.assertNotIn("id-token", admit)
         self.assertNotIn("environment:", admit)
-        self.assertIn("fetch-depth: 0", admit)
+        # A shallow checkout: AdmissionTests prove admission works from one.
+        self.assertNotIn("fetch-depth", admit)
         self.assertIn("python3 scripts/release_train.py admit --bundle release-bundle", admit)
         self.assertIn("needs: [validate, admit]", deploy)
         self.assertIn("environment: next", deploy)

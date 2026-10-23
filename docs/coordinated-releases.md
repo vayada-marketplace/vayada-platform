@@ -138,9 +138,9 @@ then runs three idempotent jobs, so a rerun continues where the last one stopped
   exact artifact and hashes (no deployment state, no ECS writes);
 - `admit`: when main does not list the API digest yet, either commits it to both
   compatible-image lists after the same list tests as the automatic admission
-  (`push`), or pushes `release-train/admit-<sha>` and waits up to two hours for a
-  person to open and merge that admission PR (`pr`, the default: the workflow
-  token can neither open a PR nor start its CI);
+  (`push`, the default since 2026-10-23), or pushes `release-train/admit-<sha>`
+  and waits up to two hours for a person to open and merge that admission PR
+  (`pr`: the workflow token can neither open a PR nor start its CI);
 - `deploy-verify`: dispatches the ordinary deploy of the exact artifact unless
   `desired-release` already names the sha and every live digest matches, proves
   the deploy run planned that artifact, then checks live digests against the

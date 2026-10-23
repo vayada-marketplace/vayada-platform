@@ -121,7 +121,7 @@ def read_request(event_name: str, event: dict[str, Any]) -> dict[str, Any]:
             "summary": inputs.get("summary"),
             # workflow_dispatch booleans arrive as strings in the event payload.
             "dryRun": str(inputs.get("dry_run", "true")).lower() == "true",
-            "admission": inputs.get("admission", "pr"),
+            "admission": inputs.get("admission", "push"),
             "appRunId": None,
             "appRunUrl": None,
         }
