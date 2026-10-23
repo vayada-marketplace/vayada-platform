@@ -260,6 +260,8 @@ class DeployVerifyCommandTests(unittest.TestCase):
         self.enterContext(mock.patch.object(train.release, "GitHub", return_value=self.app))
         self.enterContext(mock.patch.object(train, "PlatformGitHub"))
         self.enterContext(mock.patch.object(train.time, "sleep"))
+        # With sleep patched out, an unexpected real wait would spin until its deadline: fail fast.
+        self.enterContext(mock.patch.object(train, "wait_run", side_effect=AssertionError("unexpected deploy wait")))
         self.enterContext(mock.patch.object(train, "find_deploy_run", return_value={
             "id": 39978053401, "html_url": "https://run/39978053401", "created_at": "2026-10-23T15:24:52Z"}))
         self.enterContext(mock.patch.object(train, "plan_of", return_value={
@@ -301,6 +303,22 @@ class DeployVerifyCommandTests(unittest.TestCase):
                          ("failed", "failed", "done", "done"))
         self.assertIn("Reconcile next-pms-frontend: failure", self.summary.read_text())
 
+    def test_a_release_contained_in_a_newer_accepted_identical_one_only_verifies(self):
+        # The rerun of 39977836231: desired-release had moved to 396cf265c (same images), so it
+        # dispatched an ordinary deploy that skipped every service as stale.
+        newer = {"sourceSha": NEWER, "acceptedAt": "2026-10-23T15:55:41Z", "artifactId": 12513000000}
+        self.app.compare.return_value = "ahead"
+        with mock.patch.object(train, "desired_release", return_value=newer), \
+             mock.patch.object(train, "live_digests", return_value=dict(self.own)):
+            train.command_deploy_verify(argparse.Namespace(bundle=str(self.bundle), deploy_minutes=90))
+        train.PlatformGitHub.assert_not_called()
+        train.find_deploy_run.assert_not_called()
+        self.app.compare.assert_called_once_with(SHA, NEWER)
+        self.assertEqual(self.rows(), {"Step": "Result", "deploy": "done", "live digests": "done",
+                                       "logs": "done", "health": "done"})
+        self.assertIn(f"desired-release {NEWER[:9]} contains this sha", self.summary.read_text())
+        self.assertIn("since 2026-10-23T15:54:41Z", self.summary.read_text())
+
     # CodeRabbit on #636: a read that fails after its retries is a failed row, never an abort.
     def test_unreadable_deploy_jobs_fail_the_deploy_row_and_verification_goes_on(self):
         new = {"sourceSha": SHA, "acceptedAt": "2026-10-23T15:25:34Z", "artifactId": 12512032371}
@@ -320,6 +338,31 @@ class DeployVerifyCommandTests(unittest.TestCase):
         self.assertEqual((rows["deploy"], rows["live digests"], rows["logs"], rows["health"]),
                          ("done", "failed", "done", "done"))
         self.assertIn("could not read the live state after the deploy", self.summary.read_text())
+
+
+class AlreadyLiveTests(unittest.TestCase):
+    """2026-10-23: 6fbc174a8 was live when 396cf265c (tests only, byte-identical images) was accepted."""
+
+    own = {"next-target-backend": DIGEST, "next-pms-frontend": "sha256:" + "2" * 64}
+
+    def test_this_sha_or_a_containing_newer_release_with_these_live_images_needs_no_deploy(self):
+        never = mock.Mock(side_effect=AssertionError("no compare needed"))
+        self.assertIn("names this sha", train.already_live(SHA, self.own, {"sourceSha": SHA}, dict(self.own), never))
+        compare = mock.Mock(return_value="ahead")
+        reason = train.already_live(SHA, self.own, {"sourceSha": NEWER}, dict(self.own), compare)
+        compare.assert_called_once_with(SHA, NEWER)
+        self.assertIn(f"desired-release {NEWER[:9]} contains this sha", reason)
+
+    def test_anything_else_still_deploys(self):
+        other_live = {**self.own, "next-pms-frontend": "sha256:" + "3" * 64}
+        never = mock.Mock(side_effect=AssertionError("no compare needed"))
+        self.assertIsNone(train.already_live(SHA, self.own, None, dict(self.own), never))
+        self.assertIsNone(train.already_live(SHA, self.own, {"sourceSha": SHA}, other_live, never))
+        self.assertIsNone(train.already_live(SHA, self.own, {"sourceSha": NEWER}, other_live, never))
+        for order in ("behind", "diverged"):
+            with self.subTest(order=order):
+                self.assertIsNone(train.already_live(SHA, self.own, {"sourceSha": NEWER}, dict(self.own),
+                                                     lambda *_: order))
 
 
 def release_services():

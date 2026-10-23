@@ -369,6 +369,22 @@ def run_jobs(github: PlatformGitHub, run: dict[str, Any]) -> list[tuple[str, str
 
 
 # ---------------------------------------------------------------- verify
+def already_live(sha: str, own: dict[str, str], desired: dict[str, Any] | None, live: dict[str, str],
+                 compare: Callable[[str, str], str]) -> str | None:
+    """Why the release needs no deploy, or None: every live digest is this release's, and
+    desired-release is this sha or a newer accepted one that contains it. The second case is a
+    later main commit with byte-identical images whose automatic event was accepted meanwhile
+    (396cf265c after 6fbc174a8, 2026-10-23); an ordinary deploy would only skip as stale."""
+    if desired is None or live != own:
+        return None
+    if desired.get("sourceSha") == sha:
+        return "desired-release names this sha and every live digest matches"
+    if compare(sha, desired["sourceSha"]) in ("ahead", "identical"):
+        return (f"desired-release {desired['sourceSha'][:9]} contains this sha and every live digest "
+                "matches this release")
+    return None
+
+
 def expected_digests(plan_order: str | None, manifest: dict[str, Any], desired: dict[str, Any] | None,
                      compare: Callable[[str, str], str], superseding_manifest: Callable[[dict[str, Any]], dict[str, Any]]) -> tuple[dict[str, str], str]:
     """The digests that must be live: this release's, or those of the newer accepted release that
@@ -481,9 +497,15 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
     plan_order = None
     live_error = ""
     rows = []
-    already = desired is not None and desired.get("sourceSha") == request["sha"] and live == own
+    app = release.GitHub(APP_REPOSITORY, os.environ.get("COORDINATED_RELEASE_READ_TOKEN", ""))
+
+    def compare(base: str, head: str) -> str:
+        return retry(lambda: app.compare(base, head), what="compare")
+
+    reason = already_live(request["sha"], own, desired, live, compare)
+    already = reason is not None
     if already:
-        rows.append(("deploy", "done", "desired-release names this sha and every live digest matches; nothing to dispatch"))
+        rows.append(("deploy", "done", f"{reason}; nothing to dispatch"))
         # Check the logs since the release was accepted, not since this rerun started.
         started = dt.datetime.strptime(desired["acceptedAt"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp()
     elif request["dryRun"]:
@@ -531,8 +553,6 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
         except TrainError as error:
             desired, live, live_error = None, None, str(error)
 
-    app = release.GitHub(APP_REPOSITORY, os.environ.get("COORDINATED_RELEASE_READ_TOKEN", ""))
-
     def superseding(record: dict[str, Any]) -> dict[str, Any]:
         directory = bundle / "superseding"
         retry(lambda: app.download_bundle(int(record["artifactId"]), directory), what="download the superseding release")
@@ -541,10 +561,12 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
     try:
         if live is None:
             fail(f"could not read the live state after the deploy: {live_error}")
-        if request["dryRun"] and not already:
+        if already:
+            expected, against = own, "this release"
+        elif request["dryRun"]:
             expected, against = own, "this release (not deployed yet in a dry run)"
         else:
-            expected, against = expected_digests(plan_order, manifest, desired, lambda base, head: retry(lambda: app.compare(base, head), what="compare"), superseding)
+            expected, against = expected_digests(plan_order, manifest, desired, compare, superseding)
         mismatched = [f"{key} live {live.get(key, '-')[:19]} != {digest[:19]}" for key, digest in expected.items() if live.get(key) != digest]
         rows.append(("live digests", "done" if not mismatched else ("info" if request["dryRun"] else "failed"),
                      f"match {against}" if not mismatched else "; ".join(mismatched)))
