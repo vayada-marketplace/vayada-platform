@@ -468,6 +468,8 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
     already = desired is not None and desired.get("sourceSha") == request["sha"] and live == own
     if already:
         rows.append(("deploy", "done", "desired-release names this sha and every live digest matches; nothing to dispatch"))
+        # Check the logs since the release was accepted, not since this rerun started.
+        started = dt.datetime.strptime(desired["acceptedAt"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp()
     elif request["dryRun"]:
         rows.append(("deploy", "skipped", f"dry run: would dispatch the ordinary deploy (desired-release {str((desired or {}).get('sourceSha'))[:9]})"))
     else:
