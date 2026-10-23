@@ -269,13 +269,17 @@ class DeployVerifyCommandTests(unittest.TestCase):
         self.enterContext(mock.patch.object(train, "health_status", return_value=200))
         self.old = {"sourceSha": NEWER.replace("b", "0"), "acceptedAt": "2026-10-23T11:52:24Z", "artifactId": 1}
 
-    def run_command(self, *, conclusion, jobs, desired_after):
+    def run_command(self, *, conclusion, jobs, desired_after, live_after=None):
+        """jobs and live_after may be an exception: the read fails after its retries."""
         old_live = {key: "sha256:" + "f" * 64 for key in self.own}
+        if live_after is None:
+            live_after = self.own if conclusion == "success" else old_live
+        jobs_mock = {"side_effect": jobs} if isinstance(jobs, Exception) else {"return_value": jobs}
         with mock.patch.object(train, "wait_run", return_value={
                  "id": 39978053401, "run_attempt": 1, "conclusion": conclusion, "html_url": "https://run/39978053401"}), \
-             mock.patch.object(train, "run_jobs", return_value=jobs), \
+             mock.patch.object(train, "run_jobs", **jobs_mock), \
              mock.patch.object(train, "desired_release", side_effect=[self.old, desired_after]), \
-             mock.patch.object(train, "live_digests", side_effect=[old_live, self.own if conclusion == "success" else old_live]):
+             mock.patch.object(train, "live_digests", side_effect=[old_live, live_after]):
             train.command_deploy_verify(argparse.Namespace(bundle=str(self.bundle), deploy_minutes=90))
 
     def rows(self):
@@ -296,6 +300,26 @@ class DeployVerifyCommandTests(unittest.TestCase):
         self.assertEqual((rows["deploy"], rows["live digests"], rows["logs"], rows["health"]),
                          ("failed", "failed", "done", "done"))
         self.assertIn("Reconcile next-pms-frontend: failure", self.summary.read_text())
+
+    # CodeRabbit on #636: a read that fails after its retries is a failed row, never an abort.
+    def test_unreadable_deploy_jobs_fail_the_deploy_row_and_verification_goes_on(self):
+        new = {"sourceSha": SHA, "acceptedAt": "2026-10-23T15:25:34Z", "artifactId": 12512032371}
+        with self.assertRaisesRegex(train.TrainError, "not verified"):
+            self.run_command(conclusion="success", jobs=train.TrainError("GET jobs: HTTP 502"), desired_after=new)
+        rows = self.rows()
+        self.assertEqual((rows["deploy"], rows["live digests"], rows["logs"], rows["health"]),
+                         ("failed", "done", "done", "done"))
+        self.assertIn("could not read the deploy jobs: GET jobs: HTTP 502", self.summary.read_text())
+
+    def test_an_unreadable_live_state_is_a_failed_row_not_the_old_snapshot(self):
+        new = {"sourceSha": SHA, "acceptedAt": "2026-10-23T15:25:34Z", "artifactId": 12512032371}
+        with self.assertRaisesRegex(train.TrainError, "not verified"):
+            self.run_command(conclusion="success", jobs=FIRST_REAL_DEPLOY_JOBS, desired_after=new,
+                             live_after=train.TrainError("read live next-pms-frontend: throttled"))
+        rows = self.rows()
+        self.assertEqual((rows["deploy"], rows["live digests"], rows["logs"], rows["health"]),
+                         ("done", "failed", "done", "done"))
+        self.assertIn("could not read the live state after the deploy", self.summary.read_text())
 
 
 def release_services():

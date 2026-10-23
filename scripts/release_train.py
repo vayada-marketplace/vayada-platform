@@ -479,6 +479,7 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
     live = live_digests(aws, config)
     started = time.time()
     plan_order = None
+    live_error = ""
     rows = []
     already = desired is not None and desired.get("sourceSha") == request["sha"] and live == own
     if already:
@@ -505,7 +506,11 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
         print(f"deploy run {run['html_url']}")
         started = dt.datetime.strptime(run["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
         run = wait_run(github, run["id"], minutes=args.deploy_minutes)
-        problems = deploy_problems(run.get("conclusion"), run_jobs(github, run))
+        try:
+            problems = deploy_problems(run.get("conclusion"), run_jobs(github, run))
+        except TrainError as error:
+            problems = ([] if run.get("conclusion") == "success" else [f"run {run.get('conclusion')}"]) \
+                + [f"could not read the deploy jobs: {error}"]
         plan: dict[str, Any] = {}
         try:
             plan = plan_of(github, run)
@@ -519,8 +524,12 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
         # Verify either way: after a failed deploy the live digests, logs and health say what is
         # live. Logs written right after the rollout belong to it (admit-and-deploy.sh waited too).
         time.sleep(150)
-        desired = desired_release(aws, config)
-        live = live_digests(aws, config)
+        # Fresh state or none: the pre-dispatch snapshot must never pass for the deployed one.
+        try:
+            desired = desired_release(aws, config)
+            live = live_digests(aws, config)
+        except TrainError as error:
+            desired, live, live_error = None, None, str(error)
 
     app = release.GitHub(APP_REPOSITORY, os.environ.get("COORDINATED_RELEASE_READ_TOKEN", ""))
 
@@ -530,6 +539,8 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
         return json.loads((directory / "manifest.json").read_text())
 
     try:
+        if live is None:
+            fail(f"could not read the live state after the deploy: {live_error}")
         if request["dryRun"] and not already:
             expected, against = own, "this release (not deployed yet in a dry run)"
         else:
