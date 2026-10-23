@@ -76,13 +76,18 @@ back a healthy API or cancel unrelated frontend jobs.
 
 Automatic `repository_dispatch` events usually arrive before the reviewed
 admission PR lists the release's next-api digest in
-`scripts/next-api-split-compatible-images.txt`. Such a run still prepares in
-full (publication validation, desired state, checkpoint obligations), then
-prints a notice and skips the API, frontend, and finalize jobs instead of
-failing at the split launcher guard; it mutates no ECS service. Admit the
+`scripts/next-api-split-compatible-images.txt`. Such a run still validates in
+full (publication, ancestry, barriers, holds, live targets) but does not accept
+the release: it writes neither `desired-release` nor checkpoint obligations
+(plan `acceptance: deferred`, VAY-2312). It then prints a notice and skips the
+API, frontend, and finalize jobs instead of failing at the split launcher
+guard; it mutates no ECS service. So commits merged to main after a release
+was picked no longer turn that release's ordinary deploy into a stale skip,
+while an older release still cannot replace an accepted newer one. Admit the
 image, then dispatch `operation=ordinary` with the artifact ID and hashes from
 the run summary. Manual dispatches never take this path: an unadmitted API
-image still fails the API job.
+image still fails the API job. An automatic event whose API image is already
+admitted (a frontend-only change) is accepted and deploys as before.
 
 No-op services still run smoke and refresh manifest-bound provenance. If a
 runner stops after ECS mutation but before state write, rerunning the same

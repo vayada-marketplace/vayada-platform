@@ -111,7 +111,7 @@ jobs:
             --output-dir release-bundle
           )
           if [ "$EVENT_NAME" = repository_dispatch ]; then
-            arguments+=(--dispatch-json dispatch.json)
+            arguments+=(--dispatch-json dispatch.json --defer-unadmitted-api)
           else
             arguments+=(
               --manifest-sha256 "$INPUT_MANIFEST_SHA256"
@@ -126,6 +126,8 @@ jobs:
 
       # Automatic events arrive before the reviewed admission PR lists the new API
       # image. Skip reconciliation instead of failing at the split launcher guard.
+      # Preparation already left such an event unaccepted (VAY-2312): desired-release
+      # stays on the last accepted release, and an older admitted release still deploys.
       # Manual dispatches never run this step, so they still fail hard there.
       - name: Check automatic API image admission
         id: admission
@@ -142,11 +144,14 @@ jobs:
           if not isinstance(digest, str) or not guard.DIGEST.fullmatch(digest):
               raise SystemExit("next-target-backend digest is invalid")
           admitted = guard.is_admitted(digest)
+          with open("release-bundle/plan.json", encoding="utf-8") as handle:
+              plan = json.load(handle)
+          # Preparation decided the same question from the same list; disagreement fails closed.
+          if (plan.get("acceptance") == "deferred") == admitted:
+              raise SystemExit(f"plan acceptance {plan.get('acceptance')!r} disagrees with admission {admitted}")
           if not admitted:
-              with open("release-bundle/plan.json", encoding="utf-8") as handle:
-                  plan = json.load(handle)
-              message = (f"Image {digest} not admitted yet; skipping automatic deploy. "
-                         "Admit it and dispatch operation=ordinary.")
+              message = (f"Image {digest} not admitted yet; skipping automatic deploy and leaving the "
+                         "desired release unchanged. Admit it and dispatch operation=ordinary.")
               print(f"::notice title=Automatic deploy skipped::{message}")
               with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
                   print(f"## Automatic deploy skipped\n\n{message}\n", file=summary)

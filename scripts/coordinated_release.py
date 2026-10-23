@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -27,6 +28,7 @@ from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "deployment" / "coordinated-release-v1.json"
+SPLIT_GUARD = ROOT / "scripts" / "assert-next-api-split-compatible-image.py"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
@@ -568,6 +570,16 @@ def validate_publication(
     if record_expires <= current:
         fail("Published release record has expired")
     return manifest, record
+
+
+def api_image_admitted(digest: str) -> bool:
+    """Whether a reviewed admission lists the API digest, by the split launcher guard's own rule."""
+    spec = importlib.util.spec_from_file_location("split_guard", SPLIT_GUARD)
+    if spec is None or spec.loader is None:
+        fail("Cannot load the next-api split launcher guard")
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    return bool(guard.is_admitted(require_digest(digest, "API digest")))
 
 
 def assess_order(current_sha: str, desired: dict[str, Any] | None, compare_status: str | None) -> str:
@@ -1245,6 +1257,12 @@ def bootstrap_evidence(aws: Aws, github: GitHub, config: dict[str, Any], key: st
 
 def prepare_release(args: argparse.Namespace) -> None:
     prepare_started_at = iso_now()
+    # An automatic event (repository_dispatch) whose API image is not admitted yet only plans:
+    # accepting it would move desired-release past every older admitted release still waiting
+    # for its ordinary deploy, which would then skip as stale (VAY-2312).
+    defer_unadmitted = bool(getattr(args, "defer_unadmitted_api", False))
+    if defer_unadmitted and (args.operation != "ordinary" or not args.dispatch_json):
+        fail("--defer-unadmitted-api applies only to automatic ordinary events")
     config = load_config(args.config)
     token = os.environ.get("COORDINATED_RELEASE_READ_TOKEN", "")
     if not token:
@@ -1405,6 +1423,8 @@ def prepare_release(args: argparse.Namespace) -> None:
         require_resume_api_readiness(plan_services[api_key], api_blocked)
     apply_api_hold_gate(plan_services, config, api_blocked)
     operation_id = require_id(args.operation_id, "operationId")
+    deferred = defer_unadmitted and not api_image_admitted(manifest["services"][api_key]["digest"])
+    accepts = args.operation in {"ordinary", "activate"} and order != "stale" and not deferred
     plan = {
         "schemaVersion": 1,
         "operation": args.operation,
@@ -1418,11 +1438,14 @@ def prepare_release(args: argparse.Namespace) -> None:
         "publishedAt": record["publishedAt"],
         "prepareStartedAt": prepare_started_at,
         "order": "explicit-resume" if args.operation == "resume" else order,
+        # accepted: desired-release and obligations written; deferred: an automatic event whose
+        # API image is not admitted, nothing written; unchanged: stale or resume.
+        "acceptance": "deferred" if deferred else "accepted" if accepts else "unchanged",
         "preparedAt": iso_now(),
         "services": plan_services,
         "bootstrap": bootstrap,
     }
-    if args.operation in {"ordinary", "activate"} and order != "stale":
+    if accepts:
         aws.put_parameter(
             state_path(config, "checkpoint-obligations"),
             {
@@ -1454,7 +1477,8 @@ def prepare_release(args: argparse.Namespace) -> None:
                 {"schemaVersion": 1, "mode": "batch", "changedAt": iso_now(), "operationId": operation_id},
             )
     (output / "plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
-    print(json.dumps({"manifestId": manifest["manifestId"], "order": order, "services": plan_services}, indent=2))
+    print(json.dumps({"manifestId": manifest["manifestId"], "order": order, "acceptance": plan["acceptance"],
+                      "services": plan_services}, indent=2))
 
 
 def smoke_service(runner: CommandRunner, config: dict[str, Any], key: str, image_source_sha: str) -> None:
@@ -1642,6 +1666,8 @@ def reconcile_service_with_dependencies(
     key = args.service
     if key not in config["services"]:
         fail("Unknown physical service")
+    if plan.get("acceptance") == "deferred":
+        fail("A deferred automatic plan (API image not admitted) cannot reconcile; admit it and dispatch operation=ordinary")
     if plan.get("schemaVersion") != 1 or plan.get("manifestId") != manifest["manifestId"]:
         fail("Plan does not bind the manifest")
     if plan.get("manifestSha256") != sha256_file(args.manifest):
@@ -1779,6 +1805,8 @@ def finalize_release_with_dependencies(
     validate: Callable[[dict[str, Any], dict[str, Any]], None],
 ) -> None:
     validate(manifest, config)
+    if plan.get("acceptance") == "deferred":
+        fail("A deferred automatic plan (API image not admitted) has nothing to finalize")
     rows = []
     failures = []
     actual_rollouts = 0
@@ -1988,6 +2016,8 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("--manifest-sha256")
     prepare.add_argument("--published-record-sha256")
     prepare.add_argument("--dispatch-json")
+    prepare.add_argument("--defer-unadmitted-api", action="store_true",
+                         help="automatic events: plan only, without accepting, while the API image is not admitted")
     prepare.add_argument("--operation", choices=("ordinary", "resume", "activate", "verify"), required=True)
     prepare.add_argument("--service")
     prepare.add_argument("--operation-id", required=True)

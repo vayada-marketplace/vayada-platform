@@ -360,6 +360,14 @@ class OrderingAndBarrierTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "diverges"):
             release.assess_order("1" * 40, desired, "diverged")
 
+    def test_api_admission_uses_the_split_launcher_guard_list(self):
+        admitted = [line.split()[1] for line in (ROOT / "scripts/next-api-split-compatible-images.txt").read_text().splitlines()
+                    if line.strip() and not line.startswith("#")]
+        self.assertTrue(release.api_image_admitted(admitted[-1]))
+        self.assertFalse(release.api_image_admitted("sha256:" + "7" * 64))
+        with self.assertRaisesRegex(release.ReleaseError, "API digest"):
+            release.api_image_admitted("sha256:bad")
+
     def test_duplicate_source_is_not_reordered_by_time(self):
         desired = {"sourceSha": "1" * 40}
         self.assertEqual(release.assess_order("1" * 40, desired, None), "duplicate")
@@ -1062,8 +1070,13 @@ class WorkflowContractTests(unittest.TestCase):
         unadmitted = "sha256:" + "7" * 64
         manifest = json.loads((ROOT / "deployment/contract/fixtures/manifest-v1.valid.json").read_text())
         plan = {"artifactId": 42, "manifestSha256": "a" * 64, "publishedRecordSha256": "b" * 64}
-        for digest, expected in ((unadmitted, "true"), (admitted, "false"), ("sha256:bad", None), (None, None)):
-            with self.subTest(digest=digest), tempfile.TemporaryDirectory() as directory:
+        cases = [(unadmitted, "deferred", "true"), (admitted, "accepted", "false"),
+                 # Preparation decided otherwise from the same list (VAY-2312): fail closed.
+                 (unadmitted, "accepted", None), (admitted, "deferred", None), (unadmitted, None, None),
+                 ("sha256:bad", "deferred", None), (None, "deferred", None)]
+        for digest, acceptance, expected in cases:
+            plan["acceptance"] = acceptance
+            with self.subTest(digest=digest, acceptance=acceptance), tempfile.TemporaryDirectory() as directory:
                 directory = Path(directory)
                 (directory / "scripts").symlink_to(ROOT / "scripts")
                 (directory / "bin").mkdir()
@@ -1095,8 +1108,8 @@ class WorkflowContractTests(unittest.TestCase):
                     continue
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output.read_text(), f"auto_skip={expected}\n")
-                notice = (f"Image {digest} not admitted yet; skipping automatic deploy. "
-                          "Admit it and dispatch operation=ordinary.")
+                notice = (f"Image {digest} not admitted yet; skipping automatic deploy and leaving the "
+                          "desired release unchanged. Admit it and dispatch operation=ordinary.")
                 if expected == "true":
                     self.assertIn("::notice title=Automatic deploy skipped::" + notice, result.stdout)
                     self.assertIn(notice, summary.read_text())
@@ -1114,6 +1127,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("if:", validate)
         self.assertNotIn("auto_skip", validate)
         self.assertIn('python3 scripts/coordinated_release.py prepare "${arguments[@]}"', validate)
+        # Only automatic events defer an unadmitted API image instead of accepting it (VAY-2312).
+        self.assertEqual(validate.count("--defer-unadmitted-api"), 1)
+        self.assertIn("arguments+=(--dispatch-json dispatch.json --defer-unadmitted-api)", validate)
         self.assertIn("--service next-target-backend", self.deployment_job(workflow, "api"))
         gate = " && needs.prepare.outputs.auto_skip != 'true'"
         today = {
