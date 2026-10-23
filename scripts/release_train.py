@@ -488,17 +488,15 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
         print(f"deploy run {run['html_url']}")
         started = dt.datetime.strptime(run["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
         run = wait_run(github, run["id"], minutes=args.deploy_minutes)
+        failed = [f"{name}: {conclusion}" for name, conclusion in run_jobs(github, run) if conclusion != "success"]
+        if failed or run.get("conclusion") != "success":
+            rows.append(("deploy", "failed", f"{run['html_url']} {run.get('conclusion')}; {', '.join(failed) or 'no job detail'}"))
+            render(rows)
+            fail("the coordinated deploy did not succeed")
         plan = plan_of(github, run)
         check_plan(plan, request)
         plan_order = plan.get("order")
-        jobs = run_jobs(github, run)
-        failed = [f"{name}: {conclusion}" for name, conclusion in jobs if conclusion != "success"]
-        rows.append(("deploy", "done" if not failed and run.get("conclusion") == "success" else "failed",
-                     f"{run['html_url']} order {plan_order}, acceptance {plan.get('acceptance', '-')}"
-                     + (f"; {', '.join(failed)}" if failed else "")))
-        if failed or run.get("conclusion") != "success":
-            render(rows)
-            fail("the coordinated deploy did not succeed")
+        rows.append(("deploy", "done", f"{run['html_url']} order {plan_order}, acceptance {plan.get('acceptance', '-')}"))
         # Logs written right after the rollout belong to this release (admit-and-deploy.sh waited too).
         time.sleep(150)
         desired = desired_release(aws, config)
