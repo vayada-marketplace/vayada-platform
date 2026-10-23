@@ -1,0 +1,137 @@
+name: Release train deploy
+
+# The platform half of the release train (VAY-2311). The app's "Release train" workflow sends a
+# release-train repository_dispatch once a release is prechecked and published; a person can also
+# dispatch it to resume. Each job is idempotent (scripts/release_train.py):
+#   validate       request + publication (verify operation: no deployment state, no ECS writes);
+#   admit          the API digest into the compatible-image lists: push to main, or a branch for
+#                  an admission PR a person merges (admission "pr", the default);
+#   deploy-verify  the ordinary coordinated deploy unless already live, then live digests, logs,
+#                  health.
+# A dry run (the default for manual runs) changes nothing.
+
+on:
+  repository_dispatch:
+    types: [release-train]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full app main sha of the release
+        required: true
+        type: string
+      published_artifact_id:
+        description: Published artifact ID from the app's Release train summary
+        required: true
+        type: string
+      manifest_sha256:
+        description: SHA-256 of the exact manifest.json bytes
+        required: true
+        type: string
+      published_record_sha256:
+        description: SHA-256 of the exact published-record.json bytes
+        required: true
+        type: string
+      summary:
+        description: One line for the admission commit
+        required: true
+        type: string
+      dry_run:
+        description: Change nothing; report what the release would do
+        required: true
+        type: boolean
+        default: true
+      admission:
+        description: "pr: wait for a person to merge the admission PR; push: commit to main"
+        required: true
+        type: choice
+        options: [pr, push]
+        default: pr
+
+permissions:
+  contents: read
+
+# One release at a time; the coordinated deploy itself still takes production-ecs-mutations.
+concurrency:
+  group: release-train-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  AWS_RETRY_MODE: standard
+  AWS_MAX_ATTEMPTS: "6"
+  BUNDLE_ARTIFACT: release-train-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  validate:
+    name: Validate the request and the publication
+    environment: next
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      dry_run: ${{ steps.validate.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-coordinated-deploy
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Validate
+        id: validate
+        env:
+          COORDINATED_RELEASE_READ_TOKEN: ${{ secrets.COORDINATED_RELEASE_READ_TOKEN }}
+        run: python3 scripts/release_train.py validate --output-dir release-bundle
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.BUNDLE_ARTIFACT }}
+          path: release-bundle/
+          if-no-files-found: error
+          retention-days: 7
+
+  admit:
+    name: Admit the API image
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.BUNDLE_ARTIFACT }}
+          path: release-bundle
+      - name: Admit
+        run: python3 scripts/release_train.py admit --bundle release-bundle --wait-minutes 120
+
+  deploy-verify:
+    name: Deploy and verify
+    needs: [validate, admit]
+    environment: next
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.BUNDLE_ARTIFACT }}
+          path: release-bundle
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::269416271598:role/vayada-github-actions-coordinated-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
+      - name: Deploy and verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COORDINATED_RELEASE_READ_TOKEN: ${{ secrets.COORDINATED_RELEASE_READ_TOKEN }}
+        run: python3 scripts/release_train.py deploy-verify --bundle release-bundle --deploy-minutes 90

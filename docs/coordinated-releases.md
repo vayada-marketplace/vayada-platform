@@ -126,6 +126,31 @@ evidence-bound acknowledgment exists. A barrier without a checkpoint blocks
 until acknowledged. Unknown barrier kinds or corrupt/mismatched acknowledgment
 records fail closed. This system does not run backfills automatically.
 
+## Release train (VAY-2311)
+
+The app's `Release train` workflow holds the merge queue, settles main,
+prechecks and publishes a release, closes the hold, and sends a `release-train`
+repository_dispatch here. `Release train deploy` (`scripts/release_train.py`)
+then runs three idempotent jobs, so a rerun continues where the last one stopped:
+
+- `validate`: trusts a repository_dispatch only from the app's
+  `release-train.yml` run on main, then runs `prepare --operation verify` on the
+  exact artifact and hashes (no deployment state, no ECS writes);
+- `admit`: when main does not list the API digest yet, either commits it to both
+  compatible-image lists after the same list tests as the automatic admission
+  (`push`), or pushes `release-train/admit-<sha>` and waits up to two hours for a
+  person to open and merge that admission PR (`pr`, the default: the workflow
+  token can neither open a PR nor start its CI);
+- `deploy-verify`: dispatches the ordinary deploy of the exact artifact unless
+  `desired-release` already names the sha and every live digest matches, proves
+  the deploy run planned that artifact, then checks live digests against the
+  manifest (or against the newer accepted release that superseded it and
+  contains it), the next-api log patterns `"42501"`, `"permission denied"` and
+  `{ $.level >= 50 }` since the deploy began, and next-api health.
+
+Dispatch it by hand with the identity from the app run's summary to resume.
+`dry_run` (the default by hand) reads everything and changes nothing.
+
 ## Legacy, Terraform, and activation
 
 Before activation, missing/`legacy` ownership keeps current
