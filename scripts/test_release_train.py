@@ -338,7 +338,22 @@ class DeployVerifyCommandTests(unittest.TestCase):
         self.assertEqual(self.rows(), {"Step": "Result", "deploy": "done", "live digests": "done",
                                        "logs": "done", "health": "done"})
         self.assertIn(f"desired-release {NEWER[:9]} contains this sha", self.summary.read_text())
-        self.assertIn("since 2026-10-23T15:54:41Z", self.summary.read_text())
+        # The re-verify of 6fbc174a8 (run 39992892475) printed the raw filter syntax, which readers lost.
+        self.assertIn("| logs | done | 0 x `42501`, 0 x `permission denied`, 0 x `level >= 50` "
+                      "since 2026-10-23T15:54:41Z |\n", self.summary.read_text())
+        self.assertNotRegex(self.summary.read_text(), r"[${}\"]")
+
+    def test_log_hits_fail_the_logs_row_with_a_count_per_pattern(self):
+        newer = {"sourceSha": NEWER, "acceptedAt": "2026-10-23T15:55:41Z", "artifactId": 12513000000}
+        self.app.compare.return_value = "ahead"
+        hits = {'"42501"': 2, '"permission denied"': 0, "{ $.level >= 50 }": 1}
+        with mock.patch.object(train, "desired_release", return_value=newer), \
+             mock.patch.object(train, "live_digests", return_value=dict(self.own)), \
+             mock.patch.object(train, "count_log_events", side_effect=lambda pattern, *_: hits[pattern]), \
+             self.assertRaisesRegex(train.TrainError, "not verified"):
+            train.command_deploy_verify(argparse.Namespace(bundle=str(self.bundle), deploy_minutes=90))
+        self.assertIn("| logs | failed | 2 x `42501`, 0 x `permission denied`, 1 x `level >= 50` "
+                      "since 2026-10-23T15:54:41Z |\n", self.summary.read_text())
 
     # CodeRabbit on #636: a read that fails after its retries is a failed row, never an abort.
     def test_unreadable_deploy_jobs_fail_the_deploy_row_and_verification_goes_on(self):
@@ -359,6 +374,19 @@ class DeployVerifyCommandTests(unittest.TestCase):
         self.assertEqual((rows["deploy"], rows["live digests"], rows["logs"], rows["health"]),
                          ("done", "failed", "done", "done"))
         self.assertIn("could not read the live state after the deploy", self.summary.read_text())
+
+
+class LogDetailTests(unittest.TestCase):
+    def test_every_pattern_has_a_plain_label(self):
+        self.assertEqual(set(train.LOG_LABELS), set(train.LOG_PATTERNS))
+        for label in train.LOG_LABELS.values():
+            self.assertNotRegex(label, r"[${}\"|`]")
+
+    def test_the_row_counts_each_pattern_by_its_label(self):
+        start_ms = int(train.dt.datetime(2026, 10, 23, 16, 57, 18, tzinfo=train.dt.timezone.utc).timestamp() * 1000)
+        counts = {'"42501"': 0, '"permission denied"': 0, "{ $.level >= 50 }": 0}
+        self.assertEqual(train.log_detail(counts, start_ms),
+                         "0 x `42501`, 0 x `permission denied`, 0 x `level >= 50` since 2026-10-23T16:57:18Z")
 
 
 class AlreadyLiveTests(unittest.TestCase):

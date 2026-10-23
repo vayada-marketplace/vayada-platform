@@ -65,6 +65,9 @@ LIST_TESTS = (
 )
 LOG_GROUP = "/ecs/vayada-next-api"
 LOG_PATTERNS = ('"42501"', '"permission denied"', "{ $.level >= 50 }")
+# How the summary names each pattern: the raw filter syntax ($, braces, quotes) gets mangled by
+# markdown and by shell pipelines reading the log (the re-verify of 6fbc174a8 lost its logs row).
+LOG_LABELS = {'"42501"': "42501", '"permission denied"': "permission denied", "{ $.level >= 50 }": "level >= 50"}
 HEALTH_URL = "https://next-api.vayada.com/health"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -414,6 +417,12 @@ def count_log_events(pattern: str, start_ms: int, region: str) -> int | None:
     return len(json.loads(result.stdout or "[]") or [])
 
 
+def log_detail(counts: dict[str, int | None], start_ms: int) -> str:
+    """The logs row: a count per pattern under its plain label, e.g. "0 x `42501`"."""
+    found = ", ".join(f"{counts[pattern]} x `{LOG_LABELS[pattern]}`" for pattern in LOG_PATTERNS)
+    return f"{found} since {iso(start_ms / 1000)}"
+
+
 def health_status(url: str = HEALTH_URL) -> int:
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "vayada-release-train"}), timeout=15) as response:
@@ -576,12 +585,12 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
     start_ms = int((started - 60) * 1000)
     counts = {pattern: retry(lambda pattern=pattern: count_log_events(pattern, start_ms, region), what=f"logs {pattern}") for pattern in LOG_PATTERNS}
     unreadable = [pattern for pattern, count in counts.items() if count is None]
-    noisy = [f"{pattern}: {count}" for pattern, count in counts.items() if count]
+    noisy = [count for count in counts.values() if count]
     if unreadable:
         rows.append(("logs", "not checked", "the deploy role may not read CloudWatch Logs yet (VAY-2311 infra PR); check by hand"))
     else:
         rows.append(("logs", "done" if not noisy else ("info" if request["dryRun"] else "failed"),
-                     "; ".join(noisy) or f"0 x {', '.join(LOG_PATTERNS)} since {iso(start_ms / 1000)}"))
+                     log_detail(counts, start_ms)))
     status = 0
     for _ in range(3):
         status = health_status()
