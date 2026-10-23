@@ -152,6 +152,35 @@ class RecoverySequenceTests(unittest.TestCase):
         release.prepare_release(args)
         return release.read_json(self.plan_path)
 
+    def automatic(self, operation_id, *, admitted):
+        """The repository_dispatch preparation, with the API admission decided by `admitted`."""
+        record = release.read_json(self.record_path)
+        dispatch = self.fixture.dispatch()
+        dispatch.update(
+            manifestId=self.manifest["manifestId"], sourceSha=self.manifest["source"]["sha"],
+            manifestSha256=release.sha256_file(self.manifest_path),
+            publishedRecordSha256=release.sha256_file(self.record_path),
+            publishedArtifactName=record["publishedArtifactName"], idempotencyKey=record["idempotencyKey"],
+        )
+        dispatch_path = self.directory / "dispatch.json"
+        dispatch_path.write_text(json.dumps(dispatch))
+        args = argparse.Namespace(
+            config=release.DEFAULT_CONFIG, artifact_id=93001, output_dir=self.directory,
+            dispatch_json=str(dispatch_path), operation="ordinary", operation_id=operation_id, service=None,
+            manifest_sha256=None, published_record_sha256=None, defer_unadmitted_api=True,
+        )
+        with mock.patch.object(release, "api_image_admitted", return_value=admitted):
+            release.prepare_release(args)
+        return release.read_json(self.plan_path)
+
+    def publish_successor(self, sha):
+        """Publish a later main commit built on the current fixture manifest."""
+        self.manifest["previousManifestId"] = self.manifest["manifestId"]
+        self.manifest["previousSourceSha"] = self.manifest["source"]["sha"]
+        self.manifest["source"]["sha"] = sha
+        self.manifest["manifestId"] = f"vayada-release/v1/{sha}/41001/2"
+        self.publish_fixture()
+
     def reconcile(self, key):
         release.reconcile_service(argparse.Namespace(
             config=release.DEFAULT_CONFIG, manifest=self.manifest_path, plan=self.plan_path, service=key,
@@ -256,6 +285,94 @@ class RecoverySequenceTests(unittest.TestCase):
         self.finalize()
         self.assertEqual(self.durable_snapshot(), before)
         self.assertEqual(self.smoke_calls, [])
+
+    def follow_main(self, *history):
+        """GitHub compare over one linear main history, oldest first."""
+        def compare(base, head):
+            if base == head:
+                return "identical"
+            return "ahead" if history.index(base) < history.index(head) else "behind"
+        self.github.compare.side_effect = compare
+
+    def test_release_deploys_after_newer_unadmitted_publications(self):
+        # VAY-2312: main moved on to S2 and S3 after release S was picked. Their automatic events
+        # arrive before any admission and must not accept them, or S would deploy as stale.
+        released = copy.deepcopy(self.manifest)
+        s0, s, s2, s3 = self.manifest["previousSourceSha"], self.manifest["source"]["sha"], "2" * 40, "3" * 40
+        self.follow_main(s0, s, s2, s3)
+        before = self.durable_snapshot()
+        for sha in (s2, s3):
+            with self.subTest(automatic=sha):
+                self.publish_successor(sha)
+                plan = self.automatic(f"automatic-{sha[:1]}", admitted=False)
+                self.assertEqual((plan["order"], plan["acceptance"]), ("new", "deferred"))
+                self.assertEqual(self.durable_snapshot(), before)
+        self.assertNotIn(self.path("checkpoint-obligations"), self.aws.state)
+
+        self.manifest = released
+        self.fixture.manifest = released
+        self.publish_fixture()
+        plan = self.prepare("release-s")
+        self.assertEqual((plan["order"], plan["acceptance"]), ("new", "accepted"))
+        for key in self.config["services"]:
+            self.reconcile(key)
+        self.finalize()
+        self.assertEqual(self.aws.state[self.path("desired-release")]["sourceSha"], s)
+        for key, image in released["services"].items():
+            self.assertEqual(self.aws.service_snapshot(key)["digest"], image["digest"])
+            self.assertEqual(self.state(key, "provenance")["manifestId"], released["manifestId"])
+
+    def test_older_release_stays_stale_after_a_newer_accepted_release(self):
+        # The rollback protection is unchanged: an admitted S2 is accepted, then S skips.
+        released = copy.deepcopy(self.manifest)
+        s0, s, s2 = self.manifest["previousSourceSha"], self.manifest["source"]["sha"], "2" * 40
+        self.follow_main(s0, s, s2)
+        self.publish_successor(s2)
+        plan = self.automatic("automatic-admitted", admitted=True)
+        self.assertEqual((plan["order"], plan["acceptance"]), ("new", "accepted"))
+        self.assertEqual(self.aws.state[self.path("desired-release")]["sourceSha"], s2)
+        for key in self.config["services"]:
+            self.reconcile(key)
+        self.finalize()
+
+        self.manifest = released
+        self.fixture.manifest = released
+        self.publish_fixture()
+        before = self.durable_snapshot()
+        plan = self.prepare("older-release")
+        self.assertEqual((plan["order"], plan["acceptance"]), ("stale", "unchanged"))
+        self.assertEqual({row["action"] for row in plan["services"].values()}, {"skip"})
+        for key in self.config["services"]:
+            self.reconcile(key)
+        self.finalize()
+        self.assertEqual(self.durable_snapshot(), before)
+
+    def test_deferred_plan_cannot_reconcile_or_finalize(self):
+        self.publish_successor("2" * 40)
+        before = self.durable_snapshot()
+        self.assertEqual(self.automatic("automatic-unadmitted", admitted=False)["acceptance"], "deferred")
+        for key in self.config["services"]:
+            with self.subTest(service=key), self.assertRaisesRegex(release.ReleaseError, "deferred automatic plan"):
+                self.reconcile(key)
+        with self.assertRaisesRegex(release.ReleaseError, "deferred automatic plan"):
+            self.finalize()
+        self.assertEqual(self.durable_snapshot(), before)
+        self.assertEqual(self.smoke_calls, [])
+
+    def test_only_automatic_ordinary_events_can_defer(self):
+        before = self.durable_snapshot()
+        for operation, dispatch_json in (("ordinary", None), ("resume", "dispatch.json"), ("activate", "dispatch.json")):
+            with self.subTest(operation=operation, dispatch=dispatch_json):
+                args = argparse.Namespace(
+                    config=release.DEFAULT_CONFIG, artifact_id=93001, output_dir=self.directory,
+                    dispatch_json=dispatch_json, operation=operation, operation_id="misused-defer",
+                    service=self.api, manifest_sha256=None, published_record_sha256=None,
+                    defer_unadmitted_api=True,
+                )
+                with self.assertRaisesRegex(release.ReleaseError, "only to automatic ordinary events"):
+                    release.prepare_release(args)
+        self.assertEqual(self.durable_snapshot(), before)
+        self.github.download_bundle.assert_not_called()
 
     def test_legacy_automatic_events_remain_fenced_after_ownership_rollback(self):
         self.prepare("accepted-release")
