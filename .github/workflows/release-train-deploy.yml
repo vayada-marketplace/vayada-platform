@@ -4,8 +4,9 @@ name: Release train deploy
 # release-train repository_dispatch once a release is prechecked and published; a person can also
 # dispatch it to resume. Each job is idempotent (scripts/release_train.py):
 #   validate       request + publication (verify operation: no deployment state, no ECS writes);
-#   admit          the API digest into the compatible-image lists: push to main, or a branch for
-#                  an admission PR a person merges (admission "pr", the default);
+#   admit          the API digest into the compatible-image lists: push to main (admission
+#                  "push", the default since Flamur's yes on 2026-10-23), or a branch for an
+#                  admission PR a person merges ("pr");
 #   deploy-verify  the ordinary coordinated deploy unless already live, then live digests, logs,
 #                  health.
 # A dry run (the default for manual runs) changes nothing.
@@ -41,11 +42,11 @@ on:
         type: boolean
         default: true
       admission:
-        description: "pr: wait for a person to merge the admission PR; push: commit to main"
+        description: "push: commit to main after the list tests; pr: wait for a person to merge the admission PR"
         required: true
         type: choice
-        options: [pr, push]
-        default: pr
+        options: [push, pr]
+        default: push
 
 permissions:
   contents: read
@@ -98,10 +99,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # A shallow main is enough: admission fetches origin/main and commits on its tip.
       - uses: actions/checkout@v7
         with:
           ref: main
-          fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
           name: ${{ env.BUNDLE_ARTIFACT }}
