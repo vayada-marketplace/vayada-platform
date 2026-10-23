@@ -148,7 +148,12 @@ then runs three idempotent jobs, so a rerun continues where the last one stopped
   contains it), the next-api log patterns `"42501"`, `"permission denied"` and
   `{ $.level >= 50 }` since the deploy began, and next-api health.
 
-Dispatch it by hand with the identity from the app run's summary to resume.
+Dispatch it by hand with the identity from the app run's summary to resume or
+to re-verify an earlier release. Never rerun an old `Release train deploy` run
+for that: a rerun runs the code of the commit it first ran on. A release whose
+images are live while `desired-release` already names it, or a newer accepted
+release that contains it (a later commit with byte-identical images), needs no
+deploy: the run only verifies.
 `dry_run` (the default by hand) reads everything and changes nothing.
 
 ## Legacy, Terraform, and activation
