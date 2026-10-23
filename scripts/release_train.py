@@ -49,6 +49,10 @@ _SPEC.loader.exec_module(release)
 APP_REPOSITORY = "vayada-marketplace/vayada"
 TRAIN_WORKFLOW_PATH = ".github/workflows/release-train.yml"
 DEPLOY_WORKFLOW = "deploy-coordinated-release.yml"
+# The deploy workflow's automatic-admission job runs only for repository_dispatch events, so an
+# ordinary workflow_dispatch deploy always skips it (the first real train, 2026-10-23, read that
+# skip as a failure after a correct deploy).
+SKIPPED_ON_DISPATCH = {"Admit the API image automatically"}
 API_SERVICE = "next-target-backend"
 LISTS = ("scripts/next-api-split-compatible-images.txt", "scripts/next-api-ongoing-export-compatible-images.txt")
 # Every Terraform Validate suite that reads the lists, as the VAY-2287 admit job runs them.
@@ -348,6 +352,17 @@ def check_plan(plan: dict[str, Any], request: dict[str, Any]) -> None:
         fail("the deploy run planned other publication bytes")
 
 
+def deploy_problems(conclusion: str | None, jobs: list[tuple[str, str]]) -> list[str]:
+    """Why a finished ordinary deploy run did not succeed; empty when it did. Every job must
+    succeed, except the automatic-admission job a workflow_dispatch skips by design."""
+    problems = [] if conclusion == "success" else [f"run {conclusion}"]
+    problems += [f"{name}: {state}" for name, state in jobs
+                 if state != "success" and not (state == "skipped" and name in SKIPPED_ON_DISPATCH)]
+    if not jobs:
+        problems.append("no job detail")
+    return problems
+
+
 def run_jobs(github: PlatformGitHub, run: dict[str, Any]) -> list[tuple[str, str]]:
     jobs = github.get(f"/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=100").get("jobs", [])
     return [(job["name"], job.get("conclusion") or job.get("status")) for job in jobs]
@@ -464,6 +479,7 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
     live = live_digests(aws, config)
     started = time.time()
     plan_order = None
+    live_error = ""
     rows = []
     already = desired is not None and desired.get("sourceSha") == request["sha"] and live == own
     if already:
@@ -490,19 +506,30 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
         print(f"deploy run {run['html_url']}")
         started = dt.datetime.strptime(run["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
         run = wait_run(github, run["id"], minutes=args.deploy_minutes)
-        failed = [f"{name}: {conclusion}" for name, conclusion in run_jobs(github, run) if conclusion != "success"]
-        if failed or run.get("conclusion") != "success":
-            rows.append(("deploy", "failed", f"{run['html_url']} {run.get('conclusion')}; {', '.join(failed) or 'no job detail'}"))
-            render(rows)
-            fail("the coordinated deploy did not succeed")
-        plan = plan_of(github, run)
-        check_plan(plan, request)
-        plan_order = plan.get("order")
-        rows.append(("deploy", "done", f"{run['html_url']} order {plan_order}, acceptance {plan.get('acceptance', '-')}"))
-        # Logs written right after the rollout belong to this release (admit-and-deploy.sh waited too).
+        try:
+            problems = deploy_problems(run.get("conclusion"), run_jobs(github, run))
+        except TrainError as error:
+            problems = ([] if run.get("conclusion") == "success" else [f"run {run.get('conclusion')}"]) \
+                + [f"could not read the deploy jobs: {error}"]
+        plan: dict[str, Any] = {}
+        try:
+            plan = plan_of(github, run)
+            check_plan(plan, request)
+            plan_order = plan.get("order")
+        except TrainError as error:
+            problems.append(str(error))
+        rows.append(("deploy", "failed" if problems else "done",
+                     f"{run['html_url']} order {plan_order}, acceptance {plan.get('acceptance', '-')}"
+                     + (f"; {', '.join(problems)}" if problems else "")))
+        # Verify either way: after a failed deploy the live digests, logs and health say what is
+        # live. Logs written right after the rollout belong to it (admit-and-deploy.sh waited too).
         time.sleep(150)
-        desired = desired_release(aws, config)
-        live = live_digests(aws, config)
+        # Fresh state or none: the pre-dispatch snapshot must never pass for the deployed one.
+        try:
+            desired = desired_release(aws, config)
+            live = live_digests(aws, config)
+        except TrainError as error:
+            desired, live, live_error = None, None, str(error)
 
     app = release.GitHub(APP_REPOSITORY, os.environ.get("COORDINATED_RELEASE_READ_TOKEN", ""))
 
@@ -511,13 +538,19 @@ def command_deploy_verify(args: argparse.Namespace) -> None:
         retry(lambda: app.download_bundle(int(record["artifactId"]), directory), what="download the superseding release")
         return json.loads((directory / "manifest.json").read_text())
 
-    if request["dryRun"] and not already:
-        expected, against = own, "this release (not deployed yet in a dry run)"
-    else:
-        expected, against = expected_digests(plan_order, manifest, desired, lambda base, head: retry(lambda: app.compare(base, head), what="compare"), superseding)
-    mismatched = [f"{key} live {live.get(key, '-')[:19]} != {digest[:19]}" for key, digest in expected.items() if live.get(key) != digest]
-    rows.append(("live digests", "done" if not mismatched else ("info" if request["dryRun"] else "failed"),
-                 f"match {against}" if not mismatched else "; ".join(mismatched)))
+    try:
+        if live is None:
+            fail(f"could not read the live state after the deploy: {live_error}")
+        if request["dryRun"] and not already:
+            expected, against = own, "this release (not deployed yet in a dry run)"
+        else:
+            expected, against = expected_digests(plan_order, manifest, desired, lambda base, head: retry(lambda: app.compare(base, head), what="compare"), superseding)
+        mismatched = [f"{key} live {live.get(key, '-')[:19]} != {digest[:19]}" for key, digest in expected.items() if live.get(key) != digest]
+        rows.append(("live digests", "done" if not mismatched else ("info" if request["dryRun"] else "failed"),
+                     f"match {against}" if not mismatched else "; ".join(mismatched)))
+    except TrainError as error:
+        # E.g. a failed deploy left desired-release on an older release: report, keep checking.
+        rows.append(("live digests", "failed", str(error)))
     start_ms = int((started - 60) * 1000)
     counts = {pattern: retry(lambda pattern=pattern: count_log_events(pattern, start_ms, region), what=f"logs {pattern}") for pattern in LOG_PATTERNS}
     unreadable = [pattern for pattern, count in counts.items() if count is None]

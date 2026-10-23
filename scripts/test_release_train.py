@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Release train deploy (VAY-2311): request trust, admission modes, deploy identity, verification."""
 
+import argparse
 import importlib.util
 import json
 import re
@@ -200,6 +201,129 @@ class DeployIdentityTests(unittest.TestCase):
         self.assertEqual(train.find_deploy_run(github, 12, "2026-10-23T11:59:00Z", sleep=lambda _: None)["id"], 2)
         github.get.return_value = {"workflow_runs": []}
         self.assertIsNone(train.find_deploy_run(github, 12, "2026-10-23T11:59:00Z", polls=2, sleep=lambda _: None))
+
+
+# The jobs of deploy run 39978053401: the first real release train's ordinary deploy (2026-10-23).
+FIRST_REAL_DEPLOY_JOBS = [
+    ("Validate and plan full release", "success"),
+    ("Reconcile API and verify readiness", "success"),
+    ("Admit the API image automatically", "skipped"),
+    ("Reconcile next-booking-frontend", "success"),
+    ("Reconcile next-booking-admin", "success"),
+    ("Reconcile next-pms-frontend", "success"),
+    ("Reconcile next-marketplace-admin", "success"),
+    ("Report per-service durable result", "success"),
+]
+
+
+class DeployOutcomeTests(unittest.TestCase):
+    def test_an_ordinary_deploy_may_skip_only_the_automatic_admission(self):
+        self.assertEqual(train.deploy_problems("success", FIRST_REAL_DEPLOY_JOBS), [])
+        skipped_frontend = [(name, "skipped" if name == "Reconcile next-pms-frontend" else state)
+                            for name, state in FIRST_REAL_DEPLOY_JOBS]
+        self.assertEqual(train.deploy_problems("success", skipped_frontend), ["Reconcile next-pms-frontend: skipped"])
+        failed_api = [(name, "failure" if name.startswith("Reconcile API") else state) for name, state in FIRST_REAL_DEPLOY_JOBS]
+        self.assertEqual(train.deploy_problems("failure", failed_api),
+                         ["run failure", "Reconcile API and verify readiness: failure"])
+        failed_admit = [(name, "failure" if name.startswith("Admit") else state) for name, state in FIRST_REAL_DEPLOY_JOBS]
+        self.assertEqual(train.deploy_problems("success", failed_admit), ["Admit the API image automatically: failure"])
+        self.assertEqual(train.deploy_problems("success", []), ["no job detail"])
+
+    def test_the_allowed_skip_is_the_deploy_workflows_repository_dispatch_only_job(self):
+        workflow = (ROOT / ".github/workflows/deploy-coordinated-release.yml").read_text()
+        for name in train.SKIPPED_ON_DISPATCH:
+            body = re.split(r"\n  [a-z][a-z-]*:\n", workflow.split(f"    name: {name}\n", 1)[1])[0]
+            self.assertRegex(body, r"(?m)^    if: github\.event_name == 'repository_dispatch' && ", name)
+
+
+class DeployVerifyCommandTests(unittest.TestCase):
+    """command_deploy_verify end to end with GitHub, AWS and the clock replaced."""
+
+    def setUp(self):
+        self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.bundle = self.directory / "bundle"
+        self.bundle.mkdir()
+        services = {key: {"digest": f"sha256:{str(index) * 64}"} for index, key in enumerate(release_services(), 1)}
+        self.own = {key: image["digest"] for key, image in services.items()}
+        (self.bundle / "manifest.json").write_text(json.dumps({"source": {"sha": SHA}, "services": services}))
+        self.request = {"sha": SHA, "artifactId": 12512032371, "manifestSha256": "c" * 64,
+                        "publishedRecordSha256": "d" * 64, "summary": "s", "dryRun": False, "admission": "push",
+                        "appRunId": 42, "appRunUrl": "u"}
+        (self.bundle / "request.json").write_text(json.dumps(self.request))
+        self.summary = self.directory / "summary.md"
+        self.summary.write_text("")
+        self.enterContext(mock.patch.dict(train.os.environ, {
+            "GITHUB_REPOSITORY": "vayada-marketplace/vayada-platform", "GH_TOKEN": "t",
+            "COORDINATED_RELEASE_READ_TOKEN": "t", "GITHUB_STEP_SUMMARY": str(self.summary)}))
+        self.enterContext(mock.patch.object(train.release, "Aws"))
+        self.app = mock.Mock()
+        self.enterContext(mock.patch.object(train.release, "GitHub", return_value=self.app))
+        self.enterContext(mock.patch.object(train, "PlatformGitHub"))
+        self.enterContext(mock.patch.object(train.time, "sleep"))
+        self.enterContext(mock.patch.object(train, "find_deploy_run", return_value={
+            "id": 39978053401, "html_url": "https://run/39978053401", "created_at": "2026-10-23T15:24:52Z"}))
+        self.enterContext(mock.patch.object(train, "plan_of", return_value={
+            "artifactId": 12512032371, "sourceSha": SHA, "manifestSha256": "c" * 64,
+            "publishedRecordSha256": "d" * 64, "order": "new", "acceptance": "accepted"}))
+        self.enterContext(mock.patch.object(train, "count_log_events", return_value=0))
+        self.enterContext(mock.patch.object(train, "health_status", return_value=200))
+        self.old = {"sourceSha": NEWER.replace("b", "0"), "acceptedAt": "2026-10-23T11:52:24Z", "artifactId": 1}
+
+    def run_command(self, *, conclusion, jobs, desired_after, live_after=None):
+        """jobs and live_after may be an exception: the read fails after its retries."""
+        old_live = {key: "sha256:" + "f" * 64 for key in self.own}
+        if live_after is None:
+            live_after = self.own if conclusion == "success" else old_live
+        jobs_mock = {"side_effect": jobs} if isinstance(jobs, Exception) else {"return_value": jobs}
+        with mock.patch.object(train, "wait_run", return_value={
+                 "id": 39978053401, "run_attempt": 1, "conclusion": conclusion, "html_url": "https://run/39978053401"}), \
+             mock.patch.object(train, "run_jobs", **jobs_mock), \
+             mock.patch.object(train, "desired_release", side_effect=[self.old, desired_after]), \
+             mock.patch.object(train, "live_digests", side_effect=[old_live, live_after]):
+            train.command_deploy_verify(argparse.Namespace(bundle=str(self.bundle), deploy_minutes=90))
+
+    def rows(self):
+        return {line.split("|")[1].strip(): line.split("|")[2].strip()
+                for line in self.summary.read_text().splitlines() if line.startswith("| ") and "---" not in line}
+
+    def test_the_first_real_deploy_verifies_digests_logs_and_health(self):
+        self.run_command(conclusion="success", jobs=FIRST_REAL_DEPLOY_JOBS,
+                         desired_after={"sourceSha": SHA, "acceptedAt": "2026-10-23T15:25:34Z", "artifactId": 12512032371})
+        self.assertEqual(self.rows(), {"Step": "Result", "deploy": "done", "live digests": "done", "logs": "done", "health": "done"})
+
+    def test_a_failed_deploy_still_reports_what_is_live_then_fails(self):
+        jobs = [(name, "failure" if name == "Reconcile next-pms-frontend" else state) for name, state in FIRST_REAL_DEPLOY_JOBS]
+        self.app.compare.return_value = "behind"
+        with self.assertRaisesRegex(train.TrainError, "not verified"):
+            self.run_command(conclusion="failure", jobs=jobs, desired_after=self.old)
+        rows = self.rows()
+        self.assertEqual((rows["deploy"], rows["live digests"], rows["logs"], rows["health"]),
+                         ("failed", "failed", "done", "done"))
+        self.assertIn("Reconcile next-pms-frontend: failure", self.summary.read_text())
+
+    # CodeRabbit on #636: a read that fails after its retries is a failed row, never an abort.
+    def test_unreadable_deploy_jobs_fail_the_deploy_row_and_verification_goes_on(self):
+        new = {"sourceSha": SHA, "acceptedAt": "2026-10-23T15:25:34Z", "artifactId": 12512032371}
+        with self.assertRaisesRegex(train.TrainError, "not verified"):
+            self.run_command(conclusion="success", jobs=train.TrainError("GET jobs: HTTP 502"), desired_after=new)
+        rows = self.rows()
+        self.assertEqual((rows["deploy"], rows["live digests"], rows["logs"], rows["health"]),
+                         ("failed", "done", "done", "done"))
+        self.assertIn("could not read the deploy jobs: GET jobs: HTTP 502", self.summary.read_text())
+
+    def test_an_unreadable_live_state_is_a_failed_row_not_the_old_snapshot(self):
+        new = {"sourceSha": SHA, "acceptedAt": "2026-10-23T15:25:34Z", "artifactId": 12512032371}
+        with self.assertRaisesRegex(train.TrainError, "not verified"):
+            self.run_command(conclusion="success", jobs=FIRST_REAL_DEPLOY_JOBS, desired_after=new,
+                             live_after=train.TrainError("read live next-pms-frontend: throttled"))
+        rows = self.rows()
+        self.assertEqual((rows["deploy"], rows["live digests"], rows["logs"], rows["health"]),
+                         ("done", "failed", "done", "done"))
+        self.assertIn("could not read the live state after the deploy", self.summary.read_text())
+
+
+def release_services():
+    return list(train.release.load_config()["services"])
 
 
 class VerifyTests(unittest.TestCase):
