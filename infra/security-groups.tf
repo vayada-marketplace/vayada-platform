@@ -32,13 +32,3 @@ resource "aws_security_group_rule" "ecs_egress" {
   description       = "Allow all outbound traffic"
 }
 
-# Allow ECS tasks to reach RDS on port 5432
-resource "aws_security_group_rule" "rds_from_ecs" {
-  type                     = "ingress"
-  from_port                = 5432
-  to_port                  = 5432
-  protocol                 = "tcp"
-  source_security_group_id = aws_security_group.ecs_tasks.id
-  security_group_id        = var.rds_sg_id
-  description              = "Allow ECS tasks to reach RDS"
-}

@@ -307,9 +307,3 @@ variable "alb_sg_id" {
   type        = string
   default     = "sg-0fcf3d67a61a7d1fd"
 }
-
-variable "rds_sg_id" {
-  description = "Existing RDS security group ID"
-  type        = string
-  default     = "sg-0089fc5e42fa33566"
-}

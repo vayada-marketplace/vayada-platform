@@ -1,7 +1,6 @@
-# VAY-2339: vayada-database gets its own security group. It used to share the
-# default VPC group (var.rds_sg_id), which also opened port 8000 to the internet.
-# The instance itself is not in Terraform: docs/vay2339-database-network.md
-# attaches this group to it. The rules mirror the 5432 rules on the default group.
+# VAY-2339: vayada-database has its own security group. It used to share the
+# default VPC group, which also opened port 8000 to the internet. The instance
+# itself is not in Terraform: docs/vay2339-database-network.md attached this group.
 resource "aws_security_group" "database" {
   name        = "vayada-database-sg"
   description = "vayada-database: PostgreSQL from the ECS task groups only"
@@ -51,4 +50,36 @@ resource "aws_security_group_rule" "database_egress" {
   cidr_blocks       = ["0.0.0.0/0"]
   security_group_id = aws_security_group.database.id
   description       = "Allow all outbound traffic"
+}
+
+# The default VPC group keeps no rules: Terraform removes every rule when it
+# adopts the group (the old 8000 rules from 0.0.0.0/0 and the ALB, and the self
+# rules). Anything launched without a group gets no access. The precondition
+# stops the plan while an RDS interface is still in the group (runbook R2).
+data "aws_security_group" "default" {
+  vpc_id = var.vpc_id
+  name   = "default"
+}
+
+data "aws_network_interfaces" "default_security_group_rds" {
+  filter {
+    name   = "group-id"
+    values = [data.aws_security_group.default.id]
+  }
+
+  filter {
+    name   = "requester-id"
+    values = ["amazon-rds"]
+  }
+}
+
+resource "aws_default_security_group" "default" {
+  vpc_id = var.vpc_id
+
+  lifecycle {
+    precondition {
+      condition     = length(data.aws_network_interfaces.default_security_group_rds.ids) == 0
+      error_message = "A database still uses the default VPC security group; finish docs/vay2339-database-network.md R2 first."
+    }
+  }
 }
