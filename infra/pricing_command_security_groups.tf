@@ -68,6 +68,15 @@ resource "aws_security_group_rule" "pricing_command_rds_egress" {
   security_group_id        = aws_security_group.pricing_command.id
 }
 
+resource "aws_security_group_rule" "pricing_command_database_egress" {
+  type                     = "egress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.database.id
+  security_group_id        = aws_security_group.pricing_command.id
+}
+
 resource "aws_security_group_rule" "rds_from_pricing_command" {
   type                     = "ingress"
   from_port                = 5432
