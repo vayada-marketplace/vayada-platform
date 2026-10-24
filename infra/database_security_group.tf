@@ -1,6 +1,6 @@
 # VAY-2339: vayada-database gets its own security group. It used to share the
 # default VPC group (var.rds_sg_id), which also opened port 8000 to the internet.
-# The instance itself is not in Terraform: docs/runbooks/vay2339-database-network.md
+# The instance itself is not in Terraform: docs/vay2339-database-network.md
 # attaches this group to it. The rules mirror the 5432 rules on the default group.
 resource "aws_security_group" "database" {
   name        = "vayada-database-sg"
