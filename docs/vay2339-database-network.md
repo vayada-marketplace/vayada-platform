@@ -28,7 +28,7 @@ OLD_SG=sg-0089fc5e42fa33566
 NEW_SG=$(aws_ ec2 describe-security-groups \
   --filters Name=vpc-id,Values=vpc-055e8074dc3b2422a Name=group-name,Values=vayada-database-sg \
   --query 'SecurityGroups[0].GroupId' --output text)
-echo "NEW_SG=$NEW_SG"   # must be an sg-… id, not None
+[ "$NEW_SG" = sg-06f9484b713fb0145 ] || echo "STOP: unexpected NEW_SG=$NEW_SG"   # created by #640 on 2026-10-24
 SERVICES="vayada-booking-admin-service vayada-booking-backend-service vayada-booking-frontend-service
   vayada-next-api-service vayada-next-booking-admin-service vayada-next-booking-frontend-service
   vayada-next-marketplace-admin-service vayada-next-pms-frontend-service vayada-pms-backend-service
