@@ -9,9 +9,11 @@ default VPC security group `sg-0089fc5e42fa33566`, which also opens port 8000 to
 Every client is an ECS task in `vayada-ecs-tasks-sg` and reaches the database
 inside the VPC, where its DNS name already resolves to the private address. AWS:
 both changes happen without downtime ("Downtime doesn't occur during this
-change"); the public-access change is immediate, the group change "as soon as
-possible". The only public-path user was `scripts/run_migration.sh` (app #3729
-retires it).
+change"). AWS calls the public-access change immediate, but on 2026-10-25 RDS
+showed it about 2 minutes after the call. It never appears in
+`PendingModifiedValues`, so `wait_db` waits for the target state and the DNS
+answer, not just "available". The only public-path user was
+`scripts/run_migration.sh` (app #3729 retires it).
 
 The coordinator runs each step from a laptop and checks it before the next one.
 Order: P1 applied, R0, R1, R2, R3, R4, P2 applied, R5, final check.
@@ -24,6 +26,7 @@ aws_() { aws --profile vayada --region eu-west-1 "$@"; }
 [ "$(aws_ sts get-caller-identity --query Account --output text)" = 269416271598 ] || echo "STOP: wrong account"
 PLATFORM="$PWD"
 DB=vayada-database
+HOST=vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com
 OLD_SG=sg-0089fc5e42fa33566
 NEW_SG=$(aws_ ec2 describe-security-groups \
   --filters Name=vpc-id,Values=vpc-055e8074dc3b2422a Name=group-name,Values=vayada-database-sg \
@@ -44,13 +47,27 @@ db_state() {
   aws_ rds describe-db-instances --db-instance-identifier "$DB" --output json --query \
     'DBInstances[0].{status:DBInstanceStatus,public:PubliclyAccessible,groups:VpcSecurityGroups,pending:PendingModifiedValues}'
 }
-wait_db() {  # until available and every group is "active"
+dns_ok() {  # $1 = expected public flag; from outside the VPC a private instance resolves to 172.31.x
+  ip=$(dig +short "$HOST" | tail -1)
+  case "$1:$ip" in
+    false:172.31.*) return 0 ;;
+    true:172.31.* | true:) return 1 ;;
+    true:*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+wait_db() {  # $1 = expected groups (space-separated), $2 = expected public flag (true|false)
+  want=$(printf '%s\n' $1 | sort | jq -R . | jq -sc .)
   for _ in $(seq 1 60); do
     s=$(db_state)
-    jq -e '.status=="available" and .pending=={} and all(.groups[]; .Status=="active")' <<<"$s" >/dev/null && { echo "$s"; return 0; }
+    if jq -e --argjson g "$want" --argjson p "$2" '.status=="available" and .pending=={} and .public==$p and
+        all(.groups[]; .Status=="active") and ([.groups[].VpcSecurityGroupId] | sort)==$g' <<<"$s" >/dev/null &&
+       dns_ok "$2"; then
+      echo "$s"; echo "dig: $ip"; return 0
+    fi
     sleep 10
   done
-  echo "STOP: instance not settled after 10 minutes"; echo "$s"; return 1
+  echo "STOP: instance not in the expected state after 10 minutes"; echo "$s"; echo "dig: $ip"; return 1
 }
 checks() {
   echo "== instance"; db_state
@@ -110,7 +127,7 @@ aws_ ec2 describe-network-interfaces --filters Name=group-id,Values="$OLD_SG" \
 aws_ ecs describe-services --cluster vayada-backend-cluster --services vayada-backend-service --output json > "$EVIDENCE_DIR/r0-vayada-backend-service.json"
 aws_ iam get-role-policy --role-name vayada-github-actions-deploy --policy-name migrate-auth-db-runtime \
   --query PolicyDocument --output json > "$EVIDENCE_DIR/r0-migrate-auth-db-runtime.policy.json"
-dig +short vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com   # today: the public 54.195.242.82
+dig +short "$HOST" | tail -1   # before R5: the public 54.195.242.82
 checks | tee "$EVIDENCE_DIR/r0-checks.txt"
 fresh | tee "$EVIDENCE_DIR/r0-fresh.txt"
 ```
@@ -121,11 +138,11 @@ fresh | tee "$EVIDENCE_DIR/r0-fresh.txt"
 aws_ rds modify-db-instance --db-instance-identifier "$DB" \
   --vpc-security-group-ids "$NEW_SG" "$OLD_SG" --apply-immediately \
   --query 'DBInstance.VpcSecurityGroups' --output json
-wait_db | tee "$EVIDENCE_DIR/r1-instance.json"   # both groups active
+wait_db "$NEW_SG $OLD_SG" true | tee "$EVIDENCE_DIR/r1-instance.json"
 checks | tee "$EVIDENCE_DIR/r1-checks.txt"
 ```
 
-Rollback: `aws_ rds modify-db-instance --db-instance-identifier "$DB" --vpc-security-group-ids "$OLD_SG" --apply-immediately`, then `wait_db`.
+Rollback: `aws_ rds modify-db-instance --db-instance-identifier "$DB" --vpc-security-group-ids "$OLD_SG" --apply-immediately`, then `wait_db "$OLD_SG" true`.
 
 ## R2: the new group only
 
@@ -133,14 +150,14 @@ Rollback: `aws_ rds modify-db-instance --db-instance-identifier "$DB" --vpc-secu
 aws_ rds modify-db-instance --db-instance-identifier "$DB" \
   --vpc-security-group-ids "$NEW_SG" --apply-immediately \
   --query 'DBInstance.VpcSecurityGroups' --output json
-wait_db | tee "$EVIDENCE_DIR/r2-instance.json"   # only NEW_SG, active
+wait_db "$NEW_SG" true | tee "$EVIDENCE_DIR/r2-instance.json"
 checks | tee "$EVIDENCE_DIR/r2-checks.txt"
 fresh | tee "$EVIDENCE_DIR/r2-fresh.txt"          # proves NEW connections from vayada-ecs-tasks-sg
 ```
 
 Existing connections are tracked and stay open; `fresh` is the real test.
 Rollback: `aws_ rds modify-db-instance --db-instance-identifier "$DB" --vpc-security-group-ids "$NEW_SG" "$OLD_SG" --apply-immediately`
-(or `"$OLD_SG"` alone), then `wait_db` and `checks`.
+(or `"$OLD_SG"` alone), then `wait_db "$NEW_SG $OLD_SG" true` (or `wait_db "$OLD_SG" true`) and `checks`.
 
 ## R3: delete vayada-backend-service (port 8000 user; dead since 2026-04)
 
@@ -193,13 +210,13 @@ Rollback: revert P2 and apply; the database no longer depends on the default gro
 ```bash
 aws_ rds modify-db-instance --db-instance-identifier "$DB" --no-publicly-accessible --apply-immediately \
   --query 'DBInstance.PendingModifiedValues'
-wait_db | tee "$EVIDENCE_DIR/r5-instance.json"   # public false
-dig +short vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com   # now 172.31.16.221 (private)
+wait_db "$NEW_SG" false | tee "$EVIDENCE_DIR/r5-instance.json"   # public false, dig 172.31.16.221
 checks | tee "$EVIDENCE_DIR/r5-checks.txt"
 fresh | tee "$EVIDENCE_DIR/r5-fresh.txt"
 ```
 
-Rollback: `aws_ rds modify-db-instance --db-instance-identifier "$DB" --publicly-accessible --apply-immediately`, then `wait_db`.
+Rollback: `aws_ rds modify-db-instance --db-instance-identifier "$DB" --publicly-accessible --apply-immediately`, then `wait_db "$NEW_SG" true`
+(AWS may assign a new public IP; `dns_ok` only requires a non-private answer).
 
 ## Final state
 
@@ -209,3 +226,20 @@ Rollback: `aws_ rds modify-db-instance --db-instance-identifier "$DB" --publicly
 - Database access from outside the VPC is impossible. Production database work
   runs as reviewed one-off ECS tasks (`scripts/legacy-migration-oneoff.sh`,
   `scripts/run-target-database-runtime-preflight.sh`).
+
+## Done 2026-10-25
+
+The coordinator ran every step from platform 04e46feec (evidence in
+`~/.local/share/vayada-testing/evidence/VAY-2339-2026-10-25/`; times UTC):
+
+| Step | Time | Result |
+|---|---|---|
+| P1 #640 | 22:35 | tf-apply: 6 added; `vayada-database-sg` = `sg-06f9484b713fb0145`, exactly the 4 rules |
+| R0 | 22:40 | public true, `[sg-0089…]`, pending `{}`; only the RDS interface in the default group; checks green; fresh PASS ×2 |
+| R1 | 22:43 | both groups active; checks green |
+| R2 | 22:44 | `[sg-06f9484b713fb0145]` only; 10/10 targets healthy, 0 errors, 16–20 connections; fresh PASS ×2 |
+| R3 | 22:47 | `vayada-backend-service` desired 0, deleted; 0 interfaces left in the default group |
+| R4 | 23:04 | `migrate-auth-db-runtime` deleted (after app #3729, 482f27f8e) |
+| P2 #642 | 23:09 | tf-apply: 1 added (default group adopted), 4 destroyed; default group 0 rules, 0 interfaces |
+| R5 | 23:10 | call sent; the old `wait_db` returned on the old state; public false about 2 minutes later |
+| R5 verify | 23:13 | dig 172.31.16.221; 10/10 healthy; 0 errors; 16–29 connections; fresh PASS ×2 |
