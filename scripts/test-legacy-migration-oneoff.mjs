@@ -32,7 +32,7 @@ test('dispatcher and script share the production allow-list', () => {
   assert.deepEqual(commandKinds, {
     'target:migration-status': 'target', 'target:cutover:abort': 'target', 'target:source:extract': 'source', 'target:cutover': 'source',
     // VAY-2108: reachable only through channex-handover-plan / channex-handover, never with a run file.
-    'target:channex:handover:activate': 'target', 'target:channex:handover:revoke': 'target',
+    'target:channex:handover:activate': 'target', 'target:channex:handover:attach': 'target', 'target:channex:handover:revoke': 'target',
     'target:channex:handover:open-sales': 'target', 'target:channex:handover:close-sales': 'target',
   });
   assert.ok(script.includes('target:migration-status|target:cutover:abort) kind="target"'));
@@ -552,8 +552,8 @@ esac
 
     // Every input check runs before any AWS call.
     for (const [request, message] of [
-      [{ ...activate, action: 'disable' }, /must be activate, revoke, open-sales or close-sales/],
-      [{ ...activate, action: 'activate\n' }, /must be activate, revoke, open-sales or close-sales/],
+      [{ ...activate, action: 'disable' }, /must be activate, attach, revoke, open-sales or close-sales/],
+      [{ ...activate, action: 'activate\n' }, /must be activate, attach, revoke, open-sales or close-sales/],
       [{ ...activate, property: PROPERTY.toUpperCase() }, /lowercase UUID/],
       [{ ...activate, property: `${PROPERTY}\n` }, /lowercase UUID/],
       [{ ...activate, extra: 'x' }, /exactly the activate fields/],
@@ -700,7 +700,48 @@ esac
       const env = Object.fromEntries(definitions()[0].containerDefinitions[0].environment.map((e) => [e.name, e.value]));
       assert.equal(env.LEGACY_MIGRATION_COMMAND, `target:channex:handover:${request.action}`);
       assert.deepEqual(JSON.parse(env.LEGACY_MIGRATION_ARGS), ['--property', PROPERTY, '--approval-ref', request.approvalRef, ...flags]);
+      assert.equal(env.LEGACY_MIGRATION_FILES, undefined);
     }
+
+    // Attach (VAY-2108): the Channex id and the reviewed manifest file travel with the activate inputs.
+    const EXTERNAL = '50e2edff-1111-4222-8333-444455556666';
+    const manifestFile = join(evidence, 'tiga-manifest.json');
+    const manifest = { capabilities: ['booking', 'ari'], roomTypes: [{ roomTypeId: PROPERTY, externalRoomTypeId: EXTERNAL, ratePlans: [] }], unmappedRoomTypeIds: [] };
+    writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
+    const manifestSha = createHash('sha256').update(readFileSync(manifestFile)).digest('hex');
+    const attach = { action: 'attach', property: PROPERTY, externalProperty: EXTERNAL, approvalRef: 'flamur-go-tiga', legacyDisabledAt: '2026-10-28T09:00:00Z', legacyReadbackFile: 'f7-readback.txt', manifestFile: 'tiga-manifest.json' };
+    const attachFile = join(root, 'attach.json');
+    for (const [request, message] of [
+      [{ ...attach, externalProperty: EXTERNAL.toUpperCase() }, /exactly the attach fields/],
+      [{ ...attach, manifestFile: '../outside.txt' }, /exactly the attach fields/],
+      [{ ...attach, manifestFile: 'linked.txt' }, /regular JSON object file/],
+      [{ ...attach, manifestFile: 'f7-readback.txt' }, /regular JSON object file/],
+      [{ ...attach, manifestFile: 'missing.json' }, /regular JSON object file/],
+      [{ ...activate, externalProperty: EXTERNAL }, /exactly the activate fields/],
+    ]) {
+      writeRequest(request, attachFile);
+      const result = run(['channex-handover-plan', attachFile]);
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, message);
+      assert.equal(awsCalls(), '');
+    }
+    writeRequest(attach, attachFile);
+    cliLines(['{"status":"START"}', planLine()]);
+    const attached = run(['channex-handover-plan', attachFile]);
+    assert.equal(attached.status, 0, attached.stderr);
+    const attachEnv = Object.fromEntries(definitions()[0].containerDefinitions[0].environment.map((e) => [e.name, e.value]));
+    assert.equal(attachEnv.LEGACY_MIGRATION_COMMAND, 'target:channex:handover:attach');
+    assert.deepEqual(JSON.parse(attachEnv.LEGACY_MIGRATION_ARGS), ['--property', PROPERTY, '--external-property', EXTERNAL, '--approval-ref', 'flamur-go-tiga',
+      '--legacy-disabled-at', '2026-10-28T09:00:00Z', '--legacy-readback-sha256', readbackSha, '--manifest', '@manifest']);
+    assert.deepEqual(JSON.parse(gunzipSync(Buffer.from(attachEnv.LEGACY_MIGRATION_FILES, 'base64')).toString()), { manifest });
+    const attachRecord = JSON.parse(readFileSync(join(evidence, `channex-handover-attach-${PROPERTY}-plan.json`), 'utf8'));
+    assert.equal(attachRecord.binding.manifestSha256, manifestSha);
+    // A changed manifest changes the binding, so the recorded go no longer matches.
+    writeFileSync(manifestFile, JSON.stringify({ ...manifest, unmappedRoomTypeIds: [EXTERNAL] }));
+    cliLines(['{"status":"START"}', applyLine()]);
+    const changedManifest = run(['channex-handover', attachFile, go(attachRecord.planSha256, 'attach')]);
+    assert.equal(changedManifest.status, 2, changedManifest.stderr);
+    assert.match(changedManifest.stderr, /plan changed since the go/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -712,7 +753,7 @@ test('the dispatcher maps each handover action to the handover CLI with the targ
     writeFileSync(join(dir, 'stub.cjs'), `const cp = require('node:child_process');
 cp.spawnSync = (file, argv, options) => { console.log(JSON.stringify({ argv: argv.slice(2), urls: Object.keys(options.env).filter((k) => k.endsWith('DATABASE_URL')).sort() })); return { status: 0 }; };
 require('node:module').syncBuiltinESMExports();`);
-    for (const action of ['activate', 'revoke', 'open-sales', 'close-sales']) {
+    for (const action of ['activate', 'attach', 'revoke', 'open-sales', 'close-sales']) {
       const result = dispatch('target', { ...DB_ENV, LEGACY_MIGRATION_COMMAND: `target:channex:handover:${action}`,
         LEGACY_MIGRATION_ARGS: JSON.stringify(['--property', '29f39aae-1111-4222-8333-444455556666', '--approval-ref', 'go']) }, ['--require', join(dir, 'stub.cjs')]);
       assert.equal(result.status, 0, result.stderr);

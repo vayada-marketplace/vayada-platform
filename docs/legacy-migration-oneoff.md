@@ -47,6 +47,7 @@ The request file holds exactly one action for one hotel:
 | `action` | Fields besides `action`, `property` and `approvalRef` (printable ASCII, 3–200 characters) |
 |---|---|
 | `activate` | `legacyDisabledAt` (ISO 8601 with `Z` or an offset) and `legacyReadbackFile`, a non-empty regular file (not a symlink) in the evidence folder holding the legacy-disable readback. The script passes its SHA-256 to the CLI. |
+| `attach` | the `activate` fields, plus `externalProperty` (the existing Channex property id, lowercase UUID) and `manifestFile`, a regular JSON object file under 256 KB in the evidence folder: the reviewed room and rate mapping (`capabilities`, `roomTypes`, `unmappedRoomTypeIds`, see the application CLI). The script passes it to the CLI as `--manifest @manifest` through `LEGACY_MIGRATION_FILES`, and binds its SHA-256 in the plan. |
 | `revoke` | `reason` (printable ASCII, 3–500 characters) |
 | `open-sales`, `close-sales` | none |
 

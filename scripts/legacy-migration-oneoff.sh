@@ -11,6 +11,7 @@ usage() {
   echo "       legacy-migration-oneoff.sh readonly-counts <counts.sql|none> <target-check.sql|none> READONLY_COUNTS:<plan sha256>" >&2
   echo "       legacy-migration-oneoff.sh channex-handover-plan <handover-request.json>" >&2
   echo "       legacy-migration-oneoff.sh channex-handover <handover-request.json> CHANNEX_HANDOVER:<action>:<property>:<plan sha256>" >&2
+  echo "       (actions: activate, attach, revoke, open-sales, close-sales)" >&2
   exit 2
 }
 [[ "$#" -ge 2 ]] || usage
@@ -266,17 +267,19 @@ next_api_image() {
   echo "$digest"
 }
 # A target-only definition: the migration secret, the pinned CA and TLS preload, no task role.
+# $4 is the gzip+base64 input files blob (the attach manifest), empty for the other actions.
 handover_definition() {
-  jq -cnS --arg command "$1" --arg args "$2" --arg image "${account}.dkr.ecr.${region}.amazonaws.com/vayada-next-api@$3" \
+  jq -cnS --arg command "$1" --arg args "$2" --arg image "${account}.dkr.ecr.${region}.amazonaws.com/vayada-next-api@$3" --arg files "${4:-}" \
     --rawfile ca "$root/rehearsal/rds-ca-rsa2048-g1.pem" --rawfile tls "$root/scripts/legacy-migration-tls.cjs" \
     --rawfile code "$root/scripts/legacy-migration-oneoff.mjs" --arg account "$account" --arg region "$region" '
     {family: "vayada-channex-handover-oneoff", networkMode: "awsvpc", requiresCompatibilities: ["FARGATE"],
      cpu: "512", memory: "1024", executionRoleArn: "arn:aws:iam::\($account):role/ecsTaskExecutionRole",
      containerDefinitions: [{name: "vayada-channex-handover-oneoff", image: $image, essential: true,
        entryPoint: ["node", "--input-type=module", "--eval"], command: [$code, "target"],
-       environment: [{name: "AWS_REGION", value: $region}, {name: "LEGACY_MIGRATION_COMMAND", value: $command},
+       environment: ([{name: "AWS_REGION", value: $region}, {name: "LEGACY_MIGRATION_COMMAND", value: $command},
          {name: "LEGACY_MIGRATION_ARGS", value: $args}, {name: "VAYADA_DB_RDS_CA_BUNDLE", value: $ca},
-         {name: "LEGACY_MIGRATION_TLS_PRELOAD", value: $tls}],
+         {name: "LEGACY_MIGRATION_TLS_PRELOAD", value: $tls}]
+         + (if $files == "" then [] else [{name: "LEGACY_MIGRATION_FILES", value: $files}] end)),
        secrets: [{name: "TARGET_DATABASE_URL", valueFrom: "arn:aws:ssm:\($region):\($account):parameter/vayada/prod/target-database-url"}],
        logConfiguration: {logDriver: "awslogs", options: {"awslogs-group": "/ecs/vayada-next-api",
          "awslogs-region": $region, "awslogs-stream-prefix": "channex-handover"}}}]}'
@@ -293,31 +296,50 @@ if [[ "$command" == channex-handover-plan || "$command" == channex-handover ]]; 
   request="$2"
   [[ -f "$request" ]] || { echo "Handover request not found." >&2; exit 2; }
   request_sha256="$(shasum -a 256 "$request" | cut -d' ' -f1)"
-  action="$(jq -er '.action | select(type == "string" and test("^(activate|revoke|open-sales|close-sales)\\z"))' "$request")" || {
-    echo "The request action must be activate, revoke, open-sales or close-sales." >&2; exit 2;
+  action="$(jq -er '.action | select(type == "string" and test("^(activate|attach|revoke|open-sales|close-sales)\\z"))' "$request")" || {
+    echo "The request action must be activate, attach, revoke, open-sales or close-sales." >&2; exit 2;
   }
   property="$(jq -er '.property | select(type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\z"))' "$request")" || {
     echo "The request property must be a lowercase UUID." >&2; exit 2;
   }
+  # Attach (VAY-2108, a fresh property taking over an existing Channex property) also names the
+  # Channex id and a reviewed manifest file in the evidence folder (the room and rate mapping).
   jq -e --arg action "$action" '
     ({activate: ["action", "approvalRef", "legacyDisabledAt", "legacyReadbackFile", "property"],
+      attach: ["action", "approvalRef", "externalProperty", "legacyDisabledAt", "legacyReadbackFile", "manifestFile", "property"],
       revoke: ["action", "approvalRef", "property", "reason"]}[$action] // ["action", "approvalRef", "property"]) as $keys
     | keys == $keys and (.approvalRef | type == "string" and test("^[ -,.-?A-~][ -~]{2,199}\\z"))
-      and ($action != "activate" or ((.legacyDisabledAt | type == "string"
+      and (($action != "activate" and $action != "attach") or ((.legacyDisabledAt | type == "string"
             and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})\\z"))
         and (.legacyReadbackFile | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\z"))))
+      and ($action != "attach" or ((.externalProperty | type == "string"
+            and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\z"))
+        and (.manifestFile | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\z"))))
       and ($action != "revoke" or (.reason | type == "string" and test("^[ -,.-?A-~][ -~]{2,499}\\z")))' "$request" >/dev/null || {
     echo "The request must hold exactly the ${action} fields, in the formats the CLI accepts." >&2; exit 2;
   }
-  readback_sha256=""
-  if [[ "$action" == activate ]]; then
+  readback_sha256="" manifest_sha256="" files=""
+  if [[ "$action" == activate || "$action" == attach ]]; then
     # The legacy-disable readback is evidence in this folder; the CLI records its SHA-256.
     readback="${evidence}/$(jq -r .legacyReadbackFile "$request")"
     [[ -f "$readback" && -s "$readback" && ! -L "$readback" ]] || { echo "The legacy readback file must be a non-empty regular file in the evidence folder." >&2; exit 2; }
     readback_sha256="$(shasum -a 256 "$readback" | cut -d' ' -f1)"
   fi
-  args="$(jq -c --arg action "$action" --arg readback "$readback_sha256" '["--property", .property, "--approval-ref", .approvalRef]
-    + (if $action == "activate" then ["--legacy-disabled-at", .legacyDisabledAt, "--legacy-readback-sha256", $readback]
+  if [[ "$action" == attach ]]; then
+    # The manifest travels like a migration input file: one JSON object the launcher writes for the CLI.
+    manifest="${evidence}/$(jq -r .manifestFile "$request")"
+    [[ -f "$manifest" && -s "$manifest" && ! -L "$manifest" && "$(wc -c <"$manifest" | tr -d ' ')" -le 262144 ]] &&
+      jq -e 'type == "object"' "$manifest" >/dev/null || {
+      echo "The manifest file must be a regular JSON object file under 256 KB in the evidence folder." >&2; exit 2;
+    }
+    manifest_sha256="$(shasum -a 256 "$manifest" | cut -d' ' -f1)"
+    files="$(jq -c '{manifest: .}' "$manifest" | gzip -n -9 | base64 | tr -d '\n')"
+  fi
+  args="$(jq -c --arg action "$action" --arg readback "$readback_sha256" '["--property", .property]
+    + (if $action == "attach" then ["--external-property", .externalProperty] else [] end)
+    + ["--approval-ref", .approvalRef]
+    + (if $action == "activate" or $action == "attach" then ["--legacy-disabled-at", .legacyDisabledAt, "--legacy-readback-sha256", $readback] else [] end)
+    + (if $action == "attach" then ["--manifest", "@manifest"]
        elif $action == "revoke" then ["--reason", .reason] else [] end)' "$request")"
   plan_record="${evidence}/channex-handover-${action}-${property}-plan.json"
   result_file="${evidence}/channex-handover-${action}-${property}-result.json"
@@ -347,18 +369,18 @@ if [[ "$command" == channex-handover-plan || "$command" == channex-handover ]]; 
   done
   # The binding covers what this script controls: request, exact arguments, image, network, cluster and code.
   binding="$(jq -cnS --arg action "$action" --arg property "$property" --arg request "$request_sha256" --argjson args "$args" \
-    --arg image "$image" --argjson network "$network" --arg cluster "$cluster" \
+    --arg manifest "$manifest_sha256" --arg image "$image" --argjson network "$network" --arg cluster "$cluster" \
     --arg launcher "$(shasum -a 256 "$root/scripts/legacy-migration-oneoff.mjs" | cut -d' ' -f1)" \
     --arg tls "$(shasum -a 256 "$root/scripts/legacy-migration-tls.cjs" | cut -d' ' -f1)" \
     --arg runner "$(shasum -a 256 "$root/scripts/legacy-migration-oneoff.sh" | cut -d' ' -f1)" \
-    '{action: $action, property: $property, requestSha256: $request, args: $args, imageDigest: $image, network: $network,
-      cluster: $cluster, launcherSha256: $launcher, tlsSha256: $tls, runnerSha256: $runner}')"
+    '{action: $action, property: $property, requestSha256: $request, args: $args, manifestSha256: $manifest, imageDigest: $image,
+      network: $network, cluster: $cluster, launcherSha256: $launcher, tlsSha256: $tls, runnerSha256: $runner}')"
   binding_sha256="$(printf '%s' "$binding" | shasum -a 256 | cut -d' ' -f1)"
   cli_command="target:channex:handover:${action}"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   if [[ "$command" == channex-handover-plan ]]; then
     log="${evidence}/channex-handover-${action}-${property}-plan-${stamp}.log"
-    run_oneoff "$(handover_definition "$cli_command" "$args" "$image")" "$network" "$log"
+    run_oneoff "$(handover_definition "$cli_command" "$args" "$image" "$files")" "$network" "$log"
     output="$(handover_output "$log")"
     [[ "$task_exit_code" == 0 && -n "$output" ]] &&
       jq -e '.applied == false and (.planSha256 | type == "string" and test("^[0-9a-f]{64}$"))' <<<"$output" >/dev/null || {
@@ -381,7 +403,7 @@ if [[ "$command" == channex-handover-plan || "$command" == channex-handover ]]; 
     echo "The plan changed since the go (image, code, network or arguments). Re-plan and get a new go." >&2; exit 2;
   }
   log="${evidence}/channex-handover-${action}-${property}-apply-${stamp}.log"
-  run_oneoff "$(handover_definition "$cli_command" "$(jq -c --arg sha "$cli_sha256" '. + ["--apply", $sha]' <<<"$args")" "$image")" "$network" "$log"
+  run_oneoff "$(handover_definition "$cli_command" "$(jq -c --arg sha "$cli_sha256" '. + ["--apply", $sha]' <<<"$args")" "$image" "$files")" "$network" "$log"
   output="$(handover_output "$log")"
   marker="$(grep '^CHANNEX_HANDOVER_COMPLETE ' "$log" || true)"
   # The result is written only when the CLI applied exactly this plan (a marker, when printed, must agree).
