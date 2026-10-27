@@ -200,12 +200,16 @@ bash scripts/run-target-database-runtime-preflight.sh --preflight-channex-claime
 bash scripts/run-target-database-runtime-preflight.sh --revoke-channex-claimed-worker sha256:LISTED_IMAGE_DIGEST
 ```
 
-The grant is inert for the running image: an image that does not ask for
-`claimedScope` accepts the table with exactly those two rows, and the claimed
-helper grants nothing to a worker that cannot read the table, so the grant and
-the revoke never block a next-api start or a rollback. The worker only runs ARI
+The grant is inert for the running image: an E1 image (app #3117, main
+`44cb6f230` and later) that does not ask for `claimedScope` accepts the table
+with exactly those two rows, and the claimed helper grants nothing to a worker
+that cannot read the table. While the grant is applied, every deploy and
+rollback target must be an E1 image or later: an older image refuses the
+worker's extra read at startup (`table_privileges`). To roll back further, run
+the revoke first; it restores the exact 0519 baseline. The worker only runs ARI
 and provisioning for claimed hotels once Terraform declares
-`channex_claimed_scope = "booking_ari"` on a D7-capable image.
+`channex_claimed_scope = "booking_ari"` on an image listed as claimed-ARI
+capable (app D7).
 
 The delivery tables of app migration 0520 (`pms.channex_offer_ari_deliver*`)
 are listed by D3 images as optional matrix entries; the connection and claimed

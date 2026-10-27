@@ -25,7 +25,7 @@ try {
   const claimed = channexScope === "claimed" || channexScope === "claimed_revoke";
   const revoke = channexScope === "claimed_revoke";
   const connection = channexScope === "connection" || claimed;
-  if (revoke && !grant) throw new Error("channex_worker_scope_mismatch");
+  if ((revoke && !grant) || (channexScope !== undefined && !connection)) throw new Error("channex_worker_scope_mismatch");
   const raw = grant ? process.env.TARGET_DATABASE_MIGRATION_URL : process.env.PMS_CHANNEX_MANAGEMENT_DATABASE_URL;
   if (!raw || !process.env.VAYADA_DB_RDS_CA_BUNDLE) throw new Error("channex_worker_connection_missing");
   const url = new URL(raw);
@@ -68,12 +68,12 @@ try {
         const ownedClaimed = (await client.query("SELECT count(*)::int AS count FROM pg_class WHERE oid=$1::regclass AND relowner=(SELECT oid FROM pg_roles WHERE rolname=current_user)",[claimedTable])).rows[0];
         if (ownedClaimed.count !== 1) throw new Error("channex_worker_table_owner_required");
         await client.query(`LOCK TABLE ${claimedTable} IN EXCLUSIVE MODE`);
-        const claimedOperations = (await client.query(`SELECT operation_type FROM ${claimedTable}`)).rows;
-        if (claimedOperations.some(row=>row.operation_type!=="sync_ari"&&row.operation_type!=="provision")) throw new Error("channex_worker_claimed_scope_mismatch");
         if (revoke) {
           await client.query(`DELETE FROM ${claimedTable}`);
           await client.query(`REVOKE SELECT ON ${claimedTable} FROM ${role}`);
         } else {
+          const claimedOperations = (await client.query(`SELECT operation_type FROM ${claimedTable}`)).rows;
+          if (claimedOperations.some(row=>row.operation_type!=="sync_ari"&&row.operation_type!=="provision")) throw new Error("channex_worker_claimed_scope_mismatch");
           await client.query(`GRANT SELECT ON ${claimedTable} TO ${role}`);
           await client.query(`INSERT INTO ${claimedTable}(operation_type) VALUES('sync_ari'),('provision') ON CONFLICT DO NOTHING`);
         }

@@ -358,7 +358,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 payload=""
 if [[ -n "${code_file}" ]]; then payload="$(gzip -n -9 -c "${script_dir}/${code_file}" | base64 | tr -d '\n')"; fi
 helper_payload=""
-if [[ -n "${helper_file}" ]]; then helper_payload="$(gzip -9 -c "${script_dir}/${helper_file}" | base64 | tr -d '\n')"; fi
+if [[ -n "${helper_file}" ]]; then helper_payload="$(gzip -n -9 -c "${script_dir}/${helper_file}" | base64 | tr -d '\n')"; fi
 if [[ -n "${vay2017_phase}" ]]; then
   bootstrap="const{spawnSync}=require('node:child_process'),z=require('node:zlib');process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();const r=spawnSync(process.execPath,['/app/packages/backend-migration/dist/cli/legacyHistoricalBindingProductionPreflight.js',process.env.VAY2017_PREFLIGHT_PHASE],{stdio:'inherit',env:process.env});process.exit(r.status??1)"
 else
