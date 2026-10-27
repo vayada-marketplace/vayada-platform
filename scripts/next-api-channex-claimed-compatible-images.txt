@@ -1,4 +1,4 @@
-# VAY-2108: reviewed next-api images that recognise PMS_CHANNEX_SCOPE=claimed (the first, release R2 at app main
-# cdbd91640, is the first image carrying app PR C #3075 and the booking copy #3784).
+# VAY-2108: reviewed next-api images that recognise PMS_CHANNEX_SCOPE=claimed (the first, release R4 at app main
+# 2178452a4, carries app PR C #3075, the booking copy #3784, D3, D7 and D3a, and runs in production since 2026-10-27).
 # Set channex_claimed_scope = "off" before deploying, or rolling back to, any image not listed here.
-cdbd916400e179bc0a28a6d7d50f4fba80e0c453 sha256:655ca88d7a24ccd9a39d3275645fe7649f81bbf9f22b01b1e7c592167c55b2cc
+2178452a43fb9a78f93f38f68249430ff0a2877f sha256:5086d864ef2ac45c5091b87715e657608c3fa42226873870f8bbf7b98d8362b3
