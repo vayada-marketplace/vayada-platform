@@ -245,13 +245,14 @@ widens the worker to the delivery tables before 0521 is live.
 
 Runner modes, each with the digest of an image listed in
 `scripts/next-api-channex-delivery-worker-images.txt` (empty until the D3 image
-is released; admit it with one `<app sha> <digest>` line, which must also be in
-the claimed-worker list):
+is released; admit it with one `<app sha> <digest>` line; the test suite, not
+the runner, checks that the line is also in the claimed-worker list):
 
 ```sh
 # Migration owner: the connection and claimed prerequisites (the claimed scope
 # must already be granted), then the matrix grants of exactly the three delivery
-# relations. Refused on an image that does not list them. Ends with the boundary
+# relations. Every delivery mode is refused before connecting on an image whose
+# matrix does not list exactly those three as optional. Ends with the boundary
 # check {connectionScope, claimedScope, offerDelivery}: it fails closed with
 # rls_disabled until 0521 is applied.
 bash scripts/run-target-database-runtime-preflight.sh --grant-channex-delivery-worker sha256:LISTED_IMAGE_DIGEST
@@ -266,6 +267,9 @@ Order: the D3 image is serving (it refuses a database without 0519 and 0520),
 then 0521 (D3a) is live, then the delivery grant and preflight, then the app
 switch `PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED=true` on a claimed `booking_ari`
 next-api (a Terraform change of its own, reviewed when the switch is due).
+Switching off goes the other way: the app switch off first (a next-api whose
+switch is on fails its next start with `grant_missing` once the grants are
+gone), then `--revoke-channex-delivery-worker`.
 
 ## Claimed booking staging canary (VAY-2108)
 

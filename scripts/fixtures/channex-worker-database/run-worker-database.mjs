@@ -46,7 +46,7 @@ export const channexManagementWorkerPrivileges = {
   "pms.channel_connections": { SELECT: true, UPDATE: ["connection_status", "updated_at"] },
   ${scenario.deliveryImage ? '"pms.channex_offer_ari_deliveries": { SELECT: true, INSERT: ["target_id"], UPDATE: ["state"] }, "pms.channex_offer_ari_delivery_dates": { SELECT: true, INSERT: ["delivery_id"] }, "pms.channex_offer_ari_delivery_receipts": { SELECT: true, INSERT: ["id"] },' : ""}
 };
-${scenario.deliveryImage ? 'export const optionalChannexDeliveryRelations = new Set(["pms.channex_offer_ari_deliveries", "pms.channex_offer_ari_delivery_dates", "pms.channex_offer_ari_delivery_receipts"]);' : ""}
+${scenario.deliveryImage ? `export const optionalChannexDeliveryRelations = new Set(${JSON.stringify(scenario.deliveryTables ?? ["pms.channex_offer_ari_deliveries", "pms.channex_offer_ari_delivery_dates", "pms.channex_offer_ari_delivery_receipts"])});` : ""}
 `);
 writeFileSync(join(work, "app", "channexManagementWorkerBoundary.js"), `
 export const channexManagementWorkerFunctions = ["platform.channex_management_worker_scope(text,text,uuid)", "pms.enqueue_restriction_ari(uuid,text)"];

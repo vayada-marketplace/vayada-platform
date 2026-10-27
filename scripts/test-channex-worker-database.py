@@ -162,10 +162,10 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
         for filename in ('channex-management-worker-database.mjs','provision-target-database-identity-runtime.mjs'):
             encoded = base64.b64encode(gzip.compress((ROOT / 'scripts' / filename).read_bytes(), compresslevel=9, mtime=0))
             self.assertLessEqual(len(encoded)+2100+1400,8192)
-        # VAY-2108 D3: bootstrap plus scope env measure ~1.1 KB; test_runner_claimed_and_delivery_modes_ship_the_scope_and_secret
-        # asserts the real override of every mode against the 8192-byte limit.
+        # VAY-2108 D3: bootstrap plus JSON scaffold and scope env measured 1066 B for delivery_revoke;
+        # test_runner_claimed_and_delivery_modes_ship_the_scope_and_secret asserts the real override of every mode.
         worker = sum(len(base64.b64encode(gzip.compress((ROOT / 'scripts' / filename).read_bytes(), compresslevel=9, mtime=0))) for filename in ('channex-management-worker-database.mjs','channex-policy-consumer-roles.mjs'))
-        self.assertLessEqual(worker+2100+1024,8192)
+        self.assertLessEqual(worker+2100+1100,8192)
         self.assertIn('VAYADA_DB_RUNTIME_PREFLIGHT_HELPER', runner)
 
     def test_grant_runner_replaces_public_function_execute_with_direct_role_grants(self):
@@ -294,13 +294,17 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
         self.assertEqual(run["status"], 0, run["stderr"])
         self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":true,"offerDelivery":true}', run["statements"])
         self.assertFalse(any(s.split()[0] in {"GRANT", "REVOKE", "INSERT", "DELETE", "LOCK"} for s in run["statements"]))
-        # An image without the optional relations (R2) refuses every delivery mode before any grant.
+        # An image without exactly the three 0520 relations (R2, or a different optional set) refuses
+        # every delivery mode before connecting.
+        wrong = ["pms.channex_offer_ari_deliveries", "pms.channex_offer_ari_delivery_dates", "pms.channel_connections"]
         for scenario in (dict(grant=True, user="vayada_target_prod_user", env={"VAYADA_DB_CHANNEX_SCOPE": "delivery"}),
-                         dict(grant=True, user="vayada_target_prod_user", env={"VAYADA_DB_CHANNEX_SCOPE": "delivery_revoke"})):
+                         dict(grant=True, user="vayada_target_prod_user", env={"VAYADA_DB_CHANNEX_SCOPE": "delivery_revoke"}),
+                         dict(env={"VAYADA_DB_CHANNEX_SCOPE": "delivery"}),
+                         dict(grant=True, user="vayada_target_prod_user", deliveryImage=True, deliveryTables=wrong, env={"VAYADA_DB_CHANNEX_SCOPE": "delivery"}),
+                         dict(grant=True, user="vayada_target_prod_user", deliveryImage=True, deliveryTables=wrong[:2], env={"VAYADA_DB_CHANNEX_SCOPE": "delivery"})):
             run = self.run_script(**scenario)
-            self.assertEqual(json.loads(run["stderr"]), {"status": "FAIL", "code": "channex_worker_delivery_scope_unsupported"})
-            self.assertEqual(run["statements"][-1], "ROLLBACK")
-            self.assertFalse(any(s.startswith(("GRANT SELECT", "GRANT INSERT", "GRANT UPDATE", "GRANT USAGE")) for s in run["statements"]))
+            self.assertEqual(json.loads(run["stderr"]), {"status": "FAIL", "code": "channex_worker_delivery_scope_unsupported"}, scenario)
+            self.assertEqual(run["statements"], [], scenario)
         run = self.run_script(env={"VAYADA_DB_CHANNEX_SCOPE": "delivery_revoke"})
         self.assertEqual(json.loads(run["stderr"]), {"status": "FAIL", "code": "channex_worker_scope_mismatch"})
 
@@ -327,7 +331,7 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
         subprocess.run(["node", "--check", str(ROOT / "scripts/channex-management-worker-database.mjs")], check=True)
         worker = sum(len(base64.b64encode(gzip.compress((ROOT / "scripts" / filename).read_bytes(), compresslevel=9, mtime=0)))
                      for filename in ("channex-management-worker-database.mjs", "channex-policy-consumer-roles.mjs"))
-        self.assertLessEqual(worker + 2100 + 1024, 8192)
+        self.assertLessEqual(worker + 2100 + 1100, 8192)
 
     def runner(self, *args):
         with tempfile.TemporaryDirectory() as directory:

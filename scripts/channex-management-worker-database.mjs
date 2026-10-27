@@ -29,6 +29,8 @@ try {
   const revoke = channexScope === "claimed_revoke" || channexScope === "delivery_revoke";
   const connection = channexScope === "connection" || claimed || delivery;
   if ((revoke && !grant) || (channexScope !== undefined && !connection)) throw new Error("channex_worker_scope_mismatch");
+  const deliveryTables = ["pms.channex_offer_ari_deliveries","pms.channex_offer_ari_delivery_dates","pms.channex_offer_ari_delivery_receipts"];
+  if (delivery && (deliveryRelations.size !== 3 || !deliveryTables.every(table=>deliveryRelations.has(table)&&channexManagementWorkerPrivileges[table]))) throw new Error("channex_worker_delivery_scope_unsupported");
   const raw = grant ? process.env.TARGET_DATABASE_MIGRATION_URL : process.env.PMS_CHANNEX_MANAGEMENT_DATABASE_URL;
   if (!raw || !process.env.VAYADA_DB_RDS_CA_BUNDLE) throw new Error("channex_worker_connection_missing");
   const url = new URL(raw);
@@ -81,10 +83,7 @@ try {
           await client.query(`INSERT INTO ${claimedTable}(operation_type) VALUES('sync_ari'),('provision') ON CONFLICT DO NOTHING`);
         }
       }
-      if (delivery) {
-        if (deliveryRelations.size !== 3) throw new Error("channex_worker_delivery_scope_unsupported");
-        if (revoke) for (const table of deliveryRelations) await client.query(`REVOKE ALL ON ${table} FROM ${role}`);
-      }
+      if (delivery && revoke) for (const table of deliveryTables) await client.query(`REVOKE ALL ON ${table} FROM ${role}`);
     } else {
       await client.query("LOCK TABLE platform.channex_management_worker_properties IN EXCLUSIVE MODE");
       const scope = (await client.query("SELECT property_id::text FROM platform.channex_management_worker_properties")).rows;
