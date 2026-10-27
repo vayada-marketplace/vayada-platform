@@ -941,8 +941,12 @@ After the 2026-10-21 incident, where two reads waited on each other's locks fore
 defaults for `vayada_next_api_runtime` in `vayada_target_prod`:
 - `lock_timeout = 10s`: a statement gives up a lock wait after 10 s. The API answers `409 busy_try_again`;
   the app PR that adds that answer goes live first.
-- `idle_in_transaction_session_timeout = 10min`: a safety net for a connection stuck in an open transaction.
-  Nothing legitimate idles that long. 60 s needs app fixes first.
+- `idle_in_transaction_session_timeout = 2min`: a safety net for a connection stuck in an open transaction.
+  It started at 10min. VAY-2297 moved every Stripe, Resend and Channex call out of open transactions or
+  capped it at 30 s, and Flamur approved 2min on 2026-10-27. After a week with no 25P03 ("idle-in-transaction
+  timeout") in the next-api logs, 60 s is the next step and needs Flamur's yes. Channex accept/decline keeps
+  its own `SET LOCAL ... = '3min'`. To go back, change `desired` in `set-api-runtime-timeouts.mjs` and run
+  `apply` again; `rollback` resets both settings.
 
 `set-api-runtime-timeouts.yml` (main only, `platform-mutations-v2`, `production-ecs-mutations` lock) runs
 `run-target-database-runtime-preflight.sh --set-api-runtime-timeouts <phase> <fingerprint>`. This is the same

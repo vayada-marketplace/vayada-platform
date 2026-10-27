@@ -380,6 +380,8 @@ esac
             self.assertEqual(split.get(release), digest, line)
         # R4 (app main 2178452a4, released 2026-10-27): the live image, with D3, D7 and D3a.
         self.assertIn(f"2178452a43fb9a78f93f38f68249430ff0a2877f {self.R4}", lines)
+        # The image production runs since 2026-10-27 16:04Z (release next-d1d75e9df, built from app main 851625e74).
+        self.assertIn("d1d75e9df1a08262df45b7b4ef37169b4da7346e sha256:5da84314667bea02ce8869da75414139b3eb34f381e594ce9fea9427ad08d081", lines)
 
 
 if __name__ == "__main__":
