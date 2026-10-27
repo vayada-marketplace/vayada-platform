@@ -195,7 +195,8 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
 
 class ChannexClaimedWorkerScopeTest(unittest.TestCase):
     """VAY-2108 P2: the claimed scope (app 0519) in the grant script and the runner."""
-    R2 = "sha256:655ca88d7a24ccd9a39d3275645fe7649f81bbf9f22b01b1e7c592167c55b2cc"
+    # The pinned image: release R4 (app main 2178452a4), the image production runs.
+    R4 = "sha256:5086d864ef2ac45c5091b87715e657608c3fa42226873870f8bbf7b98d8362b3"
     CLAIMED = "platform.channex_management_worker_claimed_operations"
 
     @staticmethod
@@ -306,11 +307,11 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
         self.assertIn('|| "${mode}" == *channex-claimed-worker ]]; then', runner)
         for mode in ("--grant-channex-claimed-worker", "--preflight-channex-claimed-worker", "--revoke-channex-claimed-worker"):
             with self.subTest(mode=mode):
-                for args in ((), ("sha256:bad",), (self.R2, "extra"), (self.R2[:-1] + "f",), ("65f6b2fc-c783-4963-9d6b-a85f82319769", self.R2)):
+                for args in ((), ("sha256:bad",), (self.R4, "extra"), (self.R4[:-1] + "f",), ("65f6b2fc-c783-4963-9d6b-a85f82319769", self.R4)):
                     result = self.runner(mode, *args)
                     self.assertEqual(result.returncode, 2, result.stderr)
                     self.assertRegex(result.stderr, "immutable image digest|not listed in scripts/next-api-channex-claimed-worker-images.txt")
-                result = self.runner(mode, self.R2)
+                result = self.runner(mode, self.R4)
                 self.assertEqual(result.returncode, 7, result.stderr)  # past validation: the CA download is the first network step
                 self.assertNotIn("not listed", result.stderr)
 
@@ -350,7 +351,7 @@ esac
                                     ("--revoke-channex-claimed-worker", "claimed_revoke", "TARGET_DATABASE_MIGRATION_URL"),
                                     ("--preflight-channex-claimed-worker", "claimed", "PMS_CHANNEX_MANAGEMENT_DATABASE_URL")):
             with self.subTest(mode=mode):
-                overrides, definition, stdout = self.runner_task(mode, self.R2)
+                overrides, definition, stdout = self.runner_task(mode, self.R4)
                 self.assertLessEqual(len(json.dumps(overrides, separators=(",", ":"))), 8192)
                 [container] = overrides["containerOverrides"]
                 env = {e["name"]: e["value"] for e in container["environment"]}
@@ -362,7 +363,7 @@ esac
                 self.assertEqual(base64.b64decode(env["VAYADA_DB_RUNTIME_PREFLIGHT_CODE"])[:2], b"\x1f\x8b")
                 [task_container] = definition["containerDefinitions"]
                 self.assertEqual(task_container["secrets"], [{"name": secret, "valueFrom": "/vayada/prod/target-database-url" if secret == "TARGET_DATABASE_MIGRATION_URL" else "/vayada/prod/target-database-channex-management-worker-url"}])
-                self.assertEqual(task_container["image"], f"269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@{self.R2}")
+                self.assertEqual(task_container["image"], f"269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@{self.R4}")
                 self.assertEqual(task_container["environment"], [])
                 self.assertEqual(task_container["portMappings"], [])
                 self.assertNotIn("taskRoleArn", definition)
@@ -377,8 +378,8 @@ esac
             self.assertRegex(line, r"^[0-9a-f]{40} sha256:[0-9a-f]{64}$")
             release, digest = line.split()
             self.assertEqual(split.get(release), digest, line)
-        # R2 (app main cdbd91640, released 2026-10-27): the live E1/E2 image.
-        self.assertIn(f"cdbd916400e179bc0a28a6d7d50f4fba80e0c453 {self.R2}", lines)
+        # R4 (app main 2178452a4, released 2026-10-27): the live image, with D3, D7 and D3a.
+        self.assertIn(f"2178452a43fb9a78f93f38f68249430ff0a2877f {self.R4}", lines)
 
 
 if __name__ == "__main__":
