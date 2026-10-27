@@ -178,6 +178,20 @@ jobs:
           python3 scripts/assert-planned-channex-claimed-image.py planned-channex-scope.json current-next-api-running-tasks.json
           rm planned-channex-scope.json
 
+      - name: Verify the claimed Channex worker grant before activating booking_ari
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra show -json tfplan > planned-channex-ari.json
+          claimed_ari="$(python3 scripts/planned-channex-claimed-ari.py planned-channex-ari.json)"
+          rm planned-channex-ari.json
+          if [ "$claimed_ari" = "true" ]; then
+            current_digest="$(
+              python3 -c \
+                'import json; print(json.load(open("current-next-api-running-tasks.json"))["tasks"][0]["containers"][0]["imageDigest"])'
+            )"
+            bash scripts/run-target-database-runtime-preflight.sh --preflight-channex-claimed-worker "${current_digest}"
+          fi
+
       - name: Preserve installed hotel setup caller
         run: |
           terraform -chdir=infra show -json tfplan > planned-setup-caller.json

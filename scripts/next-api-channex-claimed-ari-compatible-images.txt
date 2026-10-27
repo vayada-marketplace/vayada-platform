@@ -1,4 +1,5 @@
 # VAY-2108 P2: reviewed next-api images that accept the claimed ARI stage (PMS_CHANNEX_SCOPE=claimed with
 # PMS_CHANNEX_ARI_SYNC_MODE and PMS_CHANNEX_PROVISIONING_MODE mutating; app D7). Every digest here must also be
-# in next-api-channex-claimed-compatible-images.txt. Set channex_claimed_scope = "booking" or "off" before
+# in next-api-channex-claimed-compatible-images.txt (test-next-api-split-compatible-image.py checks the nesting).
+# Set channex_claimed_scope = "booking" or "off" before
 # deploying, or rolling back to, an image not listed here. Empty until the D7 image is released.
