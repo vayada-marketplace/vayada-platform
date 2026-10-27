@@ -2,11 +2,14 @@
 """VAY-2108: Terraform may declare the claimed Channex scope only while every running
 next-api task uses an image that recognises it. tf-apply rolls the new task definition
 out on the running image, and an older image refuses the claimed scope at startup.
-P2: the booking_ari stage (claimed with ARI sync mutating) likewise needs an image from
-the claimed-ARI list; a booking-only image refuses that shape at startup."""
+P2: the booking_ari stage (claimed with ARI sync and provisioning mutating) likewise needs an
+image from the claimed-ARI list; a booking-only image refuses either mode mutating at startup,
+so either one planned mutating counts as the ARI stage here."""
 import json
 from pathlib import Path
 import sys
+
+CLAIMED_ARI_MODES = {"PMS_CHANNEX_ARI_SYNC_MODE", "PMS_CHANNEX_PROVISIONING_MODE"}
 
 
 def claimed_images(name="next-api-channex-claimed-compatible-images.txt"):
@@ -25,7 +28,7 @@ def planned_claimed(plan):
         raise ValueError("expected one planned next-api container")
     environment = containers[0].get("environment", [])
     return (any(e["name"] == "PMS_CHANNEX_SCOPE" for e in environment),
-            any(e["name"] == "PMS_CHANNEX_ARI_SYNC_MODE" and e.get("value") == "mutating" for e in environment))
+            any(e["name"] in CLAIMED_ARI_MODES and e.get("value") == "mutating" for e in environment))
 
 
 def main():

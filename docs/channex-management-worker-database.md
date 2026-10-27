@@ -133,7 +133,9 @@ Terraform (`infra/channex_claimed_scope.tf`):
   otherwise it pauses both and keeps the booking shape; the `tf-apply` readiness
   check accepts the pair only together, on the claimed scope; the deploy,
   rollback and `tf-apply` image guards require a listed claimed-ARI image while
-  the pair is declared.
+  either mode is declared mutating; and `tf-apply` reruns
+  `--preflight-channex-claimed-worker` on the running image before applying a
+  plan that declares the pair (`scripts/planned-channex-claimed-ari.py`).
 - `channex_owned_property_ids` becomes `PMS_CHANNEX_OWNED_PROPERTY_IDS`
   (comma-separated). A hotel is synced only when it has an active binding claim
   *and* is listed here. The list is non-empty exactly when the scope is
@@ -169,15 +171,20 @@ Order, each step reviewed and approved separately (instructions, not evidence):
 #    channex_owned_property_ids, then activate its claim.
 # 4. ARI and provisioning (P2): --grant-channex-claimed-worker, then
 #    --preflight-channex-claimed-worker, then a claimed-ARI-capable image is
-#    listed and running, then Terraform channex_claimed_scope = "booking_ari".
+#    listed (claimed, claimed-ARI and claimed-worker lists) and running, then
+#    Terraform channex_claimed_scope = "booking_ari". tf-apply reruns the claimed
+#    preflight on the running image whenever the plan declares the pair, so a
+#    missing grant or an unlisted worker image fails before the rollout.
 ```
 
 Kill switches: revoke one hotel's claim or remove it from
 `channex_owned_property_ids` (for the last hotel, set the scope to `"off"` with an
 empty list), set `channex_claimed_scope = "booking"` (ARI and provisioning off,
 bookings kept) or `"off"` (all hotels), and on the database side
-`--revoke-channex-claimed-worker`. Never use the target Channex disable command
-for this: it deletes the Channex property.
+`--revoke-channex-claimed-worker`. Order matters for the last one: while
+`booking_ari` is live, a D7 image checks the claimed grant at every start, so set
+`"booking"` and let `tf-apply` roll it out first, then revoke. Never use the
+target Channex disable command for this: it deletes the Channex property.
 
 `Deploy App Service` keeps the claimed booking scope on `next-target-backend`
 only when it is declared exactly, on top of the connection scope: `PMS_CHANNEX_SCOPE=claimed`,
@@ -212,6 +219,7 @@ image; the next image swap is one added line):
 # check {connectionScope, claimedScope}.
 bash scripts/run-target-database-runtime-preflight.sh --grant-channex-claimed-worker sha256:LISTED_IMAGE_DIGEST
 # Worker login, read-only: the boundary with {connectionScope, claimedScope}.
+# tf-apply runs this itself, on the running image, before applying booking_ari.
 bash scripts/run-target-database-runtime-preflight.sh --preflight-channex-claimed-worker sha256:LISTED_IMAGE_DIGEST
 # Migration owner, the database-side kill switch: delete both rows, REVOKE SELECT,
 # then the connection-only boundary (the exact 0519 baseline).

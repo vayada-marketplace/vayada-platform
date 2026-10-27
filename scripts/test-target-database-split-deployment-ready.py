@@ -282,6 +282,9 @@ class DeploymentReadinessTest(unittest.TestCase):
             {**ari, "PMS_CHANNEX_BOOKING_SYNC_MODE": "observe_only"}, {**ari, "PMS_CHANNEX_WORKER_ENABLED": "false"},
             {**ari, "CHANNEX_WEBHOOK_INTAKE_MODE": "mutating"}, {**ari, "PMS_CHANNEX_SCOPE": None},
             {**ari, "PMS_CHANNEX_SCOPE": None, "PMS_CHANNEX_OWNED_PROPERTY_IDS": None, "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": None},
+            # The pair on a connection-only task (no claimed setting at all): refused for lacking the claimed scope.
+            {**ari, "PMS_CHANNEX_BOOKING_SYNC_MODE": "observe_only", "PMS_CHANNEX_SCOPE": None,
+             "PMS_CHANNEX_OWNED_PROPERTY_IDS": None, "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": None},
         ):
             result = run(image, secrets, environment=environment(**changes))
             self.assertNotEqual(result.returncode, 0, changes)
