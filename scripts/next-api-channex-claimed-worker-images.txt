@@ -1,0 +1,5 @@
+# VAY-2108: reviewed next-api images whose Channex worker boundary accepts the post-0519 database
+# (app E1 #3117 and E2 #3086 on main). Only a listed digest may run --grant-channex-claimed-worker,
+# --preflight-channex-claimed-worker or --revoke-channex-claimed-worker. Admit the next image by
+# adding one line: <app main sha> <ECR digest>. Each digest must also be in next-api-split-compatible-images.txt.
+cdbd916400e179bc0a28a6d7d50f4fba80e0c453 sha256:655ca88d7a24ccd9a39d3275645fe7649f81bbf9f22b01b1e7c592167c55b2cc

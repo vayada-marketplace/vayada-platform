@@ -3,8 +3,10 @@ import base64
 import copy
 import gzip
 import importlib.util
+import json
 import os
 import subprocess
+import tempfile
 from types import SimpleNamespace
 from pathlib import Path
 import unittest
@@ -141,15 +143,15 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
 
     def test_protected_runner_uses_explicit_image_and_only_worker_secret(self):
         runner = (ROOT / "scripts/run-target-database-runtime-preflight.sh").read_text()
-        self.assertIn('--provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker|--grant-channex-connection-worker|--preflight-channex-connection-worker)', runner)
+        self.assertIn('--provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker|--grant-channex-connection-worker|--preflight-channex-connection-worker|--grant-channex-claimed-worker|--preflight-channex-claimed-worker|--revoke-channex-claimed-worker)', runner)
         # VAY-2055: the connection scope takes only the image digest and admits the operation, not a property.
         self.assertIn('channex_scope="connection"', runner)
         self.assertIn('"$2" =~ ^sha256:[a-f0-9]{64}$', runner)
         self.assertIn('{name:"VAYADA_DB_CHANNEX_SCOPE",value:$channex_scope}', runner)
         worker_code = (ROOT / 'scripts/channex-management-worker-database.mjs').read_text()
-        self.assertIn('process.env.VAYADA_DB_CHANNEX_SCOPE === "connection"', worker_code)
+        self.assertIn('channexScope === "connection" || claimed', worker_code)
         self.assertIn('connection ? propertyId !== undefined :', worker_code)
-        self.assertIn('{connectionScope:true}', worker_code)
+        self.assertIn('{connectionScope:true,claimedScope:claimed&&!revoke}', worker_code)
         self.assertIn("INSERT INTO platform.channex_management_worker_operations(operation_type) VALUES('enable')", worker_code)
         self.assertIn('channex_worker_operation_scope_mismatch', worker_code)
         self.assertIn('provision_scope="channex_management"', runner)
@@ -189,6 +191,134 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
             "vayada_next_api_runtime", "vayada_next_finance_expense_worker"
           ]), /channex_worker_required_policy_consumer_missing/);'''
         subprocess.run(["node", "--input-type=module", "-e", script], check=True)
+
+
+class ChannexClaimedWorkerScopeTest(unittest.TestCase):
+    """VAY-2108 P2: the claimed scope (app 0519) in the grant script and the runner."""
+    R2 = "sha256:655ca88d7a24ccd9a39d3275645fe7649f81bbf9f22b01b1e7c592167c55b2cc"
+    CLAIMED = "platform.channex_management_worker_claimed_operations"
+
+    @staticmethod
+    def run_script(**scenario):
+        harness = ROOT / "scripts/fixtures/channex-worker-database/run-worker-database.mjs"
+        result = subprocess.run(["node", str(harness), json.dumps(scenario)], check=True, capture_output=True, text=True)
+        return json.loads(result.stdout)
+
+    def test_grant_claimed_adds_the_read_and_both_rows_after_the_connection_prerequisites(self):
+        run = self.run_script(grant=True, user="vayada_target_prod_user", env={"VAYADA_DB_CHANNEX_SCOPE": "claimed"})
+        self.assertEqual(run["status"], 0, run["stderr"])
+        self.assertEqual(json.loads(run["stdout"]), {"status": "PASS", "role": "vayada_next_channex_management_worker", "mode": "grant", "scope": "claimed"})
+        statements = run["statements"]
+        order = [statements.index(s) for s in (
+            'BOUNDARY {"allowMissingGrants":true}',
+            "INSERT INTO platform.channex_management_worker_operations(operation_type) VALUES('enable') ON CONFLICT DO NOTHING",
+            f"LOCK TABLE {self.CLAIMED} IN EXCLUSIVE MODE", f"SELECT operation_type FROM {self.CLAIMED}",
+            f"GRANT SELECT ON {self.CLAIMED} TO vayada_next_channex_management_worker",
+            f"INSERT INTO {self.CLAIMED}(operation_type) VALUES('sync_ari'),('provision') ON CONFLICT DO NOTHING",
+            "GRANT SELECT ON pms.channel_connections TO vayada_next_channex_management_worker",
+            'BOUNDARY {"connectionScope":true,"claimedScope":true}', "COMMIT")]
+        self.assertEqual(order, sorted(order))
+        self.assertTrue(any(s.startswith("SELECT count(*)::int AS count FROM pg_class WHERE oid=$1::regclass AND relowner=") for s in statements))
+        self.assertNotIn("ROLLBACK", statements)
+
+    def test_revoke_claimed_deletes_both_rows_and_the_read_then_asserts_the_connection_boundary(self):
+        run = self.run_script(grant=True, user="vayada_target_prod_user", claimedRows=["provision", "sync_ari"], env={"VAYADA_DB_CHANNEX_SCOPE": "claimed_revoke"})
+        self.assertEqual(run["status"], 0, run["stderr"])
+        self.assertEqual(json.loads(run["stdout"])["scope"], "claimed_revoke")
+        statements = run["statements"]
+        order = [statements.index(s) for s in (
+            f"LOCK TABLE {self.CLAIMED} IN EXCLUSIVE MODE", f"DELETE FROM {self.CLAIMED}",
+            f"REVOKE SELECT ON {self.CLAIMED} FROM vayada_next_channex_management_worker",
+            'BOUNDARY {"connectionScope":true,"claimedScope":false}', "COMMIT")]
+        self.assertEqual(order, sorted(order))
+        self.assertFalse(any("GRANT SELECT ON " + self.CLAIMED in s or "INSERT INTO " + self.CLAIMED in s for s in statements))
+
+    def test_preflight_claimed_only_reads_as_the_worker_and_requires_the_claimed_boundary(self):
+        run = self.run_script(env={"VAYADA_DB_CHANNEX_SCOPE": "claimed"})
+        self.assertEqual(run["status"], 0, run["stderr"])
+        self.assertEqual(json.loads(run["stdout"]), {"status": "PASS", "role": "vayada_next_channex_management_worker", "mode": "preflight", "scope": "claimed"})
+        self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":true}', run["statements"])
+        self.assertFalse(any(s.split()[0] in {"GRANT", "REVOKE", "INSERT", "DELETE", "LOCK"} for s in run["statements"]))
+        # The revoke scope is an owner-only grant mode; the worker login never runs it.
+        run = self.run_script(env={"VAYADA_DB_CHANNEX_SCOPE": "claimed_revoke"})
+        self.assertEqual(run["status"], 1)
+        self.assertEqual(json.loads(run["stderr"]), {"status": "FAIL", "code": "channex_worker_scope_mismatch"})
+        self.assertNotIn("BEGIN", run["statements"])
+
+    def test_grant_claimed_fails_closed_on_a_foreign_row_or_an_unowned_table(self):
+        for scenario, code in ((dict(claimedRows=["other"]), "channex_worker_claimed_scope_mismatch"),
+                               (dict(claimedOwned=False), "channex_worker_table_owner_required"),
+                               (dict(operationRows=["enable", "sync_ari"]), "channex_worker_operation_scope_mismatch")):
+            with self.subTest(code=code):
+                run = self.run_script(grant=True, user="vayada_target_prod_user", env={"VAYADA_DB_CHANNEX_SCOPE": "claimed"}, **scenario)
+                self.assertEqual(run["status"], 1)
+                self.assertEqual(json.loads(run["stderr"]), {"status": "FAIL", "code": code})
+                self.assertEqual(run["statements"][-1], "ROLLBACK")
+                self.assertFalse(any("GRANT SELECT ON " + self.CLAIMED in s for s in run["statements"]))
+
+    def test_connection_grant_and_preflight_are_unchanged_and_skip_optional_delivery_relations(self):
+        run = self.run_script(grant=True, user="vayada_target_prod_user", deliveryImage=True, env={"VAYADA_DB_CHANNEX_SCOPE": "connection"})
+        self.assertEqual(run["status"], 0, run["stderr"])
+        self.assertEqual(json.loads(run["stdout"])["scope"], "connection")
+        self.assertIn("GRANT SELECT ON pms.channel_connections TO vayada_next_channex_management_worker", run["statements"])
+        # VAY-2108 D3: the delivery tables (app 0520) get their grants only from the delivery grant mode.
+        self.assertFalse(any("pms.channex_offer_ari_deliveries" in s for s in run["statements"]))
+        self.assertFalse(any(self.CLAIMED in s for s in run["statements"]))
+        self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":false}', run["statements"])
+        run = self.run_script(env={"VAYADA_DB_CHANNEX_SCOPE": "connection"})
+        self.assertEqual(run["status"], 0, run["stderr"])
+        self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":false}', run["statements"])
+
+    def test_worker_login_mismatch_and_untrusted_endpoint_still_fail(self):
+        run = self.run_script(env={"VAYADA_DB_CHANNEX_SCOPE": "claimed"}, user="vayada_next_api_runtime")
+        self.assertEqual(json.loads(run["stderr"]), {"status": "FAIL", "code": "channex_worker_login_mismatch"})
+        run = self.run_script(grant=True, user="vayada_target_prod_user", login="vayada_target_prod_user", env={"VAYADA_DB_CHANNEX_SCOPE": "claimed", "VAYADA_DB_RDS_CA_BUNDLE": ""})
+        self.assertEqual(json.loads(run["stderr"]), {"status": "FAIL", "code": "channex_worker_connection_missing"})
+
+    def test_script_parses_and_fits_the_override_budget(self):
+        subprocess.run(["node", "--check", str(ROOT / "scripts/channex-management-worker-database.mjs")], check=True)
+        worker = sum(len(base64.b64encode(gzip.compress((ROOT / "scripts" / filename).read_bytes(), compresslevel=9, mtime=0)))
+                     for filename in ("channex-management-worker-database.mjs", "channex-policy-consumer-roles.mjs"))
+        self.assertLessEqual(worker + 2100 + 1600, 8192)
+
+    def runner(self, *args):
+        with tempfile.TemporaryDirectory() as directory:
+            # The runner needs aws, base64, gzip, jq, curl and shasum on PATH; the stubs never run
+            # before argument validation, and curl fails first on a valid call.
+            for name, code in (("aws", 99), ("curl", 7)):
+                stub = Path(directory) / name
+                stub.write_text(f"#!/bin/sh\nexit {code}\n")
+                stub.chmod(0o700)
+            return subprocess.run(["bash", str(ROOT / "scripts/run-target-database-runtime-preflight.sh"), *args],
+                                  capture_output=True, text=True, env={**os.environ, "PATH": f"{directory}:{os.environ['PATH']}"})
+
+    def test_runner_claimed_modes_take_one_listed_digest_and_use_the_owner_only_for_grant_and_revoke(self):
+        runner = (ROOT / "scripts/run-target-database-runtime-preflight.sh").read_text()
+        self.assertIn("--grant-channex-claimed-worker|--preflight-channex-claimed-worker|--revoke-channex-claimed-worker)", runner)
+        self.assertIn('channex_scope="claimed"', runner)
+        self.assertIn('[[ "${mode}" == "--revoke-channex-claimed-worker" ]] && channex_scope="claimed_revoke"', runner)
+        self.assertIn('if [[ "${mode}" == --grant-* || "${mode}" == --revoke-* ]]; then', runner)
+        self.assertIn('|| "${mode}" == *channex-claimed-worker ]]; then', runner)
+        for mode in ("--grant-channex-claimed-worker", "--preflight-channex-claimed-worker", "--revoke-channex-claimed-worker"):
+            with self.subTest(mode=mode):
+                for args in ((), ("sha256:bad",), (self.R2, "extra"), (self.R2[:-1] + "f",), ("65f6b2fc-c783-4963-9d6b-a85f82319769", self.R2)):
+                    result = self.runner(mode, *args)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertRegex(result.stderr, "immutable image digest|not listed in scripts/next-api-channex-claimed-worker-images.txt")
+                result = self.runner(mode, self.R2)
+                self.assertEqual(result.returncode, 7, result.stderr)  # past validation: the CA download is the first network step
+                self.assertNotIn("not listed", result.stderr)
+
+    def test_claimed_worker_image_list_pins_reviewed_split_compatible_digests(self):
+        lines = [line for line in (ROOT / "scripts/next-api-channex-claimed-worker-images.txt").read_text().splitlines() if line.strip() and not line.startswith("#")]
+        split = dict(line.split() for line in (ROOT / "scripts/next-api-split-compatible-images.txt").read_text().splitlines() if line.strip() and not line.startswith("#"))
+        self.assertTrue(lines)
+        for line in lines:
+            self.assertRegex(line, r"^[0-9a-f]{40} sha256:[0-9a-f]{64}$")
+            release, digest = line.split()
+            self.assertEqual(split.get(release), digest, line)
+        # R2 (app main cdbd91640, released 2026-10-27): the live E1/E2 image.
+        self.assertIn(f"cdbd916400e179bc0a28a6d7d50f4fba80e0c453 {self.R2}", lines)
 
 
 if __name__ == "__main__":

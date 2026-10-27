@@ -168,6 +168,50 @@ booking sync mutating, `target-owned`, a valid owned-property list and
 connection scope with every claimed setting removed. The `tf-apply` readiness
 check accepts the same two shapes.
 
+## Claimed worker scope: ARI and provisioning for owned hotels (VAY-2108 P2)
+
+App migration 0519 adds the owner-managed table
+`platform.channex_management_worker_claimed_operations` (rows `sync_ari` and
+`provision`, nothing else) and the helper
+`platform.channex_management_worker_claimed_scope(kind, resource)`. The worker's
+policies admit a hotel's rows on the claimed branch only while the worker can
+read that table and it holds the admitted operation, and only for hotels with an
+active binding claim on the same external id as a connected (or degraded)
+connection. The table is on purpose not in the app's privilege matrix (that
+matrix gates every next-api start), and 0519 revokes the API login's writes on
+it: its SELECT comes only from the grant mode below.
+
+Runner modes, each with the immutable digest of a listed image
+(`scripts/next-api-channex-claimed-worker-images.txt`: reviewed images whose
+worker boundary accepts the post-0519 database, one `<app sha> <digest>` line per
+image; the next image swap is one added line):
+
+```sh
+# Migration owner: the connection-grant prerequisites (function grants, exactly
+# 'enable' in the operations table, the matrix grants), then GRANT SELECT on the
+# claimed table to the worker and insert sync_ari and provision. Refuses a table
+# the owner does not own or that holds any other row. Ends with the boundary
+# check {connectionScope, claimedScope}.
+bash scripts/run-target-database-runtime-preflight.sh --grant-channex-claimed-worker sha256:LISTED_IMAGE_DIGEST
+# Worker login, read-only: the boundary with {connectionScope, claimedScope}.
+bash scripts/run-target-database-runtime-preflight.sh --preflight-channex-claimed-worker sha256:LISTED_IMAGE_DIGEST
+# Migration owner, the database-side kill switch: delete both rows, REVOKE SELECT,
+# then the connection-only boundary (the exact 0519 baseline).
+bash scripts/run-target-database-runtime-preflight.sh --revoke-channex-claimed-worker sha256:LISTED_IMAGE_DIGEST
+```
+
+The grant is inert for the running image: an image that does not ask for
+`claimedScope` accepts the table with exactly those two rows, and the claimed
+helper grants nothing to a worker that cannot read the table, so the grant and
+the revoke never block a next-api start or a rollback. The worker only runs ARI
+and provisioning for claimed hotels once Terraform declares
+`channex_claimed_scope = "booking_ari"` on a D7-capable image.
+
+The delivery tables of app migration 0520 (`pms.channex_offer_ari_deliver*`)
+are listed by D3 images as optional matrix entries; the connection and claimed
+grants skip them. They get their grants from the delivery grant mode (D3, after
+0521).
+
 ## Claimed booking staging canary (VAY-2108)
 
 `Deploy App Service` with service `next-maps-canary`, environment `next` and
