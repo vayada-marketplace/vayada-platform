@@ -1,0 +1,5 @@
+# VAY-2108 D3: reviewed next-api images whose Channex worker boundary lists the 0520 delivery tables and
+# accepts the post-0521 database (app D3 #3786 plus D3a #3787). Only a listed digest may run
+# --grant-channex-delivery-worker, --preflight-channex-delivery-worker or --revoke-channex-delivery-worker.
+# Admit the next image by adding one line: <app main sha> <ECR digest>. Each digest must also be in
+# next-api-channex-claimed-worker-images.txt and next-api-split-compatible-images.txt. Empty until D3 is released.

@@ -100,7 +100,7 @@ case "${mode}" in
       fi
     fi
     ;;
-  --provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker|--grant-channex-connection-worker|--preflight-channex-connection-worker|--grant-channex-claimed-worker|--preflight-channex-claimed-worker|--revoke-channex-claimed-worker)
+  --provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker|--grant-channex-connection-worker|--preflight-channex-connection-worker|--grant-channex-claimed-worker|--preflight-channex-claimed-worker|--revoke-channex-claimed-worker|--grant-channex-delivery-worker|--preflight-channex-delivery-worker|--revoke-channex-delivery-worker)
     ca_required=true
     family="vayada-next-api-db-runtime-preflight"
     code_file="channex-management-worker-database.mjs"
@@ -115,21 +115,22 @@ case "${mode}" in
       secret_parameter="/vayada/prod/db-marketplace-url"
       extra_secret_name="PMS_CHANNEX_MANAGEMENT_DATABASE_URL"
       extra_secret_parameter="/vayada/prod/target-database-channex-management-worker-url"
-    elif [[ "${mode}" == *channex-connection-worker || "${mode}" == *channex-claimed-worker ]]; then
+    elif [[ "${mode}" == *channex-connection-worker || "${mode}" == *channex-claimed-worker || "${mode}" == *channex-delivery-worker ]]; then
       # VAY-2055: operation scope ('enable' for unbound hotels); no property argument.
-      # VAY-2108: the claimed scope (sync_ari, provision for owned hotels) on top of it. Its modes
-      # run only on a reviewed image whose worker boundary accepts the post-0519 database: the
-      # list below pins those digests, one line per admitted image.
+      # VAY-2108: the claimed scope (sync_ari, provision for owned hotels) on top of it, and the
+      # D3 delivery scope (the 0520 delivery tables) on top of that. Their modes run only on a
+      # reviewed image whose worker boundary accepts the post-0519 (claimed) or post-0521
+      # (delivery) database: one list per scope pins those digests, one line per admitted image.
       [[ "$#" -eq 2 && "$2" =~ ^sha256:[a-f0-9]{64}$ ]] || {
-        echo "Channex connection/claimed grant, preflight and revoke require the immutable image digest." >&2; exit 2;
+        echo "Channex connection/claimed/delivery grant, preflight and revoke require the immutable image digest." >&2; exit 2;
       }
       channex_scope="connection"
-      if [[ "${mode}" == *channex-claimed-worker ]]; then
-        grep -Eq "^[0-9a-f]{40} $2\$" "$(dirname "${BASH_SOURCE[0]}")/next-api-channex-claimed-worker-images.txt" || {
-          echo "Image $2 is not listed in scripts/next-api-channex-claimed-worker-images.txt." >&2; exit 2;
+      if [[ "${mode}" != *channex-connection-worker ]]; then
+        channex_scope="${mode##*channex-}"; channex_scope="${channex_scope%-worker}"
+        grep -Eq "^[0-9a-f]{40} $2\$" "$(dirname "${BASH_SOURCE[0]}")/next-api-channex-${channex_scope}-worker-images.txt" || {
+          echo "Image $2 is not listed in scripts/next-api-channex-${channex_scope}-worker-images.txt." >&2; exit 2;
         }
-        channex_scope="claimed"
-        [[ "${mode}" == "--revoke-channex-claimed-worker" ]] && channex_scope="claimed_revoke"
+        [[ "${mode}" == --revoke-* ]] && channex_scope="${channex_scope}_revoke"
       fi
       channex_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$2"
       if [[ "${mode}" == --grant-* || "${mode}" == --revoke-* ]]; then
@@ -330,7 +331,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "$code_in_definition" == true || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker || "${mode}" == *channex-connection-worker || "${mode}" == *channex-claimed-worker ]]; then
+  if [[ "$code_in_definition" == true || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker || "${mode}" == *channex-connection-worker || "${mode}" == *channex-claimed-worker || "${mode}" == *channex-delivery-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.

@@ -143,7 +143,7 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
 
     def test_protected_runner_uses_explicit_image_and_only_worker_secret(self):
         runner = (ROOT / "scripts/run-target-database-runtime-preflight.sh").read_text()
-        self.assertIn('--provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker|--grant-channex-connection-worker|--preflight-channex-connection-worker|--grant-channex-claimed-worker|--preflight-channex-claimed-worker|--revoke-channex-claimed-worker)', runner)
+        self.assertIn('--provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker|--grant-channex-connection-worker|--preflight-channex-connection-worker|--grant-channex-claimed-worker|--preflight-channex-claimed-worker|--revoke-channex-claimed-worker|--grant-channex-delivery-worker|--preflight-channex-delivery-worker|--revoke-channex-delivery-worker)', runner)
         # VAY-2055: the connection scope takes only the image digest and admits the operation, not a property.
         self.assertIn('channex_scope="connection"', runner)
         self.assertIn('"$2" =~ ^sha256:[a-f0-9]{64}$', runner)
@@ -151,7 +151,7 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
         worker_code = (ROOT / 'scripts/channex-management-worker-database.mjs').read_text()
         self.assertIn('channexScope === "connection" || claimed', worker_code)
         self.assertIn('connection ? propertyId !== undefined :', worker_code)
-        self.assertIn('{connectionScope:true,claimedScope:claimed&&!revoke}', worker_code)
+        self.assertIn('{connectionScope:true,claimedScope:(claimed&&!revoke)||delivery,offerDelivery:delivery&&!revoke}', worker_code)
         self.assertIn("INSERT INTO platform.channex_management_worker_operations(operation_type) VALUES('enable')", worker_code)
         self.assertIn('channex_worker_operation_scope_mismatch', worker_code)
         self.assertIn('provision_scope="channex_management"', runner)
@@ -162,8 +162,10 @@ class ChannexWorkerDatabaseTest(unittest.TestCase):
         for filename in ('channex-management-worker-database.mjs','provision-target-database-identity-runtime.mjs'):
             encoded = base64.b64encode(gzip.compress((ROOT / 'scripts' / filename).read_bytes(), compresslevel=9, mtime=0))
             self.assertLessEqual(len(encoded)+2100+1400,8192)
+        # VAY-2108 D3: bootstrap plus scope env measure ~1.1 KB; test_runner_claimed_and_delivery_modes_ship_the_scope_and_secret
+        # asserts the real override of every mode against the 8192-byte limit.
         worker = sum(len(base64.b64encode(gzip.compress((ROOT / 'scripts' / filename).read_bytes(), compresslevel=9, mtime=0))) for filename in ('channex-management-worker-database.mjs','channex-policy-consumer-roles.mjs'))
-        self.assertLessEqual(worker+2100+1600,8192)
+        self.assertLessEqual(worker+2100+1024,8192)
         self.assertIn('VAYADA_DB_RUNTIME_PREFLIGHT_HELPER', runner)
 
     def test_grant_runner_replaces_public_function_execute_with_direct_role_grants(self):
@@ -216,7 +218,7 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
             f"GRANT SELECT ON {self.CLAIMED} TO vayada_next_channex_management_worker",
             f"INSERT INTO {self.CLAIMED}(operation_type) VALUES('sync_ari'),('provision') ON CONFLICT DO NOTHING",
             "GRANT SELECT ON pms.channel_connections TO vayada_next_channex_management_worker",
-            'BOUNDARY {"connectionScope":true,"claimedScope":true}', "COMMIT")]
+            'BOUNDARY {"connectionScope":true,"claimedScope":true,"offerDelivery":false}', "COMMIT")]
         self.assertEqual(order, sorted(order))
         self.assertTrue(any(s.startswith("SELECT count(*)::int AS count FROM pg_class WHERE oid=$1::regclass AND relowner=") for s in statements))
         self.assertNotIn("ROLLBACK", statements)
@@ -230,7 +232,7 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
         order = [statements.index(s) for s in (
             f"LOCK TABLE {self.CLAIMED} IN EXCLUSIVE MODE", f"DELETE FROM {self.CLAIMED}",
             f"REVOKE SELECT ON {self.CLAIMED} FROM vayada_next_channex_management_worker",
-            'BOUNDARY {"connectionScope":true,"claimedScope":false}', "COMMIT")]
+            'BOUNDARY {"connectionScope":true,"claimedScope":false,"offerDelivery":false}', "COMMIT")]
         self.assertEqual(order, sorted(order))
         self.assertFalse(any("GRANT SELECT ON " + self.CLAIMED in s or "INSERT INTO " + self.CLAIMED in s for s in statements))
 
@@ -238,7 +240,7 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
         run = self.run_script(env={"VAYADA_DB_CHANNEX_SCOPE": "claimed"})
         self.assertEqual(run["status"], 0, run["stderr"])
         self.assertEqual(json.loads(run["stdout"]), {"status": "PASS", "role": "vayada_next_channex_management_worker", "mode": "preflight", "scope": "claimed"})
-        self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":true}', run["statements"])
+        self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":true,"offerDelivery":false}', run["statements"])
         self.assertFalse(any(s.split()[0] in {"GRANT", "REVOKE", "INSERT", "DELETE", "LOCK"} for s in run["statements"]))
         # The revoke scope is an owner-only grant mode; the worker login never runs it. An unknown
         # scope string is refused before connecting instead of falling through to the canary scope.
@@ -261,6 +263,47 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
                 self.assertEqual(run["statements"][-1], "ROLLBACK")
                 self.assertFalse(any("GRANT SELECT ON " + self.CLAIMED in s for s in run["statements"]))
 
+    DELIVERY = ("pms.channex_offer_ari_deliveries", "pms.channex_offer_ari_delivery_dates", "pms.channex_offer_ari_delivery_receipts")
+
+    def test_delivery_grant_adds_only_the_optional_relations_on_top_of_the_claimed_scope(self):
+        # VAY-2108 D3: on a D3 image the delivery grant applies the matrix entries of the three
+        # optional relations and requires the claimed scope plus the delivery boundary option.
+        run = self.run_script(grant=True, user="vayada_target_prod_user", deliveryImage=True, env={"VAYADA_DB_CHANNEX_SCOPE": "delivery"})
+        self.assertEqual(run["status"], 0, run["stderr"])
+        self.assertEqual(json.loads(run["stdout"])["scope"], "delivery")
+        statements = run["statements"]
+        for table in self.DELIVERY:
+            self.assertIn(f"GRANT SELECT ON {table} TO vayada_next_channex_management_worker", statements)
+        self.assertIn("GRANT INSERT(target_id) ON pms.channex_offer_ari_deliveries TO vayada_next_channex_management_worker", statements)
+        self.assertIn("GRANT UPDATE(state) ON pms.channex_offer_ari_deliveries TO vayada_next_channex_management_worker", statements)
+        boundary = statements.index('BOUNDARY {"connectionScope":true,"claimedScope":true,"offerDelivery":true}')
+        self.assertGreater(boundary, max(i for i, s in enumerate(statements) if s.startswith("GRANT ")))
+        self.assertEqual(statements[-1], "COMMIT")
+        self.assertFalse(any(self.CLAIMED in s for s in statements))  # the claimed scope is asserted, never re-granted here
+        self.assertFalse(any("REVOKE ALL" in s for s in statements))
+        # The revoke takes the three tables back and asserts the claimed boundary without delivery.
+        run = self.run_script(grant=True, user="vayada_target_prod_user", deliveryImage=True, env={"VAYADA_DB_CHANNEX_SCOPE": "delivery_revoke"})
+        self.assertEqual(run["status"], 0, run["stderr"])
+        statements = run["statements"]
+        for table in self.DELIVERY:
+            self.assertIn(f"REVOKE ALL ON {table} FROM vayada_next_channex_management_worker", statements)
+            self.assertFalse(any(s.startswith("GRANT") and table in s for s in statements))
+        self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":true,"offerDelivery":false}', statements)
+        # The preflight reads only, with the delivery option.
+        run = self.run_script(deliveryImage=True, env={"VAYADA_DB_CHANNEX_SCOPE": "delivery"})
+        self.assertEqual(run["status"], 0, run["stderr"])
+        self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":true,"offerDelivery":true}', run["statements"])
+        self.assertFalse(any(s.split()[0] in {"GRANT", "REVOKE", "INSERT", "DELETE", "LOCK"} for s in run["statements"]))
+        # An image without the optional relations (R2) refuses every delivery mode before any grant.
+        for scenario in (dict(grant=True, user="vayada_target_prod_user", env={"VAYADA_DB_CHANNEX_SCOPE": "delivery"}),
+                         dict(grant=True, user="vayada_target_prod_user", env={"VAYADA_DB_CHANNEX_SCOPE": "delivery_revoke"})):
+            run = self.run_script(**scenario)
+            self.assertEqual(json.loads(run["stderr"]), {"status": "FAIL", "code": "channex_worker_delivery_scope_unsupported"})
+            self.assertEqual(run["statements"][-1], "ROLLBACK")
+            self.assertFalse(any(s.startswith(("GRANT SELECT", "GRANT INSERT", "GRANT UPDATE", "GRANT USAGE")) for s in run["statements"]))
+        run = self.run_script(env={"VAYADA_DB_CHANNEX_SCOPE": "delivery_revoke"})
+        self.assertEqual(json.loads(run["stderr"]), {"status": "FAIL", "code": "channex_worker_scope_mismatch"})
+
     def test_connection_grant_and_preflight_are_unchanged_and_skip_optional_delivery_relations(self):
         run = self.run_script(grant=True, user="vayada_target_prod_user", deliveryImage=True, env={"VAYADA_DB_CHANNEX_SCOPE": "connection"})
         self.assertEqual(run["status"], 0, run["stderr"])
@@ -269,10 +312,10 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
         # VAY-2108 D3: the delivery tables (app 0520) get their grants only from the delivery grant mode.
         self.assertFalse(any("pms.channex_offer_ari_deliveries" in s for s in run["statements"]))
         self.assertFalse(any(self.CLAIMED in s for s in run["statements"]))
-        self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":false}', run["statements"])
+        self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":false,"offerDelivery":false}', run["statements"])
         run = self.run_script(env={"VAYADA_DB_CHANNEX_SCOPE": "connection"})
         self.assertEqual(run["status"], 0, run["stderr"])
-        self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":false}', run["statements"])
+        self.assertIn('BOUNDARY {"connectionScope":true,"claimedScope":false,"offerDelivery":false}', run["statements"])
 
     def test_worker_login_mismatch_and_untrusted_endpoint_still_fail(self):
         run = self.run_script(env={"VAYADA_DB_CHANNEX_SCOPE": "claimed"}, user="vayada_next_api_runtime")
@@ -284,7 +327,7 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
         subprocess.run(["node", "--check", str(ROOT / "scripts/channex-management-worker-database.mjs")], check=True)
         worker = sum(len(base64.b64encode(gzip.compress((ROOT / "scripts" / filename).read_bytes(), compresslevel=9, mtime=0)))
                      for filename in ("channex-management-worker-database.mjs", "channex-policy-consumer-roles.mjs"))
-        self.assertLessEqual(worker + 2100 + 1600, 8192)
+        self.assertLessEqual(worker + 2100 + 1024, 8192)
 
     def runner(self, *args):
         with tempfile.TemporaryDirectory() as directory:
@@ -299,26 +342,41 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
 
     def test_runner_claimed_modes_take_one_listed_digest_and_use_the_owner_only_for_grant_and_revoke(self):
         runner = (ROOT / "scripts/run-target-database-runtime-preflight.sh").read_text()
-        self.assertIn("--grant-channex-claimed-worker|--preflight-channex-claimed-worker|--revoke-channex-claimed-worker)", runner)
-        self.assertIn('channex_scope="claimed"', runner)
-        self.assertIn('[[ "${mode}" == "--revoke-channex-claimed-worker" ]] && channex_scope="claimed_revoke"', runner)
+        self.assertIn("--grant-channex-claimed-worker|--preflight-channex-claimed-worker|--revoke-channex-claimed-worker|--grant-channex-delivery-worker|--preflight-channex-delivery-worker|--revoke-channex-delivery-worker)", runner)
+        self.assertIn('next-api-channex-${channex_scope}-worker-images.txt', runner)
+        self.assertIn('[[ "${mode}" == --revoke-* ]] && channex_scope="${channex_scope}_revoke"', runner)
         self.assertIn('if [[ "${mode}" == --grant-* || "${mode}" == --revoke-* ]]; then', runner)
-        self.assertIn('|| "${mode}" == *channex-claimed-worker ]]; then', runner)
-        for mode in ("--grant-channex-claimed-worker", "--preflight-channex-claimed-worker", "--revoke-channex-claimed-worker"):
-            with self.subTest(mode=mode):
-                for args in ((), ("sha256:bad",), (self.R2, "extra"), (self.R2[:-1] + "f",), ("65f6b2fc-c783-4963-9d6b-a85f82319769", self.R2)):
-                    result = self.runner(mode, *args)
-                    self.assertEqual(result.returncode, 2, result.stderr)
-                    self.assertRegex(result.stderr, "immutable image digest|not listed in scripts/next-api-channex-claimed-worker-images.txt")
-                result = self.runner(mode, self.R2)
-                self.assertEqual(result.returncode, 7, result.stderr)  # past validation: the CA download is the first network step
-                self.assertNotIn("not listed", result.stderr)
+        self.assertIn('|| "${mode}" == *channex-claimed-worker || "${mode}" == *channex-delivery-worker ]]; then', runner)
+        for kind in ("claimed", "delivery"):
+            for mode in (f"--grant-channex-{kind}-worker", f"--preflight-channex-{kind}-worker", f"--revoke-channex-{kind}-worker"):
+                with self.subTest(mode=mode):
+                    for args in ((), ("sha256:bad",), (self.R2, "extra"), (self.R2[:-1] + "f",), ("65f6b2fc-c783-4963-9d6b-a85f82319769", self.R2)):
+                        result = self.runner(mode, *args)
+                        self.assertEqual(result.returncode, 2, result.stderr)
+                        self.assertRegex(result.stderr, f"immutable image digest|not listed in scripts/next-api-channex-{kind}-worker-images.txt")
+                    result = self.runner(mode, self.R2)
+                    if kind == "delivery":  # the real delivery list is empty until the D3 image ships
+                        self.assertEqual(result.returncode, 2, result.stderr)
+                        self.assertIn("not listed in scripts/next-api-channex-delivery-worker-images.txt", result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 7, result.stderr)  # past validation: the CA download is the first network step
+                        self.assertNotIn("not listed", result.stderr)
 
-    def runner_task(self, mode, digest):
+    def runner_task(self, mode, digest, delivery_listed=False):
         """Run the runner end to end against a stubbed aws (and the real RDS CA bundle download)."""
         with tempfile.TemporaryDirectory() as directory:
             record = Path(directory) / "record"
             record.mkdir()
+            runner = ROOT / "scripts/run-target-database-runtime-preflight.sh"
+            if delivery_listed:
+                # A copy of the runner with a fixture delivery list (the real one is empty until D3 ships).
+                scripts = Path(directory) / "scripts"
+                scripts.mkdir()
+                for name in ("run-target-database-runtime-preflight.sh", "channex-management-worker-database.mjs",
+                             "channex-policy-consumer-roles.mjs", "next-api-channex-claimed-worker-images.txt"):
+                    (scripts / name).write_bytes((ROOT / "scripts" / name).read_bytes())
+                (scripts / "next-api-channex-delivery-worker-images.txt").write_text(f"# fixture\n{'d' * 40} {digest}\n")
+                runner = scripts / "run-target-database-runtime-preflight.sh"
             stub = Path(directory) / "aws"
             stub.write_text("""#!/usr/bin/env bash
 record=%s; sub="$1 $2"; query=""; prev=""; for a in "$@"; do
@@ -336,21 +394,24 @@ case "$sub|$query" in
   "ecs stop-task|"*|"ecs deregister-task-definition|"*) ;;
   *) echo "unexpected aws call: $sub $query" >&2; exit 97 ;;
 esac
-""" % (record, "preflight" if mode.startswith("--preflight") else "grant", "claimed_revoke" if mode.startswith("--revoke") else "claimed"))
+""" % (record, "preflight" if mode.startswith("--preflight") else "grant", mode.split("channex-")[1].replace("-worker", "") + ("_revoke" if mode.startswith("--revoke") else "")))
             stub.chmod(0o700)
-            result = subprocess.run(["bash", str(ROOT / "scripts/run-target-database-runtime-preflight.sh"), mode, digest],
+            result = subprocess.run(["bash", str(runner), mode, digest],
                                     capture_output=True, text=True, env={**os.environ, "PATH": f"{directory}:{os.environ['PATH']}"})
             if "curl: (" in result.stderr or "CA bundle checksum mismatch" in result.stderr:
                 self.skipTest("the RDS CA bundle download is unavailable here")
             self.assertEqual(result.returncode, 0, result.stderr)
             return json.loads((record / "overrides.json").read_text()), json.loads((record / "definition.json").read_text()), result.stdout
 
-    def test_runner_claimed_modes_ship_the_scope_and_secret_the_mode_needs(self):
+    def test_runner_claimed_and_delivery_modes_ship_the_scope_and_secret_the_mode_needs(self):
         for mode, scope, secret in (("--grant-channex-claimed-worker", "claimed", "TARGET_DATABASE_MIGRATION_URL"),
                                     ("--revoke-channex-claimed-worker", "claimed_revoke", "TARGET_DATABASE_MIGRATION_URL"),
-                                    ("--preflight-channex-claimed-worker", "claimed", "PMS_CHANNEX_MANAGEMENT_DATABASE_URL")):
+                                    ("--preflight-channex-claimed-worker", "claimed", "PMS_CHANNEX_MANAGEMENT_DATABASE_URL"),
+                                    ("--grant-channex-delivery-worker", "delivery", "TARGET_DATABASE_MIGRATION_URL"),
+                                    ("--revoke-channex-delivery-worker", "delivery_revoke", "TARGET_DATABASE_MIGRATION_URL"),
+                                    ("--preflight-channex-delivery-worker", "delivery", "PMS_CHANNEX_MANAGEMENT_DATABASE_URL")):
             with self.subTest(mode=mode):
-                overrides, definition, stdout = self.runner_task(mode, self.R2)
+                overrides, definition, stdout = self.runner_task(mode, self.R2, delivery_listed="delivery" in mode)
                 self.assertLessEqual(len(json.dumps(overrides, separators=(",", ":"))), 8192)
                 [container] = overrides["containerOverrides"]
                 env = {e["name"]: e["value"] for e in container["environment"]}
@@ -377,6 +438,11 @@ esac
             self.assertRegex(line, r"^[0-9a-f]{40} sha256:[0-9a-f]{64}$")
             release, digest = line.split()
             self.assertEqual(split.get(release), digest, line)
+        # D3: every delivery-capable image must also be a claimed-capable one.
+        delivery = [line for line in (ROOT / "scripts/next-api-channex-delivery-worker-images.txt").read_text().splitlines() if line.strip() and not line.startswith("#")]
+        for line in delivery:
+            self.assertRegex(line, r"^[0-9a-f]{40} sha256:[0-9a-f]{64}$")
+            self.assertIn(line, lines)
         # R2 (app main cdbd91640, released 2026-10-27): the live E1/E2 image.
         self.assertIn(f"cdbd916400e179bc0a28a6d7d50f4fba80e0c453 {self.R2}", lines)
 

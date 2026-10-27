@@ -18,13 +18,16 @@ const policyConsumerFunctions = channexManagementWorkerFunctions.filter(name =>
 // worker's SELECT on the owner table platform.channex_management_worker_claimed_operations and
 // its two rows (sync_ari, provision); claimed_revoke takes both back. The claimed table is not
 // in the privilege matrix on purpose: the matrix gates every next-api start.
+// VAYADA_DB_CHANNEX_SCOPE=delivery (VAY-2108 D3, app 0520/0521) grants the matrix entries of the
+// optional delivery relations on top of the claimed scope; delivery_revoke takes them back.
 let client;
 try {
   const grant = process.env.VAYADA_DB_GRANT_SCOPE === "channex_management";
   const channexScope = process.env.VAYADA_DB_CHANNEX_SCOPE;
   const claimed = channexScope === "claimed" || channexScope === "claimed_revoke";
-  const revoke = channexScope === "claimed_revoke";
-  const connection = channexScope === "connection" || claimed;
+  const delivery = channexScope === "delivery" || channexScope === "delivery_revoke";
+  const revoke = channexScope === "claimed_revoke" || channexScope === "delivery_revoke";
+  const connection = channexScope === "connection" || claimed || delivery;
   if ((revoke && !grant) || (channexScope !== undefined && !connection)) throw new Error("channex_worker_scope_mismatch");
   const raw = grant ? process.env.TARGET_DATABASE_MIGRATION_URL : process.env.PMS_CHANNEX_MANAGEMENT_DATABASE_URL;
   if (!raw || !process.env.VAYADA_DB_RDS_CA_BUNDLE) throw new Error("channex_worker_connection_missing");
@@ -38,7 +41,7 @@ try {
   await client.query("SET search_path TO pg_catalog");
   const propertyId = process.env.PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID;
   if (connection ? propertyId !== undefined : !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(propertyId??"")) throw new Error("channex_worker_property_required");
-  const scope = connection ? {connectionScope:true,claimedScope:claimed&&!revoke} : {propertyId};
+  const scope = connection ? {connectionScope:true,claimedScope:(claimed&&!revoke)||delivery,offerDelivery:delivery&&!revoke} : {propertyId};
   const claimedTable = "platform.channex_management_worker_claimed_operations";
   await client.query("BEGIN");
   const existingPolicyConsumerRoles = (await client.query(
@@ -78,6 +81,10 @@ try {
           await client.query(`INSERT INTO ${claimedTable}(operation_type) VALUES('sync_ari'),('provision') ON CONFLICT DO NOTHING`);
         }
       }
+      if (delivery) {
+        if (deliveryRelations.size !== 3) throw new Error("channex_worker_delivery_scope_unsupported");
+        if (revoke) for (const table of deliveryRelations) await client.query(`REVOKE ALL ON ${table} FROM ${role}`);
+      }
     } else {
       await client.query("LOCK TABLE platform.channex_management_worker_properties IN EXCLUSIVE MODE");
       const scope = (await client.query("SELECT property_id::text FROM platform.channex_management_worker_properties")).rows;
@@ -86,7 +93,7 @@ try {
     }
     await client.query(`GRANT USAGE ON SCHEMA platform,finance,booking,identity,hotel_catalog,pms TO ${role}`);
     for (const [table,grants] of Object.entries(channexManagementWorkerPrivileges))
-      if (!deliveryRelations.has(table)) for (const [kind,columns] of Object.entries(grants))
+      if (!deliveryRelations.has(table) || (delivery && !revoke)) for (const [kind,columns] of Object.entries(grants))
         await client.query(`GRANT ${kind}${columns===true?"":`(${columns.join(",")})`} ON ${table} TO ${role}`);
   } else {
     const login = (await client.query("SELECT current_user,session_user")).rows[0];

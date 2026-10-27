@@ -231,8 +231,41 @@ capable (app D7).
 
 The delivery tables of app migration 0520 (`pms.channex_offer_ari_deliver*`)
 are listed by D3 images as optional matrix entries; the connection and claimed
-grants skip them. They get their grants from the delivery grant mode (D3, after
-0521).
+grants skip them. They get their grants from the delivery grant mode below.
+
+## Delivery worker scope: ongoing offer ARI (VAY-2108 D3)
+
+App D3 (#3786) lists the three 0520 delivery tables in the worker's privilege
+matrix as optional (`optionalChannexDeliveryRelations`), and migration 0521
+(D3a, #3787) gives them the worker's row security. The D3 image starts with or
+without the delivery grants while `PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED` is
+off; with it on, its boundary requires them (`offerDelivery`). The grants come
+only from this mode, so a connection or claimed grant re-run on a D3 image never
+widens the worker to the delivery tables before 0521 is live.
+
+Runner modes, each with the digest of an image listed in
+`scripts/next-api-channex-delivery-worker-images.txt` (empty until the D3 image
+is released; admit it with one `<app sha> <digest>` line, which must also be in
+the claimed-worker list):
+
+```sh
+# Migration owner: the connection and claimed prerequisites (the claimed scope
+# must already be granted), then the matrix grants of exactly the three delivery
+# relations. Refused on an image that does not list them. Ends with the boundary
+# check {connectionScope, claimedScope, offerDelivery}: it fails closed with
+# rls_disabled until 0521 is applied.
+bash scripts/run-target-database-runtime-preflight.sh --grant-channex-delivery-worker sha256:LISTED_IMAGE_DIGEST
+# Worker login, read-only: the same boundary.
+bash scripts/run-target-database-runtime-preflight.sh --preflight-channex-delivery-worker sha256:LISTED_IMAGE_DIGEST
+# Migration owner, the database-side kill switch: REVOKE ALL on the three
+# relations, then the claimed boundary without the delivery option.
+bash scripts/run-target-database-runtime-preflight.sh --revoke-channex-delivery-worker sha256:LISTED_IMAGE_DIGEST
+```
+
+Order: the D3 image is serving (it refuses a database without 0519 and 0520),
+then 0521 (D3a) is live, then the delivery grant and preflight, then the app
+switch `PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED=true` on a claimed `booking_ari`
+next-api (a Terraform change of its own, reviewed when the switch is due).
 
 ## Claimed booking staging canary (VAY-2108)
 
