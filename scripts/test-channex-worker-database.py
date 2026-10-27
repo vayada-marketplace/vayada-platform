@@ -359,13 +359,10 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
                         result = self.runner(mode, *args)
                         self.assertEqual(result.returncode, 2, result.stderr)
                         self.assertRegex(result.stderr, f"immutable image digest|not listed in scripts/next-api-channex-{kind}-worker-images.txt")
+                    # R4 is on both real lists: past validation, the (stubbed) CA download is the first network step.
                     result = self.runner(mode, self.R4)
-                    if kind == "delivery":  # the real delivery list is empty until the D3 image ships
-                        self.assertEqual(result.returncode, 2, result.stderr)
-                        self.assertIn("not listed in scripts/next-api-channex-delivery-worker-images.txt", result.stderr)
-                    else:
-                        self.assertEqual(result.returncode, 7, result.stderr)  # past validation: the CA download is the first network step
-                        self.assertNotIn("not listed", result.stderr)
+                    self.assertEqual(result.returncode, 7, result.stderr)
+                    self.assertNotIn("not listed", result.stderr)
 
     def runner_task(self, mode, digest, delivery_listed=False):
         """Run the runner end to end against a stubbed aws (and the real RDS CA bundle download)."""
