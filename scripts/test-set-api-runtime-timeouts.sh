@@ -87,8 +87,8 @@ plan="$(run inspect)"
 field '.otherDatabaseDefaults[]' "${plan}" | grep -Fx statement_timeout >/dev/null
 result="$(run apply "$(field .fingerprint "${plan}")")"
 [[ "$(field .status "${result}")" == PASS && "$(field .current.lock_timeout "${result}")" == 10s ]]
-[[ "$(field .current.idle_in_transaction_session_timeout "${result}")" == 10min ]]
-[[ "$(shown vayada_target_prod)" == "10s 10min" ]]
+[[ "$(field .current.idle_in_transaction_session_timeout "${result}")" == 2min ]]
+[[ "$(shown vayada_target_prod)" == "10s 2min" ]]
 [[ "$(shown vayada_other)" == "0 0" ]]
 [[ "$(sql vayada_target_prod <<<"SELECT current_setting('statement_timeout') FROM (SELECT 1) x")" == "0" ]]
 plan="$(run inspect)"
@@ -100,6 +100,16 @@ result="$(run rollback "$(field .fingerprint "${plan}")")"
 [[ "$(field .status "${result}")" == PASS && "$(field .current.lock_timeout "${result}")" == null ]]
 [[ "$(shown vayada_target_prod)" == "0 0" ]]
 [[ "$(sql vayada_target_prod <<<"SELECT array_to_string(setconfig, ',') FROM pg_db_role_setting WHERE setrole = '${login}'::regrole")" == "statement_timeout=30s" ]]
+
+# Production holds the earlier 10min idle default (VAY-2247): apply steps it down to the desired value.
+sql vayada_target_prod vayada_admin <<SQL
+ALTER ROLE ${login} IN DATABASE vayada_target_prod SET lock_timeout = '10s';
+ALTER ROLE ${login} IN DATABASE vayada_target_prod SET idle_in_transaction_session_timeout = '10min';
+SQL
+plan="$(run inspect)"
+[[ "$(field .readyToApply "${plan}")" == true && "$(field .current.idle_in_transaction_session_timeout "${plan}")" == 10min ]]
+result="$(run apply "$(field .fingerprint "${plan}")")"
+[[ "$(field .status "${result}")" == PASS && "$(shown vayada_target_prod)" == "10s 2min" ]]
 
 # A login vayada_admin holds no ADMIN OPTION on is refused before anything changes.
 sql vayada_target_prod vayada_admin <<<"REVOKE CONNECT ON DATABASE vayada_target_prod, vayada_other FROM ${login};"

@@ -1,7 +1,8 @@
 // VAY-2247 incident follow-up (Flamur, 2026-10-21): vayada_admin sets two defaults for the API's runtime
 // login in vayada_target_prod. lock_timeout 10s: a lock wait gives up and the API answers "busy, try
-// again" instead of hanging. idle_in_transaction_session_timeout 10min: a safety net for a connection
-// stuck inside an open transaction. inspect is read-only and prints the fingerprint of what it captured;
+// again" instead of hanging. idle_in_transaction_session_timeout: a safety net for a connection stuck
+// inside an open transaction; 10min at first, 2min since VAY-2297 (Flamur, 2026-10-27) once no app path
+// idles in a transaction while it waits on Stripe, Resend or Channex. inspect is read-only and prints the fingerprint of what it captured;
 // apply (SET both) and rollback (RESET both) recapture under the same lock, refuse unless that fingerprint
 // matches, change the role in one transaction and verify after commit. New sessions pick the defaults up;
 // open ones keep theirs until the API's pools reconnect.
@@ -16,7 +17,7 @@ const database = "vayada_target_prod";
 const admin = "vayada_admin";
 const lockKey = 22472021;
 const login = "vayada_next_api_runtime";
-const desired = { lock_timeout: "10s", idle_in_transaction_session_timeout: "10min" };
+const desired = { lock_timeout: "10s", idle_in_transaction_session_timeout: "2min" };
 const names = Object.keys(desired);
 const quote = (value) => `"${value.replaceAll('"', '""')}"`;
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
