@@ -359,6 +359,10 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
                         result = self.runner(mode, *args)
                         self.assertEqual(result.returncode, 2, result.stderr)
                         self.assertRegex(result.stderr, f"immutable image digest|not listed in scripts/next-api-channex-{kind}-worker-images.txt")
+                    # A well-formed but unlisted digest is refused by name.
+                    unlisted = self.runner(mode, self.R4[:-1] + "f")
+                    self.assertEqual(unlisted.returncode, 2, unlisted.stderr)
+                    self.assertIn(f"not listed in scripts/next-api-channex-{kind}-worker-images.txt", unlisted.stderr)
                     # R4 is on both real lists: past validation, the (stubbed) CA download is the first network step.
                     result = self.runner(mode, self.R4)
                     self.assertEqual(result.returncode, 7, result.stderr)
@@ -371,7 +375,7 @@ class ChannexClaimedWorkerScopeTest(unittest.TestCase):
             record.mkdir()
             runner = ROOT / "scripts/run-target-database-runtime-preflight.sh"
             if delivery_listed:
-                # A copy of the runner with a fixture delivery list (the real one is empty until D3 ships).
+                # A copy of the runner with a fixture delivery list, so this end-to-end case does not depend on the real list.
                 scripts = Path(directory) / "scripts"
                 scripts.mkdir()
                 for name in ("run-target-database-runtime-preflight.sh", "channex-management-worker-database.mjs",
