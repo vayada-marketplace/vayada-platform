@@ -408,7 +408,7 @@ class RuntimePreflightRunnerTest(unittest.TestCase):
         for marker in ('MEMBER WITH ADMIN OPTION', 'api_runtime_timeouts_plan_changed',
                        'api_runtime_timeouts_admin_option_missing', 'api_runtime_timeouts_already_applied',
                        'api_runtime_timeouts_not_applied', 'IN DATABASE', 'lock_timeout: "10s"',
-                       'idle_in_transaction_session_timeout: "10min"', 'COMMITTED_UNVERIFIED',
+                       'idle_in_transaction_session_timeout: "2min"', 'COMMITTED_UNVERIFIED',
                        'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com',
                        'url.search !== "?sslmode=require"', 'rejectUnauthorized: true'):
             self.assertIn(marker, source)
