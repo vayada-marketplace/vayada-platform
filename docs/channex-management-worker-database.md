@@ -294,3 +294,6 @@ first (service `next-maps-canary-remove`). The image must report
 Every other canary mode drops the claimed settings it would otherwise copy from
 production next-api and forces booking sync to `observe_only`, so a canary never
 pulls production hotels.
+Every canary mode also sets `FINANCE_EXPORT_WORKER_ENABLED=false` and drops the
+export worker's credential: canaries run without background workers, and the app
+refuses an enabled export worker without them, so a canary never runs Finance exports.

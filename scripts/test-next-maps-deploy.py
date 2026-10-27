@@ -91,7 +91,7 @@ class DeploymentGuards(unittest.TestCase):
             {"name": "CHANNEX_WEBHOOK_SECRET", "valueFrom": "production-token"},
             {"name": api["CHANNEX_WORKER_SECRET_NAME"], "valueFrom": api["CHANNEX_WORKER_SECRET_PARAMETER"]}]}
 
-    def deploy_until_register(self, extra, source, rules=None, group=None):
+    def deploy_until_register(self, extra, source, rules=None, group=None, register_hook=None):
         main = api["main"]
         events = []
         def aws(service, op, **kwargs):
@@ -106,6 +106,8 @@ class DeploymentGuards(unittest.TestCase):
             if op == "describe-images": return {"imageDetails": [{"imageDigest": "sha256:" + "b" * 64}]}
             if op == "describe-parameters": return {"Parameters": [{"Type": "SecureString"}]}
             if op == "register-task-definition":
+                if register_hook is not None:
+                    register_hook.append(kwargs)
                 events.append(("register", kwargs["containerDefinitions"][0]))
                 raise RuntimeError("stop before deployment")
             raise AssertionError(op)
@@ -115,6 +117,39 @@ class DeploymentGuards(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "stop before deployment"):
                 main()
         return events
+
+    def test_no_canary_runs_finance_exports(self):
+        # VAY-2108: production next-api runs ongoing Finance exports; a canary (background workers off)
+        # must get the flag off and no export worker credential, in every mode, while the production
+        # definition it copies is only read: the one registration is the canary family's.
+        def production_source():
+            source = self.claimed_production_source()
+            source["environment"] += [
+                {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "true"},
+                {"name": "FINANCE_EXPORT_WORKER_ACCEPTED_AFTER", "value": "2026-09-25T05:00:00.000Z"},
+                {"name": "FINANCE_EXPORT_WORKER_PROPERTY_ID", "value": ""},
+                {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "true"}]
+            source["secrets"].append({"name": "FINANCE_EXPORT_WORKER_DATABASE_URL",
+                                      "valueFrom": "/vayada/prod/target-database-finance-export-worker-url"})
+            return source
+        for extra in ([], ["--channex-staging"], ["--channex-staging-booking"]):
+            with self.subTest(options=extra):
+                registered = []
+                # The stubbed aws refuses every call other than reads and this one registration.
+                events = self.deploy_until_register(extra, production_source(), register_hook=registered)
+                container = [payload for kind, payload in events if kind == "register"][0]
+                env = [e for e in container["environment"] if e["name"] == "FINANCE_EXPORT_WORKER_ENABLED"]
+                self.assertEqual(env, [{"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"}])
+                self.assertFalse(any(x["name"] == "FINANCE_EXPORT_WORKER_DATABASE_URL" for x in container["secrets"]))
+                self.assertIn({"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}, container["environment"])
+                self.assertEqual([payload["family"] for payload in registered], [api["FAMILY"]])
+        # The helper itself leaves everything else alone.
+        source = production_source()
+        before = json.loads(json.dumps(source))
+        api["disable_finance_export"](source)
+        self.assertEqual([e for e in source["environment"] if e["name"] != "FINANCE_EXPORT_WORKER_ENABLED"],
+                         [e for e in before["environment"] if e["name"] != "FINANCE_EXPORT_WORKER_ENABLED"])
+        self.assertEqual(source["secrets"], [x for x in before["secrets"] if x["name"] != "FINANCE_EXPORT_WORKER_DATABASE_URL"])
 
     def test_production_claimed_scope_reaches_a_canary_only_in_booking_mode(self):
         claimed = {"PMS_CHANNEX_SCOPE", "PMS_CHANNEX_OWNED_PROPERTY_IDS", "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE"}

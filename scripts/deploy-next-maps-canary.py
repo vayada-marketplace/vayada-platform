@@ -213,6 +213,19 @@ def drop_claimed_scope(container):
     container["secrets"] = [e for e in container.get("secrets", []) if e["name"] not in names]
 
 
+FINANCE_EXPORT_WORKER_SECRET_NAME = "FINANCE_EXPORT_WORKER_DATABASE_URL"
+
+
+def disable_finance_export(container):
+    """VAY-2108: a canary never runs Finance exports. Canaries run without background workers, and
+    the app refuses an enabled export worker without them, so the flag is forced off and the export
+    worker's credential is not mapped into the canary."""
+    container["environment"] = [e for e in container["environment"] if e["name"] != "FINANCE_EXPORT_WORKER_ENABLED"]
+    container["environment"].append({"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"})
+    container["secrets"] = [e for e in container.get("secrets", [])
+                            if e["name"] not in {"FINANCE_EXPORT_WORKER_ENABLED", FINANCE_EXPORT_WORKER_SECRET_NAME}]
+
+
 def configure_channex_claimed_booking(container):
     """Pull-only booking sync for the synthetic property against staging Channex, no worker."""
     settings = {
@@ -603,6 +616,7 @@ def main():
         assert len(parameters) == 1 and parameters[0]["Type"] == "SecureString"
         configure_channex_alerts(source)
     source["image"] = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
+    disable_finance_export(source)
     source["environment"] = [e for e in source["environment"] if e["name"] not in {"PUBLIC_HOTEL_PROFILE_SOURCE", "GOOGLE_NEARBY_ENABLED", "API_BACKGROUND_WORKERS_ENABLED"}]
     source["environment"] += [{"name": "PUBLIC_HOTEL_PROFILE_SOURCE", "value": "active_publication"}, {"name": "GOOGLE_NEARBY_ENABLED", "value": "true"}, {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]
     source["secrets"] = [e for e in source["secrets"] if e["name"] != "GOOGLE_PLACES_SERVER_API_KEY"]
