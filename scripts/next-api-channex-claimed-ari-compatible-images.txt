@@ -2,4 +2,5 @@
 # PMS_CHANNEX_ARI_SYNC_MODE and PMS_CHANNEX_PROVISIONING_MODE mutating; app D7). Every digest here must also be
 # in next-api-channex-claimed-compatible-images.txt (test-next-api-split-compatible-image.py checks the nesting).
 # Set channex_claimed_scope = "booking" or "off" before
-# deploying, or rolling back to, an image not listed here. Empty until the D7 image is released.
+# deploying, or rolling back to, an image not listed here. First: release R4 (app main 2178452a4, D7).
+2178452a43fb9a78f93f38f68249430ff0a2877f sha256:5086d864ef2ac45c5091b87715e657608c3fa42226873870f8bbf7b98d8362b3

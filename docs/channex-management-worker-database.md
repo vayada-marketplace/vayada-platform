@@ -252,9 +252,10 @@ only from this mode, so a connection or claimed grant re-run on a D3 image never
 widens the worker to the delivery tables before 0521 is live.
 
 Runner modes, each with the digest of an image listed in
-`scripts/next-api-channex-delivery-worker-images.txt` (empty until the D3 image
-is released; admit it with one `<app sha> <digest>` line; the test suite, not
-the runner, checks that the line is also in the claimed-worker list):
+`scripts/next-api-channex-delivery-worker-images.txt` (the first is release R4,
+app main 2178452a4; admit the next image with one `<app sha> <digest>` line; the
+test suite, not the runner, checks that the line is also in the claimed-worker
+list):
 
 ```sh
 # Migration owner: the connection and claimed prerequisites (the claimed scope
