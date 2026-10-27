@@ -74,6 +74,12 @@ def main() -> None:
         claimed = dict(line.split() for line in Path(__file__).with_name("next-api-channex-claimed-compatible-images.txt").read_text().splitlines() if line.strip() and not line.startswith("#"))
         if digest not in claimed.values():
             fail("set channex_claimed_scope off before deploying an image without claimed Channex support")
+        # P2: the booking_ari stage (ARI sync and provisioning mutating under the claimed scope) needs a
+        # claimed-ARI-capable image; a booking-only image refuses either mode mutating.
+        if any(e.get("name") in {"PMS_CHANNEX_ARI_SYNC_MODE", "PMS_CHANNEX_PROVISIONING_MODE"} and e.get("value") == "mutating" for e in environment):
+            claimed_ari = dict(line.split() for line in Path(__file__).with_name("next-api-channex-claimed-ari-compatible-images.txt").read_text().splitlines() if line.strip() and not line.startswith("#"))
+            if digest not in claimed_ari.values():
+                fail("set channex_claimed_scope booking or off before deploying an image without claimed Channex ARI support")
     print("next-api split launcher guard passed")
 
 

@@ -77,4 +77,6 @@ VAY-2108 adds the claimed booking scope on top of the connection scope
 (`PMS_CHANNEX_SCOPE=claimed`, booking sync mutating and `target-owned` for the
 hotels in `PMS_CHANNEX_OWNED_PROPERTY_IDS`). The script preserves it only when it is
 declared exactly. Otherwise it removes every claimed setting and keeps the connection
-scope. See `docs/channex-management-worker-database.md`.
+scope. Its `booking_ari` stage (ARI sync and provisioning both mutating) is kept only
+when both are declared exactly on that exact booking shape; otherwise both are paused
+and the booking shape stays. See `docs/channex-management-worker-database.md`.

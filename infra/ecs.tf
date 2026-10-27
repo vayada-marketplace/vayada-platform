@@ -269,11 +269,12 @@ locals {
         { name = "AIRBNB_IMPORT_CALLBACK_ORIGIN", value = "https://next-booking-admin.vayada.com" },
         # VAY-2055: only the connection (enable) capability may run here, with the
         # dedicated worker credential; every other durable capability stays paused.
-        # VAY-2108: the claimed scope adds booking sync for owned, claimed hotels.
+        # VAY-2108: the claimed scope adds booking sync for owned, claimed hotels; its
+        # booking_ari stage adds ARI and provisioning for them, always together.
         { name = "PMS_CHANNEX_WORKER_ENABLED", value = tostring(var.channex_connection_worker_enabled) },
         { name = "PMS_CHANNEX_CONNECTION_MODE", value = var.channex_connection_worker_enabled ? "mutating" : "observe_only" },
-        { name = "PMS_CHANNEX_PROVISIONING_MODE", value = "observe_only" },
-        { name = "PMS_CHANNEX_ARI_SYNC_MODE", value = "observe_only" },
+        { name = "PMS_CHANNEX_PROVISIONING_MODE", value = var.channex_claimed_scope == "booking_ari" ? "mutating" : "observe_only" },
+        { name = "PMS_CHANNEX_ARI_SYNC_MODE", value = var.channex_claimed_scope == "booking_ari" ? "mutating" : "observe_only" },
         { name = "PMS_CHANNEX_BOOKING_SYNC_MODE", value = var.channex_claimed_scope == "off" ? "observe_only" : "mutating" },
         { name = "PMS_CHANNEX_MARKUPS_MODE", value = "observe_only" },
         { name = "PMS_CHANNEX_MESSAGING_MODE", value = "observe_only" },

@@ -130,12 +130,14 @@ class CompatibleImageTest(unittest.TestCase):
     def test_skips_unrelated_service(self) -> None:
         self.assertEqual(run("pms-backend", "other", "tag", []).returncode, 0)
 
-    def scripts_with_claimed_images(self, directory: Path, digests: list[str]) -> Path:
+    def scripts_with_claimed_images(self, directory: Path, digests: list[str], ari_digests: list[str] = ()) -> Path:
         for name in ("assert-next-api-split-compatible-image.py", "assert-planned-channex-claimed-image.py",
                      "next-api-split-compatible-images.txt", "next-api-ongoing-export-compatible-images.txt"):
             (directory / name).write_text((ROOT / "scripts" / name).read_text())
         (directory / "next-api-channex-claimed-compatible-images.txt").write_text(
-            "# fixture\n" + "".join(f"{'f' * 40} {digest}\n" for digest in digests))
+            "# fixture\n" + "".join(f"{digest[7:47]} {digest}\n" for digest in digests))
+        (directory / "next-api-channex-claimed-ari-compatible-images.txt").write_text(
+            "# fixture\n" + "".join(f"{digest[7:47]} {digest}\n" for digest in ari_digests))
         return directory
 
     def test_claimed_channex_scope_deploys_and_rolls_back_only_to_listed_images(self) -> None:
@@ -153,6 +155,23 @@ class CompatibleImageTest(unittest.TestCase):
                 result = run("next-target-backend", "vayada-next-api", DIGEST, [], environment=claimed)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotEqual(run("next-target-backend", "vayada-next-api", VAY_846_DIGEST, [], environment=claimed).returncode, 0)
+                # P2: with ARI sync mutating under the claimed scope, the digest must also be on the claimed-ARI list.
+                booking_ari = claimed + [{"name": "PMS_CHANNEX_ARI_SYNC_MODE", "value": "mutating"}]
+                result = run("next-target-backend", "vayada-next-api", DIGEST, [], environment=booking_ari)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("without claimed Channex ARI support", result.stderr)
+                self.assertEqual(run("next-target-backend", "vayada-next-api", DIGEST, [], environment=claimed + [{"name": "PMS_CHANNEX_ARI_SYNC_MODE", "value": "observe_only"}]).returncode, 0)
+                # Provisioning mutating alone is the same stage for the image: a booking-only image refuses it.
+                provisioning = claimed + [{"name": "PMS_CHANNEX_PROVISIONING_MODE", "value": "mutating"}]
+                self.assertIn("without claimed Channex ARI support", run("next-target-backend", "vayada-next-api", DIGEST, [], environment=provisioning).stderr)
+            finally:
+                CHECK = original
+        with tempfile.TemporaryDirectory() as directory:
+            CHECK = self.scripts_with_claimed_images(Path(directory), [DIGEST, VAY_846_DIGEST], [DIGEST]) / original.name
+            try:
+                self.assertEqual(run("next-target-backend", "vayada-next-api", DIGEST, [], environment=booking_ari).returncode, 0)
+                self.assertNotEqual(run("next-target-backend", "vayada-next-api", VAY_846_DIGEST, [], environment=booking_ari).returncode, 0)
+                self.assertEqual(run("next-target-backend", "vayada-next-api", VAY_846_DIGEST, [], environment=claimed).returncode, 0)
             finally:
                 CHECK = original
 
@@ -165,18 +184,75 @@ class CompatibleImageTest(unittest.TestCase):
         def tasks(*digests):
             return {"tasks": [{"containers": [{"name": "vayada-next-api", "imageDigest": d}]} for d in digests]}
         claimed = [{"name": "PMS_CHANNEX_SCOPE", "value": "claimed"}]
+        booking_ari = claimed + [{"name": "PMS_CHANNEX_ARI_SYNC_MODE", "value": "mutating"}]
+        ari_only = [{"name": "PMS_CHANNEX_ARI_SYNC_MODE", "value": "mutating"}]
+        provisioning = claimed + [{"name": "PMS_CHANNEX_PROVISIONING_MODE", "value": "mutating"}]
         with tempfile.TemporaryDirectory() as directory:
-            folder = self.scripts_with_claimed_images(Path(directory), [DIGEST])
+            folder = self.scripts_with_claimed_images(Path(directory), [DIGEST, VAY_846_DIGEST], [DIGEST])
             def check(planned, running):
                 (folder / "plan.json").write_text(json.dumps(planned))
                 (folder / "running.json").write_text(json.dumps(running))
                 return subprocess.run(["python3", str(folder / "assert-planned-channex-claimed-image.py"),
                                        str(folder / "plan.json"), str(folder / "running.json")], capture_output=True, text=True)
-            self.assertEqual(check(plan([]), tasks(VAY_846_DIGEST)).returncode, 0)
+            self.assertEqual(check(plan([]), tasks(VAY_1512_DIGEST)).returncode, 0)
             self.assertEqual(check(plan(claimed), tasks(DIGEST)).returncode, 0)
-            for planned, running in ((plan(claimed), tasks(VAY_846_DIGEST)), (plan(claimed), tasks(DIGEST, VAY_846_DIGEST)),
-                                     (plan(claimed), tasks()), ({"planned_values": {}}, tasks(DIGEST)), (plan(claimed), {})):
-                self.assertNotEqual(check(planned, running).returncode, 0, (planned, running))
+            self.assertEqual(check(plan(claimed), tasks(VAY_846_DIGEST)).returncode, 0)
+            # P2: booking_ari needs the running image on the claimed-ARI list too. An ARI (or provisioning)
+            # mutating plan without the claimed scope is held to the same lists; nothing else inspects the
+            # planned shape, so the lists are the only guard before the image refuses it at startup.
+            self.assertEqual(check(plan(booking_ari), tasks(DIGEST)).returncode, 0)
+            self.assertEqual(check(plan(provisioning), tasks(DIGEST)).returncode, 0)
+            self.assertEqual(check(plan(claimed + [{"name": "PMS_CHANNEX_ARI_SYNC_MODE", "value": "observe_only"}]), tasks(VAY_846_DIGEST)).returncode, 0)
+            for planned, running in ((plan(claimed), tasks(VAY_1512_DIGEST)), (plan(claimed), tasks(DIGEST, VAY_1512_DIGEST)),
+                                     (plan(claimed), tasks()), ({"planned_values": {}}, tasks(DIGEST)), (plan(claimed), {}),
+                                     (plan(booking_ari), tasks(VAY_846_DIGEST)), (plan(booking_ari), tasks(DIGEST, VAY_846_DIGEST)),
+                                     (plan(ari_only), tasks(VAY_1512_DIGEST)), (plan(ari_only), tasks(VAY_846_DIGEST)),
+                                     (plan(provisioning), tasks(VAY_846_DIGEST))):
+                result = check(planned, running)
+                self.assertNotEqual(result.returncode, 0, (planned, running))
+                self.assertIn("claimed Channex image check failed", result.stderr)
+
+    def test_planned_claimed_ari_stage_is_read_from_the_plan(self) -> None:
+        # VAY-2108 P2: tf-apply reruns the claimed worker preflight exactly when the plan declares the ARI stage.
+        def plan(environment):
+            definition = json.dumps([{"name": "vayada-next-api", "environment": environment}])
+            return {"planned_values": {"root_module": {"resources": [{
+                "address": 'aws_ecs_task_definition.services["next-target-backend"]',
+                "values": {"container_definitions": definition}}]}}}
+        def check(planned):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "plan.json"
+                path.write_text(json.dumps(planned))
+                return subprocess.run(["python3", str(ROOT / "scripts/planned-channex-claimed-ari.py"), str(path)],
+                                      capture_output=True, text=True)
+        claimed = [{"name": "PMS_CHANNEX_SCOPE", "value": "claimed"}]
+        pair = [{"name": "PMS_CHANNEX_ARI_SYNC_MODE", "value": "mutating"}, {"name": "PMS_CHANNEX_PROVISIONING_MODE", "value": "mutating"}]
+        for environment, expected in (
+            ([], "false"), (claimed, "false"),
+            (claimed + [{"name": "PMS_CHANNEX_ARI_SYNC_MODE", "value": "observe_only"}], "false"),
+            (claimed + pair, "true"), (pair, "true"), (claimed + pair[:1], "true"), (claimed + pair[1:], "true"),
+        ):
+            result = check(plan(environment))
+            self.assertEqual((result.returncode, result.stdout.strip()), (0, expected), (environment, result.stderr))
+        for planned in ({"planned_values": {}}, plan(claimed + [{"name": "PMS_CHANNEX_ARI_SYNC_MODE", "value": "yes"}]),
+                        {"planned_values": {"root_module": {"resources": []}}}):
+            result = check(planned)
+            self.assertNotEqual(result.returncode, 0, planned)
+            self.assertIn("claimed Channex ARI plan check failed", result.stderr)
+
+    def test_channex_image_lists_nest_in_the_split_list(self) -> None:
+        # VAY-2108: every claimed-ARI image is claimed-capable, every claimed-capable and claimed-worker image is
+        # split-compatible; a line is "<app sha> <digest>". Admitting an image means adding it to each list it needs.
+        def listed(name):
+            lines = [line for line in (ROOT / "scripts" / name).read_text().splitlines() if line.strip() and not line.startswith("#")]
+            for line in lines:
+                self.assertRegex(line, r"^[0-9a-f]{40} sha256:[0-9a-f]{64}$", (name, line))
+            return {tuple(line.split()) for line in lines}
+        split = listed("next-api-split-compatible-images.txt")
+        claimed = listed("next-api-channex-claimed-compatible-images.txt")
+        self.assertTrue(listed("next-api-channex-claimed-ari-compatible-images.txt") <= claimed)
+        self.assertTrue(claimed <= split)
+        self.assertTrue(listed("next-api-channex-claimed-worker-images.txt") <= split)
 
     def test_logo_image_has_split_and_ongoing_export_attestations(self):
         source = "3efb2195a823f40b7cd5a716db5bf08ac3fe90ad"

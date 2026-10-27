@@ -89,15 +89,19 @@ class PauseWorkerTest(unittest.TestCase):
     def test_terraform_matches_deployment_pause(self):
         terraform=(ROOT/"infra/ecs.tf").read_text()
         for key,value in pause.PAUSED_ENV.items():
-            if key in pause.CONNECTION_ENV or key in pause.CLAIMED_BOOKING_ENV:continue
+            if key in pause.CONNECTION_ENV or key in pause.CLAIMED_BOOKING_ENV or key in pause.CLAIMED_ARI_ENV:continue
             self.assertIn(f'{{ name = "{key}", value = "{value}" }}',terraform)
         # VAY-2108: booking sync and the claimed settings follow channex_claimed_scope only.
         self.assertIn('{ name = "PMS_CHANNEX_BOOKING_SYNC_MODE", value = var.channex_claimed_scope == "off" ? "observe_only" : "mutating" }',terraform)
+        # VAY-2108 P2: ARI and provisioning follow the booking_ari stage only, always together.
+        for key in pause.CLAIMED_ARI_ENV:
+            self.assertIn(f'{{ name = "{key}", value = var.channex_claimed_scope == "booking_ari" ? "mutating" : "observe_only" }}',terraform)
+        self.assertEqual(terraform.count('var.channex_claimed_scope == "booking_ari"'),2)
         self.assertIn('], var.channex_claimed_scope == "off" ? [] : [\n        { name = "PMS_CHANNEX_SCOPE", value = "claimed" },\n        { name = "PMS_CHANNEX_OWNED_PROPERTY_IDS", value = join(",", var.channex_owned_property_ids) },\n        { name = "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE", value = "target-owned" },\n      ])',terraform)
         self.assertIn('var.channex_claimed_scope == "off" || var.channex_connection_worker_enabled',terraform)
         self.assertIn('{ name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" }',terraform)
         variables=(ROOT/"infra/channex_claimed_scope.tf").read_text()
-        self.assertIn('contains(["off", "booking"], var.channex_claimed_scope)',variables)
+        self.assertIn('contains(["off", "booking", "booking_ari"], var.channex_claimed_scope)',variables)
         for reserved in pause.RESERVED_PROPERTY_IDS:self.assertIn(f'"{reserved}"',variables)
         # VAY-2055: only the worker flag and connection mode follow the reviewed variables.
         self.assertIn('{ name = "PMS_CHANNEX_WORKER_ENABLED", value = tostring(var.channex_connection_worker_enabled) }',terraform)
@@ -181,6 +185,33 @@ class PauseWorkerTest(unittest.TestCase):
         task=self.claimed_fixture();set_env("PMS_CHANNEX_WORKER_ENABLED","false")(task["containerDefinitions"][0])
         env=self.env(task)
         self.assertEqual({k:env[k] for k in pause.PAUSED_ENV},pause.PAUSED_ENV)
+        self.assertFalse({"PMS_CHANNEX_SCOPE","PMS_CHANNEX_OWNED_PROPERTY_IDS"}&env.keys())
+
+    def test_booking_ari_pair_is_kept_only_when_both_are_declared_on_the_exact_booking_shape(self):
+        base={"PMS_CHANNEX_REVIEWS_MODE":"mutating","CHANNEX_WEBHOOK_INTAKE_MODE":"observe_only",**pause.PAUSED_ENV,**pause.CONNECTION_ENV,
+              **pause.CLAIMED_BOOKING_ENV,"PMS_CHANNEX_OWNED_PROPERTY_IDS":self.OWNED}
+        def ari_fixture(**modes):
+            task=self.claimed_fixture()
+            c=task["containerDefinitions"][0]
+            c["environment"]=[e for e in c["environment"] if e["name"] not in modes]+[{"name":k,"value":v} for k,v in modes.items() if v is not None]
+            return task
+        task=ari_fixture(PMS_CHANNEX_ARI_SYNC_MODE="mutating",PMS_CHANNEX_PROVISIONING_MODE="mutating")
+        self.assertEqual(self.env(task),{**base,**pause.CLAIMED_ARI_ENV})
+        once=pause.pause_worker(copy.deepcopy(task));self.assertEqual(once,pause.pause_worker(copy.deepcopy(once)))
+        # Markups and messaging never follow, even next to a declared pair.
+        task=ari_fixture(PMS_CHANNEX_ARI_SYNC_MODE="mutating",PMS_CHANNEX_PROVISIONING_MODE="mutating",PMS_CHANNEX_MARKUPS_MODE="mutating")
+        self.assertEqual(self.env(task),{**base,**pause.CLAIMED_ARI_ENV})
+        # Half a pair, a duplicate, or an unknown value: both paused, booking kept.
+        for modes in ({"PMS_CHANNEX_ARI_SYNC_MODE":"mutating"},{"PMS_CHANNEX_PROVISIONING_MODE":"mutating"},
+                      {"PMS_CHANNEX_ARI_SYNC_MODE":"mutating","PMS_CHANNEX_PROVISIONING_MODE":"on"}):
+            self.assertEqual(self.env(ari_fixture(**modes)),base,modes)
+        task=ari_fixture(PMS_CHANNEX_ARI_SYNC_MODE="mutating",PMS_CHANNEX_PROVISIONING_MODE="mutating")
+        task["containerDefinitions"][0]["environment"].append({"name":"PMS_CHANNEX_ARI_SYNC_MODE","value":"observe_only"})
+        self.assertEqual(self.env(task),base)
+        # A pair without the exact booking shape loses the pair with the claimed settings.
+        task=ari_fixture(PMS_CHANNEX_ARI_SYNC_MODE="mutating",PMS_CHANNEX_PROVISIONING_MODE="mutating",PMS_CHANNEX_BOOKING_SYNC_MODE="observe_only")
+        env=self.env(task)
+        self.assertEqual({k:env[k] for k in pause.PAUSED_ENV},{**pause.PAUSED_ENV,**pause.CONNECTION_ENV})
         self.assertFalse({"PMS_CHANNEX_SCOPE","PMS_CHANNEX_OWNED_PROPERTY_IDS"}&env.keys())
 
     def test_claimed_settings_cannot_come_from_a_secret(self):
