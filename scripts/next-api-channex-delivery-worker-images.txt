@@ -4,4 +4,7 @@
 # Admit the next image by adding one line: <app main sha> <ECR digest>. Each digest must also be in
 # next-api-channex-claimed-worker-images.txt and next-api-split-compatible-images.txt. First: release R4
 # (app main 2178452a4, D3 and D3a; 0521 applied 2026-10-27 13:44:51Z).
+# Running since 2026-10-27 16:04Z: release next-d1d75e9df (image built from app main 851625e74, no API change
+# since R4). R4 stays listed as the rollback target.
 2178452a43fb9a78f93f38f68249430ff0a2877f sha256:5086d864ef2ac45c5091b87715e657608c3fa42226873870f8bbf7b98d8362b3
+d1d75e9df1a08262df45b7b4ef37169b4da7346e sha256:5da84314667bea02ce8869da75414139b3eb34f381e594ce9fea9427ad08d081
