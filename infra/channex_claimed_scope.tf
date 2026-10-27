@@ -1,16 +1,21 @@
 # VAY-2108: Channex for hotels handed over to the target. "off" keeps the
 # VAY-2055 connection-only scope. "booking" also pulls and ingests Channex
 # bookings, every 5 minutes, for hotels that have an active binding claim and
-# are listed below. Each change is a reviewed Terraform change, made only while
-# next-api runs an image listed in scripts/next-api-channex-claimed-compatible-images.txt.
+# are listed below. "booking_ari" (P2) additionally runs ARI and published-offer
+# provisioning for those hotels on the worker's claimed database scope (app 0519,
+# admitted by the platform claimed grant), with markups and messaging still
+# observe_only. Each change is a reviewed Terraform change, made only while
+# next-api runs an image listed in scripts/next-api-channex-claimed-compatible-images.txt
+# ("booking"), and also in scripts/next-api-channex-claimed-ari-compatible-images.txt
+# ("booking_ari"): an older image refuses the shape at startup.
 variable "channex_claimed_scope" {
   type        = string
   default     = "off"
-  description = "Channex scope for claimed hotels on vayada-next-api: off or booking."
+  description = "Channex scope for claimed hotels on vayada-next-api: off, booking or booking_ari."
 
   validation {
-    condition     = contains(["off", "booking"], var.channex_claimed_scope)
-    error_message = "channex_claimed_scope must be off or booking."
+    condition     = contains(["off", "booking", "booking_ari"], var.channex_claimed_scope)
+    error_message = "channex_claimed_scope must be off, booking or booking_ari."
   }
 }
 

@@ -8,6 +8,11 @@ VAY-2108: on top of that scope Terraform may declare the claimed booking scope
 (PMS_CHANNEX_SCOPE=claimed, booking sync mutating and target-owned for a list of
 owned hotels, webhook intake observe_only). Anything short of that exact shape
 falls back to the connection scope with every claimed setting removed.
+
+VAY-2108 P2: on top of the claimed booking scope Terraform may declare the
+booking_ari stage (ARI sync and provisioning both mutating). The pair is kept
+only when both are declared exactly on an exact booking shape; otherwise both
+are paused and the booking shape (or the connection scope) remains.
 """
 import json
 import os
@@ -29,6 +34,7 @@ CLAIMED_BOOKING_ENV = {
     "PMS_CHANNEX_SCOPE": "claimed", "PMS_CHANNEX_BOOKING_SYNC_MODE": "mutating",
     "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": "target-owned",
 }
+CLAIMED_ARI_ENV = {"PMS_CHANNEX_ARI_SYNC_MODE": "mutating", "PMS_CHANNEX_PROVISIONING_MODE": "mutating"}
 MANAGED_ENV = {*PAUSED_ENV, *CLAIMED_BOOKING_ENV, OWNED_IDS}
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 # Staging and test properties in the production database (app migration 0432).
@@ -73,6 +79,14 @@ def claimed_booking_settings(container):
     return {**CLAIMED_BOOKING_ENV, OWNED_IDS: value}
 
 
+def claimed_ari_settings(container, booking):
+    """The booking_ari pair when both modes are declared exactly on an exact booking shape, else {}."""
+    seen = environment_values(container)
+    if not booking or any(seen.get(key) != {value} for key, value in CLAIMED_ARI_ENV.items()):
+        return {}
+    return dict(CLAIMED_ARI_ENV)
+
+
 def pause_worker(task):
     if task.get("family") != "vayada-next-api":
         raise ValueError("Unexpected next API task family")
@@ -84,8 +98,9 @@ def pause_worker(task):
         raise ValueError("Paused recovery requires an immutable next API image")
     if any(s["name"] in MANAGED_ENV for s in container.get("secrets", [])):
         raise ValueError("Worker pause configuration cannot be overridden by a secret")
+    booking = claimed_booking_settings(container)
     settings = {**PAUSED_ENV, **(CONNECTION_ENV if connection_scope_declared(container) else {}),
-                **claimed_booking_settings(container)}
+                **booking, **claimed_ari_settings(container, booking)}
     container["environment"] = [e for e in container.get("environment", []) if e["name"] not in MANAGED_ENV]
     container["environment"].extend({"name": key, "value": value} for key, value in settings.items())
     return task

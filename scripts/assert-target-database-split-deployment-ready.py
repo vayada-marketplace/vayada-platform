@@ -25,6 +25,8 @@ CHANNEX_CLAIMED_BOOKING = {
     "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": "target-owned", "CHANNEX_WEBHOOK_INTAKE_MODE": "observe_only",
 }
 CHANNEX_CLAIMED_SETTINGS = ("PMS_CHANNEX_SCOPE", "PMS_CHANNEX_OWNED_PROPERTY_IDS", "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE")
+# VAY-2108 P2: the booking_ari stage runs ARI and provisioning together on the claimed worker scope.
+CHANNEX_CLAIMED_ARI_PAIR = ("ARI_SYNC", "PROVISIONING")
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 # Staging and test properties in the production database (app migration 0432).
 CHANNEX_RESERVED_PROPERTY_IDS = {
@@ -164,6 +166,12 @@ def main() -> None:
     if set(CHANNEX_CLAIMED_SETTINGS).intersection(secrets):
         fail("claimed Channex settings must not come from secrets")
     channex_claimed = any(name in environment for name in CHANNEX_CLAIMED_SETTINGS)
+    channex_claimed_ari = any(environment.get(f"PMS_CHANNEX_{name}_MODE") == "mutating" for name in CHANNEX_CLAIMED_ARI_PAIR)
+    if channex_claimed_ari and (
+        not channex_claimed
+        or any(environment.get(f"PMS_CHANNEX_{name}_MODE") != "mutating" for name in CHANNEX_CLAIMED_ARI_PAIR)
+    ):
+        fail("claimed Channex ARI and provisioning must be mutating together, on the claimed scope")
     if channex_claimed:
         owned = environment.get("PMS_CHANNEX_OWNED_PROPERTY_IDS")
         owned_ids = owned.split(",") if owned else []
@@ -184,6 +192,7 @@ def main() -> None:
             environment.get(f"PMS_CHANNEX_{name}_MODE") != "observe_only"
             for name in CHANNEX_PAUSED_CAPABILITIES
             if not (channex_claimed and name == "BOOKING_SYNC")
+            and not (channex_claimed_ari and name in CHANNEX_CLAIMED_ARI_PAIR)
         ):
             fail("enabled Channex worker must be connection-only or claimed booking")
     expense_secret_present = "FINANCE_EXPENSE_WORKER_DATABASE_URL" in secrets

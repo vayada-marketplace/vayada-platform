@@ -272,6 +272,19 @@ class DeploymentReadinessTest(unittest.TestCase):
             {"PMS_CHANNEX_STAGING_RESTRICTIONS_PROPERTY_ID": "65f6b2fc-c783-4963-9d6b-a85f82319769"},
         ):
             self.assertNotEqual(run(image, secrets, environment=environment(**changes)).returncode, 0, changes)
+        # VAY-2108 P2: the booking_ari stage is the booking shape plus ARI and provisioning mutating, together.
+        ari = {"PMS_CHANNEX_ARI_SYNC_MODE": "mutating", "PMS_CHANNEX_PROVISIONING_MODE": "mutating"}
+        result = run(image, secrets, environment=environment(**ari))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for changes in (
+            {"PMS_CHANNEX_ARI_SYNC_MODE": "mutating"}, {"PMS_CHANNEX_PROVISIONING_MODE": "mutating"},
+            {**ari, "PMS_CHANNEX_MARKUPS_MODE": "mutating"}, {**ari, "PMS_CHANNEX_MESSAGING_MODE": "mutating"},
+            {**ari, "PMS_CHANNEX_BOOKING_SYNC_MODE": "observe_only"}, {**ari, "PMS_CHANNEX_WORKER_ENABLED": "false"},
+            {**ari, "CHANNEX_WEBHOOK_INTAKE_MODE": "mutating"}, {**ari, "PMS_CHANNEX_SCOPE": None},
+            {**ari, "PMS_CHANNEX_SCOPE": None, "PMS_CHANNEX_OWNED_PROPERTY_IDS": None, "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": None},
+        ):
+            result = run(image, secrets, environment=environment(**changes))
+            self.assertNotEqual(result.returncode, 0, changes)
         # A claimed setting smuggled in as a secret on an otherwise connection-only task.
         connection_only = environment(PMS_CHANNEX_SCOPE=None, PMS_CHANNEX_OWNED_PROPERTY_IDS=None,
                                       CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE=None, PMS_CHANNEX_BOOKING_SYNC_MODE="observe_only")
