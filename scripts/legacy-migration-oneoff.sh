@@ -328,12 +328,18 @@ if [[ "$command" == channex-handover-plan || "$command" == channex-handover ]]; 
   if [[ "$action" == attach ]]; then
     # The manifest travels like a migration input file: one JSON object the launcher writes for the CLI.
     manifest="${evidence}/$(jq -r .manifestFile "$request")"
-    [[ -f "$manifest" && -s "$manifest" && ! -L "$manifest" && "$(wc -c <"$manifest" | tr -d ' ')" -le 262144 ]] &&
-      jq -e 'type == "object"' "$manifest" >/dev/null || {
-      echo "The manifest file must be a regular JSON object file under 256 KB in the evidence folder." >&2; exit 2;
+    # One snapshot of the bytes: the hash in the binding and the payload the task gets are the same.
+    [[ -f "$manifest" && -s "$manifest" && ! -L "$manifest" && "$(wc -c <"$manifest" | tr -d ' ')" -le 65536 ]] || {
+      echo "The manifest file must be a non-empty regular file under 64 KB in the evidence folder." >&2; exit 2;
     }
-    manifest_sha256="$(shasum -a 256 "$manifest" | cut -d' ' -f1)"
-    files="$(jq -c '{manifest: .}' "$manifest" | gzip -n -9 | base64 | tr -d '\n')"
+    manifest_json="$(cat "$manifest"; printf x)"; manifest_json="${manifest_json%x}"
+    jq -es 'length == 1 and (.[0] | type) == "object"' <<<"$manifest_json" >/dev/null || {
+      echo "The manifest file must hold exactly one JSON object." >&2; exit 2;
+    }
+    manifest_sha256="$(printf '%s' "$manifest_json" | shasum -a 256 | cut -d' ' -f1)"
+    files="$(jq -c '{manifest: .}' <<<"$manifest_json" | gzip -n -9 | base64 | tr -d '\n')"
+    # The task definition (CA bundle, TLS preload, launcher code, arguments) must stay under 60 KB.
+    [[ "${#files}" -le 16384 ]] || { echo "The manifest compresses to more than 16 KB; split the hotel's rooms." >&2; exit 2; }
   fi
   args="$(jq -c --arg action "$action" --arg readback "$readback_sha256" '["--property", .property]
     + (if $action == "attach" then ["--external-property", .externalProperty] else [] end)

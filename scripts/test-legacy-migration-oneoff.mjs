@@ -711,12 +711,16 @@ esac
     const manifestSha = createHash('sha256').update(readFileSync(manifestFile)).digest('hex');
     const attach = { action: 'attach', property: PROPERTY, externalProperty: EXTERNAL, approvalRef: 'flamur-go-tiga', legacyDisabledAt: '2026-10-28T09:00:00Z', legacyReadbackFile: 'f7-readback.txt', manifestFile: 'tiga-manifest.json' };
     const attachFile = join(root, 'attach.json');
+    writeFileSync(join(evidence, 'two-objects.json'), '{"a":1}\n{"b":2}\n');
+    writeFileSync(join(evidence, 'huge.json'), JSON.stringify({ roomTypes: Array.from({ length: 900 }, (_, i) => ({ id: `${i}-${Math.random()}-${Math.random()}` })) }));
     for (const [request, message] of [
       [{ ...attach, externalProperty: EXTERNAL.toUpperCase() }, /exactly the attach fields/],
       [{ ...attach, manifestFile: '../outside.txt' }, /exactly the attach fields/],
-      [{ ...attach, manifestFile: 'linked.txt' }, /regular JSON object file/],
-      [{ ...attach, manifestFile: 'f7-readback.txt' }, /regular JSON object file/],
-      [{ ...attach, manifestFile: 'missing.json' }, /regular JSON object file/],
+      [{ ...attach, manifestFile: 'linked.txt' }, /non-empty regular file under 64 KB/],
+      [{ ...attach, manifestFile: 'f7-readback.txt' }, /exactly one JSON object/],
+      [{ ...attach, manifestFile: 'missing.json' }, /non-empty regular file under 64 KB/],
+      [{ ...attach, manifestFile: 'two-objects.json' }, /exactly one JSON object/],
+      [{ ...attach, manifestFile: 'huge.json' }, /compresses to more than 16 KB/],
       [{ ...activate, externalProperty: EXTERNAL }, /exactly the activate fields/],
     ]) {
       writeRequest(request, attachFile);
