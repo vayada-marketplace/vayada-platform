@@ -100,7 +100,7 @@ case "${mode}" in
       fi
     fi
     ;;
-  --provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker|--grant-channex-connection-worker|--preflight-channex-connection-worker)
+  --provision-channex-management-worker|--grant-channex-management-worker|--preflight-channex-management-worker|--grant-channex-connection-worker|--preflight-channex-connection-worker|--grant-channex-claimed-worker|--preflight-channex-claimed-worker|--revoke-channex-claimed-worker)
     ca_required=true
     family="vayada-next-api-db-runtime-preflight"
     code_file="channex-management-worker-database.mjs"
@@ -115,14 +115,24 @@ case "${mode}" in
       secret_parameter="/vayada/prod/db-marketplace-url"
       extra_secret_name="PMS_CHANNEX_MANAGEMENT_DATABASE_URL"
       extra_secret_parameter="/vayada/prod/target-database-channex-management-worker-url"
-    elif [[ "${mode}" == *channex-connection-worker ]]; then
+    elif [[ "${mode}" == *channex-connection-worker || "${mode}" == *channex-claimed-worker ]]; then
       # VAY-2055: operation scope ('enable' for unbound hotels); no property argument.
+      # VAY-2108: the claimed scope (sync_ari, provision for owned hotels) on top of it. Its modes
+      # run only on a reviewed image whose worker boundary accepts the post-0519 database: the
+      # list below pins those digests, one line per admitted image.
       [[ "$#" -eq 2 && "$2" =~ ^sha256:[a-f0-9]{64}$ ]] || {
-        echo "Channex connection grant/preflight requires the immutable image digest." >&2; exit 2;
+        echo "Channex connection/claimed grant, preflight and revoke require the immutable image digest." >&2; exit 2;
       }
       channex_scope="connection"
+      if [[ "${mode}" == *channex-claimed-worker ]]; then
+        grep -Eq "^[0-9a-f]{40} $2\$" "$(dirname "${BASH_SOURCE[0]}")/next-api-channex-claimed-worker-images.txt" || {
+          echo "Image $2 is not listed in scripts/next-api-channex-claimed-worker-images.txt." >&2; exit 2;
+        }
+        channex_scope="claimed"
+        [[ "${mode}" == "--revoke-channex-claimed-worker" ]] && channex_scope="claimed_revoke"
+      fi
       channex_image="269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@$2"
-      if [[ "${mode}" == "--grant-channex-connection-worker" ]]; then
+      if [[ "${mode}" == --grant-* || "${mode}" == --revoke-* ]]; then
         grant_scope="channex_management"
         secret_name="TARGET_DATABASE_MIGRATION_URL"
         secret_parameter="/vayada/prod/target-database-url"
@@ -320,7 +330,7 @@ if [[ "${ca_required}" == true ]]; then
   [[ "${ca_hash}" == 0fdc44d91c5a69ef4efc3f9ede636ccc22b11a890c5a656a134275da26afa812 ]] || {
     echo "Amazon RDS CA bundle checksum mismatch." >&2; exit 1;
   }
-  if [[ "$code_in_definition" == true || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker || "${mode}" == *channex-connection-worker ]]; then
+  if [[ "$code_in_definition" == true || "${mode}" == "--audit-financials-readiness" || "${mode}" == "--preflight-vay2017-historical-bindings" || "${mode}" == "--import-vay2017-source-snapshot" || "${mode}" == "--grant-identity-runtime" || "${mode}" == "--harden-cluster-database-acl" || "${mode}" == *finance-expense-worker || "${mode}" == *finance-export-worker || "${mode}" == "--preflight-finance-export-ongoing" || "${mode}" == *channex-management-worker || "${mode}" == *channex-connection-worker || "${mode}" == *channex-claimed-worker ]]; then
     command -v node >/dev/null || { echo "Required command not found: node" >&2; exit 1; }
     # This one-time grant targets the RDS instance's pinned RSA2048 G1 CA.
     # Pass only that root: the complete regional bundle exceeds ECS's 8192-byte override limit.
@@ -348,7 +358,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 payload=""
 if [[ -n "${code_file}" ]]; then payload="$(gzip -n -9 -c "${script_dir}/${code_file}" | base64 | tr -d '\n')"; fi
 helper_payload=""
-if [[ -n "${helper_file}" ]]; then helper_payload="$(gzip -9 -c "${script_dir}/${helper_file}" | base64 | tr -d '\n')"; fi
+if [[ -n "${helper_file}" ]]; then helper_payload="$(gzip -n -9 -c "${script_dir}/${helper_file}" | base64 | tr -d '\n')"; fi
 if [[ -n "${vay2017_phase}" ]]; then
   bootstrap="const{spawnSync}=require('node:child_process'),z=require('node:zlib');process.env.VAYADA_DB_RDS_CA_BUNDLE=z.gunzipSync(Buffer.from(process.env.VAYADA_DB_RDS_CA_BUNDLE_GZIP,'base64')).toString();const r=spawnSync(process.execPath,['/app/packages/backend-migration/dist/cli/legacyHistoricalBindingProductionPreflight.js',process.env.VAY2017_PREFLIGHT_PHASE],{stdio:'inherit',env:process.env});process.exit(r.status??1)"
 else

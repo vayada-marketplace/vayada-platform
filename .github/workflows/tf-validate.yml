@@ -82,6 +82,11 @@ on:
       - "scripts/next-api-ongoing-export-compatible-images.txt"
       - "scripts/planned-finance-export-mode.py"
       - "scripts/next-api-channex-claimed-compatible-images.txt"
+      - "scripts/next-api-channex-claimed-ari-compatible-images.txt"
+      - "scripts/next-api-channex-claimed-worker-images.txt"
+      - "scripts/next-api-channex-delivery-worker-images.txt"
+      - "scripts/planned-channex-claimed-ari.py"
+      - "scripts/fixtures/channex-worker-database/**"
       - "scripts/assert-planned-channex-claimed-image.py"
       - "scripts/assert-next-api-split-compatible-image.py"
       - "scripts/test-next-api-split-compatible-image.py"
@@ -293,7 +298,7 @@ jobs:
           changed=$(git diff --name-only --no-renames HEAD^1 HEAD)
           printf '%s\n' "$changed"
           admission_only=false
-          if [ -n "$changed" ] && ! grep -qvxE 'scripts/next-api-(split|ongoing-export|channex-claimed)-compatible-images\.txt' <<<"$changed"; then
+          if [ -n "$changed" ] && ! grep -qvxE 'scripts/next-api-(split|ongoing-export|channex-claimed|channex-claimed-ari)-compatible-images\.txt|scripts/next-api-channex-(claimed|delivery)-worker-images\.txt' <<<"$changed"; then
             admission_only=true
           fi
           echo "admission_only=$admission_only" >> "$GITHUB_OUTPUT"
