@@ -253,6 +253,8 @@ class CompatibleImageTest(unittest.TestCase):
         self.assertTrue(listed("next-api-channex-claimed-ari-compatible-images.txt") <= claimed)
         self.assertTrue(claimed <= split)
         self.assertTrue(listed("next-api-channex-claimed-worker-images.txt") <= split)
+        # D3: the delivery worker list (images whose boundary accepts the 0520 delivery tables) nests the same way.
+        self.assertTrue(listed("next-api-channex-delivery-worker-images.txt") <= split)
 
     def test_logo_image_has_split_and_ongoing_export_attestations(self):
         source = "3efb2195a823f40b7cd5a716db5bf08ac3fe90ad"
