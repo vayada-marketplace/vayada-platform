@@ -244,7 +244,8 @@ locals {
         { name = "XENDIT_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" },
         { name = "CHANNEX_REVIEW_WEBHOOK_INTAKE_MODE", value = "mutating" },
-        { name = "MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
+        # VAY-2302: browser origins for /api/identity privacy requests (was MARKETPLACE_DISCOVERY_ALLOWED_ORIGINS).
+        { name = "IDENTITY_PRIVACY_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         # VAY-2286: the vayada.com contact form posts to POST /api/contact; only that route
         # answers this origin (no credentials, not in AUTH_ALLOWED_ORIGINS).
         { name = "CONTACT_INTAKE_ALLOWED_ORIGINS", value = "https://vayada.com" },
@@ -261,7 +262,6 @@ locals {
         { name = "PUBLIC_BOOKABILITY_SOURCE", value = "target" },
         { name = "BOOKING_SETTINGS_SOURCE", value = "target" },
         { name = "BOOKING_RESERVATIONS_SOURCE", value = "target" },
-        { name = "MARKETPLACE_ADMIN_SOURCE", value = "target" },
         { name = "PMS_OPERATIONS_SOURCE", value = "target" },
         { name = "CHANNEX_API_BASE_URL", value = "https://app.channex.io" },
         { name = "AIRBNB_IMPORT_ENABLED", value = "true" },
