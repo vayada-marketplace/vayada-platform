@@ -290,6 +290,10 @@ locals {
         # VAY-1543: card payment for public pricing-v2 bookings (instant, full prepayment on the
         # hotel's connected Stripe account). Flip only with Flamur's go, after VAY-2088 is live.
         { name = "REPLACEMENT_PRICING_CARD_ACCEPTANCE_ENABLED", value = "true" },
+        # VAY-2139: bank transfer for public pricing-v2 bookings. The guest pays the hotel within 48 h
+        # and the hotel marks it received in the PMS. PayPal stays off: since app #3949 it also needs
+        # REPLACEMENT_PRICING_PAYPAL_ACCEPTANCE_ENABLED, which stays unset.
+        { name = "REPLACEMENT_PRICING_MANUAL_PAYMENT_ACCEPTANCE_ENABLED", value = "true" },
         { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
         { name = "BOOKING_EMAIL_FROM", value = "Vayada Bookings <bookings@vayada.com>" },
         { name = "WORKOS_AUDIENCE", value = var.workos_audience },
