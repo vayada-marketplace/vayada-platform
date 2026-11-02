@@ -294,6 +294,11 @@ locals {
         # and the hotel marks it received in the PMS. PayPal stays off: since app #3949 it also needs
         # REPLACEMENT_PRICING_PAYPAL_ACCEPTANCE_ENABLED, which stays unset.
         { name = "REPLACEMENT_PRICING_MANUAL_PAYMENT_ACCEPTANCE_ENABLED", value = "true" },
+        # VAY-2442: vayada Payment, guest card payments on Vayada's own Stripe account (TEST MODE only;
+        # next-api refuses live keys), paid out to the hotel's bank. Stays "false" until Flamur's own
+        # go; once on, only for var.vayada_payment_property_ids (infra/vayada_payment.tf).
+        { name = "VAYADA_PAYMENT_ENABLED", value = "false" },
+        { name = "VAYADA_PAYMENT_PROPERTY_IDS", value = join(",", var.vayada_payment_property_ids) },
         { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
         { name = "BOOKING_EMAIL_FROM", value = "Vayada Bookings <bookings@vayada.com>" },
         { name = "WORKOS_AUDIENCE", value = var.workos_audience },
@@ -332,6 +337,12 @@ locals {
         { name = "AUTH_DATABASE_URL", valueFrom = "/vayada/prod/target-database-identity-runtime-url" },
         { name = "STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/stripe-secret-key" },
         { name = "STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/stripe-webhook-secret" },
+        # VAY-2442: vayada Payment's Stripe TEST MODE keys and webhook signing secret. Put into SSM from
+        # the Keychain outside Terraform (no value in GitHub secrets or state); all three must exist
+        # before this applies, or the new next-api task can't start.
+        { name = "VAYADA_PAYMENT_STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/vayada-payment-stripe-test-secret-key" },
+        { name = "VAYADA_PAYMENT_STRIPE_PUBLISHABLE_KEY", valueFrom = "/vayada/prod/vayada-payment-stripe-test-publishable-key" },
+        { name = "VAYADA_PAYMENT_STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/vayada-payment-stripe-test-webhook-secret" },
         { name = "RESEND_API_KEY", valueFrom = "/vayada/prod/resend-api-key" },
         { name = "WORKOS_API_KEY", valueFrom = "/vayada/prod/workos-api-key" },
         { name = "WORKOS_CLIENT_ID", valueFrom = "/vayada/prod/workos-client-id" },

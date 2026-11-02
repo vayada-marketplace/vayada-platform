@@ -1,5 +1,6 @@
 locals {
   finance_bank_transfer_kms_purpose             = "finance-bank-transfer-v1"
+  finance_payout_destination_kms_purpose        = "finance-payout-destination-v1"
   finance_bank_transfer_kms_key_versions        = { v1 = {} }
   finance_bank_transfer_kms_current_key_version = "v1"
   finance_bank_transfer_kms_context_keys        = ["purpose", "propertyId", "destinationId", "revision"]
@@ -7,8 +8,11 @@ locals {
   finance_bank_transfer_kms_allowed_key_arns    = sort([for key in values(aws_kms_key.finance_bank_transfer) : key.arn])
   finance_bank_transfer_kms_context_condition = {
     StringEquals = {
-      "kms:EncryptionAlgorithm"       = "SYMMETRIC_DEFAULT"
-      "kms:EncryptionContext:purpose" = local.finance_bank_transfer_kms_purpose
+      "kms:EncryptionAlgorithm" = "SYMMETRIC_DEFAULT"
+      "kms:EncryptionContext:purpose" = [
+        local.finance_bank_transfer_kms_purpose,
+        local.finance_payout_destination_kms_purpose,
+      ]
     }
     StringLike = {
       "kms:EncryptionContext:propertyId"    = "????????-????-????-????-????????????"
