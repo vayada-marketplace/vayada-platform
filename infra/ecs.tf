@@ -283,6 +283,10 @@ locals {
         # VAY-2247 switch-on, step 1: the server's first run and, with it, the setup checklist API.
         # Booking Admin's ONBOARDING_V2_ENABLED follows in its own apply once this is live (runbook).
         { name = "HOTEL_FIRST_RUN_ENABLED", value = "true" },
+        # VAY-2451 switch-on: the go-live checklist (GET …/checklist/v2) behind both dashboards' new cards.
+        # Turned on in the same apply as Booking Admin's FOUR_STEP_SETUP_ENABLED; off, v2 answers 404 and the
+        # dashboards keep today's checklist.
+        { name = "HOTEL_GO_LIVE_CHECKLIST_ENABLED", value = "true" },
         { name = "FINANCE_SOURCE", value = "target" },
         { name = "BOOKING_CHECKOUT_COMMAND_SOURCE", value = "target" },
         { name = "BOOKING_WEB_EVENT_SINK", value = "target" },
@@ -417,6 +421,9 @@ locals {
         # VAY-2247 switch-on, step 2: /setup opens the new first run (read per request on the server).
         # Needs next-api's HOTEL_FIRST_RUN_ENABLED live first (step 1).
         { name = "ONBOARDING_V2_ENABLED", value = "true" },
+        # VAY-2451 switch-on: /setup opens the four-step setup instead of the 7-step one (read per request).
+        # Needs ONBOARDING_V2_ENABLED; turned on in the same apply as next-api's HOTEL_GO_LIVE_CHECKLIST_ENABLED.
+        { name = "FOUR_STEP_SETUP_ENABLED", value = "true" },
       ]
       secrets = []
     }
