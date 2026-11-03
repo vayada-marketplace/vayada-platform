@@ -108,3 +108,24 @@ resource "cloudflare_record" "resend_dmarc" {
   content = "v=DMARC1; p=none;"
   proxied = false
 }
+
+# Hotel websites (VAY-2422): static files on Cloudflare Pages, one Pages project per hotel named
+# vayada-site-<slug>. The vayada repo's "Deploy Hotel Sites" workflow creates each project and
+# attaches <slug>.site.vayada.com as its custom domain with a Pages-only token (this repo's token
+# edits vayada.com DNS only). This record sends the address to the project. DNS only, like the
+# records above: Pages validates the domain through it and serves the certificate itself, as for a
+# domain outside Cloudflare (Universal SSL covers one level below vayada.com; these are two).
+locals {
+  hotel_sites = ["animals-ahangama"]
+}
+
+resource "cloudflare_record" "hotel_site" {
+  for_each = var.enable_cloudflare_dns ? toset(local.hotel_sites) : toset([])
+
+  zone_id = var.cloudflare_zone_id
+  name    = "${each.key}.site"
+  type    = "CNAME"
+  content = "vayada-site-${each.key}.pages.dev"
+  proxied = false
+  comment = "VAY-2422 hotel website on Cloudflare Pages"
+}
