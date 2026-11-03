@@ -295,9 +295,9 @@ locals {
         # REPLACEMENT_PRICING_PAYPAL_ACCEPTANCE_ENABLED, which stays unset.
         { name = "REPLACEMENT_PRICING_MANUAL_PAYMENT_ACCEPTANCE_ENABLED", value = "true" },
         # VAY-2442: vayada Payment, guest card payments on Vayada's own Stripe account (TEST MODE only;
-        # next-api refuses live keys), paid out to the hotel's bank. Stays "false" until Flamur's own
-        # go; once on, only for var.vayada_payment_property_ids (infra/vayada_payment.tf).
-        { name = "VAYADA_PAYMENT_ENABLED", value = "false" },
+        # next-api refuses live keys), paid out to the hotel's bank. On since Flamur's go on 2026-11-03,
+        # only for var.vayada_payment_property_ids (infra/vayada_payment.tf: TEST ONLY Agent).
+        { name = "VAYADA_PAYMENT_ENABLED", value = "true" },
         { name = "VAYADA_PAYMENT_PROPERTY_IDS", value = join(",", var.vayada_payment_property_ids) },
         { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
         { name = "BOOKING_EMAIL_FROM", value = "Vayada Bookings <bookings@vayada.com>" },
