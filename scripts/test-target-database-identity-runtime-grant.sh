@@ -94,12 +94,22 @@ ALTER TABLE platform.product_audit_events ENABLE ROW LEVEL SECURITY;
 CREATE POLICY identity_runtime_scope ON platform.product_audit_events TO PUBLIC
   USING (current_user <> 'vayada_next_identity_runtime' OR product = 'identity');
 ALTER TABLE platform.dead_letter_events ENABLE ROW LEVEL SECURITY;
-CREATE POLICY identity_runtime_scope ON platform.dead_letter_events TO PUBLIC
-  USING (current_user <> 'vayada_next_identity_runtime'
-    OR (source_kind = 'webhook' AND resource_product = 'identity'
+-- App migration 0414 (VAY-2045) form: the WorkOS receipt lookup lives in an invoker helper.
+CREATE FUNCTION platform.identity_runtime_dead_letter_webhook_scope(webhook_id integer)
+RETURNS boolean LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM platform.external_webhook_events receipt
+    WHERE receipt.id = webhook_id AND receipt.provider = 'workos'
+  );
+END;
+$$;
+CREATE POLICY identity_runtime_scope ON platform.dead_letter_events TO PUBLIC USING (
+  current_user <> 'vayada_next_identity_runtime'
+  OR (source_kind = 'webhook' AND resource_product = 'identity'
       AND resource_type = 'workos_webhook'
-      AND EXISTS (SELECT 1 FROM platform.external_webhook_events AS receipt
-        WHERE receipt.id = webhook_event_id AND receipt.provider = 'workos')));
+      AND platform.identity_runtime_dead_letter_webhook_scope(webhook_event_id))
+);
 RESET ROLE;
 SQL
 
@@ -229,6 +239,30 @@ docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
 expect_grant_failure identity_shared_rls_policy_unexpected
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c "ALTER POLICY identity_runtime_pms_inbox_enqueue ON platform.jobs WITH CHECK (current_user = 'vayada_next_identity_runtime' AND queue_name = 'pms-inbox' AND job_type = 'pms.inbox.assignment.reconcile' AND resource_product = 'pms' AND resource_type = 'inbox_assignment')" >/dev/null
+# VAY-2478: only the 0414 dead-letter scope passes; the pre-0414 inline form and extra policies fail.
+dead_letter_scope="current_user <> 'vayada_next_identity_runtime' OR (source_kind = 'webhook'
+  AND resource_product = 'identity' AND resource_type = 'workos_webhook'"
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 -c "ALTER POLICY identity_runtime_scope
+  ON platform.dead_letter_events USING (${dead_letter_scope} AND EXISTS (SELECT 1 FROM
+  platform.external_webhook_events AS receipt WHERE receipt.id = webhook_event_id AND receipt.provider = 'workos')))" >/dev/null
+expect_grant_failure identity_shared_rls_policy_unexpected
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 -c "ALTER POLICY identity_runtime_scope
+  ON platform.dead_letter_events USING (${dead_letter_scope}))" >/dev/null
+expect_grant_failure identity_shared_rls_policy_unexpected
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 -c "ALTER POLICY identity_runtime_scope
+  ON platform.dead_letter_events USING (${dead_letter_scope}
+  AND platform.identity_runtime_dead_letter_webhook_scope(webhook_event_id)))" >/dev/null
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'CREATE POLICY dead_letter_extra ON platform.dead_letter_events TO PUBLIC USING (true)' >/dev/null
+expect_grant_failure identity_shared_rls_policy_unexpected
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c 'DROP POLICY dead_letter_extra ON platform.dead_letter_events' >/dev/null
+# The helper's body is not compared; a definer helper would bypass the receipts' row scope.
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'ALTER FUNCTION platform.identity_runtime_dead_letter_webhook_scope(integer) SECURITY DEFINER' >/dev/null
+expect_grant_failure identity_role_callable_definer
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 -c \
+  'ALTER FUNCTION platform.identity_runtime_dead_letter_webhook_scope(integer) SECURITY INVOKER' >/dev/null
 
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c 'ALTER VIEW booking.pricing_runtime_effective_property_scopes SET (security_barrier=false)' >/dev/null
@@ -304,6 +338,13 @@ fi
 if [[ "$(docker exec "${database}" psql -U postgres -At \
   -c 'SET ROLE vayada_next_identity_runtime; SELECT count(*) FROM platform.external_webhook_events')" != *$'\n1' ]]; then
   echo 'non-WorkOS webhook row visible' >&2
+  exit 1
+fi
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 -c "INSERT INTO platform.dead_letter_events
+  VALUES (1, 'webhook', 'identity', 'workos_webhook', 1), (2, 'webhook', 'identity', 'workos_webhook', 2)" >/dev/null
+if [[ "$(docker exec "${database}" psql -U postgres -At \
+  -c 'SET ROLE vayada_next_identity_runtime; SELECT id FROM platform.dead_letter_events')" != $'SET\n1' ]]; then
+  echo 'dead letter outside the WorkOS receipt scope visible' >&2
   exit 1
 fi
 

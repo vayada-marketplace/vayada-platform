@@ -320,7 +320,13 @@ dedicated protected parameter without printing or committing the value. The
 shared-table RLS migration from app PR #2530 must be deployed first. The
 grant runner refuses missing RLS or unrelated effective privileges and must
 run only from a reviewed private-network migration-owner task with verified
-RDS TLS. The identity credential may enqueue a PMS inbox reconciliation job
+RDS TLS. It also compares each shared table's permissive policies with the
+text the app migrations create (for `platform.dead_letter_events`, the app
+migration 0414 form that calls `platform.identity_runtime_dead_letter_webhook_scope`;
+the helper's body is not compared, only that the login cannot call any
+security-definer function), so an app migration that rewrites one of these
+policies needs a matching grant-script and fixture change before the next run.
+The identity credential may enqueue a PMS inbox reconciliation job
 but may not read or update that PMS worker's rows. It may read only
 `hotel_catalog.properties` outside the identity and shared platform tables so
 staff access can be restricted to owned properties, plus the single
