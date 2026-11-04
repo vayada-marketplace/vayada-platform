@@ -49,7 +49,7 @@ const expectedPolicies = new Map([
     ["identity_runtime_scope:ALL", `(${ownerBypass} OR (product = 'identity'::text))`],
   ])],
   ["platform.dead_letter_events", new Map([
-    ["identity_runtime_scope:ALL", `(${ownerBypass} OR ((source_kind = 'webhook'::text) AND (resource_product = 'identity'::text) AND (resource_type = 'workos_webhook'::text) AND (EXISTS ( SELECT 1 FROM platform.external_webhook_events receipt WHERE ((receipt.id = dead_letter_events.webhook_event_id) AND (receipt.provider = 'workos'::text))))))`],
+    ["identity_runtime_scope:ALL", `(${ownerBypass} OR ((source_kind = 'webhook'::text) AND (resource_product = 'identity'::text) AND (resource_type = 'workos_webhook'::text) AND platform.identity_runtime_dead_letter_webhook_scope(webhook_event_id)))`],
   ])],
 ]);
 const canonical = (expression) => expression?.replace(/\s+/g, " ") ?? null;
