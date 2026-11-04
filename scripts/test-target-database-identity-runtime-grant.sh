@@ -65,6 +65,8 @@ CREATE TABLE platform.product_audit_events (id integer PRIMARY KEY, product text
 CREATE TABLE platform.dead_letter_events (id integer PRIMARY KEY, source_kind text NOT NULL,
   resource_product text NOT NULL, resource_type text NOT NULL,
   webhook_event_id integer REFERENCES platform.external_webhook_events(id));
+CREATE TABLE platform.legacy_owner_bootstrap_receipts (command_id uuid PRIMARY KEY,
+  owner_user_ids uuid[] NOT NULL, payload_sha256 text);
 CREATE TABLE booking.guest_bookings (id integer PRIMARY KEY);
 CREATE TABLE hotel_catalog.properties (id integer PRIMARY KEY);
 CREATE VIEW booking.pricing_runtime_effective_property_scopes
@@ -304,6 +306,58 @@ if [[ "$(docker exec "${database}" psql -U postgres -At \
   echo 'non-WorkOS webhook row visible' >&2
   exit 1
 fi
+
+# VAY-2478: the legacy-owner signup guard runs on this login. It reads owner_user_ids only.
+receipts=platform.legacy_owner_bootstrap_receipts
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 -c "INSERT INTO ${receipts} \
+  VALUES ('00000000-0000-4000-8000-000000000001', '{00000000-0000-4000-8000-0000000000aa}', 'x')" >/dev/null
+run_guard() {
+  # The guard's query verbatim (apps/api/src/platform/legacyOwnerSignupGuard.ts), logged in as the role.
+  docker run --rm --network "${network}" --volume "${modules}:/work" --workdir /work \
+    --env "IDENTITY_DATABASE_URL=postgresql://vayada_next_identity_runtime:identity@vayada-identity-grant-db:5432/postgres" \
+    --env "GUARD_USER_ID=$1" ghcr.io/vayada-marketplace/ci-node:22-bookworm node --input-type=module --eval '
+      import pg from "pg";
+      const client = new pg.Client(process.env.IDENTITY_DATABASE_URL);
+      await client.connect();
+      const result = await client.query(
+        `SELECT EXISTS (
+           SELECT 1 FROM platform.legacy_owner_bootstrap_receipts
+           WHERE $1::uuid = ANY(owner_user_ids)
+         ) AS protected`,
+        [process.env.GUARD_USER_ID],
+      );
+      console.log(result.rows[0].protected);
+      await client.end();'
+}
+[[ "$(run_guard 00000000-0000-4000-8000-0000000000aa)" == true ]] || { echo 'guard missed a receipt owner' >&2; exit 1; }
+[[ "$(run_guard 00000000-0000-4000-8000-0000000000bb)" == false ]] || { echo 'guard held a non-owner' >&2; exit 1; }
+for statement in "SELECT command_id FROM ${receipts}" "SELECT * FROM ${receipts}" \
+  "INSERT INTO ${receipts} (command_id, owner_user_ids) VALUES (gen_random_uuid(), '{}')" \
+  "UPDATE ${receipts} SET owner_user_ids = owner_user_ids" "DELETE FROM ${receipts}" "TRUNCATE ${receipts}"; do
+  if output="$(docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+    -c "SET ROLE vayada_next_identity_runtime; ${statement}" 2>&1)"; then
+    echo "receipt statement unexpectedly allowed: ${statement}" >&2
+    exit 1
+  fi
+  grep -F 'permission denied for table legacy_owner_bootstrap_receipts' <<<"${output}" >/dev/null
+done
+# A re-run with the receipt grant in place passes; any wider receipt access fails it.
+run_grant | grep -F '"status":"PASS"' >/dev/null
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c "GRANT SELECT (payload_sha256) ON ${receipts} TO vayada_next_identity_runtime" >/dev/null
+expect_grant_failure identity_role_existing_column_privilege_too_broad
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c "REVOKE SELECT (payload_sha256) ON ${receipts} FROM vayada_next_identity_runtime; GRANT INSERT (owner_user_ids) ON ${receipts} TO vayada_next_identity_runtime" >/dev/null
+expect_grant_failure identity_role_existing_column_privilege_too_broad
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c "REVOKE INSERT (owner_user_ids) ON ${receipts} FROM vayada_next_identity_runtime; GRANT SELECT ON ${receipts} TO vayada_next_identity_runtime" >/dev/null
+expect_grant_failure identity_role_existing_privilege_too_broad
+# A table-level REVOKE also drops the column grant; the next run restores it.
+docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
+  -c "REVOKE SELECT ON ${receipts} FROM vayada_next_identity_runtime" >/dev/null
+run_grant | grep -F '"status":"PASS"' >/dev/null
+[[ "$(run_guard 00000000-0000-4000-8000-0000000000aa)" == true ]] || { echo 'receipt grant not restored' >&2; exit 1; }
+
 docker exec "${database}" psql -U postgres -v ON_ERROR_STOP=1 \
   -c 'GRANT UPDATE ON booking.guest_bookings TO vayada_next_identity_runtime' >/dev/null
 expect_grant_failure identity_role_existing_privilege_too_broad
