@@ -12,6 +12,8 @@ usage() {
   echo "       legacy-migration-oneoff.sh channex-handover-plan <handover-request.json>" >&2
   echo "       legacy-migration-oneoff.sh channex-handover <handover-request.json> CHANNEX_HANDOVER:<action>:<property>:<plan sha256>" >&2
   echo "       (actions: activate, attach, revoke, open-sales, close-sales)" >&2
+  echo "       legacy-migration-oneoff.sh workos-user-resync-plan <approval-ref>" >&2
+  echo "       legacy-migration-oneoff.sh workos-user-resync <approval-ref> WORKOS_USER_RESYNC:<plan sha256>" >&2
   exit 2
 }
 [[ "$#" -ge 2 ]] || usage
@@ -251,7 +253,7 @@ fi
 # the CLI's plan SHA and everything this script binds (request, arguments, image, network, code),
 # so any change needs a new plan and a new go. The run passes --apply <CLI plan SHA>, and the CLI
 # re-plans under row locks and refuses on any change. See docs/legacy-migration-oneoff.md.
-handover_families="vayada-channex-handover-oneoff vayada-legacy-migration-oneoff-target vayada-legacy-migration-oneoff-source"
+handover_families="vayada-channex-handover-oneoff vayada-workos-user-resync-oneoff vayada-legacy-migration-oneoff-target vayada-legacy-migration-oneoff-source"
 # Prints the digest of the single running next-api task, which must be a reviewed image.
 next_api_image() {
   local tasks digest
@@ -426,6 +428,112 @@ if [[ "$command" == channex-handover-plan || "$command" == channex-handover ]]; 
   exit 0
 fi
 
+# VAY-2479 WorkOS user resync: re-reads the users whose WorkOS user webhooks the legacy-owner guard
+# dead-lettered (VAY-2478) and applies the webhook's own update, as the identity login. Same two steps
+# as the Channex handover: the plan is the CLI's own dry run (read-only) on the running reviewed
+# next-api image, the go names the plan SHA-256 (CLI plan and this script's binding), and the apply
+# passes --apply <CLI plan SHA>; the CLI re-plans and refuses on any change. See docs/legacy-migration-oneoff.md.
+# The definition holds the identity login and the WorkOS API key only: no migration secret, no task role.
+resync_definition() {
+  jq -cnS --arg args "$1" --arg image "${account}.dkr.ecr.${region}.amazonaws.com/vayada-next-api@$2" \
+    --rawfile ca "$root/rehearsal/rds-ca-rsa2048-g1.pem" --rawfile tls "$root/scripts/legacy-migration-tls.cjs" \
+    --rawfile code "$root/scripts/legacy-migration-oneoff.mjs" --arg account "$account" --arg region "$region" '
+    def ssm($name): "arn:aws:ssm:\($region):\($account):parameter/vayada/prod/\($name)";
+    {family: "vayada-workos-user-resync-oneoff", networkMode: "awsvpc", requiresCompatibilities: ["FARGATE"],
+     cpu: "512", memory: "1024", executionRoleArn: "arn:aws:iam::\($account):role/ecsTaskExecutionRole",
+     containerDefinitions: [{name: "vayada-workos-user-resync-oneoff", image: $image, essential: true,
+       entryPoint: ["node", "--input-type=module", "--eval"], command: [$code, "identity"],
+       environment: [{name: "AWS_REGION", value: $region}, {name: "LEGACY_MIGRATION_COMMAND", value: "identity:workos:user-resync"},
+         {name: "LEGACY_MIGRATION_ARGS", value: $args}, {name: "VAYADA_DB_RDS_CA_BUNDLE", value: $ca},
+         {name: "LEGACY_MIGRATION_TLS_PRELOAD", value: $tls}],
+       secrets: [{name: "AUTH_DATABASE_URL", valueFrom: ssm("target-database-identity-runtime-url")},
+         {name: "WORKOS_API_KEY", valueFrom: ssm("workos-api-key")}],
+       logConfiguration: {logDriver: "awslogs", options: {"awslogs-group": "/ecs/vayada-next-api",
+         "awslogs-region": $region, "awslogs-stream-prefix": "workos-user-resync"}}}]}'
+}
+if [[ "$command" == workos-user-resync-plan || "$command" == workos-user-resync ]]; then
+  [[ ( "$command" == workos-user-resync-plan && "$#" -eq 2 ) || ( "$command" == workos-user-resync && "$#" -eq 3 ) ]] || usage
+  # Every input check runs before the first AWS call.
+  approval_ref="$2"
+  [[ "$approval_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{1,63}$ ]] || {
+    echo "The approval reference must be 2 to 64 letters, digits or . _ : - (for example VAY-2479)." >&2; exit 2;
+  }
+  plan_record="${evidence}/workos-user-resync-plan.json"
+  result_file="${evidence}/workos-user-resync-result.json"
+  # A folder that holds a completed resync keeps its plan and result: use a new folder.
+  [[ ! -e "$result_file" ]] || { echo "${result_file##*/} already exists; use a new evidence folder." >&2; exit 2; }
+  go_sha256="" cli_sha256=""
+  if [[ "$command" == workos-user-resync ]]; then
+    [[ "$3" =~ ^WORKOS_USER_RESYNC:([0-9a-f]{64})$ ]] || { echo "Confirmation must be WORKOS_USER_RESYNC:<plan sha256>." >&2; exit 2; }
+    go_sha256="${BASH_REMATCH[1]}"
+    [[ -f "$plan_record" ]] || { echo "No plan in the evidence folder; run workos-user-resync-plan first." >&2; exit 2; }
+    jq -e --arg sha "$go_sha256" --arg ref "$approval_ref" '.planSha256 == $sha and .approvalRef == $ref' "$plan_record" >/dev/null || {
+      echo "The go names another plan, or the approval reference changed since the plan. Re-plan." >&2; exit 2;
+    }
+    cli_sha256="$(jq -r .cliPlanSha256 "$plan_record")"
+  fi
+  [[ "$(shasum -a 256 "$root/rehearsal/rds-ca-rsa2048-g1.pem" | cut -d' ' -f1)" == "$ca_sha256" ]] || { echo "The pinned RDS CA bundle changed." >&2; exit 2; }
+  require_profile
+  image="$(next_api_image)"
+  network="$(aws_ ecs describe-services --cluster vayada-backend-cluster --services vayada-next-api-service \
+    --query 'services[0].networkConfiguration' --output json)"
+  for family in $handover_families; do
+    [[ "$(aws_ ecs list-tasks --cluster "$cluster" --family "$family" --query 'length(taskArns)' --output text)" == 0 ]] || {
+      echo "A one-off task is still running. Inspect it before starting another." >&2; exit 1;
+    }
+  done
+  args="$(jq -cn --arg ref "$approval_ref" '["--approval-ref", $ref]')"
+  # The binding covers what this script controls: arguments, image, network, cluster and code.
+  binding="$(jq -cnS --arg ref "$approval_ref" --argjson args "$args" --arg image "$image" --argjson network "$network" \
+    --arg cluster "$cluster" --arg launcher "$(shasum -a 256 "$root/scripts/legacy-migration-oneoff.mjs" | cut -d' ' -f1)" \
+    --arg tls "$(shasum -a 256 "$root/scripts/legacy-migration-tls.cjs" | cut -d' ' -f1)" \
+    --arg runner "$(shasum -a 256 "$root/scripts/legacy-migration-oneoff.sh" | cut -d' ' -f1)" \
+    '{approvalRef: $ref, args: $args, imageDigest: $image, network: $network, cluster: $cluster,
+      launcherSha256: $launcher, tlsSha256: $tls, runnerSha256: $runner}')"
+  binding_sha256="$(printf '%s' "$binding" | shasum -a 256 | cut -d' ' -f1)"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  if [[ "$command" == workos-user-resync-plan ]]; then
+    log="${evidence}/workos-user-resync-plan-${stamp}.log"
+    run_oneoff "$(resync_definition "$args" "$image")" "$network" "$log"
+    output="$(handover_output "$log")"
+    [[ "$task_exit_code" == 0 && -n "$output" ]] &&
+      jq -e '.applied == false and (.planSha256 | type == "string" and test("^[0-9a-f]{64}$"))' <<<"$output" >/dev/null || {
+      echo "The dry run printed no single read-only plan; no plan recorded. Raw log: ${log}" >&2; exit 1;
+    }
+    cli_sha256="$(jq -r .planSha256 <<<"$output")"
+    jq -nS --argjson binding "$binding" --arg binding_sha256 "$binding_sha256" --argjson output "$output" \
+      --arg plan_sha256 "$(printf '%s' "${cli_sha256}:${binding_sha256}" | shasum -a 256 | cut -d' ' -f1)" '
+      {approvalRef: $binding.approvalRef, planSha256: $plan_sha256, bindingSha256: $binding_sha256, binding: $binding,
+       cliPlanSha256: $output.planSha256, cliPlan: $output.plan}' > "$plan_record"
+    { echo "WorkOS user resync plan (${approval_ref})"
+      jq -r '"Image: \(.binding.imageDigest)", "Arguments: \(.binding.args | tostring)", "Binding sha256: \(.bindingSha256)",
+        "CLI plan:", (.cliPlan | tostring), "CLI plan sha256: \(.cliPlanSha256)",
+        "Plan sha256 (CLI plan and binding): \(.planSha256)"' "$plan_record"
+      echo "Run after the go: workos-user-resync ${approval_ref} WORKOS_USER_RESYNC:$(jq -r .planSha256 "$plan_record")"
+    } | tee "${evidence}/workos-user-resync-plan.txt"
+    exit 0
+  fi
+  [[ "$(printf '%s' "${cli_sha256}:${binding_sha256}" | shasum -a 256 | cut -d' ' -f1)" == "$go_sha256" ]] || {
+    echo "The plan changed since the go (image, code, network or arguments). Re-plan and get a new go." >&2; exit 2;
+  }
+  log="${evidence}/workos-user-resync-apply-${stamp}.log"
+  run_oneoff "$(resync_definition "$(jq -c --arg sha "$cli_sha256" '. + ["--apply", $sha]' <<<"$args")" "$image")" "$network" "$log"
+  output="$(handover_output "$log")"
+  marker="$(grep '^WORKOS_USER_RESYNC_COMPLETE ' "$log" || true)"
+  # The result is written only when the CLI applied exactly this plan and printed its completion marker.
+  [[ "$task_exit_code" == 0 && -n "$output" ]] &&
+    jq -e --arg sha "$cli_sha256" '.applied == true and .planSha256 == $sha' <<<"$output" >/dev/null &&
+    [[ "$marker" =~ ^WORKOS_USER_RESYNC_COMPLETE\ planSha256=${cli_sha256}\ updated=[0-9]+\ resolved=[0-9]+\ acknowledged=[0-9]+\ skipped=[0-9]+$ ]] || {
+    echo "The resync did not complete; no result written. Raw log: ${log}" >&2
+    [[ "$task_exit_code" == 0 ]] && exit 1
+    exit "$task_exit_code"
+  }
+  jq -S --arg go "$go_sha256" --arg binding_sha256 "$binding_sha256" --arg marker "$marker" \
+    '. + {goPlanSha256: $go, bindingSha256: $binding_sha256, marker: $marker}' <<<"$output" > "$result_file"
+  echo "Saved ${result_file}"
+  exit 0
+fi
+
 [[ "$#" -eq 4 ]] || usage
 input="$2" input_sha256="$3" confirmation="$4"
 case "$command" in
@@ -479,7 +587,7 @@ jq -e '(.files // {}) | type == "object" and all(keys[]; test("^[a-z][a-z0-9-]{0
 files="$(jq -c '.files // {}' "$input" | gzip -n -9 | base64 | tr -d '\n')"
 
 require_profile
-for family in vayada-legacy-migration-oneoff-target vayada-legacy-migration-oneoff-source vayada-channex-handover-oneoff; do
+for family in vayada-legacy-migration-oneoff-target vayada-legacy-migration-oneoff-source vayada-channex-handover-oneoff vayada-workos-user-resync-oneoff; do
   [[ "$(aws_ ecs list-tasks --cluster "$cluster" --family "$family" --query 'length(taskArns)' --output text)" == 0 ]] || {
     echo "A one-off migration task is still running. Inspect it before starting another." >&2; exit 1;
   }

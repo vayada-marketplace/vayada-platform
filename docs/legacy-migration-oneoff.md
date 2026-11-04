@@ -94,6 +94,78 @@ The request file holds exactly one action for one hotel:
   offer targets in the database; the claimed Channex worker then pushes the
   change. No step deletes or disables a Channex property.
 
+## WorkOS user resync (VAY-2479)
+
+From 20 Sep to 4 Nov 2026 the legacy-owner guard dead-lettered WorkOS
+"user created/updated" webhooks for existing users (VAY-2478). WorkOS was told
+they arrived, so it never resends them. The resync re-reads each affected user
+from WorkOS and applies the webhook's own update to our copy. It runs the
+application CLI `apps/api/src/cli/workosUserResync.ts` in two steps:
+
+```bash
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh workos-user-resync-plan VAY-2479
+EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh workos-user-resync VAY-2479 WORKOS_USER_RESYNC:<plan sha256>
+```
+
+- **What the CLI touches:**
+  - It picks open dead letters with reason `identity_reconciliation_failed`
+    and the guard's summary on WorkOS `user.created`/`user.updated` receipts.
+  - For each linked real user, it reads the user from WorkOS (read-only GET)
+    and runs the webhook's `updateLinkedWorkosUser`: users email, name and
+    status, and the WorkOS link's email, verified flag and profile.
+  - It then marks that user's dead letters `resolved`, with one
+    `workos.webhook.normalized` audit row per receipt (`ignored` for a deleted
+    user, whose details it never changes).
+  - Smoke (`.test`) dead letters are marked `acknowledged`.
+- **What it never does:**
+  - It never creates a user or link. A WorkOS ID with no linked user, or a
+    user WorkOS no longer has, is skipped and reported, and its dead letters
+    stay open.
+  - It changes no membership, writes nothing to WorkOS and sends no email.
+- **Task:**
+  - It runs on the digest of the single running `vayada-next-api` task, which
+    must be listed in `scripts/next-api-split-compatible-images.txt`. The new
+    CLI must already be in that image, so the app PR has to be released first.
+  - The definition holds only the identity login
+    (`/vayada/prod/target-database-identity-runtime-url` as
+    `AUTH_DATABASE_URL`) and the WorkOS API key (`/vayada/prod/workos-api-key`).
+    It also has the pinned RDS CA and TLS preload, no task role, and the
+    family `vayada-workos-user-resync-oneoff`.
+  - The launcher pins `AUTH_DATABASE_URL` to `vayada_next_identity_runtime`
+    @ `vayada_target_prod` and refuses any other database URL in that task.
+    The CLI also refuses unless `current_user` is the identity login.
+- **Plan:** the CLI's dry run. It reads in a READ ONLY transaction and only
+  calls WorkOS GET.
+  - The script saves `workos-user-resync-plan.json` (0600). It holds the
+    CLI's plan, the CLI's `planSha256` and the script's binding: approval
+    reference, arguments, image, network, cluster, and the SHA-256s of this
+    script, its launcher and the TLS preload.
+  - The printed plan lists users by the last 8 characters of their WorkOS ID,
+    with the outcome, the names of the fields that would change, and counts.
+    It never prints names or emails.
+  - The plan SHA-256 is SHA-256 of `<CLI plan sha>:<binding sha>`.
+- **Go:** Flamur names that plan SHA-256 in `WORKOS_USER_RESYNC:<plan sha>`.
+- **Apply:**
+  - Before any AWS call, the script refuses a go for another plan or another
+    approval reference.
+  - It recomputes the binding and refuses unless it gives the go's plan SHA.
+  - It passes `--apply <CLI plan sha>`. The CLI re-plans and refuses
+    `plan_changed` unless the plan is identical: same users, same dead
+    letters, same values before and after.
+  - Each user is written in one transaction, under the webhook's provider
+    lock. That transaction refuses `user_changed_since_plan` if the user
+    changed after the re-plan.
+- **Result:** `workos-user-resync-result.json` is written only when:
+  - the CLI exits 0;
+  - it prints exactly one JSON line with `applied: true` for the CLI plan SHA;
+  - it prints `WORKOS_USER_RESYNC_COMPLETE planSha256=<that sha> updated=… resolved=… acknowledged=… skipped=…`.
+
+  The folder then refuses another apply: use a new folder. A second dry run
+  afterwards lists only the skipped users, and applying it writes nothing.
+- **Not a migration command:** the generic `<command> <run-file>` path refuses
+  `identity:workos:user-resync`. A resync refuses to start while any one-off
+  migration, handover or resync task is running, and they refuse while it runs.
+
 ## What one call does
 
 1. **Before any AWS call, it checks the inputs:**
