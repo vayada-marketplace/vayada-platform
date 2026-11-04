@@ -46,6 +46,8 @@ The old Python Marketplace API and its admin build were retired in VAY-2259: `ap
 
 All ECS services run on `vayada-backend-cluster` (Fargate) in `eu-west-1`, fronted by `vayada-backend-alb`. Public `vayada.com` DNS is authoritative in Cloudflare; Route 53 records remain for AWS-side aliases and certificate validation where used. Cloudflare DNS management is gated by `enable_cloudflare_dns`; only enable it after `TF_VAR_CLOUDFLARE_API_TOKEN` is a valid DNS edit token for the `vayada.com` zone.
 
+Hotel websites (VAY-2422) are not on AWS: each `<slug>.site.vayada.com` is a DNS-only CNAME (`cloudflare_record.hotel_site` in `infra/cloudflare.tf`) to that hotel's Cloudflare Pages project, `vayada-site-<slug>.pages.dev`. The vayada repo's Deploy Hotel Sites workflow creates the project, attaches the address and publishes the files with a Pages-only token; this repo's token can't reach Pages.
+
 ### Parallel next-stack hostname freeze
 
 Next-stack rollout is parallel validation, not a production hostname cutover.
