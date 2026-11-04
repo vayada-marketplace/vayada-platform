@@ -29,8 +29,8 @@ const privileges = new Map([
   ["platform.jobs", "SELECT, INSERT, UPDATE"],
   ["platform.dead_letter_events", "SELECT, INSERT, UPDATE"],
   ["platform.product_audit_events", "SELECT, INSERT"],
+  ["platform.legacy_owner_bootstrap_receipts", "SELECT (owner_user_ids)"],
 ]);
-const sharedTables = [...privileges.keys()].filter((table) => table.startsWith("platform."));
 const publicReads = new Set(["booking.pricing_runtime_effective_property_scopes"]);
 const knownPrivileges = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 const ownerBypass = "(CURRENT_USER <> 'vayada_next_identity_runtime'::name)";
@@ -139,7 +139,7 @@ try {
     `, [table]);
     if (relation.rowCount !== 1 || !relation.rows[0].owned)
       throw new Error("identity_grant_table_owner_required");
-    if (sharedTables.includes(table)) {
+    if (expectedPolicies.has(table)) {
       if (!relation.rows[0].rls) throw new Error("identity_shared_rls_missing");
       const policies = await client.query(`
         SELECT policyname, cmd, permissive, roles, qual, with_check
@@ -206,7 +206,8 @@ try {
     const allowed = privileges.get(row.relation)?.split(", ") ?? [];
     const expectedPublicRead = publicReads.has(row.relation) &&
       row.privilege === "SELECT";
-    if ((!allowed.includes(row.privilege) && !expectedPublicRead) || row.can_delegate)
+    if ((!allowed.includes(row.privilege) && !allowed.includes(`${row.privilege} (${row.attname})`) &&
+        !expectedPublicRead) || row.can_delegate)
       throw new Error("identity_role_existing_column_privilege_too_broad");
   }
   const sequenceExcess = await client.query(`

@@ -323,7 +323,13 @@ run only from a reviewed private-network migration-owner task with verified
 RDS TLS. The identity credential may enqueue a PMS inbox reconciliation job
 but may not read or update that PMS worker's rows. It may read only
 `hotel_catalog.properties` outside the identity and shared platform tables so
-staff access can be restricted to owned properties. The two pricing-runtime
+staff access can be restricted to owned properties, plus the single
+`owner_user_ids` column of `platform.legacy_owner_bootstrap_receipts`: the
+VAY-2017 legacy-owner signup guard reads it before WorkOS webhooks, signup and
+admin lifecycle changes touch an existing user (VAY-2478). Unlike the shared
+platform tables, receipts are not row-scoped: the guard must see every receipt.
+Any other receipt column, any receipt write, or a table-wide receipt grant
+fails the grant contract. The two pricing-runtime
 security-barrier views remain readable through their migration-owned PUBLIC
 contract but return rows only for their assigned pricing login. The dedicated parameter is
 mapped to `AUTH_DATABASE_URL` only after the role, grants, restricted-role
@@ -355,6 +361,9 @@ The identity grant runner pins the current `rds-ca-rsa2048-g1` root from the
 verified regional bundle to fit ECS overrides; recheck the RDS CA before use
 after any certificate rotation.
 The role-creation step refuses an existing role and does not rotate passwords.
+`--grant-identity-runtime` is idempotent: a merged change to the grant set
+reaches production only when an operator re-runs it against the existing role,
+after the owner's go for that production change.
 A failed step requires inspection rather than a blind retry. The restricted-role
 canary and reviewed Terraform mapping change are required before live
 `AUTH_DATABASE_URL` cutover.
