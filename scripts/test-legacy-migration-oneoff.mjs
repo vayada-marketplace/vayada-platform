@@ -993,6 +993,12 @@ esac
       assert.equal(existsSync(resultFile), false);
     }
     state('exit', '0');
+    // After an apply ran, the plan it applied stays: a new plan needs a new folder.
+    const replan = run(['workos-user-resync-plan', REF]);
+    assert.equal(replan.status, 2, replan.stderr);
+    assert.match(replan.stderr, /apply already ran from this evidence folder/);
+    assert.equal(awsCalls(), '');
+    assert.equal(planSha(), firstGo);
 
     // The apply passes --apply <CLI plan sha> and keeps the result; the folder then refuses another apply.
     cliLines(['{"status":"START"}', applyLine(), marker()]);

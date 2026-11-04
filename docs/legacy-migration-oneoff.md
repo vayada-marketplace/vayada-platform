@@ -116,7 +116,12 @@ EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh work
   - It then marks that user's dead letters `resolved`, with one
     `workos.webhook.normalized` audit row per receipt (`ignored` for a deleted
     user, whose details it never changes).
-  - Smoke (`.test`) dead letters are marked `acknowledged`.
+  - Smoke dead letters are marked `acknowledged`. A user counts as smoke when
+    our email, or every webhook email, ends in `.test` (privacy erasure
+    rewrites our email).
+  - If the identity login cannot read the legacy-owner receipts (the
+    VAY-2478 failure), the plan refuses with `legacy_owner_guard_unreadable`
+    instead of reporting users as protected.
 - **What it never does:**
   - It never creates a user or link. A WorkOS ID with no linked user, or a
     user WorkOS no longer has, is skipped and reported, and its dead letters
@@ -153,8 +158,12 @@ EVIDENCE_DIR=<0700 evidence folder> bash scripts/legacy-migration-oneoff.sh work
     `plan_changed` unless the plan is identical: same users, same dead
     letters, same values before and after.
   - Each user is written in one transaction, under the webhook's provider
-    lock. That transaction refuses `user_changed_since_plan` if the user
-    changed after the re-plan.
+    lock. That transaction refuses `user_changed_since_plan` (with the user's
+    short reference) if the user changed after the re-plan.
+  - The CLI prints one `progress` line per committed user, so a run that
+    stops halfway shows how far it got. Once an apply has run from a folder,
+    `workos-user-resync-plan` refuses in that folder, so the applied plan stays
+    on record: re-plan in a new folder and get a new go.
 - **Result:** `workos-user-resync-result.json` is written only when:
   - the CLI exits 0;
   - it prints exactly one JSON line with `applied: true` for the CLI plan SHA;

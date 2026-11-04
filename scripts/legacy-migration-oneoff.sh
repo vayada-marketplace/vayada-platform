@@ -462,6 +462,12 @@ if [[ "$command" == workos-user-resync-plan || "$command" == workos-user-resync 
   result_file="${evidence}/workos-user-resync-result.json"
   # A folder that holds a completed resync keeps its plan and result: use a new folder.
   [[ ! -e "$result_file" ]] || { echo "${result_file##*/} already exists; use a new evidence folder." >&2; exit 2; }
+  # An apply that stopped halfway keeps the plan it applied: a new plan goes in a new folder.
+  if [[ "$command" == workos-user-resync-plan ]]; then
+    for applied in "${evidence}"/workos-user-resync-apply-*.log; do
+      [[ ! -e "$applied" ]] || { echo "An apply already ran from this evidence folder; plan again in a new folder." >&2; exit 2; }
+    done
+  fi
   go_sha256="" cli_sha256=""
   if [[ "$command" == workos-user-resync ]]; then
     [[ "$3" =~ ^WORKOS_USER_RESYNC:([0-9a-f]{64})$ ]] || { echo "Confirmation must be WORKOS_USER_RESYNC:<plan sha256>." >&2; exit 2; }
