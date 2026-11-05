@@ -105,7 +105,7 @@ jobs:
     environment: platform-mutations-v2
     if: (github.event.client_payload.service || inputs.service) != 'next-maps-canary' && (github.event.client_payload.service || inputs.service) != 'next-maps-canary-remove' && (github.event.client_payload.service || inputs.service) != 'next-maps-guest' && (github.event.client_payload.service || inputs.service) != 'next-maps-guest-remove' && (github.event.client_payload.service || inputs.service) != 'next-maps-frontends' && (github.event.client_payload.service || inputs.service) != 'next-maps-frontends-remove'
     name: Deploy ${{ github.event.client_payload.service || inputs.service }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Require reviewed main workflow
@@ -457,7 +457,7 @@ jobs:
   maps-canary:
     environment: platform-mutations-v2
     if: github.event_name == 'workflow_dispatch' && (inputs.service == 'next-maps-canary' || inputs.service == 'next-maps-canary-remove' || inputs.service == 'next-maps-guest' || inputs.service == 'next-maps-guest-remove' || inputs.service == 'next-maps-frontends' || inputs.service == 'next-maps-frontends-remove')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require reviewed main workflow
         env:

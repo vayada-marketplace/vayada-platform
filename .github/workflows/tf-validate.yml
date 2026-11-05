@@ -184,7 +184,7 @@ permissions:
 jobs:
   identity-runtime-grant:
     name: Identity runtime grant (PostgreSQL ${{ matrix.postgres }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         postgres: ["16", "17"]
@@ -200,7 +200,7 @@ jobs:
 
   target-database-cluster-acl:
     name: Cluster database ACL (PostgreSQL ${{ matrix.postgres }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         postgres: ["16", "17"]
@@ -216,7 +216,7 @@ jobs:
 
   hotel-setup-role-retirement:
     name: Hotel setup role retirement (PostgreSQL ${{ matrix.postgres }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         postgres: ["16", "17"]
@@ -232,7 +232,7 @@ jobs:
 
   affiliate-capture-login-retirement:
     name: Affiliate capture login retirement (PostgreSQL ${{ matrix.postgres }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         postgres: ["16", "17"]
@@ -248,7 +248,7 @@ jobs:
 
   api-runtime-timeouts:
     name: API runtime login timeouts (PostgreSQL ${{ matrix.postgres }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         postgres: ["16", "17"]
@@ -264,7 +264,7 @@ jobs:
 
   target-database-runtime-preflight:
     name: Runtime database preflight (PostgreSQL ${{ matrix.postgres }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         postgres: ["16", "17"]
@@ -283,7 +283,7 @@ jobs:
   # admission PRs) cannot change what it proves, and skips the plans.
   pricing-bootstrap-identity:
     name: Pricing bootstrap identity (offline plans)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout merge commit and its base
@@ -327,7 +327,7 @@ jobs:
 
   validate:
     name: Validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout code

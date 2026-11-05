@@ -14,14 +14,14 @@ concurrency:
 jobs:
   begin:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - run: date --utc --iso-8601=seconds
 
   workers:
     needs: begin
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 3
     strategy:
       fail-fast: false
@@ -33,7 +33,7 @@ jobs:
 
   end:
     needs: workers
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - run: date --utc --iso-8601=seconds
