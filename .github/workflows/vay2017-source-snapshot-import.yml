@@ -22,7 +22,7 @@ jobs:
   authorize-import:
     if: github.ref == 'refs/heads/main'
     environment: platform-mutations-v2
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - run: "true"
 
@@ -30,7 +30,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     needs: authorize-import
     environment: vay2042-data-rehearsal
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       verified-at: ${{ steps.verify.outputs.verified_at }}
@@ -74,7 +74,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     needs: verify-source
     environment: platform-mutations-v2
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7

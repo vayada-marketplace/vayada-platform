@@ -10,7 +10,7 @@ concurrency:
 jobs:
   preflight:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: vay2042-data-rehearsal
     timeout-minutes: 35
     steps:
