@@ -770,3 +770,252 @@ require('node:module').syncBuiltinESMExports();`);
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// VAY-2479: the WorkOS user resync runs the apps/api CLI as the identity login, never the migration owner.
+const IDENTITY_ENV = {
+  VAYADA_DB_RDS_CA_BUNDLE: CA, LEGACY_MIGRATION_TLS_PRELOAD: TLS_PRELOAD,
+  AUTH_DATABASE_URL: `postgresql://vayada_next_identity_runtime:pw@${PROD_HOST}:5432/vayada_target_prod?sslmode=require`,
+  WORKOS_API_KEY: 'sk_test_not_a_real_key',
+};
+
+test('the dispatcher runs the WorkOS user resync CLI from apps/api with the identity login only', () => {
+  assert.match(dispatcher, /'identity:workos:user-resync': \['identity', 'workosUserResync\.js'\]/);
+  const dir = mkdtempSync(join(tmpdir(), 'workos-user-resync-dispatch-'));
+  try {
+    writeFileSync(join(dir, 'stub.cjs'), `const cp = require('node:child_process');
+cp.spawnSync = (file, argv, options) => { console.log(JSON.stringify({ argv: argv.slice(2), urls: Object.keys(options.env).filter((k) => k.endsWith('DATABASE_URL')).sort(), auth: options.env.AUTH_DATABASE_URL, key: options.env.WORKOS_API_KEY, tls: JSON.parse(options.env.LEGACY_MIGRATION_TLS) })); return { status: 0 }; };
+require('node:module').syncBuiltinESMExports();`);
+    const args = JSON.stringify(['--approval-ref', 'VAY-2479']);
+    const result = dispatch('identity', { ...IDENTITY_ENV, LEGACY_MIGRATION_COMMAND: 'identity:workos:user-resync', LEGACY_MIGRATION_ARGS: args }, ['--require', join(dir, 'stub.cjs')]);
+    assert.equal(result.status, 0, result.stderr);
+    const [start, run] = result.stdout.trim().split('\n').map((line) => JSON.parse(line));
+    assert.deepEqual(start, { status: 'START', command: 'identity:workos:user-resync', flags: ['--approval-ref'] });
+    assert.deepEqual(run.argv, ['/app/apps/api/dist/cli/workosUserResync.js', '--approval-ref', 'VAY-2479']);
+    assert.deepEqual(run.urls, ['AUTH_DATABASE_URL']);
+    assert.match(run.auth, new RegExp(`^postgresql://vayada_next_identity_runtime:pw@${PROD_HOST}:5432/vayada_target_prod\\?sslmode=verify-full&sslrootcert=`));
+    assert.equal(run.key, IDENTITY_ENV.WORKOS_API_KEY);
+    assert.equal(run.tls.cliDir, '/app/apps/api/dist/cli');
+    assert.deepEqual(run.tls.hosts, [PROD_HOST]);
+    rmSync(join(run.tls.ca, '..'), { recursive: true, force: true });
+
+    for (const [kind, env, code] of [
+      // The resync never runs in a target or source task, and identity tasks run nothing else.
+      ['target', { ...DB_ENV, LEGACY_MIGRATION_COMMAND: 'identity:workos:user-resync', LEGACY_MIGRATION_ARGS: args }, 'command_not_allowed_for_task'],
+      ['identity', { ...IDENTITY_ENV, LEGACY_MIGRATION_COMMAND: 'target:migration-status', LEGACY_MIGRATION_ARGS: '[]' }, 'command_not_allowed_for_task'],
+      ['identity', { ...IDENTITY_ENV, LEGACY_MIGRATION_COMMAND: 'target:channex:handover:activate', LEGACY_MIGRATION_ARGS: '[]' }, 'command_not_allowed_for_task'],
+      // Only the identity login, and no other database URL next to it.
+      ['identity', { ...IDENTITY_ENV, LEGACY_MIGRATION_COMMAND: 'identity:workos:user-resync', LEGACY_MIGRATION_ARGS: args, AUTH_DATABASE_URL: DB_ENV.TARGET_DATABASE_URL }, 'database_url_not_pinned'],
+      ['identity', { ...IDENTITY_ENV, LEGACY_MIGRATION_COMMAND: 'identity:workos:user-resync', LEGACY_MIGRATION_ARGS: args, AUTH_DATABASE_URL: IDENTITY_ENV.AUTH_DATABASE_URL.replace(PROD_HOST, RESTORE_HOST) }, 'database_url_not_pinned'],
+      ['identity', { ...IDENTITY_ENV, LEGACY_MIGRATION_COMMAND: 'identity:workos:user-resync', LEGACY_MIGRATION_ARGS: args, AUTH_DATABASE_URL: '' }, 'database_url_not_pinned'],
+      ['identity', { ...IDENTITY_ENV, LEGACY_MIGRATION_COMMAND: 'identity:workos:user-resync', LEGACY_MIGRATION_ARGS: args, TARGET_DATABASE_URL: DB_ENV.TARGET_DATABASE_URL }, 'unexpected_database_url'],
+      ['identity', { ...IDENTITY_ENV, LEGACY_MIGRATION_COMMAND: 'identity:workos:user-resync', LEGACY_MIGRATION_ARGS: args, LEGACY_MIGRATION_TLS_PRELOAD: '' }, 'tls_preload_invalid'],
+    ]) {
+      const refused = dispatch(kind, env, ['--require', join(dir, 'stub.cjs')]);
+      assert.equal(refused.status, 64, `${kind} ${env.LEGACY_MIGRATION_COMMAND} ${refused.stdout}`);
+      assert.deepEqual(JSON.parse(refused.stderr), { status: 'REFUSED', code });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('workos user resync plans the CLI dry run as the identity login, then applies exactly that plan', () => {
+  const root = mkdtempSync(join(tmpdir(), 'workos-user-resync-'));
+  try {
+    mkdirSync(join(root, 'scripts'));
+    mkdirSync(join(root, 'rehearsal'));
+    for (const name of ['legacy-migration-oneoff.sh', 'legacy-migration-oneoff.mjs', 'legacy-migration-tls.cjs', 'next-api-split-compatible-images.txt'])
+      copyFileSync(new URL(`./${name}`, import.meta.url), join(root, 'scripts', name));
+    copyFileSync(new URL('../rehearsal/rds-ca-rsa2048-g1.pem', import.meta.url), join(root, 'rehearsal/rds-ca-rsa2048-g1.pem'));
+    const evidence = join(root, 'evidence');
+    mkdirSync(evidence, { mode: 0o700 });
+    const OTHER_DIGEST = readFileSync(new URL('./next-api-split-compatible-images.txt', import.meta.url), 'utf8').trim().split('\n').map((line) => line.split(' ')[1]).filter((digest) => digest !== DIGEST).at(-1);
+    const CLI_SHA = 'b'.repeat(64);
+    const REF = 'VAY-2479';
+    const state = (name, value) => writeFileSync(join(root, name), value);
+    state('account', '269416271598');
+    state('digest', DIGEST);
+    state('exit', '0');
+    state('network', '{"awsvpcConfiguration":{"subnets":["subnet-1"]}}');
+    const cliLines = (lines) => state('events', JSON.stringify({ events: lines.map((message) => ({ message })), nextForwardToken: 'f/1' }));
+    const planLine = (overrides = {}) => JSON.stringify({ planSha256: CLI_SHA, applied: false, approvalRef: REF, plan: { totals: { users: 18 } }, ...overrides });
+    const applyLine = (overrides = {}) => JSON.stringify({ planSha256: CLI_SHA, applied: true, approvalRef: REF, result: { usersUpdated: 16 }, ...overrides });
+    const marker = (sha = CLI_SHA) => `WORKOS_USER_RESYNC_COMPLETE planSha256=${sha} updated=16 resolved=41 acknowledged=196 skipped=0`;
+    mkdirSync(join(root, 'bin'));
+    writeFileSync(join(root, 'bin/aws'), `#!/usr/bin/env bash
+[[ "$1 $2 $3 $4" == "--profile vayada --region eu-west-1" ]] || { echo "unexpected aws options: $*" >&2; exit 9; }
+shift 4
+echo "$1 $2" >> "${root}/aws.log"
+args=("$@"); for ((i = 0; i < \${#args[@]}; i++)); do
+  [[ "\${args[i]}" == --cli-input-json ]] && printf '%s\\n' "\${args[i+1]}" >> "${root}/definitions.jsonl"
+done
+case "$1 $2" in
+  "sts get-caller-identity") cat "${root}/account" ;;
+  "ecs describe-services")
+    [[ "$*" == *networkConfiguration* ]] && cat "${root}/network" ||
+      echo '{"desiredCount":1,"runningCount":1,"deployments":[{"rolloutState":"COMPLETED"}]}' ;;
+  "ecs list-tasks")
+    if [[ "$*" == *--family* ]]; then [[ -f "${root}/running" && "$*" == *"$(cat "${root}/running")"* ]] && echo 1 || echo 0
+    else echo '{"taskArns":["arn:aws:ecs:eu-west-1:269416271598:task/vayada-backend-cluster/feed"]}'; fi ;;
+  "ecs register-task-definition") echo arn:aws:ecs:eu-west-1:269416271598:task-definition/vayada-workos-user-resync-oneoff:1 ;;
+  "ecs run-task") echo '{"tasks":[{"taskArn":"arn:aws:ecs:eu-west-1:269416271598:task/vayada-target-database-runtime-preflight/0123456789abcdef0123456789abcdef"}],"failures":[]}' ;;
+  "ecs describe-tasks")
+    if [[ "$*" == *imageDigest* ]]; then cat "${root}/digest"
+    elif [[ "$*" == *lastStatus* ]]; then echo STOPPED
+    else echo "{\\"containers\\":[{\\"exitCode\\":$(cat "${root}/exit")}]}"; fi ;;
+  "logs get-log-events") [[ "$*" == *next-token* ]] && echo '{"events":[],"nextForwardToken":"f/1"}' || cat "${root}/events" ;;
+esac
+`);
+    chmodSync(join(root, 'bin/aws'), 0o755);
+    const script = join(root, 'scripts/legacy-migration-oneoff.sh');
+    // /bin/bash: macOS operators run bash 3.2.
+    const run = (args) => {
+      rmSync(join(root, 'aws.log'), { force: true });
+      rmSync(join(root, 'definitions.jsonl'), { force: true });
+      return spawnSync('/bin/bash', [script, ...args], { encoding: 'utf8', env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, EVIDENCE_DIR: evidence } });
+    };
+    const awsCalls = () => (existsSync(join(root, 'aws.log')) ? readFileSync(join(root, 'aws.log'), 'utf8') : '');
+    const definitions = () => readFileSync(join(root, 'definitions.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const recordFile = join(evidence, 'workos-user-resync-plan.json');
+    const resultFile = join(evidence, 'workos-user-resync-result.json');
+    const planSha = () => JSON.parse(readFileSync(recordFile, 'utf8')).planSha256;
+    const go = (sha) => `WORKOS_USER_RESYNC:${sha}`;
+    const plan = (ref = REF) => {
+      cliLines(['{"status":"START","command":"identity:workos:user-resync","flags":["--approval-ref"]}', planLine({ approvalRef: ref })]);
+      const result = run(['workos-user-resync-plan', ref]);
+      assert.equal(result.status, 0, result.stderr);
+      return result;
+    };
+
+    // Every input check runs before any AWS call.
+    for (const [args, status, message] of [
+      [['workos-user-resync-plan', 'x'], 2, /approval reference must be/],
+      [['workos-user-resync-plan', '--apply'], 2, /approval reference must be/],
+      [['workos-user-resync-plan', 'VAY 2479'], 2, /approval reference must be/],
+      [['workos-user-resync-plan', 'VAY-2479\n'], 2, /approval reference must be/],
+      [['workos-user-resync-plan', REF, 'extra'], 2, /Usage/],
+      [['workos-user-resync', REF], 2, /Usage/],
+      [['workos-user-resync', REF, CLI_SHA], 2, /Confirmation must be WORKOS_USER_RESYNC:<plan sha256>/],
+      [['workos-user-resync', REF, `WORKOS_USER_RESYNC:${'A'.repeat(64)}`], 2, /Confirmation must be/],
+      [['workos-user-resync', REF, go(CLI_SHA)], 2, /run workos-user-resync-plan first/],
+    ]) {
+      const result = run(args);
+      assert.equal(result.status, status, `${JSON.stringify(args)} ${result.stderr}`);
+      assert.match(result.stderr, message);
+      assert.equal(awsCalls(), '');
+    }
+    // The generic migration path never reaches the resync CLI.
+    assert.match(run(['identity:workos:user-resync', join(root, 'none.json'), '0'.repeat(64), 'x']).stderr, /allow-list/);
+
+    // No plan for an unreviewed image, while another one-off runs, or from a failed or apply-shaped dry run.
+    state('digest', `sha256:${'0'.repeat(64)}`);
+    assert.match(run(['workos-user-resync-plan', REF]).stderr, /not a reviewed pair/);
+    assert.doesNotMatch(awsCalls(), /register/);
+    state('digest', DIGEST);
+    for (const family of ['vayada-channex-handover-oneoff', 'vayada-workos-user-resync-oneoff', 'vayada-legacy-migration-oneoff-target']) {
+      state('running', family);
+      assert.match(run(['workos-user-resync-plan', REF]).stderr, /still running/);
+      assert.doesNotMatch(awsCalls(), /register/);
+    }
+    rmSync(join(root, 'running'));
+    for (const [lines, exit] of [
+      [['{"status":"START"}', '{"status":"REFUSED","code":"identity_login_required"}'], '64'],
+      [['{"status":"START"}', planLine()], '1'],
+      [['{"status":"START"}', planLine({ applied: true })], '0'],
+      [['{"status":"START"}', planLine(), planLine()], '0'],
+    ]) {
+      cliLines(lines);
+      state('exit', exit);
+      assert.match(run(['workos-user-resync-plan', REF]).stderr, /no plan recorded/);
+      assert.equal(existsSync(recordFile), false);
+    }
+    state('exit', '0');
+
+    // The plan: the CLI's own dry run on the running reviewed image, identity login and WorkOS key only.
+    const planned = plan();
+    const firstGo = planSha();
+    assert.notEqual(firstGo, CLI_SHA);
+    assert.match(planned.stdout, new RegExp(`Run after the go: workos-user-resync ${REF} WORKOS_USER_RESYNC:${firstGo}`));
+    const [planDefinition] = definitions();
+    assert.equal(planDefinition.family, 'vayada-workos-user-resync-oneoff');
+    assert.equal(planDefinition.taskRoleArn, undefined);
+    const [planContainer] = planDefinition.containerDefinitions;
+    assert.equal(planContainer.image, `269416271598.dkr.ecr.eu-west-1.amazonaws.com/vayada-next-api@${DIGEST}`);
+    assert.deepEqual([...planContainer.entryPoint, ...planContainer.command], ['node', '--input-type=module', '--eval', dispatcher, 'identity']);
+    assert.deepEqual(planContainer.secrets.map((x) => `${x.name}=${x.valueFrom.split(':parameter')[1]}`),
+      ['AUTH_DATABASE_URL=/vayada/prod/target-database-identity-runtime-url', 'WORKOS_API_KEY=/vayada/prod/workos-api-key']);
+    const planEnv = Object.fromEntries(planContainer.environment.map((e) => [e.name, e.value]));
+    assert.equal(planEnv.LEGACY_MIGRATION_COMMAND, 'identity:workos:user-resync');
+    assert.deepEqual(JSON.parse(planEnv.LEGACY_MIGRATION_ARGS), ['--approval-ref', REF]);
+    assert.equal(planEnv.LEGACY_MIGRATION_FILES, undefined);
+    assert.equal(planContainer.logConfiguration.options['awslogs-stream-prefix'], 'workos-user-resync');
+    const record = JSON.parse(readFileSync(recordFile, 'utf8'));
+    assert.deepEqual([record.approvalRef, record.cliPlanSha256, record.cliPlan], [REF, CLI_SHA, { totals: { users: 18 } }]);
+    assert.equal(statSync(recordFile).mode & 0o777, 0o600);
+
+    // The go must name that plan and its approval reference; anything the plan bound needs a new go.
+    assert.match(run(['workos-user-resync', REF, go(CLI_SHA)]).stderr, /names another plan/);
+    assert.match(run(['workos-user-resync', 'VAY-2480', go(firstGo)]).stderr, /names another plan/);
+    assert.equal(awsCalls(), '');
+    const drift = (change, undo) => {
+      change();
+      const result = run(['workos-user-resync', REF, go(firstGo)]);
+      undo();
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /plan changed since the go/);
+      assert.doesNotMatch(awsCalls(), /register/);
+    };
+    drift(() => state('digest', OTHER_DIGEST), () => state('digest', DIGEST));
+    drift(() => state('network', '{"awsvpcConfiguration":{"subnets":["subnet-2"]}}'), () => state('network', '{"awsvpcConfiguration":{"subnets":["subnet-1"]}}'));
+    const runnerText = readFileSync(script, 'utf8');
+    drift(() => writeFileSync(script, `${runnerText}\n# edited\n`), () => writeFileSync(script, runnerText));
+    state('digest', OTHER_DIGEST);
+    plan();
+    assert.notEqual(planSha(), firstGo);
+    assert.match(run(['workos-user-resync', REF, go(firstGo)]).stderr, /names another plan/);
+    state('digest', DIGEST);
+    plan();
+    assert.equal(planSha(), firstGo);
+
+    // A refusal, a non-zero exit, an unapplied report, a missing marker or one for another plan writes no result.
+    for (const [lines, exit, status] of [
+      [['{"status":"START"}', '{"status":"REFUSED","code":"plan_changed"}'], '64', 64],
+      [['{"status":"START"}', applyLine(), marker()], '1', 1],
+      [['{"status":"START"}', applyLine({ applied: false }), marker()], '0', 1],
+      [['{"status":"START"}', applyLine()], '0', 1],
+      [['{"status":"START"}', applyLine(), marker('c'.repeat(64))], '0', 1],
+    ]) {
+      cliLines(lines);
+      state('exit', exit);
+      const result = run(['workos-user-resync', REF, go(firstGo)]);
+      assert.equal(result.status, status, result.stderr);
+      assert.match(result.stderr, /did not complete; no result written/);
+      assert.equal(existsSync(resultFile), false);
+    }
+    state('exit', '0');
+    // After an apply ran, the plan it applied stays: a new plan needs a new folder.
+    const replan = run(['workos-user-resync-plan', REF]);
+    assert.equal(replan.status, 2, replan.stderr);
+    assert.match(replan.stderr, /apply already ran from this evidence folder/);
+    assert.equal(awsCalls(), '');
+    assert.equal(planSha(), firstGo);
+
+    // The apply passes --apply <CLI plan sha> and keeps the result; the folder then refuses another apply.
+    cliLines(['{"status":"START"}', applyLine(), marker()]);
+    const applied = run(['workos-user-resync', REF, go(firstGo)]);
+    assert.equal(applied.status, 0, applied.stderr);
+    const applyContainer = definitions()[0].containerDefinitions[0];
+    const applyEnv = Object.fromEntries(applyContainer.environment.map((e) => [e.name, e.value]));
+    assert.deepEqual(JSON.parse(applyEnv.LEGACY_MIGRATION_ARGS), ['--approval-ref', REF, '--apply', CLI_SHA]);
+    assert.deepEqual(applyContainer.secrets.map((x) => x.name), ['AUTH_DATABASE_URL', 'WORKOS_API_KEY']);
+    assert.match(awsCalls(), /ecs register-task-definition\necs run-task\n[\s\S]*ecs deregister-task-definition\necs delete-task-definitions\n$/);
+    const result = JSON.parse(readFileSync(resultFile, 'utf8'));
+    assert.deepEqual([result.result, result.goPlanSha256, result.marker], [{ usersUpdated: 16 }, firstGo, marker()]);
+    const again = run(['workos-user-resync', REF, go(firstGo)]);
+    assert.equal(again.status, 2);
+    assert.match(again.stderr, /already exists; use a new evidence folder/);
+    assert.equal(awsCalls(), '');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -13,10 +13,13 @@ import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
 const CLI = '/app/packages/backend-migration/dist/cli';
+// VAY-2479: "identity" tasks run an apps/api CLI as the identity login, never the migration owner.
+const CLI_DIRS = { target: CLI, source: CLI, identity: '/app/apps/api/dist/cli' };
 const CA_SHA256 = 'f5c5f92ae025987c76dc49bdb1ace8556fdf332b4788d719a923bc274779d869';
 // SHA-256 of scripts/legacy-migration-tls.cjs; a mismatched checkout is refused.
 const TLS_PRELOAD_SHA256 = '4393f823953295d3830917389be8bed9732cc4653ac9e4b8fb9de8f12b92eb29';
 const TARGET = { host: 'vayada-database.c7eiqkoq4as4.eu-west-1.rds.amazonaws.com', database: 'vayada_target_prod', user: 'vayada_target_prod_user' };
+const IDENTITY = { ...TARGET, user: 'vayada_next_identity_runtime' };
 // The sources are the attested restore of the frozen legacy databases, never production legacy.
 const SOURCE_DATABASES = { AUTH: 'vayada_auth_db', BOOKING: 'vayada_booking_db', MARKETPLACE: 'postgres', PMS: 'vayada_pms_db' };
 // command -> [task kind, CLI file, subcommand...]; "target" tasks never get source or media access.
@@ -31,6 +34,8 @@ const COMMANDS = {
   'target:channex:handover:revoke': ['target', 'channexHandover.js', 'revoke'],
   'target:channex:handover:open-sales': ['target', 'channexHandover.js', 'open-sales'],
   'target:channex:handover:close-sales': ['target', 'channexHandover.js', 'close-sales'],
+  // VAY-2479: the WorkOS user resync, as the identity login (legacy-migration-oneoff.sh workos-user-resync).
+  'identity:workos:user-resync': ['identity', 'workosUserResync.js'],
 };
 
 const refuse = (code) => {
@@ -68,7 +73,10 @@ const ca = process.env.VAYADA_DB_RDS_CA_BUNDLE ?? '';
 if (createHash('sha256').update(ca).digest('hex') !== CA_SHA256) refuse('rds_ca_invalid');
 const preload = process.env.LEGACY_MIGRATION_TLS_PRELOAD ?? '';
 if (createHash('sha256').update(preload).digest('hex') !== TLS_PRELOAD_SHA256) refuse('tls_preload_invalid');
-const pins = { TARGET_DATABASE_URL: TARGET };
+const pins = kind === 'identity' ? { AUTH_DATABASE_URL: IDENTITY } : { TARGET_DATABASE_URL: TARGET };
+// An identity task holds the identity login only: no other database URL may reach its CLI.
+if (kind === 'identity' && Object.keys(process.env).some((name) => name.endsWith('DATABASE_URL') && name !== 'AUTH_DATABASE_URL'))
+  refuse('unexpected_database_url');
 if (kind === 'source') {
   const host = process.env.LEGACY_MIGRATION_SOURCE_HOST ?? '';
   const user = process.env.LEGACY_MIGRATION_SOURCE_USER ?? '';
@@ -104,7 +112,7 @@ for (const [variable, url] of Object.entries(urls)) {
   url.searchParams.set('sslrootcert', caFile);
   env[variable] = url.toString();
 }
-env.LEGACY_MIGRATION_TLS = JSON.stringify({ ca: caFile, cliDir: CLI, hosts: [...new Set(Object.values(urls).map((url) => url.hostname))] });
+env.LEGACY_MIGRATION_TLS = JSON.stringify({ ca: caFile, cliDir: CLI_DIRS[kind], hosts: [...new Set(Object.values(urls).map((url) => url.hostname))] });
 const paths = {};
 for (const [name, value] of Object.entries(files)) {
   paths[name] = join(directory, `${name}.json`);
@@ -114,6 +122,6 @@ const argv = args.map((arg) => (arg.startsWith('@') ? paths[arg.slice(1)] : arg)
 
 // Flag names only: values such as the operator stay out of the logs.
 console.log(JSON.stringify({ status: 'START', command, flags: args.filter((arg) => arg.startsWith('--')) }));
-const result = spawnSync(process.execPath, ['--require', preloadFile, join(CLI, script), ...subcommand, ...argv], { stdio: 'inherit', env });
+const result = spawnSync(process.execPath, ['--require', preloadFile, join(CLI_DIRS[kind], script), ...subcommand, ...argv], { stdio: 'inherit', env });
 // Keep the CLI exit code: 0 done, 4 awaiting smoke, 1 failed (including PARITY_NOT_GO).
 process.exit(result.status ?? 1);
