@@ -58,7 +58,7 @@ jobs:
       attempt: ${{ steps.attempt.outputs.value }}
       auto_skip: ${{ steps.admission.outputs.auto_skip }}
     environment: next
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Record preparation attempt
         id: attempt
@@ -173,7 +173,7 @@ jobs:
     needs: prepare
     if: ${{ needs.prepare.result == 'success' && inputs.operation != 'verify' && needs.prepare.outputs.auto_skip != 'true' }}
     environment: next
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require preparation in this attempt
         env:
@@ -215,7 +215,7 @@ jobs:
           - next-booking-admin
           - next-marketplace-admin
     environment: next
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require preparation in this attempt
         env:
@@ -246,7 +246,7 @@ jobs:
     needs: [prepare, api, frontends]
     if: always() && needs.prepare.result == 'success' && inputs.operation != 'verify' && needs.prepare.outputs.auto_skip != 'true'
     environment: next
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require preparation in this attempt
         env:
@@ -282,7 +282,7 @@ jobs:
     needs: prepare
     if: github.event_name == 'repository_dispatch' && needs.prepare.result == 'success' && needs.prepare.outputs.auto_skip == 'true' && vars.AUTO_ADMIT_NEXT_API_IMAGES == 'true'
     environment: next
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       actions: write

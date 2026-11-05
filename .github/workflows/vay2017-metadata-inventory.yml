@@ -14,7 +14,7 @@ concurrency:
 jobs:
   inventory:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: vay2017-metadata-preflight
     timeout-minutes: 70
     steps:

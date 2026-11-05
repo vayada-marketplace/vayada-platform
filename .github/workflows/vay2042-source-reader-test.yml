@@ -34,7 +34,7 @@ jobs:
       matrix:
         postgres: ['16', '17']
         scope: ['source-reader', 'target', 'private-preflight']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: ghcr.io/vayada-marketplace/ci-postgres:${{ matrix.postgres }}

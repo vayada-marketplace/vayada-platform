@@ -28,7 +28,7 @@ jobs:
   apply:
     environment: platform-mutations-v2
     name: Apply
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Require reviewed main workflow
