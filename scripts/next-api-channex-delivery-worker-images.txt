@@ -6,5 +6,8 @@
 # (app main 2178452a4, D3 and D3a; 0521 applied 2026-10-27 13:44:51Z).
 # Running since 2026-10-27 16:04Z: release next-d1d75e9df (image built from app main 851625e74, no API change
 # since R4). R4 stays listed as the rollback target.
+# VAY-2108 switch (Tiga Lombok, Aether Hilltop Villas), 2026-11-14: next-1b170f8b8, the image next-api runs
+# since 2026-11-13 17:44Z (task definition 1423; release c082903d8 built no new API image).
 2178452a43fb9a78f93f38f68249430ff0a2877f sha256:5086d864ef2ac45c5091b87715e657608c3fa42226873870f8bbf7b98d8362b3
 d1d75e9df1a08262df45b7b4ef37169b4da7346e sha256:5da84314667bea02ce8869da75414139b3eb34f381e594ce9fea9427ad08d081
+1b170f8b8a958ef0e75b0e626e6298393a64ac80 sha256:161c7f180b9d2e3cb7371eb1cc0dfa3350737f5e0f1367ce8f90559cbc38c696
