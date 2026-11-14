@@ -328,6 +328,7 @@ locals {
         { name = "PMS_CHANNEX_SCOPE", value = "claimed" },
         { name = "PMS_CHANNEX_OWNED_PROPERTY_IDS", value = join(",", var.channex_owned_property_ids) },
         { name = "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE", value = "target-owned" },
+        { name = "PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED", value = tostring(var.channex_offer_ari_delivery_enabled) },
       ])
       secrets = concat([
         { name = "TARGET_DATABASE_URL", valueFrom = "/vayada/prod/target-database-runtime-url" },
@@ -553,6 +554,11 @@ resource "aws_ecs_task_definition" "services" {
     precondition {
       condition     = each.key != "next-target-backend" || (var.channex_claimed_scope == "off") == (length(var.channex_owned_property_ids) == 0)
       error_message = "The claimed Channex scope needs at least one owned property, and owned properties need the claimed scope."
+    }
+
+    precondition {
+      condition     = each.key != "next-target-backend" || !var.channex_offer_ari_delivery_enabled || contains(["booking_ari"], var.channex_claimed_scope)
+      error_message = "Channex offer ARI delivery requires channex_claimed_scope = booking_ari (a mutating ARI sync)."
     }
 
     precondition {
