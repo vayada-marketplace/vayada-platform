@@ -37,3 +37,15 @@ variable "channex_owned_property_ids" {
     error_message = "channex_owned_property_ids must be distinct lowercase UUIDs and must not name a reserved staging or test property."
   }
 }
+
+# VAY-2108 D3: ongoing offer ARI delivery (PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED). It is the only path
+# that keeps a published offer's Channex rate plan current after activation and that sends
+# stop_sell false once the runner's open-sales command opened the offer. The app refuses it without
+# a mutating ARI sync, and the worker boundary then needs the delivery grant (scripts/
+# channex-management-worker-database.mjs --grant-channex-delivery-worker), so it is on only with
+# booking_ari and an image on scripts/next-api-channex-delivery-worker-images.txt.
+variable "channex_offer_ari_delivery_enabled" {
+  type        = bool
+  default     = false
+  description = "Ongoing Channex offer ARI delivery for owned, claimed hotels on vayada-next-api; requires channex_claimed_scope = booking_ari."
+}

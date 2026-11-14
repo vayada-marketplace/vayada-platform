@@ -80,6 +80,11 @@ def main() -> None:
             claimed_ari = dict(line.split() for line in Path(__file__).with_name("next-api-channex-claimed-ari-compatible-images.txt").read_text().splitlines() if line.strip() and not line.startswith("#"))
             if digest not in claimed_ari.values():
                 fail("set channex_claimed_scope booking or off before deploying an image without claimed Channex ARI support")
+        # D3: ongoing offer ARI delivery needs an image whose worker boundary knows the delivery tables.
+        if any(e.get("name") == "PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED" and e.get("value") == "true" for e in environment):
+            delivery = dict(line.split() for line in Path(__file__).with_name("next-api-channex-delivery-worker-images.txt").read_text().splitlines() if line.strip() and not line.startswith("#"))
+            if digest not in delivery.values():
+                fail("set channex_offer_ari_delivery_enabled false before deploying an image without Channex offer ARI delivery support")
     print("next-api split launcher guard passed")
 
 

@@ -128,6 +128,7 @@ class DeploymentGuards(unittest.TestCase):
                 {"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "true"},
                 {"name": "FINANCE_EXPORT_WORKER_ACCEPTED_AFTER", "value": "2026-09-25T05:00:00.000Z"},
                 {"name": "FINANCE_EXPORT_WORKER_PROPERTY_ID", "value": ""},
+                {"name": "PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED", "value": "true"},
                 {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "true"}]
             source["secrets"].append({"name": "FINANCE_EXPORT_WORKER_DATABASE_URL",
                                       "valueFrom": "/vayada/prod/target-database-finance-export-worker-url"})
@@ -141,6 +142,8 @@ class DeploymentGuards(unittest.TestCase):
                 env = [e for e in container["environment"] if e["name"] == "FINANCE_EXPORT_WORKER_ENABLED"]
                 self.assertEqual(env, [{"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"}])
                 self.assertFalse(any(x["name"] == "FINANCE_EXPORT_WORKER_DATABASE_URL" for x in container["secrets"]))
+                delivery = [e for e in container["environment"] if e["name"] == "PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED"]
+                self.assertEqual(delivery, [{"name": "PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED", "value": "false"}])
                 self.assertIn({"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}, container["environment"])
                 self.assertEqual([payload["family"] for payload in registered], [api["FAMILY"]])
         # The helper itself leaves everything else alone.

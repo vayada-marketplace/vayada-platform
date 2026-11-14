@@ -130,7 +130,7 @@ class CompatibleImageTest(unittest.TestCase):
     def test_skips_unrelated_service(self) -> None:
         self.assertEqual(run("pms-backend", "other", "tag", []).returncode, 0)
 
-    def scripts_with_claimed_images(self, directory: Path, digests: list[str], ari_digests: list[str] = ()) -> Path:
+    def scripts_with_claimed_images(self, directory: Path, digests: list[str], ari_digests: list[str] = (), delivery_digests: list[str] = ()) -> Path:
         for name in ("assert-next-api-split-compatible-image.py", "assert-planned-channex-claimed-image.py",
                      "next-api-split-compatible-images.txt", "next-api-ongoing-export-compatible-images.txt"):
             (directory / name).write_text((ROOT / "scripts" / name).read_text())
@@ -138,7 +138,33 @@ class CompatibleImageTest(unittest.TestCase):
             "# fixture\n" + "".join(f"{digest[7:47]} {digest}\n" for digest in digests))
         (directory / "next-api-channex-claimed-ari-compatible-images.txt").write_text(
             "# fixture\n" + "".join(f"{digest[7:47]} {digest}\n" for digest in ari_digests))
+        (directory / "next-api-channex-delivery-worker-images.txt").write_text(
+            "# fixture\n" + "".join(f"{digest[7:47]} {digest}\n" for digest in delivery_digests))
         return directory
+
+    def test_offer_ari_delivery_deploys_only_listed_images(self) -> None:
+        # VAY-2108 D3: with delivery on, the digest must also be on the delivery-worker list.
+        global CHECK
+        original = CHECK
+        delivery = [{"name": "FINANCE_EXPORT_WORKER_ENABLED", "value": "false"}, {"name": "PMS_CHANNEX_SCOPE", "value": "claimed"},
+                    {"name": "PMS_CHANNEX_ARI_SYNC_MODE", "value": "mutating"}, {"name": "PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED", "value": "true"}]
+        with tempfile.TemporaryDirectory() as directory:
+            CHECK = self.scripts_with_claimed_images(Path(directory), [DIGEST], [DIGEST]) / original.name
+            try:
+                result = run("next-target-backend", "vayada-next-api", DIGEST, [], environment=delivery)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("without Channex offer ARI delivery support", result.stderr)
+                off = delivery[:3] + [{"name": "PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED", "value": "false"}]
+                self.assertEqual(run("next-target-backend", "vayada-next-api", DIGEST, [], environment=off).returncode, 0)
+            finally:
+                CHECK = original
+        with tempfile.TemporaryDirectory() as directory:
+            CHECK = self.scripts_with_claimed_images(Path(directory), [DIGEST], [DIGEST], [DIGEST]) / original.name
+            try:
+                result = run("next-target-backend", "vayada-next-api", DIGEST, [], environment=delivery)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            finally:
+                CHECK = original
 
     def test_claimed_channex_scope_deploys_and_rolls_back_only_to_listed_images(self) -> None:
         # VAY-2108: the current task declares the claimed scope; the guard runs for the deploy and the rollback digest.
