@@ -13,6 +13,11 @@ VAY-2108 P2: on top of the claimed booking scope Terraform may declare the
 booking_ari stage (ARI sync and provisioning both mutating). The pair is kept
 only when both are declared exactly on an exact booking shape; otherwise both
 are paused and the booking shape (or the connection scope) remains.
+
+VAY-2108 D3: ongoing offer ARI delivery (PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED=true)
+is kept only next to a kept booking_ari pair. Otherwise it is dropped (the app
+default is off): the app refuses delivery without a mutating ARI sync, so a
+paused pair with delivery left on would stop next-api from starting.
 """
 import json
 import os
@@ -35,7 +40,8 @@ CLAIMED_BOOKING_ENV = {
     "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE": "target-owned",
 }
 CLAIMED_ARI_ENV = {"PMS_CHANNEX_ARI_SYNC_MODE": "mutating", "PMS_CHANNEX_PROVISIONING_MODE": "mutating"}
-MANAGED_ENV = {*PAUSED_ENV, *CLAIMED_BOOKING_ENV, OWNED_IDS}
+OFFER_ARI_DELIVERY_ENV = {"PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED": "true"}
+MANAGED_ENV = {*PAUSED_ENV, *CLAIMED_BOOKING_ENV, OWNED_IDS, *OFFER_ARI_DELIVERY_ENV}
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 # Staging and test properties in the production database (app migration 0432).
 RESERVED_PROPERTY_IDS = {
@@ -87,6 +93,14 @@ def claimed_ari_settings(container, booking):
     return dict(CLAIMED_ARI_ENV)
 
 
+def offer_ari_delivery_settings(container, ari):
+    """Delivery on when declared exactly next to a kept booking_ari pair, else {} (dropped, so off)."""
+    seen = environment_values(container)
+    if not ari or any(seen.get(key) != {value} for key, value in OFFER_ARI_DELIVERY_ENV.items()):
+        return {}
+    return dict(OFFER_ARI_DELIVERY_ENV)
+
+
 def pause_worker(task):
     if task.get("family") != "vayada-next-api":
         raise ValueError("Unexpected next API task family")
@@ -99,8 +113,9 @@ def pause_worker(task):
     if any(s["name"] in MANAGED_ENV for s in container.get("secrets", [])):
         raise ValueError("Worker pause configuration cannot be overridden by a secret")
     booking = claimed_booking_settings(container)
+    ari = claimed_ari_settings(container, booking)
     settings = {**PAUSED_ENV, **(CONNECTION_ENV if connection_scope_declared(container) else {}),
-                **booking, **claimed_ari_settings(container, booking)}
+                **booking, **ari, **offer_ari_delivery_settings(container, ari)}
     container["environment"] = [e for e in container.get("environment", []) if e["name"] not in MANAGED_ENV]
     container["environment"].extend({"name": key, "value": value} for key, value in settings.items())
     return task

@@ -226,6 +226,14 @@ def disable_finance_export(container):
                             if e["name"] not in {"FINANCE_EXPORT_WORKER_ENABLED", FINANCE_EXPORT_WORKER_SECRET_NAME}]
 
 
+def disable_offer_ari_delivery(container):
+    """VAY-2108 D3: a canary never delivers Channex offer ARI. Production may carry the flag with
+    booking_ari; most canary modes set ARI sync observe_only, and the app refuses the flag then."""
+    container["environment"] = [e for e in container["environment"] if e["name"] != "PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED"]
+    container["environment"].append({"name": "PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED", "value": "false"})
+    container["secrets"] = [e for e in container.get("secrets", []) if e["name"] != "PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED"]
+
+
 def configure_channex_claimed_booking(container):
     """Pull-only booking sync for the synthetic property against staging Channex, no worker."""
     settings = {
@@ -617,6 +625,7 @@ def main():
         configure_channex_alerts(source)
     source["image"] = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/vayada-next-api@{digest}"
     disable_finance_export(source)
+    disable_offer_ari_delivery(source)
     source["environment"] = [e for e in source["environment"] if e["name"] not in {"PUBLIC_HOTEL_PROFILE_SOURCE", "GOOGLE_NEARBY_ENABLED", "API_BACKGROUND_WORKERS_ENABLED"}]
     source["environment"] += [{"name": "PUBLIC_HOTEL_PROFILE_SOURCE", "value": "active_publication"}, {"name": "GOOGLE_NEARBY_ENABLED", "value": "true"}, {"name": "API_BACKGROUND_WORKERS_ENABLED", "value": "false"}]
     source["secrets"] = [e for e in source["secrets"] if e["name"] != "GOOGLE_PLACES_SERVER_API_KEY"]

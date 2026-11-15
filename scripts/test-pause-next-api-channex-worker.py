@@ -97,7 +97,9 @@ class PauseWorkerTest(unittest.TestCase):
         for key in pause.CLAIMED_ARI_ENV:
             self.assertIn(f'{{ name = "{key}", value = var.channex_claimed_scope == "booking_ari" ? "mutating" : "observe_only" }}',terraform)
         self.assertEqual(terraform.count('var.channex_claimed_scope == "booking_ari"'),2)
-        self.assertIn('], var.channex_claimed_scope == "off" ? [] : [\n        { name = "PMS_CHANNEX_SCOPE", value = "claimed" },\n        { name = "PMS_CHANNEX_OWNED_PROPERTY_IDS", value = join(",", var.channex_owned_property_ids) },\n        { name = "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE", value = "target-owned" },\n      ])',terraform)
+        self.assertIn('], var.channex_claimed_scope == "off" ? [] : [\n        { name = "PMS_CHANNEX_SCOPE", value = "claimed" },\n        { name = "PMS_CHANNEX_OWNED_PROPERTY_IDS", value = join(",", var.channex_owned_property_ids) },\n        { name = "CHANNEX_ADMIN_MANUAL_BOOKING_SYNC_MODE", value = "target-owned" },\n        { name = "PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED", value = tostring(var.channex_offer_ari_delivery_enabled) },\n      ])',terraform)
+        # D3: delivery is declared only inside the claimed settings and only with booking_ari.
+        self.assertIn('!var.channex_offer_ari_delivery_enabled || contains(["booking_ari"], var.channex_claimed_scope)',terraform)
         self.assertIn('var.channex_claimed_scope == "off" || var.channex_connection_worker_enabled',terraform)
         self.assertIn('{ name = "CHANNEX_WEBHOOK_INTAKE_MODE", value = "observe_only" }',terraform)
         variables=(ROOT/"infra/channex_claimed_scope.tf").read_text()
@@ -186,6 +188,25 @@ class PauseWorkerTest(unittest.TestCase):
         env=self.env(task)
         self.assertEqual({k:env[k] for k in pause.PAUSED_ENV},pause.PAUSED_ENV)
         self.assertFalse({"PMS_CHANNEX_SCOPE","PMS_CHANNEX_OWNED_PROPERTY_IDS"}&env.keys())
+
+    def test_offer_ari_delivery_is_kept_only_next_to_a_kept_booking_ari_pair(self):
+        delivery={"name":"PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED","value":"true"}
+        def fixture_with(*extra):
+            task=self.claimed_fixture()
+            task["containerDefinitions"][0]["environment"]+=list(extra)
+            return task
+        pair=[{"name":"PMS_CHANNEX_ARI_SYNC_MODE","value":"mutating"},{"name":"PMS_CHANNEX_PROVISIONING_MODE","value":"mutating"}]
+        env=self.env(fixture_with(*pair,delivery))
+        self.assertEqual(env["PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED"],"true")
+        self.assertEqual({k:env[k] for k in pause.CLAIMED_ARI_ENV},pause.CLAIMED_ARI_ENV)
+        once=pause.pause_worker(fixture_with(*pair,delivery));self.assertEqual(once,pause.pause_worker(copy.deepcopy(once)))
+        # Without the pair (booking only, half a pair) or with any other value, delivery is dropped (off).
+        for extra in ([delivery],[pair[0],delivery],[*pair,{"name":"PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED","value":"1"}],
+                      [*pair,{"name":"PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED","value":"false"}],[*pair,delivery,{"name":"PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED","value":"false"}]):
+            self.assertNotIn("PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED",self.env(fixture_with(*extra)),extra)
+        # A secret may not set it.
+        task=fixture_with(*pair);task["containerDefinitions"][0]["secrets"].append({"name":"PMS_CHANNEX_OFFER_ARI_DELIVERY_ENABLED","valueFrom":"x"})
+        with self.assertRaises(ValueError):pause.pause_worker(task)
 
     def test_booking_ari_pair_is_kept_only_when_both_are_declared_on_the_exact_booking_shape(self):
         base={"PMS_CHANNEX_REVIEWS_MODE":"mutating","CHANNEX_WEBHOOK_INTAKE_MODE":"observe_only",**pause.PAUSED_ENV,**pause.CONNECTION_ENV,
