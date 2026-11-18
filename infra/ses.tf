@@ -15,6 +15,11 @@ resource "aws_sesv2_configuration_set" "transactional" {
 
   lifecycle {
     prevent_destroy = true
+    # Since 2026-11-18 SES returns an empty DeliveryOptions for this set (no change in CloudTrail).
+    # The AWS provider reads it as max_delivery_seconds = 0 and plans to remove it, which needs
+    # ses:PutConfigurationSetDeliveryOptions that the deploy role does not have. Nothing here
+    # manages delivery options, so leave them to SES.
+    ignore_changes = [delivery_options]
   }
 }
 
