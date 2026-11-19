@@ -161,6 +161,26 @@ jobs:
           )" = /vayada/prod/target-database-identity-runtime-url
           bash scripts/run-target-database-runtime-preflight.sh
 
+      - name: Require vayada Payment's live Stripe parameters
+        # VAY-2442: the next-api task reads these three (infra/ecs.tf). They're put into SSM outside
+        # Terraform; if one is missing, the new next-api task can't start and the deploy below hangs.
+        run: |
+          set -euo pipefail
+          for name in secret-key publishable-key webhook-secret; do
+            parameter="/vayada/prod/vayada-payment-stripe-live-${name}"
+            found="$(
+              aws ssm get-parameter \
+                --name "${parameter}" \
+                --region "${AWS_REGION}" \
+                --query Parameter.Name \
+                --output text
+            )" || found=""
+            if [ "${found}" != "${parameter}" ]; then
+              echo "::error::${parameter} is missing. Put it into SSM before this applies (VAY-2442)."
+              exit 1
+            fi
+          done
+
       - name: Verify ongoing export readiness before activation
         run: |
           set -euo pipefail

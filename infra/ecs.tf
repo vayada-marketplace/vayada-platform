@@ -294,11 +294,13 @@ locals {
         # and the hotel marks it received in the PMS. PayPal stays off: since app #3949 it also needs
         # REPLACEMENT_PRICING_PAYPAL_ACCEPTANCE_ENABLED, which stays unset.
         { name = "REPLACEMENT_PRICING_MANUAL_PAYMENT_ACCEPTANCE_ENABLED", value = "true" },
-        # VAY-2442: vayada Payment, guest card payments on Vayada's own Stripe account (TEST MODE only;
-        # next-api refuses live keys), paid out to the hotel's bank. On since Flamur's go on 2026-11-03,
-        # only for var.vayada_payment_property_ids (infra/vayada_payment.tf: TEST ONLY Agent).
+        # VAY-2442: vayada Payment, guest card payments on Vayada's own Stripe account, paid out to the
+        # hotel's bank. On since Flamur's go on 2026-11-03, only for var.vayada_payment_property_ids
+        # (infra/vayada_payment.tf). Hotels on var.vayada_payment_live_property_ids take real money
+        # with the live keys, every other hotel uses the test keys.
         { name = "VAYADA_PAYMENT_ENABLED", value = "true" },
         { name = "VAYADA_PAYMENT_PROPERTY_IDS", value = join(",", var.vayada_payment_property_ids) },
+        { name = "VAYADA_PAYMENT_LIVE_PROPERTY_IDS", value = join(",", var.vayada_payment_live_property_ids) },
         { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
         { name = "BOOKING_EMAIL_FROM", value = "Vayada Bookings <bookings@vayada.com>" },
         { name = "WORKOS_AUDIENCE", value = var.workos_audience },
@@ -344,6 +346,13 @@ locals {
         { name = "VAYADA_PAYMENT_STRIPE_SECRET_KEY", valueFrom = "/vayada/prod/vayada-payment-stripe-test-secret-key" },
         { name = "VAYADA_PAYMENT_STRIPE_PUBLISHABLE_KEY", valueFrom = "/vayada/prod/vayada-payment-stripe-test-publishable-key" },
         { name = "VAYADA_PAYMENT_STRIPE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/vayada-payment-stripe-test-webhook-secret" },
+        # VAY-2442: vayada Payment's Stripe LIVE MODE keys (restricted rk_live_ key, pk_live_) and the
+        # signing secret of the live endpoint /webhooks/stripe/vayada-payment-live, from the main Vayada
+        # Stripe account. Put into SSM from the Keychain the same way; all three must exist before this
+        # applies. They take real money only for hotels on var.vayada_payment_live_property_ids.
+        { name = "VAYADA_PAYMENT_STRIPE_LIVE_SECRET_KEY", valueFrom = "/vayada/prod/vayada-payment-stripe-live-secret-key" },
+        { name = "VAYADA_PAYMENT_STRIPE_LIVE_PUBLISHABLE_KEY", valueFrom = "/vayada/prod/vayada-payment-stripe-live-publishable-key" },
+        { name = "VAYADA_PAYMENT_STRIPE_LIVE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/vayada-payment-stripe-live-webhook-secret" },
         { name = "RESEND_API_KEY", valueFrom = "/vayada/prod/resend-api-key" },
         { name = "WORKOS_API_KEY", valueFrom = "/vayada/prod/workos-api-key" },
         { name = "WORKOS_CLIENT_ID", valueFrom = "/vayada/prod/workos-client-id" },
@@ -534,6 +543,11 @@ resource "aws_ecs_task_definition" "services" {
         )
       )
       error_message = "Ongoing exports require a fixed cutoff, no exact-property scope and the pinned RDS CA; disabled exports must be unmapped."
+    }
+
+    precondition {
+      condition     = each.key != "next-target-backend" || local.vayada_payment_lists_consistent
+      error_message = "VAY-2442: every hotel on vayada_payment_property_ids must be on vayada_payment_live_property_ids (real money) or be one of Vayada's test hotels, and a test hotel may never be on the live list (infra/vayada_payment.tf)."
     }
 
     precondition {
