@@ -301,6 +301,8 @@ locals {
         { name = "VAYADA_PAYMENT_ENABLED", value = "true" },
         { name = "VAYADA_PAYMENT_PROPERTY_IDS", value = join(",", var.vayada_payment_property_ids) },
         { name = "VAYADA_PAYMENT_LIVE_PROPERTY_IDS", value = join(",", var.vayada_payment_live_property_ids) },
+        { name = "VAYADA_PAYMENT_TEST_PROPERTY_IDS", value = join(",", sort(tolist(local.vayada_payment_test_property_ids))) },
+        { name = "VAYADA_PAYMENT_STOPPED_PROPERTY_IDS", value = join(",", var.vayada_payment_stopped_property_ids) },
         { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
         { name = "BOOKING_EMAIL_FROM", value = "Vayada Bookings <bookings@vayada.com>" },
         { name = "WORKOS_AUDIENCE", value = var.workos_audience },
@@ -547,7 +549,7 @@ resource "aws_ecs_task_definition" "services" {
 
     precondition {
       condition     = each.key != "next-target-backend" || local.vayada_payment_lists_consistent
-      error_message = "VAY-2442: every hotel on vayada_payment_property_ids must be on vayada_payment_live_property_ids (real money) or be one of Vayada's test hotels, and a test hotel may never be on the live list (infra/vayada_payment.tf)."
+      error_message = "VAY-2442: every hotel on vayada_payment_property_ids must be live or one of Vayada's test hotels; a test hotel may never be on an explicit live list; the charge list [\"*\"] needs the live list [\"*\"]; and the live list [\"*\"] needs TEST ONLY Agent pinned as a test hotel (infra/vayada_payment.tf)."
     }
 
     precondition {
