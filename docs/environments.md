@@ -279,7 +279,7 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/anthropic-api-key`      | `pms-api`                          |
 | `/vayada/prod/channex-api-key`        | `pms-api`                          |
 | `/vayada/prod/firecrawl-api-key`      | `pms-api`                          |
-| `/vayada/prod/cloudflare-api-token`   | platform Terraform                 |
+| `/vayada/prod/cloudflare-api-token`   | platform Terraform, `booking-api`, `next-api` custom-domain checks |
 | `/vayada/prod/target-database-url`    | `next-api` startup migrations      |
 | `/vayada/prod/target-database-runtime-url` | `next-api` runtime            |
 | `/vayada/prod/target-database-identity-runtime-url` | `next-api` `AUTH_DATABASE_URL` |
@@ -300,6 +300,8 @@ environment as:
 | `WORKOS_WEBHOOK_SECRET` | `/vayada/prod/workos-webhook-secret` |
 | `AUTH_COOKIE_SECRET` | `/vayada/prod/auth-cookie-secret` |
 | `STRIPE_WEBHOOK_SECRET` | `/vayada/prod/stripe-webhook-secret` |
+| `CLOUDFLARE_API_TOKEN` (with `CLOUDFLARE_ZONE_ID`) | `/vayada/prod/cloudflare-api-token`; zone from `var.cloudflare_zone_id` (VAY-2568) |
+| `BOOKING_CUSTOM_DOMAIN_ROUTES` | `var.next_booking_custom_domains` (`infra/booking_custom_domains.auto.tfvars.json`): `host=propertyId,…`, the hotel domains the ALB sends to the new booking frontend, the only ones Booking Admin can verify (VAY-2568) |
 | `WORKOS_AUDIENCE`, `WORKOS_ISSUER`, `WORKOS_JWKS_URL` | Terraform variables from matching GitHub Actions secrets |
 
 The existing `target-database-url` remains the migration-owner credential and
