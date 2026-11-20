@@ -84,7 +84,9 @@ locals {
   vayada_payment_charge_all = length(var.vayada_payment_property_ids) == 1 && contains(var.vayada_payment_property_ids, "*")
   vayada_payment_live_all   = length(var.vayada_payment_live_property_ids) == 1 && contains(var.vayada_payment_live_property_ids, "*")
   vayada_payment_lists_consistent = (
-    local.vayada_payment_live_all || (
+    # Every hotel live needs TEST ONLY Agent still pinned as a test hotel: without it, its stored
+    # test payments (captures, cancels, refunds) would go to the live keys and fail.
+    local.vayada_payment_live_all ? contains(local.vayada_payment_test_property_ids, "103a5fe7-05a4-4bf2-8a75-67a9ceaf9f21") : (
       !local.vayada_payment_charge_all &&
       length(setsubtract(
         toset(var.vayada_payment_property_ids),
