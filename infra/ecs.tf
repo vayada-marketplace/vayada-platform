@@ -301,6 +301,8 @@ locals {
         { name = "VAYADA_PAYMENT_ENABLED", value = "true" },
         { name = "VAYADA_PAYMENT_PROPERTY_IDS", value = join(",", var.vayada_payment_property_ids) },
         { name = "VAYADA_PAYMENT_LIVE_PROPERTY_IDS", value = join(",", var.vayada_payment_live_property_ids) },
+        { name = "VAYADA_PAYMENT_TEST_PROPERTY_IDS", value = join(",", sort(tolist(local.vayada_payment_test_property_ids))) },
+        { name = "VAYADA_PAYMENT_STOPPED_PROPERTY_IDS", value = join(",", var.vayada_payment_stopped_property_ids) },
         { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
         { name = "BOOKING_EMAIL_FROM", value = "Vayada Bookings <bookings@vayada.com>" },
         { name = "WORKOS_AUDIENCE", value = var.workos_audience },
