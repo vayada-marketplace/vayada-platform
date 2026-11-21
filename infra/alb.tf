@@ -173,6 +173,7 @@ locals {
     local.staging_pms_listener_rules,
     local.booking_pause_listener_rules,
     local.next_booking_custom_domain_listener_rules,
+    local.next_booking_host_redirect_listener_rules,
   )
 }
 
