@@ -304,6 +304,11 @@ locals {
         { name = "VAYADA_PAYMENT_TEST_PROPERTY_IDS", value = join(",", sort(tolist(local.vayada_payment_test_property_ids))) },
         { name = "VAYADA_PAYMENT_STOPPED_PROPERTY_IDS", value = join(",", var.vayada_payment_stopped_property_ids) },
         { name = "BOOKING_HOST_BASE", value = "https://next-booking.vayada.com" },
+        # VAY-2568: hotels' own booking domains are Cloudflare for SaaS custom hostnames on the
+        # vayada.com zone; Booking Admin's domain check finds or creates them (token below), and
+        # verifies only the domains the ALB routes to the new booking page, for their own property.
+        { name = "CLOUDFLARE_ZONE_ID", value = var.cloudflare_zone_id },
+        { name = "BOOKING_CUSTOM_DOMAIN_ROUTES", value = local.next_booking_custom_domain_routes },
         { name = "BOOKING_EMAIL_FROM", value = "Vayada Bookings <bookings@vayada.com>" },
         { name = "WORKOS_AUDIENCE", value = var.workos_audience },
         { name = "WORKOS_ISSUER", value = var.workos_issuer },
@@ -356,6 +361,9 @@ locals {
         { name = "VAYADA_PAYMENT_STRIPE_LIVE_PUBLISHABLE_KEY", valueFrom = "/vayada/prod/vayada-payment-stripe-live-publishable-key" },
         { name = "VAYADA_PAYMENT_STRIPE_LIVE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/vayada-payment-stripe-live-webhook-secret" },
         { name = "RESEND_API_KEY", valueFrom = "/vayada/prod/resend-api-key" },
+        # VAY-2568: the same zone token the old booking-api uses for custom hostnames (SSL and
+        # Certificates: Edit on vayada.com, checked read-only on 2026-11-20).
+        { name = "CLOUDFLARE_API_TOKEN", valueFrom = "/vayada/prod/cloudflare-api-token" },
         { name = "WORKOS_API_KEY", valueFrom = "/vayada/prod/workos-api-key" },
         { name = "WORKOS_CLIENT_ID", valueFrom = "/vayada/prod/workos-client-id" },
         { name = "WORKOS_WEBHOOK_SECRET", valueFrom = "/vayada/prod/workos-webhook-secret" },

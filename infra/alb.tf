@@ -168,7 +168,12 @@ locals {
     }
   } : {}
 
-  listener_rules = merge(local.base_listener_rules, local.staging_pms_listener_rules, local.booking_pause_listener_rules)
+  listener_rules = merge(
+    local.base_listener_rules,
+    local.staging_pms_listener_rules,
+    local.booking_pause_listener_rules,
+    local.next_booking_custom_domain_listener_rules,
+  )
 }
 
 resource "aws_lb_target_group" "services" {
