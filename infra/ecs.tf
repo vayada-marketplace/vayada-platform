@@ -256,6 +256,12 @@ locals {
         # its differences here, at most once a day. The VAY-2088 stale-prices alert uses the same
         # address. Sent through the booking email provider (RESEND_API_KEY / BOOKING_EMAIL_FROM). Not a secret.
         { name = "PRICING_PUBLICATION_FRESHNESS_ALERT_EMAIL", value = "t.schreyer@vayada.com" },
+        # VAY-2504: one email a month when vayada's total AI spend for the month passes
+        # AI_SPEND_ALERT_USD ($50 to begin with, Flamur's decision on 2026-11-22). Sent through the
+        # booking email provider (RESEND_API_KEY / BOOKING_EMAIL_FROM). Not a secret.
+        # AI_DEFAULT_MONTHLY_BUDGET_USD stays unset: a hotel gets no AI until staff set its budget.
+        { name = "AI_SPEND_ALERT_EMAIL", value = "f.maliqi@vayada.com" },
+        { name = "AI_SPEND_ALERT_USD", value = "50" },
         { name = "PMS_OPERATIONS_ALLOWED_ORIGINS", value = local.next_frontend_allowed_origins },
         { name = "PUBLIC_HOTEL_PROFILE_SOURCE", value = "active_publication" },
         { name = "BOOKING_DOMAIN_RESOLUTION_SOURCE", value = "target" },
