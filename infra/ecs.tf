@@ -300,6 +300,11 @@ locals {
         # and the hotel marks it received in the PMS. PayPal stays off: since app #3949 it also needs
         # REPLACEMENT_PRICING_PAYPAL_ACCEPTANCE_ENABLED, which stays unset.
         { name = "REPLACEMENT_PRICING_MANUAL_PAYMENT_ACCEPTANCE_ENABLED", value = "true" },
+        # VAY-2099: "hotel confirms each booking" (request mode) for public pricing-v2 bookings. Every
+        # hotel set to request mode takes requests: rooms held 24 h, the hotel accepts or rejects in
+        # PMS, unanswered requests expire; a card request is authorised and captured on accept.
+        # Removing this line stops new requests only; pending ones can still be answered or expire.
+        { name = "REPLACEMENT_PRICING_REQUEST_ACCEPTANCE_ENABLED", value = "true" },
         # VAY-2442: vayada Payment, guest card payments on Vayada's own Stripe account, paid out to the
         # hotel's bank. On since Flamur's go on 2026-11-03, only for var.vayada_payment_property_ids
         # (infra/vayada_payment.tf). Hotels on var.vayada_payment_live_property_ids take real money
