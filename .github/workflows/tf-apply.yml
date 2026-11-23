@@ -181,6 +181,25 @@ jobs:
             fi
           done
 
+      - name: Require the Google Maps key editor
+        # VAY-2589: next-api reads both (infra/ecs.tf). They're put into SSM outside Terraform
+        # (docs/google-maps-key-editor.md); if one is missing, the new next-api task can't start.
+        run: |
+          set -euo pipefail
+          for parameter in /vayada/prod/next-api-google-maps-key-name /vayada/prod/next-api-google-maps-key-editor; do
+            found="$(
+              aws ssm get-parameter \
+                --name "${parameter}" \
+                --region "${AWS_REGION}" \
+                --query Parameter.Name \
+                --output text
+            )" || found=""
+            if [ "${found}" != "${parameter}" ]; then
+              echo "::error::${parameter} is missing. Put it into SSM before this applies (VAY-2589)."
+              exit 1
+            fi
+          done
+
       - name: Require the partner webhook signing key
         # VAY-2438, VAY-2441: next-api and the partner app registration task read it (infra/ecs.tf,
         # infra/partner_app_registration.tf). It's put into SSM outside Terraform and never shown; if

@@ -381,6 +381,12 @@ locals {
         # must exist before this applies (tf-apply checks), or the new next-api task can't start.
         # Changing it changes every partner's signing secret at once.
         { name = "PARTNER_WEBHOOK_SIGNING_KEY", valueFrom = "/vayada/prod/partner-webhook-signing-key" },
+        # VAY-2589: next-api adds hotels' booking domains to the browser Maps key's website list. The
+        # key's name and the JSON key of a Google service account that may only read and update API
+        # keys, both put into SSM outside Terraform (docs/google-maps-key-editor.md). Both must exist
+        # before this applies (tf-apply checks), or the new next-api task can't start.
+        { name = "GOOGLE_MAPS_BROWSER_KEY_NAME", valueFrom = "/vayada/prod/next-api-google-maps-key-name" },
+        { name = "GOOGLE_MAPS_KEY_EDITOR_CREDENTIALS", valueFrom = "/vayada/prod/next-api-google-maps-key-editor" },
         ], var.finance_expense_worker_secret_mapped ? [
         { name = "FINANCE_EXPENSE_WORKER_DATABASE_URL", valueFrom = "/vayada/prod/target-database-finance-expense-worker-url" },
         ] : [], (var.finance_export_worker_secret_mapped || var.finance_export_worker_enabled) ? [

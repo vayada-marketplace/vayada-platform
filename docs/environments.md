@@ -299,6 +299,8 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/workos-webhook-secret`  | `next-api`                         |
 | `/vayada/prod/auth-cookie-secret`     | `next-api`                         |
 | `/vayada/prod/partner-webhook-signing-key` | `next-api`, partner app registration task (VAY-2438, VAY-2441); put into SSM outside Terraform |
+| `/vayada/prod/next-api-google-maps-key-name` | `next-api` (VAY-2589): the browser Maps key's name, `projects/<number>/locations/global/keys/<id>`; put into SSM outside Terraform ([google-maps-key-editor.md](google-maps-key-editor.md)) |
+| `/vayada/prod/next-api-google-maps-key-editor` | `next-api` (VAY-2589): the JSON key of the Google service account that may only read and update API keys; put into SSM outside Terraform, never shown |
 
 The `next-api` task maps those SSM parameters to the backend's runtime
 environment as:
@@ -314,6 +316,7 @@ environment as:
 | `STRIPE_WEBHOOK_SECRET` | `/vayada/prod/stripe-webhook-secret` |
 | `PARTNER_WEBHOOK_SIGNING_KEY` | `/vayada/prod/partner-webhook-signing-key`: base64 of 32 random bytes, never shown; each partner app's webhook signing secret is derived from it, so changing it changes them all (VAY-2438) |
 | `CLOUDFLARE_API_TOKEN` (with `CLOUDFLARE_ZONE_ID`) | `/vayada/prod/cloudflare-api-token`; zone from `var.cloudflare_zone_id` (VAY-2568) |
+| `GOOGLE_MAPS_BROWSER_KEY_NAME`, `GOOGLE_MAPS_KEY_EDITOR_CREDENTIALS` | `/vayada/prod/next-api-google-maps-key-name`, `/vayada/prod/next-api-google-maps-key-editor`: next-api adds each hotel domain in `var.next_booking_custom_domains` to the browser Maps key's website list, a minute after start and hourly (VAY-2589) |
 | `BOOKING_CUSTOM_DOMAIN_ROUTES` | `var.next_booking_custom_domains` (`infra/booking_custom_domains.auto.tfvars.json`): `host=propertyId,…`, the hotel domains the ALB sends to the new booking frontend, the only ones Booking Admin can verify (VAY-2568) |
 | `WORKOS_AUDIENCE`, `WORKOS_ISSUER`, `WORKOS_JWKS_URL` | Terraform variables from matching GitHub Actions secrets |
 
