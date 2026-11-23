@@ -376,6 +376,11 @@ locals {
         { name = "AUTH_COOKIE_SECRET", valueFrom = "/vayada/prod/auth-cookie-secret" },
         { name = "AUTH_LEGACY_BOOKING_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
         { name = "AUTH_LEGACY_PMS_JWT_SECRET", valueFrom = "/vayada/prod/jwt-secret-key" },
+        # VAY-2438: partner booking updates. Each partner app's webhook signing secret is derived from
+        # this key (base64 of 32 random bytes). Written into SSM outside Terraform and never shown; it
+        # must exist before this applies (tf-apply checks), or the new next-api task can't start.
+        # Changing it changes every partner's signing secret at once.
+        { name = "PARTNER_WEBHOOK_SIGNING_KEY", valueFrom = "/vayada/prod/partner-webhook-signing-key" },
         ], var.finance_expense_worker_secret_mapped ? [
         { name = "FINANCE_EXPENSE_WORKER_DATABASE_URL", valueFrom = "/vayada/prod/target-database-finance-expense-worker-url" },
         ] : [], (var.finance_export_worker_secret_mapped || var.finance_export_worker_enabled) ? [
