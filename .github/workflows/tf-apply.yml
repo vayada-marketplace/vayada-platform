@@ -200,6 +200,24 @@ jobs:
             exit 1
           fi
 
+      - name: Require the custom-domain proof secret
+        # VAY-2579: next-api reads it (infra/ecs.tf). It's put into SSM outside Terraform and never
+        # shown; if it's missing, the new next-api task can't start and the deploy below hangs.
+        run: |
+          set -euo pipefail
+          parameter=/vayada/prod/next-api-custom-domain-proof-secret
+          found="$(
+            aws ssm get-parameter \
+              --name "${parameter}" \
+              --region "${AWS_REGION}" \
+              --query Parameter.Name \
+              --output text
+          )" || found=""
+          if [ "${found}" != "${parameter}" ]; then
+            echo "::error::${parameter} is missing. Put it into SSM before this applies (VAY-2579)."
+            exit 1
+          fi
+
       - name: Verify ongoing export readiness before activation
         run: |
           set -euo pipefail
