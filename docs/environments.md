@@ -290,7 +290,8 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/anthropic-api-key`      | `pms-api`                          |
 | `/vayada/prod/channex-api-key`        | `pms-api`                          |
 | `/vayada/prod/firecrawl-api-key`      | `pms-api`                          |
-| `/vayada/prod/cloudflare-api-token`   | platform Terraform, `booking-api`, `next-api` custom-domain checks |
+| `/vayada/prod/cloudflare-api-token`   | platform Terraform, `booking-api`  |
+| `/vayada/prod/next-api-cloudflare-hostnames-token` | `next-api` custom-domain checks: SSL and Certificates: Edit on `vayada.com` only; created outside Terraform (VAY-2578) |
 | `/vayada/prod/target-database-url`    | `next-api` startup migrations      |
 | `/vayada/prod/target-database-runtime-url` | `next-api` runtime            |
 | `/vayada/prod/target-database-identity-runtime-url` | `next-api` `AUTH_DATABASE_URL` |
@@ -313,7 +314,7 @@ environment as:
 | `AUTH_COOKIE_SECRET` | `/vayada/prod/auth-cookie-secret` |
 | `STRIPE_WEBHOOK_SECRET` | `/vayada/prod/stripe-webhook-secret` |
 | `PARTNER_WEBHOOK_SIGNING_KEY` | `/vayada/prod/partner-webhook-signing-key`: base64 of 32 random bytes, never shown; each partner app's webhook signing secret is derived from it, so changing it changes them all (VAY-2438) |
-| `CLOUDFLARE_API_TOKEN` (with `CLOUDFLARE_ZONE_ID`) | `/vayada/prod/cloudflare-api-token`; zone from `var.cloudflare_zone_id` (VAY-2568) |
+| `CLOUDFLARE_API_TOKEN` (with `CLOUDFLARE_ZONE_ID`) | `/vayada/prod/next-api-cloudflare-hostnames-token` (VAY-2578); zone from `var.cloudflare_zone_id` (VAY-2568) |
 | `BOOKING_CUSTOM_DOMAIN_ROUTES` | `var.next_booking_custom_domains` (`infra/booking_custom_domains.auto.tfvars.json`): `host=propertyId,…`, the hotel domains the ALB sends to the new booking frontend, the only ones Booking Admin can verify (VAY-2568) |
 | `WORKOS_AUDIENCE`, `WORKOS_ISSUER`, `WORKOS_JWKS_URL` | Terraform variables from matching GitHub Actions secrets |
 

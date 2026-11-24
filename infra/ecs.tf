@@ -372,9 +372,12 @@ locals {
         { name = "VAYADA_PAYMENT_STRIPE_LIVE_PUBLISHABLE_KEY", valueFrom = "/vayada/prod/vayada-payment-stripe-live-publishable-key" },
         { name = "VAYADA_PAYMENT_STRIPE_LIVE_WEBHOOK_SECRET", valueFrom = "/vayada/prod/vayada-payment-stripe-live-webhook-secret" },
         { name = "RESEND_API_KEY", valueFrom = "/vayada/prod/resend-api-key" },
-        # VAY-2568: the same zone token the old booking-api uses for custom hostnames (SSL and
-        # Certificates: Edit on vayada.com, checked read-only on 2026-11-20).
-        { name = "CLOUDFLARE_API_TOKEN", valueFrom = "/vayada/prod/cloudflare-api-token" },
+        # VAY-2578: next-api's own Cloudflare token, for custom hostnames only (Zone → SSL and
+        # Certificates: Edit on vayada.com; no DNS or zone settings). Created by hand in Cloudflare and
+        # put into SSM outside Terraform (no value in GitHub secrets or state); it must exist before
+        # this applies, or the new next-api task can't start. booking-api and Terraform keep
+        # /vayada/prod/cloudflare-api-token.
+        { name = "CLOUDFLARE_API_TOKEN", valueFrom = "/vayada/prod/next-api-cloudflare-hostnames-token" },
         { name = "WORKOS_API_KEY", valueFrom = "/vayada/prod/workos-api-key" },
         { name = "WORKOS_CLIENT_ID", valueFrom = "/vayada/prod/workos-client-id" },
         { name = "WORKOS_WEBHOOK_SECRET", valueFrom = "/vayada/prod/workos-webhook-secret" },
