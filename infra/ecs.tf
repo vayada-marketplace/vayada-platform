@@ -378,6 +378,10 @@ locals {
         # this applies, or the new next-api task can't start. booking-api and Terraform keep
         # /vayada/prod/cloudflare-api-token.
         { name = "CLOUDFLARE_API_TOKEN", valueFrom = "/vayada/prod/next-api-cloudflare-hostnames-token" },
+        # VAY-2579: keys each hotel's custom-domain ownership code (TXT `_vayada.<domain>`). Created by
+        # hand (`openssl rand -hex 32` straight into SSM) outside Terraform, like the token above; it
+        # must exist before this applies. Never change it: every hotel's code would change with it.
+        { name = "BOOKING_CUSTOM_DOMAIN_PROOF_SECRET", valueFrom = "/vayada/prod/next-api-custom-domain-proof-secret" },
         { name = "WORKOS_API_KEY", valueFrom = "/vayada/prod/workos-api-key" },
         { name = "WORKOS_CLIENT_ID", valueFrom = "/vayada/prod/workos-client-id" },
         { name = "WORKOS_WEBHOOK_SECRET", valueFrom = "/vayada/prod/workos-webhook-secret" },
