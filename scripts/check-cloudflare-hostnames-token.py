@@ -7,8 +7,12 @@ The token arrives on stdin and is never printed; only GET requests are sent:
     --name /vayada/prod/next-api-cloudflare-hostnames-token --with-decryption \
     --query Parameter.Value --output text | python3 -I scripts/check-cloudflare-hostnames-token.py
 
-A hostname-only token can list custom hostnames and is refused DNS records.
-Exit code 0 when it is one, 1 otherwise.
+A hostname-only token can list custom hostnames and is refused DNS records and
+zone settings. Exit code 0 when it is one, 1 otherwise.
+
+The zone's legacy `permissions` list is printed for information only: for a token
+holding just "SSL and Certificates: Edit" it also names #zone_settings:read/edit,
+yet such a token is refused every zone setting (checked 2026-11-24).
 """
 import json
 import sys
@@ -43,6 +47,8 @@ print("token verify:", status, (body.get("result") or {}).get("status"))
 probes = [
     ("custom hostnames (needed)", f"/zones/{ZONE}/custom_hostnames?per_page=1", 200),
     ("DNS records (must be refused)", f"/zones/{ZONE}/dns_records?per_page=1", 403),
+    ("zone settings (must be refused)", f"/zones/{ZONE}/settings", 403),
+    ("security level (must be refused)", f"/zones/{ZONE}/settings/security_level", 403),
 ]
 ok = status == 200
 for name, path, expected in probes:
@@ -51,11 +57,13 @@ for name, path, expected in probes:
     match = status == expected
     ok = ok and match
     print(f"{name}: HTTP {status} codes {codes} -> {'as expected' if match else 'NOT as expected'}")
-# The zone object lists the token's rights on it, when the token may read the zone at all.
+# Information only: the zone object's legacy permission names (see the docstring).
 status, body = get(f"/zones/{ZONE}")
 perms = (body.get("result") or {}).get("permissions") or []
-extra = sorted(set(perms) - {"#ssl:read", "#ssl:edit", "#zone:read"})
-print("zone read:", status, "permissions:", perms, "| beyond SSL:", extra or "none")
-ok = ok and not extra
+print("zone read:", status, "legacy permissions (info only):", perms)
+# DNS edit must never be on it, whatever the probes above say.
+if any(p.startswith("#dns_records") for p in perms):
+    print("legacy permissions include #dns_records -> NOT as expected")
+    ok = False
 print("RESULT:", "hostname-only token" if ok else "NOT a hostname-only token")
 sys.exit(0 if ok else 1)
