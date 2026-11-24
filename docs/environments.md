@@ -70,7 +70,8 @@ a separate cutover ticket says otherwise:
 | `vayada.com` | Existing public site routing |
 | `app.vayada.com` | 302 to Booking Admin (`/setup*` → `/setup`, else `/login`), VAY-2259 |
 | `api.vayada.com` | 410 at the load balancer (retired Marketplace API), VAY-2259 |
-| `booking-api.vayada.com` | Legacy Booking API |
+| `booking-api.vayada.com` | Legacy Booking API; its POST/DELETE `/admin/settings/custom-domain` answer 409 at the load balancer (old Booking Admin can't change domains), VAY-2579 |
+| Hotels' own domains (Cloudflare for SaaS, CNAME to `custom.booking.vayada.com`) | New-system hotels: `next_booking_custom_domains` (60-89) → Next Booking Web; old-system hotels: `legacy_booking_custom_domains` (90-98) → existing Booking Web; any other domain: the catch-all (99) → existing Booking Web, VAY-2579 |
 | `booking.vayada.com` and `*.booking.vayada.com` | Existing Booking Web |
 | `admin.booking.vayada.com` | Existing Booking Admin |
 | `pms-api.vayada.com` | Legacy PMS API |

@@ -3,7 +3,7 @@
 # ("default-custom-domains") still sends those to the OLD booking frontend, which serves the
 # old-system hotels that kept their domains. A hotel that moved to the new system is listed here
 # with its property id:
-#   - the ALB sends its domain to the new booking frontend (one rule each, priorities 60-98: after
+#   - the ALB sends its domain to the new booking frontend (one rule each, priorities 60-89: after
 #     every named host rule, 54 being the last, and before the catch-all; the VAY-2108 pause rules
 #     1-9 still win while a host is listed there);
 #   - next-api gets the list as BOOKING_CUSTOM_DOMAIN_ROUTES and verifies the domain in Booking Admin
@@ -17,17 +17,17 @@ variable "next_booking_custom_domains" {
     property_id = string
   }))
   default     = {}
-  description = "Custom booking domains of hotels on the new system: ALB rule priority (60-98) and the hotel's property id."
+  description = "Custom booking domains of hotels on the new system: ALB rule priority (60-89; 90-98 are the old system's, VAY-2579) and the hotel's property id."
 
   validation {
     condition = (
       alltrue([for host, route in var.next_booking_custom_domains : can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", host))]) &&
       alltrue([for host, route in var.next_booking_custom_domains : host != "vayada.com" && !endswith(host, ".vayada.com")]) &&
-      alltrue([for host, route in var.next_booking_custom_domains : route.priority >= 60 && route.priority <= 98 && floor(route.priority) == route.priority]) &&
+      alltrue([for host, route in var.next_booking_custom_domains : route.priority >= 60 && route.priority <= 89 && floor(route.priority) == route.priority]) &&
       length(distinct([for host, route in var.next_booking_custom_domains : route.priority])) == length(var.next_booking_custom_domains) &&
       alltrue([for host, route in var.next_booking_custom_domains : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", route.property_id))])
     )
-    error_message = "next_booking_custom_domains: lowercase hotel domains outside vayada.com, each with a distinct whole priority from 60 to 98 and a lowercase property UUID."
+    error_message = "next_booking_custom_domains: lowercase hotel domains outside vayada.com, each with a distinct whole priority from 60 to 89 and a lowercase property UUID."
   }
 }
 
