@@ -174,6 +174,8 @@ locals {
     local.booking_pause_listener_rules,
     local.next_booking_custom_domain_listener_rules,
     local.next_booking_host_redirect_listener_rules,
+    local.legacy_booking_custom_domain_listener_rules,
+    local.legacy_booking_admin_custom_domain_freeze_rules,
   )
 }
 
@@ -249,9 +251,21 @@ resource "aws_lb_listener_rule" "services" {
     }
   }
 
+  # One host, or (VAY-2579) a list of up to 5 hosts.
   condition {
     host_header {
-      values = [each.value.host]
+      values = try(each.value.hosts, [each.value.host])
+    }
+  }
+
+  # VAY-2579: only these request methods, when set.
+  dynamic "condition" {
+    for_each = try(each.value.methods, null) == null ? [] : [each.value.methods]
+
+    content {
+      http_request_method {
+        values = condition.value
+      }
     }
   }
 
@@ -267,6 +281,13 @@ resource "aws_lb_listener_rule" "services" {
 
   tags = {
     Name = each.key
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.legacy_booking_custom_domain_overlaps) == 0
+      error_message = "legacy_booking_custom_domains must not repeat a host from next_booking_custom_domains, next_booking_host_redirects or booking_pause_hosts: ${join(", ", sort(tolist(local.legacy_booking_custom_domain_overlaps)))}."
+    }
   }
 }
 
