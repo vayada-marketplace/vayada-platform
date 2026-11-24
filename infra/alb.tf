@@ -291,14 +291,25 @@ resource "aws_lb_listener_rule" "services" {
   }
 }
 
-# Default action: forward unmatched traffic (custom domains) to booking frontend
+# Catch-all: every host no rule names, in practice a hotel's own domain (Cloudflare for SaaS), reaches
+# the NEW booking frontend (VAY-2579 step 4). It shows the hotel whose verified domain it is, and
+# "domain not configured" for any other. The old system's hotel domains have rules of their own to the
+# old booking frontend (legacy_booking_domains.tf, 90-98), which must exist before this points here.
+# The resource keeps its name, so the change is an in-place update of one rule.
 resource "aws_lb_listener_rule" "default_booking_frontend" {
   listener_arn = data.aws_lb_listener.https.arn
   priority     = 99
 
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.services["booking-frontend"].arn
+    target_group_arn = aws_lb_target_group.services["next-booking-frontend"].arn
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.legacy_booking_custom_domain_hosts) > 0
+      error_message = "The catch-all goes to the new booking frontend only while the old system's hotel domains are named in legacy_booking_custom_domains (VAY-2579)."
+    }
   }
 
   # Match everything not caught by higher-priority rules

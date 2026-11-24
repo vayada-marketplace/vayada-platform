@@ -1,8 +1,8 @@
 # VAY-2568: a hotel's own booking domain (a Cloudflare for SaaS custom hostname, CNAME to
-# custom.booking.vayada.com) reaches the ALB with its own Host header. The catch-all at priority 99
-# ("default-custom-domains") still sends those to the OLD booking frontend, which serves the
-# old-system hotels that kept their domains. A hotel that moved to the new system is listed here
-# with its property id:
+# custom.booking.vayada.com) reaches the ALB with its own Host header. Since VAY-2579 step 4 the
+# catch-all at priority 99 ("default-custom-domains") sends those to the NEW booking frontend; the
+# old-system hotels' domains are named in legacy_booking_domains.tf (90-98) and keep the OLD one.
+# A hotel that moved to the new system is still listed here with its property id, until step 5:
 #   - the ALB sends its domain to the new booking frontend (one rule each, priorities 60-89: after
 #     every named host rule, 54 being the last, and before the catch-all; the VAY-2108 pause rules
 #     1-9 still win while a host is listed there);
