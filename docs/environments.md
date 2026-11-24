@@ -48,6 +48,17 @@ All ECS services run on `vayada-backend-cluster` (Fargate) in `eu-west-1`, front
 
 Hotel websites (VAY-2422) are not on AWS: each `<slug>.site.vayada.com` is a DNS-only CNAME (`cloudflare_record.hotel_site` in `infra/cloudflare.tf`) to that hotel's Cloudflare Pages project, `vayada-site-<slug>.pages.dev`. The vayada repo's Deploy Hotel Sites workflow creates the project, attaches the address and publishes the files with a Pages-only token; this repo's token can't reach Pages.
 
+### Connecting a hotel's own booking domain
+
+A hotel on the new system can use its own domain for its booking page (VAY-2568). Checklist:
+
+1. Confirm the hotel owns the domain, then list it in `infra/booking_custom_domains.auto.tfvars.json` with the hotel's property id and a free priority from 60 to 98 (see `infra/booking_custom_domains.tf`). Merge and apply.
+2. The hotel connects the domain in Booking Admin. It shows "Connected" once the CNAME, the certificate and this route are all in place.
+3. Add `https://<domain>/*` to the website restrictions of the Google Maps browser key that booking-web is built with (`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`), in Google Cloud console › APIs & Services › Credentials. Saving replaces the whole list, so keep every entry that is already there. Without this, Google refuses the key on the hotel's domain (`RefererNotAllowedMapError` in the browser console), and every map on the hotel's booking page turns into "The map couldn't load right now." about 20 seconds after it first draws (VAY-2589). To check, open a room's details on the hotel's domain, press "Show map", and confirm the map is still there a minute later.
+4. Redirect the hotel's old hosts to the new domain only after it shows "Connected" (`next_booking_host_redirects`). Lift a hotel's pause hosts all together.
+
+To drop a domain, remove it in Booking Admin first, then take it out of the list and out of the Maps key.
+
 ### Parallel next-stack hostname freeze
 
 Next-stack rollout is parallel validation, not a production hostname cutover.
@@ -288,6 +299,7 @@ Runtime secrets are stored in AWS SSM Parameter Store under `/vayada/prod/`:
 | `/vayada/prod/workos-client-id`       | `next-api`                         |
 | `/vayada/prod/workos-webhook-secret`  | `next-api`                         |
 | `/vayada/prod/auth-cookie-secret`     | `next-api`                         |
+| `/vayada/prod/partner-webhook-signing-key` | `next-api`, partner app registration task (VAY-2438, VAY-2441); put into SSM outside Terraform |
 
 The `next-api` task maps those SSM parameters to the backend's runtime
 environment as:
@@ -301,6 +313,7 @@ environment as:
 | `WORKOS_WEBHOOK_SECRET` | `/vayada/prod/workos-webhook-secret` |
 | `AUTH_COOKIE_SECRET` | `/vayada/prod/auth-cookie-secret` |
 | `STRIPE_WEBHOOK_SECRET` | `/vayada/prod/stripe-webhook-secret` |
+| `PARTNER_WEBHOOK_SIGNING_KEY` | `/vayada/prod/partner-webhook-signing-key`: base64 of 32 random bytes, never shown; each partner app's webhook signing secret is derived from it, so changing it changes them all (VAY-2438) |
 | `CLOUDFLARE_API_TOKEN` (with `CLOUDFLARE_ZONE_ID`) | `/vayada/prod/next-api-cloudflare-hostnames-token` (VAY-2578); zone from `var.cloudflare_zone_id` (VAY-2568) |
 | `BOOKING_CUSTOM_DOMAIN_ROUTES` | `var.next_booking_custom_domains` (`infra/booking_custom_domains.auto.tfvars.json`): `host=propertyId,…`, the hotel domains the ALB sends to the new booking frontend, the only ones Booking Admin can verify (VAY-2568) |
 | `WORKOS_AUDIENCE`, `WORKOS_ISSUER`, `WORKOS_JWKS_URL` | Terraform variables from matching GitHub Actions secrets |
