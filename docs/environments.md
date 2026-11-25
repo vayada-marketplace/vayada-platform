@@ -71,7 +71,7 @@ a separate cutover ticket says otherwise:
 | `app.vayada.com` | 302 to Booking Admin (`/setup*` → `/setup`, else `/login`), VAY-2259 |
 | `api.vayada.com` | 410 at the load balancer (retired Marketplace API), VAY-2259 |
 | `booking-api.vayada.com` | Legacy Booking API; its POST/DELETE `/admin/settings/custom-domain` answer 409 at the load balancer (old Booking Admin can't change domains), VAY-2579 |
-| Hotels' own domains (Cloudflare for SaaS, CNAME to `custom.booking.vayada.com`) | New-system hotels: `next_booking_custom_domains` (60-89) → Next Booking Web; old-system hotels: `legacy_booking_custom_domains` (90-98) → existing Booking Web; any other domain: the catch-all (99) → Next Booking Web, which shows "domain not configured" unless the domain is verified for a hotel, VAY-2579 |
+| Hotels' own domains (Cloudflare for SaaS, CNAME to `custom.booking.vayada.com`) | Old-system hotels: `legacy_booking_custom_domains` (90-98) → existing Booking Web; every other domain: the catch-all (99) → Next Booking Web, which shows the hotel whose domain is verified in Booking Admin, or "domain not configured"; no per-domain rule, VAY-2579 |
 | `booking.vayada.com` and `*.booking.vayada.com` | Existing Booking Web |
 | `admin.booking.vayada.com` | Existing Booking Admin |
 | `pms-api.vayada.com` | Legacy PMS API |
@@ -317,8 +317,8 @@ environment as:
 | `STRIPE_WEBHOOK_SECRET` | `/vayada/prod/stripe-webhook-secret` |
 | `PARTNER_WEBHOOK_SIGNING_KEY` | `/vayada/prod/partner-webhook-signing-key`: base64 of 32 random bytes, never shown; each partner app's webhook signing secret is derived from it, so changing it changes them all (VAY-2438) |
 | `CLOUDFLARE_API_TOKEN` (with `CLOUDFLARE_ZONE_ID`) | `/vayada/prod/next-api-cloudflare-hostnames-token` (VAY-2578); zone from `var.cloudflare_zone_id` (VAY-2568) |
-| `BOOKING_CUSTOM_DOMAIN_PROOF_SECRET` | `/vayada/prod/next-api-custom-domain-proof-secret`: with it, a domain not in `BOOKING_CUSTOM_DOMAIN_ROUTES` for the hotel must also carry the hotel's TXT record `_vayada.<domain>` before it is registered or verified (VAY-2579) |
-| `BOOKING_CUSTOM_DOMAIN_ROUTES` | `var.next_booking_custom_domains` (`infra/booking_custom_domains.auto.tfvars.json`): `host=propertyId,…`, the hotel domains the ALB sends to the new booking frontend, the only ones Booking Admin can verify (VAY-2568) |
+| `BOOKING_CUSTOM_DOMAIN_PROOF_SECRET` | `/vayada/prod/next-api-custom-domain-proof-secret`: a hotel's domain is verified only with the hotel's TXT record `_vayada.<domain>` (and an active Cloudflare hostname); without the secret no domain is verified (VAY-2579) |
+| `BOOKING_CUSTOM_DOMAIN_OLD_FRONTEND_HOSTS` | `local.legacy_booking_custom_domain_hosts` (`infra/legacy_booking_domains.auto.tfvars.json`), comma-separated, `none` when empty: the old system's hotel domains the ALB still sends to the old booking frontend; next-api never verifies them (VAY-2579) |
 | `WORKOS_AUDIENCE`, `WORKOS_ISSUER`, `WORKOS_JWKS_URL` | Terraform variables from matching GitHub Actions secrets |
 
 The existing `target-database-url` remains the migration-owner credential and

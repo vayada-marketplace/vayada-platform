@@ -172,7 +172,6 @@ locals {
     local.base_listener_rules,
     local.staging_pms_listener_rules,
     local.booking_pause_listener_rules,
-    local.next_booking_custom_domain_listener_rules,
     local.next_booking_host_redirect_listener_rules,
     local.legacy_booking_custom_domain_listener_rules,
     local.legacy_booking_admin_custom_domain_freeze_rules,
@@ -286,7 +285,7 @@ resource "aws_lb_listener_rule" "services" {
   lifecycle {
     precondition {
       condition     = length(local.legacy_booking_custom_domain_overlaps) == 0
-      error_message = "legacy_booking_custom_domains must not repeat a host from next_booking_custom_domains, next_booking_host_redirects or booking_pause_hosts: ${join(", ", sort(tolist(local.legacy_booking_custom_domain_overlaps)))}."
+      error_message = "legacy_booking_custom_domains must not repeat a host from next_booking_host_redirects: ${join(", ", sort(tolist(local.legacy_booking_custom_domain_overlaps)))}."
     }
   }
 }
