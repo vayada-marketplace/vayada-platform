@@ -10,10 +10,12 @@
 # The list is the old system's domains that serve its pages today: Cloudflare for SaaS hostnames that
 # are active (cross-checked read-only against booking_hotels.custom_domain), minus the hotels that
 # moved (Tiga Lombok, Aether Hilltop Villas; see booking_custom_domains.tf). Keys are rule priorities
-# 90-98 (after every named host and the new-system domains at 60-89, before the catch-all), each with
+# 90-98 (after every named host, before the catch-all), each with
 # at most 3 hosts (the ALB matches at most three values per condition). When an old-system hotel
 # moves, remove its domain from its rule only; the other rules stay as they are. The list only ever
-# shrinks: the old Booking Admin can't add domains any more (below).
+# shrinks: the old Booking Admin can't add domains any more (below). next-api gets it as
+# BOOKING_CUSTOM_DOMAIN_OLD_FRONTEND_HOSTS and never verifies these domains, so a hotel can verify its
+# domain in the new Booking Admin only once it is removed here.
 variable "legacy_booking_custom_domains" {
   type        = map(list(string))
   default     = {}
@@ -33,11 +35,11 @@ variable "legacy_booking_custom_domains" {
 locals {
   legacy_booking_custom_domain_hosts = flatten(values(var.legacy_booking_custom_domains))
 
-  # A host here and on the new system (its domains or redirects) would leave one of the two rules
-  # dead. Pause hosts (1-9) are meant to sit on top of these, so they may repeat a host.
+  # A host here and among the new system's redirects would leave one of the two rules dead. Pause
+  # hosts (1-9) are meant to sit on top of these, so they may repeat a host.
   legacy_booking_custom_domain_overlaps = setintersection(
     toset(local.legacy_booking_custom_domain_hosts),
-    setunion(toset(keys(var.next_booking_custom_domains)), toset(keys(var.next_booking_host_redirects))),
+    toset(keys(var.next_booking_host_redirects)),
   )
 
   legacy_booking_custom_domain_listener_rules = {
